@@ -6,104 +6,310 @@
  */
 
 (function () {
+
+    function isSystemUniform(name) {
+        if (!name) return false;
+        const lower = name.toLowerCase();
+        return ['max_light_number', 'map', 'lightside', 'shade', 'emissive', 'lightcolor', 'uambient', 'uambientcolor', 'utime', 'uworldnormalmatrix', 'texture_size'].includes(lower) ||
+            lower.startsWith('ulight') ||
+            lower.startsWith('light_');
+    }
+
+    const getBlockbenchTextureForCube = (cube) => {
+        if (!cube || !cube.faces || typeof Texture === 'undefined' || !Texture.all) return null;
+        const faceOrder = ['north', 'south', 'east', 'west', 'up', 'down'];
+        for (const faceName of faceOrder) {
+            const face = cube.faces[faceName];
+            if (!face || !face.texture) continue;
+            const textureRef = face.texture;
+            if (typeof textureRef === 'object') return textureRef;
+            const bbTexture = Texture.all.find(t =>
+                t && (
+                    t.uuid === textureRef ||
+                    t.id === textureRef ||
+                    t.name === textureRef ||
+                    t.path === textureRef
+                )
+            );
+            if (bbTexture) return bbTexture;
+        }
+        return null;
+    };
+
+    function resolveSystemUniformValue(key, cube, defaultValue) {
+        const lower = key.toLowerCase();
+
+        if (lower === 'shade') {
+            if (typeof settings !== 'undefined' && settings.shading) {
+                return settings.shading.value;
+            }
+            if (typeof Settings !== 'undefined' && Settings.get) {
+                return Settings.get('shading');
+            }
+            return defaultValue;
+        }
+
+        if (lower === 'lightside') {
+            if (typeof Canvas !== 'undefined' && Canvas.global_light_side !== undefined) {
+                return Canvas.global_light_side;
+            }
+            return defaultValue;
+        }
+
+        if (lower === 'lightcolor') {
+            if (typeof Canvas !== 'undefined' && Canvas.global_light_color && typeof settings !== 'undefined' && settings.brightness) {
+                let c = new THREE.Color().copy(Canvas.global_light_color).multiplyScalar(settings.brightness.value / 50);
+                return new THREE.Vector3(c.r, c.g, c.b);
+            }
+            return defaultValue;
+        }
+
+        if (lower === 'uambientcolor') {
+            if (typeof Canvas !== 'undefined' && Canvas.global_light_color) {
+                let c = new THREE.Color().copy(Canvas.global_light_color);
+                return new THREE.Vector3(c.r, c.g, c.b);
+            }
+            return defaultValue;
+        }
+
+        if (lower === 'uambient') {
+            if (typeof settings !== 'undefined' && settings.brightness) {
+                return settings.brightness.value / 100;
+            }
+            return defaultValue;
+        }
+
+        if (lower === 'emissive') {
+            const bbTex = getBlockbenchTextureForCube(cube);
+            return (bbTex && bbTex.render_mode === 'emissive') ? true : false;
+        }
+
+        return defaultValue;
+    }
+
+    function areUniformValuesEqual(val1, val2) {
+        if (val1 === val2) return true;
+        if (val1 && val2 && typeof val1 === 'object' && typeof val2 === 'object') {
+            if (typeof val1.equals === 'function') return val1.equals(val2);
+            if (typeof val2.equals === 'function') return val2.equals(val1);
+        }
+        return false;
+    }
+
     function formatGLSL(rawString) {
+        if (!rawString) return "";
+
         let comments = [];
-        // Extract block and line comments to avoid collapsing them and breaking code
+        // Extract block comments
         let code = rawString.replace(/\/\*[\s\S]*?\*\//g, match => {
             comments.push(match);
-            return ` __BLOCK_COMMENT_${comments.length - 1}__ `;
-        }).replace(/\/\/.*/g, match => {
-            comments.push(match);
-            return ` __LINE_COMMENT_${comments.length - 1}__ `;
+            return `\n__BLOCK_COMMENT_${comments.length - 1}__\n`;
         });
 
-        // 1. Proteger las directivas de preprocesador (#define, #ifdef, etc.)
+        // Extract line comments
+        code = code.replace(/\/\/.*/g, match => {
+            comments.push(match);
+            return `\n__LINE_COMMENT_${comments.length - 1}__\n`;
+        });
+
+        // Extract preprocessor directives
+        let directives = [];
         const lines = code.split('\n');
         code = '';
-        const directives = [];
 
-        lines.forEach((line) => {
+        lines.forEach(line => {
             let trimmed = line.trim();
             if (trimmed.startsWith('#')) {
                 directives.push(trimmed);
-                code += ` __DIRECTIVE_${directives.length - 1}__ `;
+                code += `\n__DIRECTIVE_${directives.length - 1}__\n`;
             } else {
-                code += trimmed + ' ';
+                code += line + '\n';
             }
         });
 
-        // 2. Normalizar espacios, palabras clave y comas
-        code = code.replace(/\s+/g, ' '); // Colapsar espacios múltiples
-        code = code.replace(/\b(if|for|while|return)\b\s*\(/g, '$1 ('); // Espacio tras keywords
-        code = code.replace(/\)\s*\{/g, ') {'); // Espacio antes de abrir llave
-        code = code.replace(/\}\s*else\b/g, '} else'); // 'else' en la misma línea que la llave
-        code = code.replace(/\belse\b\s*\{/g, 'else {');
-        code = code.replace(/,\s*/g, ', '); // Espacio uniforme después de las comas
+        // Carriage return cleanup
+        code = code.replace(/\r/g, '');
 
-        // 3. Normalizar operadores principales (asignaciones, comparaciones, lógicos)
-        code = code.replace(/\s*(\+=|-=|\*=|\/=|==|!=|<=|>=|&&|\|\||=)\s*/g, ' $1 ');
-
-        // 4. Parseo carácter por carácter para indentación
-        let formatted = '';
-        let indentLevel = 0;
+        // Tokenize around braces and semicolons to build a clean stream
+        let normalizedCode = "";
         let parenDepth = 0;
-        const indentStr = '    '; // 4 espacios por nivel
+        let spacesCollapsed = code.replace(/[ \t]+/g, ' ');
 
-        for (let i = 0; i < code.length; i++) {
-            let char = code[i];
+        for (let i = 0; i < spacesCollapsed.length; i++) {
+            let char = spacesCollapsed[i];
 
             if (char === '(') {
                 parenDepth++;
-                formatted += char;
+                normalizedCode += char;
             } else if (char === ')') {
                 parenDepth = Math.max(0, parenDepth - 1);
-                formatted += char;
+                normalizedCode += char;
             } else if (char === '{') {
-                formatted += ' {\n';
-                indentLevel++;
-                formatted += indentStr.repeat(indentLevel);
-                while (code[i + 1] === ' ') i++; // Omitir espacios siguientes
+                normalizedCode = normalizedCode.trimEnd();
+                normalizedCode += ' {\n';
             } else if (char === '}') {
-                indentLevel = Math.max(0, indentLevel - 1);
-                if (formatted.endsWith(indentStr.repeat(indentLevel + 1))) {
-                    formatted = formatted.slice(0, -indentStr.length);
-                } else {
-                    formatted += '\n' + indentStr.repeat(indentLevel);
-                }
-                formatted += '}';
-
-                let nextText = code.slice(i + 1, i + 6);
-                if (!nextText.match(/^\s*else/)) {
-                    formatted += '\n' + indentStr.repeat(indentLevel);
-                }
-                while (code[i + 1] === ' ') i++;
+                normalizedCode = normalizedCode.trimEnd();
+                normalizedCode += '\n}\n';
             } else if (char === ';') {
-                formatted += ';';
+                normalizedCode += ';';
                 if (parenDepth === 0) {
-                    formatted += '\n' + indentStr.repeat(indentLevel);
-                    while (code[i + 1] === ' ') i++;
+                    normalizedCode += '\n';
                 }
+            } else if (char === '\n') {
+                normalizedCode += '\n';
             } else {
-                formatted += char;
+                normalizedCode += char;
             }
         }
 
-        // 5. Restaurar directivas y comentarios
-        formatted = formatted.replace(/__DIRECTIVE_(\d+)__/g, (m, id) => '\n' + directives[id] + '\n' + indentStr.repeat(indentLevel));
-        formatted = formatted.replace(/__BLOCK_COMMENT_(\d+)__/g, (m, id) => '\n' + comments[id] + '\n' + indentStr.repeat(indentLevel));
-        formatted = formatted.replace(/__LINE_COMMENT_(\d+)__/g, (m, id) => comments[id] + '\n' + indentStr.repeat(indentLevel));
+        // Format line-by-line helper
+        function formatLineContent(lineContent) {
+            let s = lineContent.trim();
+            if (s.length === 0) return "";
 
-        // Limpiar líneas vacías
-        let finalLines = formatted.split('\n');
-        let result = [];
-        finalLines.forEach(line => {
-            let trimmed = line.trimEnd();
-            if (trimmed.trim().length > 0) {
-                result.push(trimmed);
+            // Space after control keywords
+            s = s.replace(/\b(if|for|while|switch|return)\b\s*\(/g, '$1 (');
+            // Space before opening brace
+            s = s.replace(/\)\s*\{/g, ') {');
+            // Space after commas
+            s = s.replace(/,\s*/g, ', ');
+
+            // Normalize spaces around binary operators
+            const operators = ['\\+=', '-=', '\\*=', '/=', '==', '!=', '<=', '>=', '&&', '\\|\\|', '='];
+            operators.forEach(op => {
+                const regex = new RegExp('\\s*' + op + '\\s*', 'g');
+                s = s.replace(regex, ` ${op.replace('\\', '')} `);
+            });
+
+            // Adjust comparison operators that might get mangled by the single '=' rule
+            s = s.replace(/\s*=\s*=\s*/g, ' == ');
+            s = s.replace(/\s*!\s*=\s*/g, ' != ');
+            s = s.replace(/\s*\+\s*=\s*/g, ' += ');
+            s = s.replace(/\s*-\s*-\s*/g, ' -= ');
+            s = s.replace(/\s*\*\s*=\s*/g, ' *= ');
+            s = s.replace(/\s*\/\s*=\s*/g, ' /= ');
+            s = s.replace(/\s*<\s*=\s*/g, ' <= ');
+            s = s.replace(/\s*>\s*=\s*/g, ' >= ');
+
+            // Normalize spaces around math operators (+, -, *, /)
+            s = s.replace(/\s*([+\-*/])\s*/g, ' $1 ');
+
+            // Fix double-spacing that might have occurred
+            s = s.replace(/\s+/g, ' ');
+
+            // Restore clean increment/decrement
+            s = s.replace(/\s*\+\s*\+\s*/g, '++');
+            s = s.replace(/\s*-\s*-\s*/g, '--');
+
+            return s;
+        }
+
+        let linesToProcess = normalizedCode.split('\n');
+        let outputLines = [];
+        let indentLevel = 0;
+        const indentStr = '    ';
+
+        linesToProcess.forEach(line => {
+            let trimmed = line.trim();
+            if (trimmed.length === 0) {
+                // Keep single blank lines for readability spacing
+                if (outputLines.length > 0 && outputLines[outputLines.length - 1] !== "") {
+                    outputLines.push("");
+                }
+                return;
+            }
+
+            // Keep directive and comment placeholders untouched
+            if (trimmed.startsWith('__DIRECTIVE_') || trimmed.startsWith('__BLOCK_COMMENT_') || trimmed.startsWith('__LINE_COMMENT_')) {
+                outputLines.push(trimmed);
+                return;
+            }
+
+            if (trimmed === '}') {
+                indentLevel = Math.max(0, indentLevel - 1);
+                outputLines.push(indentStr.repeat(indentLevel) + '}');
+            } else if (trimmed.endsWith('{')) {
+                let content = trimmed.slice(0, -1).trim();
+                outputLines.push(indentStr.repeat(indentLevel) + formatLineContent(content) + ' {');
+                indentLevel++;
+            } else if (trimmed.startsWith('}')) {
+                indentLevel = Math.max(0, indentLevel - 1);
+                let rest = trimmed.slice(1).trim();
+                outputLines.push(indentStr.repeat(indentLevel) + '} ' + formatLineContent(rest));
+                if (rest.endsWith('{')) {
+                    indentLevel++;
+                }
+            } else {
+                outputLines.push(indentStr.repeat(indentLevel) + formatLineContent(trimmed));
             }
         });
 
-        // Retoque de indentación post-restauración
+        // Reconstruct the full string
+        let finalCode = outputLines.join('\n');
+
+        // Restore directives
+        finalCode = finalCode.replace(/__DIRECTIVE_(\d+)__/g, (m, id) => {
+            return directives[id];
+        });
+
+        // Restore block comments nicely
+        finalCode = finalCode.replace(/__BLOCK_COMMENT_(\d+)__/g, (m, id) => {
+            const commentLines = comments[id].split('\n');
+            return commentLines.map((l, idx) => {
+                let t = l.trim();
+                if (idx > 0 && t.startsWith('*')) {
+                    return ' ' + t;
+                }
+                return t;
+            }).join('\n');
+        });
+
+        // Restore line comments
+        finalCode = finalCode.replace(/__LINE_COMMENT_(\d+)__/g, (m, id) => {
+            return comments[id];
+        });
+
+        // Second pass: clean up indentation of comments and align bracket structures
+        let finalLines = finalCode.split('\n');
+        let currentIndent = 0;
+
+        for (let i = 0; i < finalLines.length; i++) {
+            let line = finalLines[i];
+            let trimmed = line.trim();
+
+            if (trimmed.endsWith('{')) {
+                finalLines[i] = indentStr.repeat(currentIndent) + trimmed;
+                currentIndent++;
+            } else if (trimmed.startsWith('}')) {
+                currentIndent = Math.max(0, currentIndent - 1);
+                finalLines[i] = indentStr.repeat(currentIndent) + trimmed;
+            } else if (trimmed.startsWith('/*') || trimmed.startsWith('//') || trimmed.startsWith('*')) {
+                let extra = trimmed.startsWith('*') ? ' ' : '';
+                finalLines[i] = indentStr.repeat(currentIndent) + extra + trimmed;
+            } else if (!trimmed.startsWith('#') && trimmed.length > 0) {
+                finalLines[i] = indentStr.repeat(currentIndent) + trimmed;
+            } else {
+                finalLines[i] = trimmed;
+            }
+        }
+
+        // Return final filtered lines collapse consecutive empty lines
+        let result = [];
+        let lastWasEmpty = false;
+
+        finalLines.forEach(line => {
+            let trimmed = line.trim();
+            if (trimmed.length === 0) {
+                if (!lastWasEmpty && result.length > 0) {
+                    result.push("");
+                    lastWasEmpty = true;
+                }
+            } else {
+                result.push(line.trimEnd());
+                lastWasEmpty = false;
+            }
+        });
+
         return result.join('\n');
     }
 
@@ -113,8 +319,34 @@
     // 1. INTERNATIONALIZATION (Translations)
     // =========================================================================
     Language.addTranslations('en', {
+        'panel.global_renderer_properties': 'WORLD',
+        'panel.material_properties': 'MATERIAL',
+
+        'shader_architect.material_panel.no_selected': 'Select a single cube or multiple cubes to edit their material instance properties.',
+        'shader_architect.material_panel.no_instance': 'Create a material instance to override the global material on this cube.',
+        'shader_architect.material_panel.multiple_instances': 'Multiple material instances have been selected. All selected cubes must have the same material instance properties.',
+        'shader_architect.material_panel.properties': 'Material Instance Properties',
+
+        'shader_architect.material_panel.title': 'Material Instance',
+        'shader_architect.material_panel.global_material': 'Global Material',
+        'shader_architect.material_panel.mixed_instances': '(Mixed Instances)',
+        'shader_architect.material_panel.base_material': 'Base Material',
+        'shader_architect.material_panel.base_material.desc': 'Select the FancyShaderMaterial that provides the shader code and uniform defaults for this instance.',
+        'shader_architect.material_panel.instance': 'Material Instance',
+        'shader_architect.material_panel.instance.desc': 'Assign a project material instance to the selected cubes, or use the global render material.',
+        'shader_architect.material_panel.instance_name': 'Instance Name',
+        'shader_architect.material_panel.new_instance_name': 'New Material Instance',
+        'shader_architect.material_panel.create_instance': 'Create Material Instance',
+        'shader_architect.material_panel.create_instance.desc': 'Create a project material instance from a base material and assign it to the selected cubes.',
+        'shader_architect.material_panel.delete_instance': 'Delete Material Instance',
+        'shader_architect.material_panel.delete_instance.desc': 'Delete the selected material instance from this project and clear it from every cube using it.',
+        'shader_architect.material_panel.undo.create_instance': 'Create material instance',
+        'shader_architect.material_panel.undo.delete_instance': 'Delete material instance',
+        'shader_architect.material_panel.undo.assign_instance': 'Assign material instance',
+        'shader_architect.material_panel.undo.clear_instance': 'Use global material',
+        'shader_architect.material_panel.undo.rename_instance': 'Rename material instance',
         "menu.shader_architect": "Shader Architect",
-        "action.sa_global_mode": "Render Mode",
+        "action.sa_global_mode": "World Render Mode",
         "shader_architect.menu.material_studio": "Material Studio",
         "shader_architect.menu.apply_material": "Apply Material to Selection",
         "shader_architect.menu.clear_material": "Clear Material Override",
@@ -131,11 +363,168 @@
         "shader_architect.preset.shaded_lightflow": "Shaded Lightflow",
         "shader_architect.preset.pixelated_shaded_lightflow": "Pixelated Shaded Lightflow",
 
-
         "shader_architect.preset.pbr": "Standard PBR",
+
+        // Preset Uniform Translations (Short labels for properties UI)
+        "shader_architect.uniform.LIGHTCOLOR": "Light Tint",
+        "shader_architect.uniform.LIGHTCOLOR.desc": "Overall color tint multiplier applied to the final render",
+        "shader_architect.uniform.SHADE": "Shade Enable",
+        "shader_architect.uniform.SHADE.desc": "Toggle scene shading/shadowing systems",
+        "shader_architect.uniform.LIGHTSIDE": "Light Side",
+        "shader_architect.uniform.LIGHTSIDE.desc": "Side direction representing the main lighting vector",
+        "shader_architect.uniform.EMISSIVE": "Emissive Glow",
+        "shader_architect.uniform.EMISSIVE.desc": "Treat textures as fully self-illuminated/emissive",
+        "shader_architect.uniform.max_light_number": "Max Lights",
+        "shader_architect.uniform.max_light_number.desc": "Maximum number of active light sources to calculate",
+        "shader_architect.uniform.uAmbient": "Ambient Int",
+        "shader_architect.uniform.uAmbient.desc": "Multiplier for ambient environment lighting intensity",
+        "shader_architect.uniform.uAmbientColor": "Ambient Color",
+        "shader_architect.uniform.uAmbientColor.desc": "Color of the background ambient light source",
+        "shader_architect.uniform.uExposure": "Exposure",
+        "shader_architect.uniform.uExposure.desc": "Exposure multiplier for color mapping",
+        "shader_architect.uniform.uToneMapping": "Tone Mapping",
+        "shader_architect.uniform.uToneMapping.desc": "Algorithm for mapping high dynamic range color values",
+        "shader_architect.uniform.uUseToneMapping": "Tone Mapping",
+        "shader_architect.uniform.uUseToneMapping.desc": "Algorithm for mapping high dynamic range color values",
+        "shader_architect.uniform.uStylizedNormalInfluence": "Stylized Normal",
+        "shader_architect.uniform.uStylizedNormalInfluence.desc": "Blend factor between realistic physical normals and stylized light direction normals",
+        "shader_architect.uniform.uLightWrap": "Light Wrap",
+        "shader_architect.uniform.uLightWrap.desc": "Enables light to wrap around curved edges for softer shading",
+        "shader_architect.uniform.uAOEnabled": "AO Enabled",
+        "shader_architect.uniform.uAOEnabled.desc": "Toggle baked Ambient Occlusion calculations",
+        "shader_architect.uniform.uAOStrength": "AO Strength",
+        "shader_architect.uniform.uAOStrength.desc": "Intensity of ambient occlusion shadows",
+        "shader_architect.uniform.uAORadius": "AO Radius",
+        "shader_architect.uniform.uAORadius.desc": "Sampling radius for ambient occlusion detection",
+        "shader_architect.uniform.uAOPower": "AO Power",
+        "shader_architect.uniform.uAOPower.desc": "Exponent curve adjustment for ambient occlusion falloff",
+        "shader_architect.uniform.uAOMin": "AO Min",
+        "shader_architect.uniform.uAOMin.desc": "Minimum ambient occlusion brightness clamp",
+        "shader_architect.uniform.uAODirectInfluence": "AO Direct Influence",
+        "shader_architect.uniform.uAODirectInfluence.desc": "How much AO shadows affect direct light sources",
+        "shader_architect.uniform.uShadowStrength": "Shadow Strength",
+        "shader_architect.uniform.uShadowStrength.desc": "Darkness intensity of cast shadows",
+        "shader_architect.uniform.uShadowFloor": "Shadow Floor",
+        "shader_architect.uniform.uShadowFloor.desc": "Minimum ambient shadow value (shadow brightness floor)",
+        "shader_architect.uniform.AMBIENT_INTENSITY": "Ambient Int",
+        "shader_architect.uniform.AMBIENT_INTENSITY.desc": "Intensity multiplier for ambient scene lighting",
+        "shader_architect.uniform.uBaseColor": "Base Color",
+        "shader_architect.uniform.uBaseColor.desc": "Primary diffuse color of the material",
+        "shader_architect.uniform.uMetallic": "Metallic",
+        "shader_architect.uniform.uMetallic.desc": "Metallic metalness factor (0.0 = dielectric, 1.0 = metallic)",
+        "shader_architect.uniform.uRoughness": "Roughness",
+        "shader_architect.uniform.uRoughness.desc": "Surface roughness factor, controlling glossy reflections scatter",
+        "shader_architect.uniform.uAO": "AO Strength",
+        "shader_architect.uniform.uAO.desc": "Baked ambient occlusion factor",
+        "shader_architect.uniform.uClearcoat": "Clearcoat",
+        "shader_architect.uniform.uClearcoat.desc": "Clearcoat layer intensity (e.g. lacquer/varnish)",
+        "shader_architect.uniform.uClearcoatRoughness": "Clearcoat Rough",
+        "shader_architect.uniform.uClearcoatRoughness.desc": "Roughness of the clearcoat layer",
+        "shader_architect.uniform.uAnisotropy": "Anisotropy",
+        "shader_architect.uniform.uAnisotropy.desc": "Reflection anisotropy level (stretching along a direction)",
+        "shader_architect.uniform.uAnisotropyDirection": "Anisotropy Dir",
+        "shader_architect.uniform.uAnisotropyDirection.desc": "Orientation angle/vector of anisotropy tangent",
+        "shader_architect.uniform.uSheen": "Sheen",
+        "shader_architect.uniform.uSheen.desc": "Sheen backscattering intensity for velvet/fabric effects",
+        "shader_architect.uniform.uSheenColor": "Sheen Color",
+        "shader_architect.uniform.uSheenColor.desc": "Color of the sheen reflection",
+        "shader_architect.uniform.uSheenRoughness": "Sheen Rough",
+        "shader_architect.uniform.uSheenRoughness.desc": "Roughness of the sheen reflection",
+        "shader_architect.uniform.uTransmission": "Transmission",
+        "shader_architect.uniform.uTransmission.desc": "Light transmission factor (translucency/glass effect)",
+        "shader_architect.uniform.uThickness": "Thickness",
+        "shader_architect.uniform.uThickness.desc": "Volumetric thickness of the medium for absorption",
+        "shader_architect.uniform.uAttenuationColor": "Atten Color",
+        "shader_architect.uniform.uAttenuationColor.desc": "Color tint when light passes through the thickness",
+        "shader_architect.uniform.uAttenuationDistance": "Atten Dist",
+        "shader_architect.uniform.uAttenuationDistance.desc": "Distance light travels through medium before absorption",
+        "shader_architect.uniform.uIOR": "Refraction IOR",
+        "shader_architect.uniform.uIOR.desc": "Index of Refraction (IOR) determining light bending",
+        "shader_architect.uniform.uIridescence": "Iridescence",
+        "shader_architect.uniform.uIridescence.desc": "Thin-film interference iridescence (rainbow shimmer)",
+        "shader_architect.uniform.uIridescenceIOR": "Iridescence IOR",
+        "shader_architect.uniform.uIridescenceIOR.desc": "Index of refraction of the thin iridescence film",
+        "shader_architect.uniform.uIridescenceThicknessMin": "Iridescence Min",
+        "shader_architect.uniform.uIridescenceThicknessMin.desc": "Minimum thickness of thin-film in nanometers",
+        "shader_architect.uniform.uIridescenceThicknessMax": "Iridescence Max",
+        "shader_architect.uniform.uIridescenceThicknessMax.desc": "Maximum thickness of thin-film in nanometers",
+        "shader_architect.uniform.uEmissiveColor": "Emiss Color",
+        "shader_architect.uniform.uEmissiveColor.desc": "Self-illumination emissive color",
+        "shader_architect.uniform.uEmissiveStrength": "Emiss Strength",
+        "shader_architect.uniform.uEmissiveStrength.desc": "Intensity multiplier for self-illumination emission",
+        "shader_architect.uniform.uUseBaseColorMap": "Base Color Map",
+        "shader_architect.uniform.uUseBaseColorMap.desc": "Toggle using texture map for base color",
+        "shader_architect.uniform.uUseMetallicRoughnessMap": "Metal/Rough Map",
+        "shader_architect.uniform.uUseMetallicRoughnessMap.desc": "Toggle using texture map for metallic/roughness",
+        "shader_architect.uniform.uUseNormalMap": "Normal Map",
+        "shader_architect.uniform.uUseNormalMap.desc": "Toggle using normal map for surface details",
+        "shader_architect.uniform.uUseAOMap": "AO Map",
+        "shader_architect.uniform.uUseAOMap.desc": "Toggle using texture map for Ambient Occlusion",
+        "shader_architect.uniform.uUseEmissiveMap": "Emissive Map",
+        "shader_architect.uniform.uUseEmissiveMap.desc": "Toggle using texture map for emissive glow",
+        "shader_architect.uniform.uUseClearcoatMap": "Clearcoat Map",
+        "shader_architect.uniform.uUseClearcoatMap.desc": "Toggle using texture map for clearcoat",
+        "shader_architect.uniform.uUseClearcoatRoughnessMap": "Clearcoat Rough Map",
+        "shader_architect.uniform.uUseClearcoatRoughnessMap.desc": "Toggle using texture map for clearcoat roughness",
+        "shader_architect.uniform.uUseAnisotropyMap": "Anisotropy Map",
+        "shader_architect.uniform.uUseAnisotropyMap.desc": "Toggle using texture map for anisotropy",
+        "shader_architect.uniform.uUseSheenColorMap": "Sheen Color Map",
+        "shader_architect.uniform.uUseSheenColorMap.desc": "Toggle using texture map for sheen color",
+        "shader_architect.uniform.uUseSheenRoughnessMap": "Sheen Rough Map",
+        "shader_architect.uniform.uUseSheenRoughnessMap.desc": "Toggle using texture map for sheen roughness",
+        "shader_architect.uniform.uUseTransmissionMap": "Transmission Map",
+        "shader_architect.uniform.uUseTransmissionMap.desc": "Toggle using texture map for transmission",
+        "shader_architect.uniform.uUseThicknessMap": "Thickness Map",
+        "shader_architect.uniform.uUseThicknessMap.desc": "Toggle using texture map for thickness",
+        "shader_architect.uniform.uUseIridescenceMap": "Iridescence Map",
+        "shader_architect.uniform.uUseIridescenceMap.desc": "Toggle using texture map for iridescence",
+        "shader_architect.uniform.uUseIridescenceThicknessMap": "Iridescence Thick Map",
+        "shader_architect.uniform.uUseIridescenceThicknessMap.desc": "Toggle using texture map for iridescence thickness",
+        "shader_architect.uniform.uNormalScale": "Normal Scale",
+        "shader_architect.uniform.uNormalScale.desc": "Strength multiplier for normal mapping details",
+        "shader_architect.uniform.uEnvSpecularStrength": "Env Specular",
+        "shader_architect.uniform.uEnvSpecularStrength.desc": "Intensity of specular reflection from the environment environment",
+        "shader_architect.uniform.uSpecularIntensity": "Specular Int",
+        "shader_architect.uniform.uSpecularIntensity.desc": "General multiplier for direct specular highlight highlights",
+        "shader_architect.uniform.uShadowStrength": "Shadow Strength",
+        "shader_architect.uniform.uShadowStrength.desc": "Darkness intensity of cast shadows",
+        "shader_architect.uniform.uShadowFloor": "Shadow Floor",
+        "shader_architect.uniform.uShadowFloor.desc": "Minimum ambient shadow value (shadow brightness floor)",
+        "shader_architect.ui.toggle_left": "Toggle Material Library (Ctrl+B)",
+        "shader_architect.ui.toggle_right": "Toggle Properties Sidebar",
+        "shader_architect.ui.format": "Format GLSL Code (Shift+Alt+F)",
+        "shader_architect.ui.validate": "Compile & Link Shader (Ctrl+S)",
+        "shader_architect.ui.apply": "Apply live updates to scene",
+        "shader_architect.ui.problems": "Problems",
+        "shader_architect.ui.no_problems": "No problems detected in shader.",
+        "shader_architect.ui.status_ok": "Ready",
+        "shader_architect.ui.status_errors": "Errors detected",
+        "shader_architect.ui.tooltip.duplicate": "Duplicate this material",
+        "shader_architect.ui.tooltip.export": "Export material to .samat file",
+        "shader_architect.ui.tooltip.delete": "Delete this material",
     });
 
     Language.addTranslations('es', {
+        'panel.global_renderer_properties': 'MUNDO',
+        'panel.material_properties': 'MATERIAL',
+        'shader_architect.material_panel.title': 'Instancia de material',
+        'shader_architect.material_panel.global_material': 'Material global',
+        'shader_architect.material_panel.mixed_instances': '(Instancias diferentes)',
+        'shader_architect.material_panel.base_material': 'Material base',
+        'shader_architect.material_panel.base_material.desc': 'Elige el FancyShaderMaterial que aporta el shader y los uniforms por defecto de esta instancia.',
+        'shader_architect.material_panel.instance': 'Instancia de material',
+        'shader_architect.material_panel.instance.desc': 'Asigna una instancia de material del proyecto a los cubos seleccionados, o usa el material global.',
+        'shader_architect.material_panel.instance_name': 'Nombre de instancia',
+        'shader_architect.material_panel.new_instance_name': 'Nueva instancia de material',
+        'shader_architect.material_panel.create_instance': 'Crear instancia de material',
+        'shader_architect.material_panel.create_instance.desc': 'Crea una instancia de material del proyecto desde un material base y la asigna a los cubos seleccionados.',
+        'shader_architect.material_panel.delete_instance': 'Eliminar instancia de material',
+        'shader_architect.material_panel.delete_instance.desc': 'Elimina la instancia de material seleccionada del proyecto y la limpia de todos los cubos que la usan.',
+        'shader_architect.material_panel.undo.create_instance': 'Crear instancia de material',
+        'shader_architect.material_panel.undo.delete_instance': 'Eliminar instancia de material',
+        'shader_architect.material_panel.undo.assign_instance': 'Asignar instancia de material',
+        'shader_architect.material_panel.undo.clear_instance': 'Usar material global',
+        'shader_architect.material_panel.undo.rename_instance': 'Renombrar instancia de material',
         "menu.shader_architect": "Shader Architect",
         "action.sa_global_mode": "Modo de Render",
         "shader_architect.menu.material_studio": "Estudio de Materiales",
@@ -155,6 +544,18 @@
         "shader_architect.preset.pixelated_shaded_lightflow": "Luces con Sombra Pixeladas",
 
         "shader_architect.preset.pbr": "Standard PBR",
+        "shader_architect.ui.toggle_left": "Alternar Biblioteca de Materiales (Ctrl+B)",
+        "shader_architect.ui.toggle_right": "Alternar Barra Lateral de Propiedades",
+        "shader_architect.ui.format": "Formatear Código GLSL (Shift+Alt+F)",
+        "shader_architect.ui.validate": "Compilar y Vincular Shader (Ctrl+S)",
+        "shader_architect.ui.apply": "Aplicar cambios en vivo a la escena",
+        "shader_architect.ui.problems": "Problemas",
+        "shader_architect.ui.no_problems": "No se detectaron problemas en el shader.",
+        "shader_architect.ui.status_ok": "Listo",
+        "shader_architect.ui.status_errors": "Errores detectados",
+        "shader_architect.ui.tooltip.duplicate": "Duplicar este material",
+        "shader_architect.ui.tooltip.export": "Exportar material a archivo .samat",
+        "shader_architect.ui.tooltip.delete": "Eliminar este material",
     });
 
     /*function tl(key) {
@@ -165,20 +566,169 @@
     // 2. CSS & PRISM.JS SYNTAX HIGHLIGHTING
     // =========================================================================
     const PLUGIN_STYLE_ID = 'shader-architect-styles';
+    const PROJECT_MATERIAL_INSTANCES_PROP = 'sa_material_instances_json';
+    const MATERIAL_INSTANCES_UNDO_ASPECT = 'sa_material_instances';
     const pluginStyle = /*css*/`
-    /* Prism Editor Layout */
-    .prism-editor-wrapper code { font-family: 'Consolas', 'Courier New', monospace; line-height: inherit; display: block; }
-    .prism-editor-component { height: auto; max-height: 100%; align-items: flex-start; position: relative; }
-    .prism-editor-component, .prism-editor-wrapper { width: 100%; display: flex; }
-    .prism-editor-wrapper { height: 100%; overflow: auto; tab-size: 4; }
-    .prism-editor-wrapper pre { display: inline-block; width: 100%; }
-    
-    .prism-editor__line-numbers {
-        height: 100%; overflow: hidden; flex-shrink: 0; padding-top: 4px; margin-top: 0;
-        background: var(--color-back); color: var(--color-text); border-right: 1px solid rgba(0, 0, 0, 0.2); user-select: none;
+    /* Dialog Layout Restructuring for fixed window with internal scrollbars */
+    #sa_material_studio_dialog .dialog_content {
+        background: var(--color-back);
+        color: var(--color-text);
+        padding: 0px !important;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden !important;
     }
-    .prism-editor__line-number { text-align: right; white-space: nowrap; padding: 0 8px 0 4px; font-size: 0.9em; opacity: 0.7; }
-    .prism-editor__code { margin: 0 !important; flex-grow: 2; min-height: 100%; box-sizing: border-box; tab-size: 4; outline: none; background: transparent; }
+    
+    .sa-studio-container {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        width: 100%;
+        background: var(--color-back);
+        color: var(--color-text);
+        overflow: hidden;
+    }
+
+    .sa-studio-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 8px 12px;
+        background: var(--color-ui);
+        border-bottom: 1px solid var(--color-border);
+        height: 48px;
+        box-sizing: border-box;
+    }
+
+    .sa-studio-body {
+        display: flex;
+        flex-grow: 1;
+        height: calc(100% - 72px); /* height minus header and status bar */
+        width: 100%;
+        overflow: hidden;
+        position: relative;
+    }
+
+    .sa-studio-sidebar {
+        width: 280px;
+        background: var(--color-ui);
+        display: flex;
+        flex-direction: column;
+        transition: width 0.15s ease, padding 0.15s ease, border 0.15s ease;
+        overflow-y: auto;
+        overflow-x: hidden;
+        box-sizing: border-box;
+        flex-shrink: 0;
+    }
+
+    .sa-studio-sidebar.sa-left {
+        border-right: 1px solid var(--color-border);
+    }
+
+    .sa-studio-sidebar.sa-right {
+        border-left: 1px solid var(--color-border);
+    }
+
+    .sa-studio-sidebar.collapsed {
+        width: 0px !important;
+        padding: 0px !important;
+        border: none !important;
+        overflow: hidden;
+    }
+
+    .sa-studio-main {
+        flex-grow: 1;
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        min-height: 0 !important;
+        overflow: hidden;
+        background: var(--color-back);
+    }
+
+    /* Prism Editor Custom CSS styling */
+    .prism-editor-wrapper {
+        display: flex !important;
+        flex-direction: row !important;
+        align-items: stretch !important;
+        height: 100% !important;
+        width: 100% !important;
+        overflow: auto !important;
+        position: relative !important;
+        background: #1e1e1e;
+        box-sizing: border-box;
+        tab-size: 4;
+    }
+    .prism-editor__container {
+        position: relative !important;
+        flex-grow: 1 !important;
+        min-height: 100% !important;
+        height: auto !important;
+        box-sizing: border-box;
+        overflow: visible !important;
+    }
+    .prism-editor__textarea, .prism-editor__pre {
+        margin: 0 !important;
+        border: 0 !important;
+        padding: 10px 10px 10px 10px !important;
+        box-sizing: border-box !important;
+        font-family: 'Consolas', 'Courier New', monospace !important;
+        font-size: 13px !important;
+        line-height: 20px !important;
+        tab-size: 4 !important;
+        white-space: pre !important;
+        word-wrap: normal !important;
+        overflow: visible !important;
+    }
+    .prism-editor__textarea {
+        position: absolute !important;
+        top: 0 !important;
+        left: 0 !important;
+        height: 100% !important;
+        width: 100% !important;
+        min-height: 100% !important;
+        min-width: 100% !important;
+        resize: none !important;
+        color: transparent !important;
+        background: transparent !important;
+        caret-color: #ffffff !important;
+        z-index: 2 !important;
+        outline: none !important;
+        overflow: hidden !important;
+    }
+    .prism-editor__pre {
+        position: relative !important;
+        z-index: 1 !important;
+        pointer-events: none !important;
+        display: block !important;
+        margin: 0 !important;
+    }
+    .prism-editor__line-numbers {
+        height: auto !important;
+        min-height: 100% !important;
+        overflow: hidden !important;
+        flex-shrink: 0 !important;
+        padding: 10px 8px 10px 8px !important;
+        box-sizing: border-box !important;
+        background: #181818 !important;
+        color: #858585 !important;
+        border-right: 1px solid #2d2d2d !important;
+        user-select: none !important;
+        text-align: right;
+    }
+    .prism-editor__line-number {
+        font-family: 'Consolas', 'Courier New', monospace !important;
+        font-size: 13px !important;
+        line-height: 20px !important;
+        white-space: nowrap;
+        opacity: 0.7;
+    }
+    .prism-editor__textarea::selection, 
+    .prism-editor__pre::selection, 
+    .prism-editor__pre *::selection {
+        background: color-mix(in srgb, var(--color-accent) 30%, transparent) !important;
+    }
 
     /* Code Area */
     code[class*="language-"], pre[class*="language-"] {
@@ -190,30 +740,389 @@
     .token.comment, .token.prolog, .token.doctype, .token.cdata { color: slategray; font-style: italic; opacity: 0.85; }
     .token.punctuation { color: #b2d0dd; }
     .token.property, .token.tag, .token.symbol, .token.deleted, .token.attr-name { color: #fc2f40; }
-    .token.constant { color: #73adff; }
+    .token.constant { color: #ffb86c; }
     .token.boolean { color: rgb(159, 255, 156); }
-    .token.number { color: #b28cff; }
-    .token.string, .token.char { color: #e8df6a; }
-    .token.operator{ color: #fd766a; }
-    .token.keyword { color: #8cd9ff; }
-    .token.builtin { color: #ffff80; }
-    .token.function, .token.function-name { color: #94e400; }
-    .token.class-name { color: #50e48f; }
+    .token.number { color: #bd93f9; }
+    .token.string, .token.char { color: #f1fa8c; }
+    .token.operator{ color: #ff79c6; }
+    .token.keyword { color: #8be9fd; }
+    .token.builtin { color: #50fa7b; }
+    .token.builtin-variable { color: #ffb86c; font-weight: bold; }
+    .token.function, .token.function-name { color: #ffb86c; }
+    .token.class-name { color: #8be9fd; font-weight: bold; }
+    .token.important { color: #ff5555; font-weight: bold; }
 
-    /* Dialog Styling */
+    /* VSCode Tabs Bar styling */
+    .sa-vscode-tabs-row {
+        display: flex;
+        align-items: center;
+        background: var(--color-ui);
+        border-bottom: 1px solid var(--color-border);
+        height: 38px;
+        box-sizing: border-box;
+        overflow-x: auto;
+        overflow-y: hidden;
+    }
+    .sa-vscode-tab {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 0 16px;
+        height: 100%;
+        background: var(--color-ui);
+        border: none;
+        border-right: 1px solid var(--color-border);
+        color: var(--color-text);
+        opacity: 0.65;
+        cursor: pointer;
+        font-size: 0.9em;
+        transition: background 0.15s, opacity 0.15s;
+        user-select: none;
+        border-bottom: 2px solid transparent;
+        font-weight: 500;
+    }
+    .sa-vscode-tab:hover {
+        background: rgba(255, 255, 255, 0.05);
+        opacity: 0.9;
+    }
+    .sa-vscode-tab.active {
+        background: var(--color-back);
+        border-bottom: 2px solid var(--color-accent);
+        opacity: 1;
+        font-weight: bold;
+    }
+
+    .sa-editor-actions-toolbar {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-left: auto;
+        padding-right: 8px;
+    }
+
+    .sa-editor-container {
+        flex-grow: 1;
+        position: relative;
+        overflow: hidden;
+        background: #1e1e1e;
+        display: flex;
+        flex-direction: column;
+        min-height: 0 !important;
+    }
+
+    .sa-editor-scrollable {
+        flex-grow: 1;
+        overflow: auto;
+        height: 100%;
+        width: 100%;
+        position: relative;
+    }
+
+    .glsl-editor-instance {
+        font-family: 'Consolas', 'Courier New', monospace;
+        font-size: 13px;
+        line-height: 20px;
+        height: 100%;
+    }
+
+    .glsl-editor-instance textarea {
+        outline: none;
+        caret-color: #ffffff;
+        font-family: inherit;
+        font-size: inherit;
+        line-height: inherit;
+    }
+
+    /* Autocomplete Dropdown styling */
+    .sa-autocomplete-dropdown {
+        position: absolute;
+        background: #282a36;
+        border: 1px solid var(--color-border);
+        border-radius: 4px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+        z-index: 9999;
+        max-height: 200px;
+        overflow-y: auto;
+        width: 220px;
+        pointer-events: auto;
+    }
+    .sa-autocomplete-item {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 6px 10px;
+        cursor: pointer;
+        font-family: 'Consolas', monospace;
+        font-size: 12px;
+        color: #f8f8f2;
+        user-select: none;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+    }
+    .sa-autocomplete-item:hover, .sa-autocomplete-item.active {
+        background: var(--color-accent);
+        color: var(--color-accent_text);
+    }
+    .sa-autocomplete-item .type-badge {
+        font-size: 0.8em;
+        opacity: 0.6;
+        padding: 1px 4px;
+        border-radius: 3px;
+        background: rgba(255, 255, 255, 0.15);
+        color: #f8f8f2;
+    }
+
+    /* Problems Console styling */
+    .sa-problems-console {
+        background: #181a1f;
+        border-top: 1px solid var(--color-border);
+        height: 140px;
+        display: flex;
+        flex-direction: column;
+        flex-shrink: 0;
+        overflow: hidden;
+    }
+    .sa-problems-console.collapsed {
+        height: 28px !important;
+    }
+    .sa-problems-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 4px 12px;
+        background: #21252b;
+        border-bottom: 1px solid rgba(255,255,255,0.05);
+        font-weight: bold;
+        font-size: 0.85em;
+        cursor: pointer;
+        user-select: none;
+        height: 28px;
+        box-sizing: border-box;
+    }
+    .sa-problems-list {
+        flex-grow: 1;
+        overflow-y: auto;
+        padding: 6px 12px;
+    }
+    .sa-problem-item {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        padding: 4px 8px;
+        border-radius: 3px;
+        cursor: pointer;
+        font-size: 0.9em;
+        transition: background 0.15s;
+        margin-bottom: 2px;
+        color: #f8f8f2;
+    }
+    .sa-problem-item:hover {
+        background: rgba(255, 255, 255, 0.05);
+    }
+    .sa-problem-item.error {
+        color: #ff5555;
+    }
+    .sa-problem-item.warning {
+        color: #ffb86c;
+    }
+    .sa-problem-item .location {
+        font-family: monospace;
+        opacity: 0.7;
+        flex-shrink: 0;
+        font-weight: bold;
+    }
+    .sa-problem-item .message {
+        word-break: break-all;
+    }
+
+    /* Status Bar styling */
+    .sa-studio-statusbar {
+        height: 24px;
+        background: var(--color-ui);
+        border-top: 1px solid var(--color-border);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 12px;
+        font-size: 0.8em;
+        box-sizing: border-box;
+        opacity: 0.85;
+    }
+    .sa-statusbar-item {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+    }
+    .sa-statusbar-item.clickable {
+        cursor: pointer;
+    }
+    .sa-statusbar-item.clickable:hover {
+        color: var(--color-accent);
+    }
+
+    /* Dialog Controls styling */
     #sa_material_studio_dialog select, #sa_material_studio_dialog button, #sa_material_studio_dialog input {
         background: var(--color-button); color: var(--color-text); border: 1px solid var(--color-border);
-        border-radius: 4px; padding: 6px 12px; transition: background 0.15s, border 0.15s; outline: none;
+        border-radius: 4px; padding: 6px 12px; transition: background 0.15s, border 0.15s, color 0.15s; outline: none;
     }
-    #sa_material_studio_dialog input[type="color"] { padding: 0px 4px; height: 32px; width: 40px; cursor: pointer; }
-    #sa_material_studio_dialog button:hover { background: var(--color-accent); color: var(--color-text); cursor: pointer;}
-    #sa_material_studio_dialog .dialog_content { background: var(--color-back); color: var(--color-text); }
+    #sa_material_studio_dialog select {
+        padding-right: 24px;
+        appearance: none;
+        background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' fill='white'><path d='M7 10l5 5 5-5z'/></svg>");
+        background-repeat: no-repeat;
+        background-position: right 6px center;
+    }
+    #sa_material_studio_dialog input[type="color"] { padding: 2px; height: 32px; width: 44px; cursor: pointer; border-radius: 4px; }
+    #sa_material_studio_dialog button:hover { background: var(--color-accent); color: var(--color-accent_text); cursor: pointer;}
     
-    .sa-uniform-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; padding: 6px; background: rgba(0,0,0,0.1); border-radius: 4px; }
-    .sa-uniform-row label { min-width: 120px; font-weight: bold; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;}
-    .sa-materiel-list-item { padding: 8px; margin-bottom: 4px; border: 1px solid var(--color-border); border-radius: 4px; cursor: pointer; transition: background 0.2s; display: flex; align-items: center; gap: 8px; }
-    .sa-materiel-list-item:hover { background: rgba(255,255,255,0.05); }
-    .sa-materiel-list-item.selected { background: var(--color-accent); border-color: transparent; }
+    /* Left Panel Buttons */
+    .sa-left-btn {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        width: 100%;
+        height: 34px;
+        font-weight: 500;
+        margin-bottom: 4px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        background: var(--color-button);
+        color: var(--color-text);
+        border: 1px solid var(--color-border);
+        border-radius: 4px;
+    }
+    .sa-left-btn:hover {
+        background: var(--color-accent);
+        color: var(--color-accent_text);
+        border-color: transparent;
+    }
+    
+    /* Header Editor styling */
+    .sa-editor-header {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        background: var(--color-ui);
+        padding: 6px 12px;
+        border-radius: 6px;
+        border: 1px solid var(--color-border);
+        flex-grow: 1;
+    }
+    .sa-material-name-input {
+        font-size: 1.25em;
+        font-weight: bold;
+        flex-grow: 1;
+        background: transparent !important;
+        border: 1px solid transparent !important;
+        padding: 4px 8px !important;
+        transition: all 0.2s ease;
+    }
+    .sa-material-name-input:focus {
+        border-color: var(--color-accent) !important;
+        background: var(--color-back) !important;
+    }
+    
+    .sa-icon-btn {
+        background: var(--color-button);
+        border: 1px solid var(--color-border);
+        border-radius: 4px;
+        width: 32px;
+        height: 32px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        transition: all 0.15s ease;
+        color: var(--color-text);
+    }
+    .sa-icon-btn:hover, .sa-icon-btn.active {
+        background: var(--color-accent);
+        color: var(--color-accent_text);
+        border-color: transparent;
+    }
+    .sa-icon-btn.delete-btn:hover {
+        background: #fc2f40;
+        color: #ffffff;
+    }
+
+    /* Material List Items */
+    .sa-materiel-list-item {
+        padding: 10px 12px;
+        margin-bottom: 6px;
+        border: 1px solid var(--color-border);
+        border-radius: 6px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        background: var(--color-back);
+    }
+    .sa-materiel-list-item:hover {
+        background: var(--color-button);
+        border-color: var(--color-border);
+    }
+    .sa-materiel-list-item.selected {
+        background: var(--color-accent) !important;
+        color: var(--color-accent_text) !important;
+        border-color: transparent;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.15);
+    }
+    .sa-materiel-list-item.selected i {
+        color: var(--color-accent_text);
+    }
+    
+    /* Uniform Cards */
+    .sa-uniform-row {
+        display: block;
+        margin-bottom: 8px;
+        padding: 10px 12px;
+        background: var(--color-ui);
+        border: 1px solid var(--color-border);
+        border-radius: 6px;
+        transition: border-color 0.2s ease;
+    }
+    .sa-uniform-row:hover {
+        border-color: var(--color-accent);
+    }
+    .sa-uniform-row-header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        width: 100%;
+    }
+    .sa-uniform-row label {
+        min-width: 120px;
+        font-weight: bold;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+    }
+    .sa-uniform-row label .uni-type {
+        font-size: 0.8em;
+        opacity: 0.5;
+        font-family: var(--font-code, monospace);
+        font-weight: normal;
+    }
+    
+    /* Scrollbars */
+    #sa_material_studio_dialog ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+    }
+    #sa_material_studio_dialog ::-webkit-scrollbar-track {
+        background: transparent;
+    }
+    #sa_material_studio_dialog ::-webkit-scrollbar-thumb {
+        background: var(--color-border);
+        border-radius: 4px;
+    }
+    #sa_material_studio_dialog ::-webkit-scrollbar-thumb:hover {
+        background: var(--color-accent);
+    }
     `;
 
     if (typeof Prism !== 'undefined' && !Prism.languages.glsl) {
@@ -222,9 +1131,10 @@
             'preprocessor': { pattern: /(^\s*)#\s*[a-zA-Z_]\w*(?:[^\r\n\\]|\\(?:\r\n?|\n))*/m, lookbehind: true, alias: 'important' },
             'string': { pattern: /(["'])(?:\\.|(?!\1)[^\\\r\n])*\1/, greedy: true },
             'type': { pattern: /\b(?:void|bool|int|uint|float|vec2|vec3|vec4|mat2|mat3|mat4|sampler2D|samplerCube)\b/, alias: 'class-name' },
-            'keyword': /\b(?:break|continue|do|for|while|if|else|return|discard|attribute|const|uniform|varying|precision|highp|mediump|lowp|in|out|inout|struct)\b/,
-            'constant': /\b(?:true|false|[gG]l_[a-zA-Z0-9_]*)\b/,
-            'builtin': /\b(?:radians|degrees|sin|cos|tan|pow|exp|log|sqrt|abs|sign|floor|ceil|fract|min|max|clamp|mix|step|smoothstep|length|distance|dot|cross|normalize|reflect|texture2D)\b/,
+            'keyword': /\b(?:break|continue|discard|do|else|for|if|return|while|struct|attribute|const|in|inout|out|uniform|varying|precision|highp|mediump|lowp|layout|centroid|flat|smooth|noperspective)\b/,
+            'constant': /\b(?:true|false|gl_MaxDrawBuffers|gl_MaxTextureImageUnits|gl_MaxTextureCoords|gl_MaxVertexAttribs|gl_MaxVertexUniformComponents|gl_MaxVaryingFloats|gl_MaxVertexTextureImageUnits|gl_MaxCombinedTextureImageUnits|gl_MaxFragmentUniformComponents|gl_DepthRange)\b/,
+            'builtin-variable': /\b(?:gl_Position|gl_PointSize|gl_FragColor|gl_FragData|gl_FragCoord|gl_FrontFacing|gl_PointCoord)\b/,
+            'builtin': /\b(?:radians|degrees|sin|cos|tan|asin|acos|atan|pow|exp|log|exp2|log2|sqrt|inversesqrt|abs|sign|floor|ceil|fract|mod|min|max|clamp|mix|step|smoothstep|length|distance|dot|cross|normalize|faceforward|reflect|refract|matrixCompMult|outerProduct|transpose|determinant|inverse|lessThan|lessThanEqual|greaterThan|greaterThanEqual|equal|notEqual|any|all|not|texture2D|textureCube|texture2DLod|texture2DProjLod|textureCubeLod|texture2DProj|texture2DProjGrad|texture2DGrad|textureCubeGrad)\b/,
             'function': { pattern: /\b[a-zA-Z_]\w*(?=\s*\()/i, alias: 'function-name' },
             'number': /\b(?:0x[\da-fA-F]+|0b[01]+|0[0-7]+|(?:\d*\.)?\d+(?:[eE][+-]?\d+)?)\b/,
             'operator': /[+\-*/%=&|^~!<>?:]+/,
@@ -258,10 +1168,8 @@
                 else if (val instanceof THREE.Vector2) val = { x: val.x, y: val.y };
                 else if (u.type === 'color') val = u.hexValue; // Custom hex handler
 
-                serializedUniforms[key] = {
-                    type: u.type,
-                    value: val
-                };
+                serializedUniforms[key] = MaterialManager.cloneUniformDefinition(u);
+                serializedUniforms[key].value = val;
             }
 
             return {
@@ -280,20 +1188,16 @@
             let parsedUniforms = {};
             if (data.uniforms) {
                 for (let key in data.uniforms) {
-                    let u = data.uniforms[key];
-                    let val = u.value;
-                    let type = u.type;
+                    let def = data.uniforms[key];
+                    let type = def.type;
+                    let parsedDef = MaterialManager.cloneUniformDefinition(def);
+                    parsedDef.value = MaterialManager.deserializeUniformValue(type, def.value);
 
-                    if (type === 'vec3' || type === 'vec3v') {
-                        if (val && val.x !== undefined) val = new THREE.Vector3(val.x, val.y, val.z);
-                    } else if (type === 'vec2' || type === 'vec2v') {
-                        if (val && val.x !== undefined) val = new THREE.Vector2(val.x, val.y);
-                    } else if (type === 'color') {
-                        // Keep hex string for editing, conversion happens at render time
-                        parsedUniforms[key] = { type: type, value: val, hexValue: val };
-                        continue;
+                    if (type === 'color' && parsedDef.hexValue === undefined && typeof def.value === 'string') {
+                        parsedDef.hexValue = def.value;
                     }
-                    parsedUniforms[key] = { type: type, value: val };
+
+                    parsedUniforms[key] = parsedDef;
                 }
             }
 
@@ -309,32 +1213,194 @@
         }
     }
 
+    class FancyShaderMaterialInstance {
+        constructor(props = {}) {
+            this.id = props.id || guid();
+            this.name = props.name || "Material Instance";
+            this.icon = props.icon || "texture";
+            this.baseMaterialId = props.baseMaterialId || props.materialId || 'classic';
+            this.uniforms = props.uniforms || {};
+            this.isMaterialInstance = true;
+        }
+
+        toJSON() {
+            return {
+                sa_format_version: "2.1-instance",
+                id: this.id,
+                name: this.name,
+                icon: this.icon,
+                baseMaterialId: this.baseMaterialId,
+                uniforms: MaterialManager.serializeUniformMap(this.uniforms)
+            };
+        }
+
+        static fromJSON(data) {
+            return new FancyShaderMaterialInstance({
+                id: data.id,
+                name: data.name,
+                icon: data.icon,
+                baseMaterialId: data.baseMaterialId || data.materialId || 'classic',
+                uniforms: MaterialManager.deserializeUniformMap(data.uniforms || data.uniformOverrides || {})
+            });
+        }
+    }
+
     const MaterialManager = {
         materials: {}, // Registry of all available materials
+        instances: {}, // Registry of material instances that only override uniforms
+        projectMaterialInstancesProperty: null,
+        materialInstancesUndoHooks: null,
+
+        get materialInstances() {
+            return this.instances;
+        },
 
         init() {
             this.registerBuiltIns();
             this.loadCustomMaterials();
+            this.loadMaterialInstances();
+            this.revalidateAllMaterialInstances({ save: false });
         },
 
         register(mat) {
             this.materials[mat.id] = mat;
+            this.revalidateMaterialInstancesForMaterial(mat.id, { save: false });
             this.saveCustomMaterials();
+            this.saveMaterialInstances();
         },
 
         deleteMaterial(id) {
             if (this.materials[id] && this.materials[id].isCustom) {
                 delete this.materials[id];
+                this.rebaseMaterialInstances(id, 'classic');
                 this.saveCustomMaterials();
+                this.saveMaterialInstances();
 
                 // Clear outliner overrides that used this
                 Cube.all.forEach(c => {
                     if (c.sa_material_id === id) {
-                        delete c.sa_material_id;
+                        c.sa_material_id = '';
                     }
                 });
-                ShaderEngine.updateAllCubes();
+                if (ShaderEngine.globalRenderMode === id) {
+                    ShaderEngine.globalRenderMode = 'classic';
+                }
+                ShaderEngine.updateAllCubes('delete_material');
             }
+        },
+
+        cloneUniformValue(value) {
+            if (value && typeof value.clone === 'function') return value.clone();
+            if (Array.isArray(value)) return value.map(v => this.cloneUniformValue(v));
+            if (value && typeof value === 'object') return Object.assign({}, value);
+            return value;
+        },
+
+        cloneUniformDefinition(def) {
+            if (!def) return def;
+            const clone = {};
+            for (const key in def) {
+                if (key === 'value') continue;
+                clone[key] = this.cloneUniformValue(def[key]);
+            }
+            clone.value = this.cloneUniformValue(def.value);
+            return clone;
+        },
+
+        cloneUniformMap(uniforms) {
+            const cloned = {};
+            for (const key in uniforms || {}) {
+                cloned[key] = this.cloneUniformDefinition(uniforms[key]);
+            }
+            return cloned;
+        },
+
+        serializeUniformValue(value) {
+            if (value && value.x !== undefined && value.y !== undefined && value.z !== undefined) {
+                return { x: value.x, y: value.y, z: value.z };
+            }
+            if (value && value.x !== undefined && value.y !== undefined) {
+                return { x: value.x, y: value.y };
+            }
+            // Soporte para serialización de matrices de Three.js
+            if (value && (value.isMatrix3 || value instanceof THREE.Matrix3)) {
+                return value.toArray();
+            }
+            if (value && (value.isMatrix4 || value instanceof THREE.Matrix4)) {
+                return value.toArray();
+            }
+            if (Array.isArray(value)) return value.map(v => this.serializeUniformValue(v));
+            return value;
+        },
+
+        serializeUniformMap(uniforms) {
+            const serialized = {};
+            for (const key in uniforms || {}) {
+                const def = uniforms[key];
+                serialized[key] = this.cloneUniformDefinition(def);
+                serialized[key].value = this.serializeUniformValue(def.value);
+            }
+            return serialized;
+        },
+
+        deserializeUniformValue(type, value) {
+            if (Array.isArray(value)) {
+                const itemType = type === 'vec3v' ? 'vec3' : (type === 'vec2v' ? 'vec2' : type);
+                // Evitamos mapear recursivamente matrices serializadas como arreglos
+                if (type !== 'mat3' && type !== 'mat4') {
+                    return value.map(v => this.deserializeUniformValue(itemType, v));
+                }
+            }
+            if ((type === 'vec3' || type === 'vec3v' || type === 'color') && value && value.x !== undefined) {
+                return new THREE.Vector3(value.x, value.y, value.z);
+            }
+            if ((type === 'vec2' || type === 'vec2v') && value && value.x !== undefined) {
+                return new THREE.Vector2(value.x, value.y);
+            }
+            // Reconstruir Matrix3
+            if (type === 'mat3' && value) {
+                const m = new THREE.Matrix3();
+                if (value.elements) {
+                    m.fromArray(value.elements);
+                } else if (Array.isArray(value)) {
+                    m.fromArray(value);
+                }
+                return m;
+            }
+            // Reconstruir Matrix4
+            if (type === 'mat4' && value) {
+                const m = new THREE.Matrix4();
+                if (value.elements) {
+                    m.fromArray(value.elements);
+                } else if (Array.isArray(value)) {
+                    m.fromArray(value);
+                }
+                return m;
+            }
+            return value;
+        },
+
+        deserializeUniformMap(uniforms) {
+            const parsed = {};
+            for (const key in uniforms || {}) {
+                const def = uniforms[key];
+                const type = def.type;
+                parsed[key] = this.cloneUniformDefinition(def);
+                parsed[key].value = this.deserializeUniformValue(type, def.value);
+                if (type === 'color' && parsed[key].hexValue === undefined && typeof def.value === 'string') {
+                    parsed[key].hexValue = def.value;
+                }
+            }
+            return parsed;
+        },
+
+        normalizeUniformType(type) {
+            return type === 'color' ? 'vec3' : type;
+        },
+
+        areUniformsCompatible(baseDef, instanceDef) {
+            if (!baseDef || !instanceDef) return false;
+            return this.normalizeUniformType(baseDef.type) === this.normalizeUniformType(instanceDef.type);
         },
 
         saveCustomMaterials() {
@@ -358,6 +1424,546 @@
                     });
                 }
             } catch (ignore) { }
+        },
+
+        getActiveProject() {
+            return typeof Project !== 'undefined' ? Project : null;
+        },
+
+        registerProjectMaterialInstanceProperty() {
+            if (this.projectMaterialInstancesProperty) return this.projectMaterialInstancesProperty;
+            if (typeof Property === 'undefined') return null;
+
+            const activeProject = this.getActiveProject();
+            const projectClass =
+                typeof ModelProject !== 'undefined'
+                    ? ModelProject
+                    : (
+                        activeProject &&
+                            activeProject.constructor &&
+                            activeProject.constructor !== Object
+                            ? activeProject.constructor
+                            : null
+                    );
+
+            if (!projectClass) return null;
+            this.projectMaterialInstancesProperty = new Property(projectClass, 'string', PROJECT_MATERIAL_INSTANCES_PROP, {
+                default: '',
+                exposed: true
+            });
+            return this.projectMaterialInstancesProperty;
+        },
+
+        registerMaterialInstanceUndoHooks() {
+            if (this.materialInstancesUndoHooks || typeof Blockbench === 'undefined') {
+                return this.materialInstancesUndoHooks;
+            }
+
+            const createSaveEvent = Blockbench.on('create_undo_save', event => {
+                if (!event || !event.aspects || !event.aspects[MATERIAL_INSTANCES_UNDO_ASPECT] || !event.save) return;
+                event.save[PROJECT_MATERIAL_INSTANCES_PROP] = this.getProjectMaterialInstancesJSON();
+            });
+
+            const loadSaveEvent = Blockbench.on('load_undo_save', event => {
+                if (!event || !event.save || event.save[PROJECT_MATERIAL_INSTANCES_PROP] === undefined) return;
+
+                this.setProjectMaterialInstancesJSON(event.save[PROJECT_MATERIAL_INSTANCES_PROP], this.getActiveProject(), {
+                    markDirty: false,
+                    dispatch: false
+                });
+                this.syncMaterialInstancesFromProject();
+                ShaderEngine.updateAllCubes('undo_material_instances');
+                Blockbench.dispatchEvent('shader_architect_material_instances_changed', { undo: true });
+            });
+
+            this.materialInstancesUndoHooks = {
+                delete: () => {
+                    if (createSaveEvent && typeof createSaveEvent.delete === 'function') createSaveEvent.delete();
+                    if (loadSaveEvent && typeof loadSaveEvent.delete === 'function') loadSaveEvent.delete();
+                    this.materialInstancesUndoHooks = null;
+                }
+            };
+
+            return this.materialInstancesUndoHooks;
+        },
+
+        markProjectDirty(project = this.getActiveProject()) {
+            if (project && project.saved !== undefined) {
+                project.saved = false;
+            }
+        },
+
+        serializeMaterialInstances() {
+            const instances = [];
+            for (let id in this.instances) {
+                instances.push(this.instances[id].toJSON());
+            }
+            return instances;
+        },
+
+        getProjectMaterialInstancesJSON(project = this.getActiveProject()) {
+            if (!project) return '';
+            return project[PROJECT_MATERIAL_INSTANCES_PROP] || '';
+        },
+
+        setProjectMaterialInstancesJSON(json, project = this.getActiveProject(), options = {}) {
+            if (!project) return false;
+            project[PROJECT_MATERIAL_INSTANCES_PROP] = json || '';
+            if (options.markDirty !== false) {
+                this.markProjectDirty(project);
+            }
+            return true;
+        },
+
+        saveMaterialInstances(options = {}) {
+            try {
+                const project = options.project || this.getActiveProject();
+                if (!project) return false;
+                const json = JSON.stringify(this.serializeMaterialInstances());
+                const saved = this.setProjectMaterialInstancesJSON(json, project, options);
+                if (saved && options.dispatch !== false && typeof Blockbench !== 'undefined') {
+                    Blockbench.dispatchEvent('shader_architect_material_instances_changed', {});
+                }
+                return saved;
+            } catch (ignore) {
+                return false;
+            }
+        },
+
+        loadMaterialInstances(project = this.getActiveProject()) {
+            this.instances = {};
+
+            try {
+                let data = this.getProjectMaterialInstancesJSON(project);
+                if (!data) return this.instances;
+
+                let parsed = typeof data === 'string' ? JSON.parse(data) : data;
+                if (!Array.isArray(parsed)) return this.instances;
+
+                parsed.forEach(iJson => {
+                    let instance = FancyShaderMaterialInstance.fromJSON(iJson);
+                    this.instances[instance.id] = instance;
+                });
+            } catch (ignore) { }
+
+            return this.instances;
+        },
+
+        syncMaterialInstancesFromProject(project = this.getActiveProject()) {
+            const instances = this.loadMaterialInstances(project);
+            this.revalidateAllMaterialInstances({ save: false });
+            return instances;
+        },
+
+        syncMaterialInstancesToProject(project = this.getActiveProject(), options = {}) {
+            return this.saveMaterialInstances(Object.assign({}, options, { project }));
+        },
+
+        getMaterialInstance(instanceOrId) {
+            if (!instanceOrId) return null;
+            if (typeof instanceOrId === 'string') return this.instances[instanceOrId] || null;
+            return instanceOrId.isMaterialInstance ? instanceOrId : null;
+        },
+
+        createMaterialInstance(baseMaterialIdOrProps = 'classic', props = {}) {
+            const data = typeof baseMaterialIdOrProps === 'string'
+                ? Object.assign({}, props, { baseMaterialId: baseMaterialIdOrProps })
+                : Object.assign({}, baseMaterialIdOrProps);
+
+            const base = this.materials[data.baseMaterialId] || this.materials['classic'];
+            if (!base) return null;
+
+            const instance = new FancyShaderMaterialInstance({
+                id: data.id,
+                name: data.name || `${base.name} Instance`,
+                icon: data.icon || base.icon,
+                baseMaterialId: base.id,
+                uniforms: data.uniforms
+                    ? this.cloneUniformMap(data.uniforms)
+                    : this.cloneUniformMap(base.uniforms || {})
+            });
+
+            this.revalidateMaterialInstance(instance, { save: false });
+            this.instances[instance.id] = instance;
+            this.saveMaterialInstances();
+            return instance;
+        },
+
+        createInstance(baseMaterialIdOrProps = 'classic', props = {}) {
+            return this.createMaterialInstance(baseMaterialIdOrProps, props);
+        },
+
+        registerMaterialInstance(instanceOrProps) {
+            const instance = instanceOrProps instanceof FancyShaderMaterialInstance
+                ? instanceOrProps
+                : new FancyShaderMaterialInstance(instanceOrProps || {});
+            const base = this.materials[instance.baseMaterialId] || this.materials['classic'];
+            if (!base) return null;
+
+            instance.baseMaterialId = base.id;
+            if (!instance.uniforms || Object.keys(instance.uniforms).length === 0) {
+                instance.uniforms = this.cloneUniformMap(base.uniforms || {});
+            }
+
+            this.revalidateMaterialInstance(instance, { save: false });
+            this.instances[instance.id] = instance;
+            this.saveMaterialInstances();
+            return instance;
+        },
+
+        registerInstance(instanceOrProps) {
+            return this.registerMaterialInstance(instanceOrProps);
+        },
+
+        clearCubeMaterialAssignment(cube, options = {}) {
+            if (!cube) return false;
+            const hadMaterialId = cube.sa_material_id !== undefined && cube.sa_material_id !== '';
+            const hadInstanceId = cube.sa_material_instance_id !== undefined && cube.sa_material_instance_id !== '';
+
+            cube.sa_material_id = '';
+            cube.sa_material_instance_id = '';
+
+            if ((hadMaterialId || hadInstanceId) && options.markDirty !== false) {
+                this.markProjectDirty();
+            }
+            return hadMaterialId || hadInstanceId;
+        },
+
+        clearMissingMaterialInstanceFromCube(cube, missingInstanceId) {
+            if (!cube || !missingInstanceId) return false;
+            if (cube.sa_material_instance_id !== missingInstanceId) return false;
+
+            this.clearCubeMaterialAssignment(cube);
+            if (window.DebugTools && typeof DebugTools.logWarning === 'function') {
+                DebugTools.logWarning(`Shader Architect cleared missing material instance "${missingInstanceId}" from cube "${cube.name || cube.uuid || 'unnamed'}".`);
+            } else {
+                console.warn(`Shader Architect cleared missing material instance "${missingInstanceId}" from cube "${cube.name || cube.uuid || 'unnamed'}".`);
+            }
+            return true;
+        },
+
+        deleteMaterialInstance(id) {
+            if (!this.instances[id]) return false;
+            delete this.instances[id];
+            this.saveMaterialInstances();
+
+            Cube.all.forEach(cube => {
+                if (cube.sa_material_instance_id === id) {
+                    this.clearCubeMaterialAssignment(cube);
+                }
+            });
+            ShaderEngine.updateAllCubes('delete_material_instance');
+            return true;
+        },
+
+        deleteInstance(id) {
+            return this.deleteMaterialInstance(id);
+        },
+
+        exportMaterialInstance(instanceOrId, options = {}) {
+            const instance = this.getMaterialInstance(instanceOrId);
+            if (!instance) return null;
+
+            const data = instance.toJSON();
+            return options.asObject ? data : JSON.stringify(data, null, 4);
+        },
+
+        exportInstance(instanceOrId, options = {}) {
+            return this.exportMaterialInstance(instanceOrId, options);
+        },
+
+        importMaterialInstance(data, options = {}) {
+            try {
+                const parsed = typeof data === 'string' ? JSON.parse(data) : data;
+                if (!parsed) return null;
+
+                const instance = FancyShaderMaterialInstance.fromJSON(parsed);
+                if (!instance.id || (this.instances[instance.id] && !options.overwrite)) {
+                    instance.id = guid();
+                }
+
+                if (!this.materials[instance.baseMaterialId]) {
+                    instance.baseMaterialId = options.fallbackMaterialId || 'classic';
+                }
+
+                if (options.name) instance.name = options.name;
+                return this.registerMaterialInstance(instance);
+            } catch (error) {
+                console.error('Failed to import Shader Architect material instance', error);
+                return null;
+            }
+        },
+
+        importInstance(data, options = {}) {
+            return this.importMaterialInstance(data, options);
+        },
+
+        duplicateMaterialInstance(instanceOrId, props = {}) {
+            const source = this.getMaterialInstance(instanceOrId);
+            if (!source) return null;
+
+            const data = source.toJSON();
+            data.id = props.id || guid();
+            data.name = props.name || `${source.name} Copy`;
+            if (props.baseMaterialId) data.baseMaterialId = props.baseMaterialId;
+
+            return this.importMaterialInstance(data, { overwrite: false });
+        },
+
+        duplicateInstance(instanceOrId, props = {}) {
+            return this.duplicateMaterialInstance(instanceOrId, props);
+        },
+
+        setMaterialInstanceBase(instanceOrId, baseMaterialId) {
+            const instance = this.getMaterialInstance(instanceOrId);
+            const base = this.materials[baseMaterialId];
+            if (!instance || !base) return null;
+
+            instance.baseMaterialId = base.id;
+            instance.icon = instance.icon || base.icon;
+            this.revalidateMaterialInstance(instance, { save: false });
+
+            Cube.all.forEach(cube => {
+                if (cube.sa_material_instance_id === instance.id) {
+                    cube.sa_material_id = base.id;
+                }
+            });
+
+            this.saveMaterialInstances();
+            ShaderEngine.updateAllCubes('set_material_instance_base');
+            return instance;
+        },
+
+        setInstanceBaseMaterial(instanceOrId, baseMaterialId) {
+            return this.setMaterialInstanceBase(instanceOrId, baseMaterialId);
+        },
+
+        rebaseMaterialInstances(oldBaseId, newBaseId = 'classic') {
+            for (let id in this.instances) {
+                if (this.instances[id].baseMaterialId === oldBaseId) {
+                    this.instances[id].baseMaterialId = newBaseId;
+                    this.revalidateMaterialInstance(this.instances[id], { save: false });
+                }
+            }
+        },
+
+        revalidateMaterialInstance(instanceOrId, options = {}) {
+            const instance = this.getMaterialInstance(instanceOrId) || instanceOrId;
+            if (!instance) return null;
+
+            const base = this.materials[instance.baseMaterialId] || this.materials['classic'];
+            if (!base) return null;
+
+            instance.baseMaterialId = base.id;
+            const baseUniforms = this.cloneUniformMap(base.uniforms || {});
+            const currentUniforms = instance.uniforms || {};
+            const nextUniforms = {};
+
+            for (const key in baseUniforms) {
+                const currentDef = currentUniforms[key];
+                nextUniforms[key] = this.areUniformsCompatible(baseUniforms[key], currentDef)
+                    ? this.cloneUniformDefinition(currentDef)
+                    : this.cloneUniformDefinition(baseUniforms[key]);
+            }
+
+            instance.uniforms = nextUniforms;
+            if (options.save !== false) this.saveMaterialInstances();
+            return instance;
+        },
+
+        revalidateMaterialInstancesForMaterial(materialId, options = {}) {
+            for (let id in this.instances) {
+                if (this.instances[id].baseMaterialId === materialId) {
+                    this.revalidateMaterialInstance(this.instances[id], { save: false });
+                }
+            }
+            if (options.save !== false) this.saveMaterialInstances();
+        },
+
+        revalidateAllMaterialInstances(options = {}) {
+            for (let id in this.instances) {
+                this.revalidateMaterialInstance(this.instances[id], { save: false });
+            }
+            if (options.save !== false) this.saveMaterialInstances();
+        },
+
+        getMaterialInstanceUniformDefaults(baseMaterialId) {
+            const base = this.materials[baseMaterialId] || this.materials['classic'];
+            return base ? this.cloneUniformMap(base.uniforms || {}) : {};
+        },
+
+        getMaterialInstanceUniforms(instanceOrId) {
+            const instance = this.getMaterialInstance(instanceOrId);
+            if (!instance) return {};
+
+            const base = this.materials[instance.baseMaterialId] || this.materials['classic'];
+            if (!base) return {};
+
+            const uniforms = this.cloneUniformMap(base.uniforms || {});
+            for (const key in instance.uniforms || {}) {
+                if (this.areUniformsCompatible(uniforms[key], instance.uniforms[key])) {
+                    uniforms[key] = this.cloneUniformDefinition(instance.uniforms[key]);
+                }
+            }
+            return uniforms;
+        },
+
+        getInstanceUniforms(instanceOrId) {
+            return this.getMaterialInstanceUniforms(instanceOrId);
+        },
+
+        setMaterialInstanceUniform(instanceOrId, uniformName, value) {
+            const instance = this.getMaterialInstance(instanceOrId);
+            if (!instance) return null;
+
+            const base = this.materials[instance.baseMaterialId] || this.materials['classic'];
+            const baseDef = base && base.uniforms ? base.uniforms[uniformName] : null;
+            if (!baseDef) return null;
+
+            let nextDef;
+            if (value && typeof value === 'object' && value.type && Object.prototype.hasOwnProperty.call(value, 'value')) {
+                nextDef = this.cloneUniformDefinition(value);
+            } else {
+                nextDef = this.cloneUniformDefinition(baseDef);
+                nextDef.value = this.cloneUniformValue(value);
+                if (nextDef.type === 'color') {
+                    if (typeof value === 'string') {
+                        nextDef.hexValue = value;
+                    } else {
+                        delete nextDef.hexValue;
+                    }
+                }
+            }
+
+            if (!this.areUniformsCompatible(baseDef, nextDef)) return null;
+            instance.uniforms[uniformName] = nextDef;
+            this.saveMaterialInstances();
+            ShaderEngine.updateAllUniforms();
+            ShaderEngine.updateAllCubes('set_material_instance_uniform');
+            return nextDef;
+        },
+
+        setInstanceUniform(instanceOrId, uniformName, value) {
+            return this.setMaterialInstanceUniform(instanceOrId, uniformName, value);
+        },
+
+        resetMaterialInstanceUniform(instanceOrId, uniformName) {
+            const instance = this.getMaterialInstance(instanceOrId);
+            if (!instance) return null;
+
+            const base = this.materials[instance.baseMaterialId] || this.materials['classic'];
+            const baseDef = base && base.uniforms ? base.uniforms[uniformName] : null;
+            if (!baseDef) return null;
+
+            instance.uniforms[uniformName] = this.cloneUniformDefinition(baseDef);
+            this.saveMaterialInstances();
+            ShaderEngine.updateAllUniforms();
+            ShaderEngine.updateAllCubes('reset_material_instance_uniform');
+            return instance.uniforms[uniformName];
+        },
+
+        resetInstanceUniform(instanceOrId, uniformName) {
+            return this.resetMaterialInstanceUniform(instanceOrId, uniformName);
+        },
+
+        resetMaterialInstanceUniforms(instanceOrId) {
+            const instance = this.getMaterialInstance(instanceOrId);
+            if (!instance) return null;
+
+            const base = this.materials[instance.baseMaterialId] || this.materials['classic'];
+            if (!base) return null;
+
+            instance.uniforms = this.cloneUniformMap(base.uniforms || {});
+            this.saveMaterialInstances();
+            ShaderEngine.updateAllUniforms();
+            ShaderEngine.updateAllCubes('reset_material_instance_uniforms');
+            return instance;
+        },
+
+        resetInstanceUniforms(instanceOrId) {
+            return this.resetMaterialInstanceUniforms(instanceOrId);
+        },
+
+        assignMaterialInstanceToCube(cube, instanceOrId) {
+            const instance = this.getMaterialInstance(instanceOrId);
+            if (!cube || !instance) return false;
+
+            cube.sa_material_instance_id = instance.id;
+            cube.sa_material_id = instance.baseMaterialId;
+            ShaderEngine.applyToMesh(cube, this.getRenderMaterialForInstance(instance));
+            ShaderEngine.updateLightUniforms();
+            return true;
+        },
+
+        assignInstanceToCube(cube, instanceOrId) {
+            return this.assignMaterialInstanceToCube(cube, instanceOrId);
+        },
+
+        clearMaterialInstanceFromCube(cube) {
+            if (!cube) return false;
+            this.clearCubeMaterialAssignment(cube);
+            ShaderEngine.updateAllCubes('clear_material_instance');
+            return true;
+        },
+
+        clearInstanceFromCube(cube) {
+            return this.clearMaterialInstanceFromCube(cube);
+        },
+
+        getRenderMaterialForInstance(instanceOrId) {
+            const instance = this.getMaterialInstance(instanceOrId);
+            if (!instance) return null;
+
+            const base = this.materials[instance.baseMaterialId] || this.materials['classic'];
+            if (!base) return null;
+
+            return {
+                id: base.id,
+                name: instance.name || base.name,
+                icon: instance.icon || base.icon,
+                vertex: base.vertex,
+                fragment: base.fragment,
+                uniforms: this.getMaterialInstanceUniforms(instance),
+                isCustom: false,
+                enableShadows: base.enableShadows,
+                isMaterialInstanceRender: true,
+                materialInstanceId: instance.id,
+                baseMaterialId: base.id,
+                baseMaterial: base
+            };
+        },
+
+        getRenderMaterial(materialOrInstance) {
+            if (!materialOrInstance) return this.materials['classic'] || null;
+            if (materialOrInstance.isMaterialInstanceRender) return materialOrInstance;
+
+            if (typeof materialOrInstance === 'string') {
+                if (this.instances[materialOrInstance]) {
+                    return this.getRenderMaterialForInstance(materialOrInstance);
+                }
+                return this.materials[materialOrInstance] || this.materials['classic'] || null;
+            }
+
+            if (materialOrInstance.isMaterialInstance) {
+                return this.getRenderMaterialForInstance(materialOrInstance);
+            }
+
+            return materialOrInstance;
+        },
+
+        resolveCubeMaterial(cube, fallbackMaterialId = 'classic') {
+            if (cube && cube.sa_material_instance_id) {
+                if (this.instances[cube.sa_material_instance_id]) {
+                    const material = this.getRenderMaterialForInstance(cube.sa_material_instance_id);
+                    if (material) return material;
+                }
+
+                this.clearMissingMaterialInstanceFromCube(cube, cube.sa_material_instance_id);
+                return this.getRenderMaterial(fallbackMaterialId || 'classic');
+            }
+
+            const materialId = (cube && cube.sa_material_id) || fallbackMaterialId || 'classic';
+            return this.getRenderMaterial(materialId);
         },
 
         registerBuiltIns() {
@@ -426,10 +2032,10 @@
                     }
                 `,
                 uniforms: {
-                    "LIGHTCOLOR": { type: "vec3", value: new THREE.Vector3(1, 1, 1) },
-                    "SHADE": { type: "bool", value: true },
-                    "LIGHTSIDE": { type: "int", value: 0 },
-                    "EMISSIVE": { type: "bool", value: false }
+                    "LIGHTCOLOR": { type: "vec3", value: new THREE.Vector3(1, 1, 1), expose: true },
+                    "SHADE": { type: "bool", value: true, expose: true },
+                    "LIGHTSIDE": { type: "int", value: 0, expose: true, min: 0, max: 5, step: 1, allow_higher: false, allow_lower: false },
+                    "EMISSIVE": { type: "bool", value: false, expose: true }
                 }
             });
 
@@ -1195,138 +2801,138 @@ void main() {
 }`,
                 uniforms: {
                     // Base PBR Properties
-                    "uBaseColor": { type: "color", value: "#ffffff", hexValue: "#ffffff" },
-                    "uMetallic": { type: "float", value: 0.0 },
-                    "uRoughness": { type: "float", value: 0.5 },
-                    "uAO": { type: "float", value: 1.0 },
+                    "uBaseColor": { type: "color", value: "#ffffff", hexValue: "#ffffff", expose: true },
+                    "uMetallic": { type: "float", value: 0.0, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
+                    "uRoughness": { type: "float", value: 0.5, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
+                    "uAO": { type: "float", value: 1.0, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
 
                     // Clearcoat
-                    "uClearcoat": { type: "float", value: 0.0 },
-                    "uClearcoatRoughness": { type: "float", value: 0.1 },
+                    "uClearcoat": { type: "float", value: 0.0, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
+                    "uClearcoatRoughness": { type: "float", value: 0.1, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
 
                     // Anisotropy
-                    "uAnisotropy": { type: "float", value: 0.0 },
-                    "uAnisotropyDirection": { type: "vec2", value: new THREE.Vector2(1.0, 0.0) },
+                    "uAnisotropy": { type: "float", value: 0.0, expose: true, min: -1.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
+                    "uAnisotropyDirection": { type: "vec2", value: new THREE.Vector2(1.0, 0.0), expose: true },
 
                     // Sheen
-                    "uSheen": { type: "float", value: 0.0 },
-                    "uSheenColor": { type: "color", value: "#ffffff", hexValue: "#ffffff" },
-                    "uSheenRoughness": { type: "float", value: 0.5 },
+                    "uSheen": { type: "float", value: 0.0, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
+                    "uSheenColor": { type: "color", value: "#ffffff", hexValue: "#ffffff", expose: true },
+                    "uSheenRoughness": { type: "float", value: 0.5, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
 
                     // Transmission
-                    "uTransmission": { type: "float", value: 0.0 },
-                    "uThickness": { type: "float", value: 1.0 },
-                    "uAttenuationColor": { type: "color", value: "#ffffff", hexValue: "#ffffff" },
-                    "uAttenuationDistance": { type: "float", value: 1.0 },
-                    "uIOR": { type: "float", value: 1.5 },
+                    "uTransmission": { type: "float", value: 0.0, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
+                    "uThickness": { type: "float", value: 1.0, expose: true, min: 0.0, max: 10.0, step: 0.1, allow_higher: true, allow_lower: false },
+                    "uAttenuationColor": { type: "color", value: "#ffffff", hexValue: "#ffffff", expose: true },
+                    "uAttenuationDistance": { type: "float", value: 1.0, expose: true, min: 0.0, max: 10.0, step: 0.1, allow_higher: true, allow_lower: false },
+                    "uIOR": { type: "float", value: 1.5, expose: true, min: 1.0, max: 3.0, step: 0.01, allow_higher: true, allow_lower: false },
 
                     // Iridescence
-                    "uIridescence": { type: "float", value: 0.0 },
-                    "uIridescenceIOR": { type: "float", value: 1.33 },
-                    "uIridescenceThicknessMin": { type: "float", value: 100.0 },
-                    "uIridescenceThicknessMax": { type: "float", value: 400.0 },
+                    "uIridescence": { type: "float", value: 0.0, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
+                    "uIridescenceIOR": { type: "float", value: 1.33, expose: true, min: 1.0, max: 3.0, step: 0.01, allow_higher: true, allow_lower: false },
+                    "uIridescenceThicknessMin": { type: "float", value: 100.0, expose: true, min: 0.0, max: 1000.0, step: 10.0, allow_higher: true, allow_lower: false },
+                    "uIridescenceThicknessMax": { type: "float", value: 400.0, expose: true, min: 0.0, max: 1000.0, step: 10.0, allow_higher: true, allow_lower: false },
 
                     // Emission
-                    "uEmissiveColor": { type: "color", value: "#000000", hexValue: "#000000" },
-                    "uEmissiveStrength": { type: "float", value: 0.0 },
+                    "uEmissiveColor": { type: "color", value: "#000000", hexValue: "#000000", expose: true },
+                    "uEmissiveStrength": { type: "float", value: 0.0, expose: true, min: 0.0, max: 10.0, step: 0.1, allow_higher: true, allow_lower: false },
 
                     // Texture enable flags. Set these to true only when a real texture exists.
-                    "uUseBaseColorMap": { type: "bool", value: false },
-                    "uUseMetallicRoughnessMap": { type: "bool", value: false },
-                    "uUseNormalMap": { type: "bool", value: false },
-                    "uUseAOMap": { type: "bool", value: false },
-                    "uUseEmissiveMap": { type: "bool", value: false },
-                    "uUseClearcoatMap": { type: "bool", value: false },
-                    "uUseClearcoatRoughnessMap": { type: "bool", value: false },
-                    "uUseAnisotropyMap": { type: "bool", value: false },
-                    "uUseSheenColorMap": { type: "bool", value: false },
-                    "uUseSheenRoughnessMap": { type: "bool", value: false },
-                    "uUseTransmissionMap": { type: "bool", value: false },
-                    "uUseThicknessMap": { type: "bool", value: false },
-                    "uUseIridescenceMap": { type: "bool", value: false },
-                    "uUseIridescenceThicknessMap": { type: "bool", value: false },
+                    "uUseBaseColorMap": { type: "bool", value: false, expose: true },
+                    "uUseMetallicRoughnessMap": { type: "bool", value: false, expose: true },
+                    "uUseNormalMap": { type: "bool", value: false, expose: true },
+                    "uUseAOMap": { type: "bool", value: false, expose: true },
+                    "uUseEmissiveMap": { type: "bool", value: false, expose: true },
+                    "uUseClearcoatMap": { type: "bool", value: false, expose: true },
+                    "uUseClearcoatRoughnessMap": { type: "bool", value: false, expose: true },
+                    "uUseAnisotropyMap": { type: "bool", value: false, expose: true },
+                    "uUseSheenColorMap": { type: "bool", value: false, expose: true },
+                    "uUseSheenRoughnessMap": { type: "bool", value: false, expose: true },
+                    "uUseTransmissionMap": { type: "bool", value: false, expose: true },
+                    "uUseThicknessMap": { type: "bool", value: false, expose: true },
+                    "uUseIridescenceMap": { type: "bool", value: false, expose: true },
+                    "uUseIridescenceThicknessMap": { type: "bool", value: false, expose: true },
 
                     // Texture Maps
-                    "uBaseColorMap": { type: "sampler2D", value: null },
-                    "uMetallicRoughnessMap": { type: "sampler2D", value: null },
-                    "uNormalMap": { type: "sampler2D", value: null },
-                    "uAOMap": { type: "sampler2D", value: null },
-                    "uEmissiveMap": { type: "sampler2D", value: null },
-                    "uClearcoatMap": { type: "sampler2D", value: null },
-                    "uClearcoatRoughnessMap": { type: "sampler2D", value: null },
-                    "uClearcoatNormalMap": { type: "sampler2D", value: null },
-                    "uAnisotropyMap": { type: "sampler2D", value: null },
-                    "uSheenColorMap": { type: "sampler2D", value: null },
-                    "uSheenRoughnessMap": { type: "sampler2D", value: null },
-                    "uTransmissionMap": { type: "sampler2D", value: null },
-                    "uThicknessMap": { type: "sampler2D", value: null },
-                    "uIridescenceMap": { type: "sampler2D", value: null },
-                    "uIridescenceThicknessMap": { type: "sampler2D", value: null },
+                    "uBaseColorMap": { type: "sampler2D", value: null, expose: false },
+                    "uMetallicRoughnessMap": { type: "sampler2D", value: null, expose: false },
+                    "uNormalMap": { type: "sampler2D", value: null, expose: false },
+                    "uAOMap": { type: "sampler2D", value: null, expose: false },
+                    "uEmissiveMap": { type: "sampler2D", value: null, expose: false },
+                    "uClearcoatMap": { type: "sampler2D", value: null, expose: false },
+                    "uClearcoatRoughnessMap": { type: "sampler2D", value: null, expose: false },
+                    "uClearcoatNormalMap": { type: "sampler2D", value: null, expose: false },
+                    "uAnisotropyMap": { type: "sampler2D", value: null, expose: false },
+                    "uSheenColorMap": { type: "sampler2D", value: null, expose: false },
+                    "uSheenRoughnessMap": { type: "sampler2D", value: null, expose: false },
+                    "uTransmissionMap": { type: "sampler2D", value: null, expose: false },
+                    "uThicknessMap": { type: "sampler2D", value: null, expose: false },
+                    "uIridescenceMap": { type: "sampler2D", value: null, expose: false },
+                    "uIridescenceThicknessMap": { type: "sampler2D", value: null, expose: false },
 
                     // Texture Scales
-                    "uBaseColorMapScale": { type: "vec2", value: new THREE.Vector2(1, 1) },
-                    "uMetallicRoughnessMapScale": { type: "vec2", value: new THREE.Vector2(1, 1) },
-                    "uNormalMapScale": { type: "vec2", value: new THREE.Vector2(1, 1) },
-                    "uAOMapScale": { type: "vec2", value: new THREE.Vector2(1, 1) },
-                    "uEmissiveMapScale": { type: "vec2", value: new THREE.Vector2(1, 1) },
-                    "uClearcoatMapScale": { type: "vec2", value: new THREE.Vector2(1, 1) },
-                    "uClearcoatRoughnessMapScale": { type: "vec2", value: new THREE.Vector2(1, 1) },
-                    "uAnisotropyMapScale": { type: "vec2", value: new THREE.Vector2(1, 1) },
-                    "uSheenColorMapScale": { type: "vec2", value: new THREE.Vector2(1, 1) },
-                    "uSheenRoughnessMapScale": { type: "vec2", value: new THREE.Vector2(1, 1) },
-                    "uTransmissionMapScale": { type: "vec2", value: new THREE.Vector2(1, 1) },
-                    "uThicknessMapScale": { type: "vec2", value: new THREE.Vector2(1, 1) },
-                    "uIridescenceMapScale": { type: "vec2", value: new THREE.Vector2(1, 1) },
-                    "uIridescenceThicknessMapScale": { type: "vec2", value: new THREE.Vector2(1, 1) },
+                    "uBaseColorMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true },
+                    "uMetallicRoughnessMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true },
+                    "uNormalMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true },
+                    "uAOMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true },
+                    "uEmissiveMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true },
+                    "uClearcoatMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true },
+                    "uClearcoatRoughnessMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true },
+                    "uAnisotropyMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true },
+                    "uSheenColorMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true },
+                    "uSheenRoughnessMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true },
+                    "uTransmissionMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true },
+                    "uThicknessMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true },
+                    "uIridescenceMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true },
+                    "uIridescenceThicknessMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true },
 
                     // Rendering controls
-                    "uNormalScale": { type: "float", value: 1.0 },
-                    "uEnvSpecularStrength": { type: "float", value: 0.35 },
-                    "uSpecularIntensity": { type: "float", value: 1.0 },
+                    "uNormalScale": { type: "float", value: 1.0, expose: true, min: -2.0, max: 2.0, step: 0.1, allow_higher: true, allow_lower: true },
+                    "uEnvSpecularStrength": { type: "float", value: 0.35, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: true, allow_lower: false },
+                    "uSpecularIntensity": { type: "float", value: 1.0, expose: true, min: 0.0, max: 2.0, step: 0.05, allow_higher: true, allow_lower: false },
 
                     // Light arrays / Lightflow-compatible uniforms
-                    "uLightPos": { type: "vec3v", value: Array.from({ length: 16 }, () => new THREE.Vector3()) },
-                    "uLightDir": { type: "vec3v", value: Array.from({ length: 16 }, () => new THREE.Vector3(0, -1, 0)) },
-                    "uLightIntensity": { type: "floatv", value: Array(16).fill(0.0) },
-                    "uLightDistance": { type: "floatv", value: Array(16).fill(0.0) },
-                    "uLightConeAngle": { type: "floatv", value: Array(16).fill(0.0) },
-                    "uLightPenumbra": { type: "floatv", value: Array(16).fill(0.0) },
-                    "uLightType": { type: "intv", value: Array(16).fill(0) },
-                    "uLightColor": { type: "vec3v", value: Array.from({ length: 16 }, () => new THREE.Vector3()) },
-                    "max_light_number": { type: "int", value: 0 },
-                    "uLightCastShadow": { type: "intv", value: Array(16).fill(0) },
-                    "uLightShadowIndex": { type: "intv", value: Array(16).fill(-1) },
+                    "uLightPos": { type: "vec3v", value: Array.from({ length: 16 }, () => new THREE.Vector3()), expose: false },
+                    "uLightDir": { type: "vec3v", value: Array.from({ length: 16 }, () => new THREE.Vector3(0, -1, 0)), expose: false },
+                    "uLightIntensity": { type: "floatv", value: Array(16).fill(0.0), expose: false },
+                    "uLightDistance": { type: "floatv", value: Array(16).fill(0.0), expose: false },
+                    "uLightConeAngle": { type: "floatv", value: Array(16).fill(0.0), expose: false },
+                    "uLightPenumbra": { type: "floatv", value: Array(16).fill(0.0), expose: false },
+                    "uLightType": { type: "intv", value: Array(16).fill(0), expose: false },
+                    "uLightColor": { type: "vec3v", value: Array.from({ length: 16 }, () => new THREE.Vector3()), expose: false },
+                    "max_light_number": { type: "int", value: 0, expose: true, min: 0, max: 16, step: 1, allow_higher: false, allow_lower: false },
+                    "uLightCastShadow": { type: "intv", value: Array(16).fill(0), expose: false },
+                    "uLightShadowIndex": { type: "intv", value: Array(16).fill(-1), expose: false },
 
                     // Ambient
-                    "uAmbient": { type: "float", value: 0.3 },
-                    "uAmbientColor": { type: "vec3", value: new THREE.Vector3(1, 1, 1) },
+                    "uAmbient": { type: "float", value: 0.3, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: true, allow_lower: false },
+                    "uAmbientColor": { type: "vec3", value: new THREE.Vector3(1, 1, 1), expose: true },
 
                     // Normal correction
-                    "uWorldNormalMatrix": { type: "mat3", value: new THREE.Matrix3() },
-                    "uStylizedNormalInfluence": { type: "float", value: 0.0 },
+                    "uWorldNormalMatrix": { type: "mat3", value: new THREE.Matrix3(), expose: false },
+                    "uStylizedNormalInfluence": { type: "float", value: 0.0, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
 
                     // Output / artistic controls
-                    "uExposure": { type: "float", value: 1.0 },
-                    "uUseToneMapping": { type: "float", value: 0.0 },
-                    "uLightWrap": { type: "float", value: 0.0 },
+                    "uExposure": { type: "float", value: 1.0, expose: true, min: 0.0, max: 5.0, step: 0.1, allow_higher: true, allow_lower: false },
+                    "uUseToneMapping": { type: "float", value: 0.0, expose: true, min: 0.0, max: 5.0, step: 1.0, allow_higher: false, allow_lower: false },
+                    "uLightWrap": { type: "float", value: 0.0, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
 
                     // Ambient Occlusion
-                    "uAOEnabled": { type: "bool", value: true },
-                    "uAOStrength": { type: "float", value: 0.5 },
-                    "uAORadius": { type: "float", value: 0.12 },
-                    "uAOPower": { type: "float", value: 1.5 },
-                    "uAOMin": { type: "float", value: 0.4 },
-                    "uAODirectInfluence": { type: "float", value: 0.15 },
+                    "uAOEnabled": { type: "bool", value: true, expose: true },
+                    "uAOStrength": { type: "float", value: 0.5, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
+                    "uAORadius": { type: "float", value: 0.12, expose: true, min: 0.0, max: 2.0, step: 0.01, allow_higher: true, allow_lower: false },
+                    "uAOPower": { type: "float", value: 1.5, expose: true, min: 0.1, max: 5.0, step: 0.1, allow_higher: true, allow_lower: false },
+                    "uAOMin": { type: "float", value: 0.4, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
+                    "uAODirectInfluence": { type: "float", value: 0.15, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
 
                     // Shadows
-                    "uShadowStrength": { type: "float", value: 1.0 },
-                    "uShadowFloor": { type: "float", value: 0.0 },
+                    "uShadowStrength": { type: "float", value: 1.0, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
+                    "uShadowFloor": { type: "float", value: 0.0, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
 
                     // Blockbench-style controls
-                    "SHADE": { type: "bool", value: true },
-                    "LIGHTSIDE": { type: "int", value: 0 },
-                    "LIGHTCOLOR": { type: "vec3", value: new THREE.Vector3(1, 1, 1) },
-                    "TEXTURE_SIZE": { type: "vec2", value: new THREE.Vector2(16, 16) }
+                    "SHADE": { type: "bool", value: true, expose: true },
+                    "LIGHTSIDE": { type: "int", value: 0, expose: true, min: 0, max: 5, step: 1, allow_higher: false, allow_lower: false },
+                    "LIGHTCOLOR": { type: "vec3", value: new THREE.Vector3(1, 1, 1), expose: true },
+                    "TEXTURE_SIZE": { type: "vec2", value: new THREE.Vector2(16, 16), expose: false }
                 },
                 enableShadows: true
             });
@@ -1335,154 +2941,277 @@ void main() {
 
             const createLightflowUniforms = (withShadowBinding = false) => {
                 const uniforms = {
+                    "uClampLighting": {
+                        type: "bool",
+                        value: false,
+                        expose: true
+                    },
                     // Light arrays
                     "uLightPos": {
                         type: "vec3v",
-                        value: Array.from({ length: 16 }, () => new THREE.Vector3())
+                        value: Array.from({ length: 16 }, () => new THREE.Vector3()),
+                        expose: false
                     },
                     "uLightDir": {
                         type: "vec3v",
-                        value: Array.from({ length: 16 }, () => new THREE.Vector3(0, -1, 0))
+                        value: Array.from({ length: 16 }, () => new THREE.Vector3(0, -1, 0)),
+                        expose: false
                     },
                     "uLightIntensity": {
                         type: "floatv",
-                        value: Array(16).fill(0.0)
+                        value: Array(16).fill(0.0),
+                        expose: false
                     },
                     "uLightDistance": {
                         type: "floatv",
-                        value: Array(16).fill(0.0)
+                        value: Array(16).fill(0.0),
+                        expose: false
                     },
                     "uLightConeAngle": {
                         type: "floatv",
-                        value: Array(16).fill(0.0)
+                        value: Array(16).fill(0.0),
+                        expose: false
                     },
                     "uLightPenumbra": {
                         type: "floatv",
-                        value: Array(16).fill(0.0)
+                        value: Array(16).fill(0.0),
+                        expose: false
                     },
                     "uLightType": {
                         type: "intv",
-                        value: Array(16).fill(0)
+                        value: Array(16).fill(0),
+                        expose: false
                     },
                     "uLightColor": {
                         type: "vec3v",
-                        value: Array.from({ length: 16 }, () => new THREE.Vector3())
+                        value: Array.from({ length: 16 }, () => new THREE.Vector3()),
+                        expose: false
                     },
                     "max_light_number": {
                         type: "int",
-                        value: 0
+                        value: 0,
+                        expose: true,
+                        min: 0,
+                        max: 16,
+                        step: 1,
+                        allow_higher: false,
+                        allow_lower: false
                     },
 
                     // Ambient
                     "uAmbient": {
                         type: "float",
-                        value: 0.3
+                        value: 0.3,
+                        expose: true,
+                        min: 0.0,
+                        max: 1.0,
+                        step: 0.05,
+                        allow_higher: true,
+                        allow_lower: false
                     },
                     "uAmbientColor": {
                         type: "vec3",
-                        value: new THREE.Vector3(1, 1, 1)
+                        value: new THREE.Vector3(1, 1, 1),
+                        expose: true
                     },
 
                     // Normal correction
                     "uWorldNormalMatrix": {
                         type: "mat3",
-                        value: new THREE.Matrix3()
+                        value: new THREE.Matrix3(),
+                        expose: false
                     },
 
                     // Output / artistic controls
                     "uExposure": {
                         type: "float",
-                        value: 1.0
+                        value: 1.0,
+                        expose: true,
+                        min: 0.0,
+                        max: 5.0,
+                        step: 0.1,
+                        allow_higher: true,
+                        allow_lower: false
                     },
                     "uToneMapping": {
                         type: "int",
-                        value: 0
+                        value: 0,
+                        expose: true,
+                        min: 0,
+                        max: 5,
+                        step: 1,
+                        allow_higher: false,
+                        allow_lower: false
                     },
                     "uStylizedNormalInfluence": {
                         type: "float",
-                        value: 0.0
+                        value: 0.0,
+                        expose: true,
+                        min: 0.0,
+                        max: 1.0,
+                        step: 0.05,
+                        allow_higher: false,
+                        allow_lower: false
                     },
                     "uLightWrap": {
                         type: "float",
-                        value: 0.0
+                        value: 0.0,
+                        expose: true,
+                        min: 0.0,
+                        max: 1.0,
+                        step: 0.05,
+                        allow_higher: false,
+                        allow_lower: false
                     },
 
                     // Ambient Occlusion - Voxel-friendly
                     "uAOEnabled": {
                         type: "bool",
-                        value: true
+                        value: true,
+                        expose: true
                     },
                     "uAOStrength": {
                         type: "float",
-                        value: 0.5
+                        value: 0.5,
+                        expose: true,
+                        min: 0.0,
+                        max: 1.0,
+                        step: 0.05,
+                        allow_higher: false,
+                        allow_lower: false
                     },
                     "uAORadius": {
                         type: "float",
-                        value: 0.12
+                        value: 0.12,
+                        expose: true,
+                        min: 0.0,
+                        max: 2.0,
+                        step: 0.01,
+                        allow_higher: true,
+                        allow_lower: false
                     },
                     "uAOPower": {
                         type: "float",
-                        value: 1.5
+                        value: 1.5,
+                        expose: true,
+                        min: 0.1,
+                        max: 5.0,
+                        step: 0.1,
+                        allow_higher: true,
+                        allow_lower: false
                     },
                     "uAOMin": {
                         type: "float",
-                        value: 0.4
+                        value: 0.4,
+                        expose: true,
+                        min: 0.0,
+                        max: 1.0,
+                        step: 0.05,
+                        allow_higher: false,
+                        allow_lower: false
                     },
                     "uAODirectInfluence": {
                         type: "float",
-                        value: 0.15
+                        value: 0.15,
+                        expose: true,
+                        min: 0.0,
+                        max: 1.0,
+                        step: 0.05,
+                        allow_higher: false,
+                        allow_lower: false
                     },
                     "uAOEdgeSharpness": {
                         type: "float",
-                        value: 8.0
+                        value: 8.0,
+                        expose: true,
+                        min: 0.0,
+                        max: 16.0,
+                        step: 0.5,
+                        allow_higher: true,
+                        allow_lower: false
                     },
                     "uAOCornerWeight": {
                         type: "float",
-                        value: 1.5
+                        value: 1.5,
+                        expose: true,
+                        min: 0.0,
+                        max: 5.0,
+                        step: 0.1,
+                        allow_higher: true,
+                        allow_lower: false
                     },
                     "uAOFaceNormalWeight": {
                         type: "float",
-                        value: 0.3
+                        value: 0.3,
+                        expose: true,
+                        min: 0.0,
+                        max: 1.0,
+                        step: 0.05,
+                        allow_higher: false,
+                        allow_lower: false
                     },
 
                     // Blockbench-style controls
                     "SHADE": {
                         type: "bool",
-                        value: true
+                        value: true,
+                        expose: true
                     },
                     "LIGHTSIDE": {
                         type: "int",
-                        value: 0
+                        value: 0,
+                        expose: true,
+                        min: 0,
+                        max: 5,
+                        step: 1,
+                        allow_higher: false,
+                        allow_lower: false
                     },
                     "LIGHTCOLOR": {
                         type: "vec3",
-                        value: new THREE.Vector3(1, 1, 1)
+                        value: new THREE.Vector3(1, 1, 1),
+                        expose: true
                     },
                     "TEXTURE_SIZE": {
                         type: "vec2",
-                        value: new THREE.Vector2(16, 16)
+                        value: new THREE.Vector2(16, 16),
+                        expose: false
                     }
                 };
 
                 if (withShadowBinding) {
                     uniforms["uLightCastShadow"] = {
                         type: "intv",
-                        value: Array(16).fill(0)
+                        value: Array(16).fill(0),
+                        expose: false
                     };
 
                     uniforms["uLightShadowIndex"] = {
                         type: "intv",
-                        value: Array(16).fill(-1)
+                        value: Array(16).fill(-1),
+                        expose: false
                     };
 
                     uniforms["uShadowStrength"] = {
                         type: "float",
-                        value: 1.0
+                        value: 1.0,
+                        expose: true,
+                        min: 0.0,
+                        max: 1.0,
+                        step: 0.05,
+                        allow_higher: false,
+                        allow_lower: false
                     };
 
                     uniforms["uShadowFloor"] = {
                         type: "float",
-                        value: 0.0
+                        value: 0.0,
+                        expose: true,
+                        min: 0.0,
+                        max: 1.0,
+                        step: 0.05,
+                        allow_higher: false,
+                        allow_lower: false
                     };
                 }
 
@@ -1590,6 +3319,9 @@ uniform float uAODirectInfluence;
 uniform float uAOEdgeSharpness;
 uniform float uAOCornerWeight;
 uniform float uAOFaceNormalWeight;
+
+// Checkbox option to clamp lighting
+uniform bool uClampLighting; 
 
 varying vec2 vUv;
 varying vec2 vFaceUv;
@@ -1730,6 +3462,8 @@ float computeVoxelAO(vec2 faceUv, vec3 normal) {
     return clamp(ao, clamp(uAOMin, 0.0, 1.0), 1.0);
 }
 
+// --- TONE MAPPING (Linear Workflow Compatible) ---
+
 // ACES Filmic Tone Mapping
 vec3 acesFilm(vec3 x) {
     float a = 2.51;
@@ -1772,8 +3506,7 @@ vec3 filmic(vec3 x) {
     float exposure = max(uExposure, 0.001);
     x *= exposure;
     x = max(vec3(0.0), x - 0.004);
-    float gamma = 2.2;
-    return pow((x * (6.2 * x + 0.5)) / (x * (6.2 * x + 1.7) + 0.06), vec3(1.0 / gamma));
+    return (x * (6.2 * x + 0.5)) / (x * (6.2 * x + 1.7) + 0.06);
 }
 
 // Linear with exposure only
@@ -1807,6 +3540,10 @@ void main() {
 
     if (texel.a < 0.01) discard;
 
+    // --- LINEARIZE INPUT TEXTURE ---
+    // Converts input texture from sRGB to Linear space so lighting calculations are correct.
+    texel.rgb = pow(max(texel.rgb, vec3(0.0)), vec3(2.2));
+
     vec3 normal = safeNormalize(vWorldNormal, vec3(0.0, 1.0, 0.0));
 
     vec3 directLight = vec3(0.0);
@@ -1826,7 +3563,17 @@ void main() {
     float directAO = mix(1.0, ambientOcclusion, clamp(uAODirectInfluence, 0.0, 1.0));
     vec3 lighting = ambientLight + directLight * directAO;
 
+    // --- LIGHTING CLAMP (Checkbox) ---
+    if (uClampLighting) {
+        float maxChannel = max(lighting.r, max(lighting.g, lighting.b));
+        if (maxChannel > 1.0) {
+            lighting /= maxChannel;
+        }
+    }
+
     vec3 finalColor = texel.rgb * lighting;
+    
+    // Apply lift uniform (keep values near 0.0 to prevent washing out dark tones)
     finalColor += vec3(lift);
     finalColor *= LIGHTCOLOR;
 
@@ -1835,6 +3582,10 @@ void main() {
     }
 
     finalColor = applyToneMapping(finalColor);
+
+    // --- GAMMA CORRECTION ---
+    // Converts the final linear color into sRGB space for correct display output.
+    finalColor = pow(max(finalColor, vec3(0.0)), vec3(1.0 / 2.2));
 
     gl_FragColor = vec4(finalColor, texel.a);
 }`,
@@ -1950,15 +3701,22 @@ uniform float uAmbient;
 uniform vec3 uAmbientColor;
 
 uniform float uExposure;
-uniform float uUseToneMapping;
+uniform int uToneMapping;
 uniform float uLightWrap;
 
+// AO Uniforms
 uniform bool uAOEnabled;
 uniform float uAOStrength;
 uniform float uAORadius;
 uniform float uAOPower;
 uniform float uAOMin;
 uniform float uAODirectInfluence;
+uniform float uAOEdgeSharpness;
+uniform float uAOCornerWeight;
+uniform float uAOFaceNormalWeight;
+
+// Checkbox option to clamp lighting
+uniform bool uClampLighting;
 
 uniform float uShadowStrength;
 uniform float uShadowFloor;
@@ -1972,6 +3730,15 @@ varying vec3 vWorldNormal;
 #define SA_LIGHT_POINT 0
 #define SA_LIGHT_DIRECTIONAL 1
 #define SA_LIGHT_SPOT 2
+
+// Tonemapping modes
+#define TM_NONE 0
+#define TM_ACES 1
+#define TM_REINHARD 2
+#define TM_UNCHARTED2 3
+#define TM_HABLE 4
+#define TM_FILMIC 5
+#define TM_LINEAR 6
 
 vec3 safeNormalize(vec3 v, vec3 fallback) {
     float lenSq = dot(v, v);
@@ -2046,13 +3813,13 @@ vec3 computeLightContribution(int lightIndex, vec3 normal, vec3 worldPos) {
     return max(uLightColor[lightIndex], vec3(0.0)) * diffuse * intensity * attenuation;
 }
 
+// --- SHADOW FUNCTIONS ---
+
 float getDirectionalShadowByIndex(int shadowIndex) {
     float result = 1.0;
 
     #ifdef USE_SHADOWMAP
-
     #if NUM_DIR_LIGHT_SHADOWS > 0
-
         DirectionalLightShadow directionalLight;
 
         #pragma unroll_loop_start
@@ -2070,9 +3837,7 @@ float getDirectionalShadowByIndex(int shadowIndex) {
             }
         }
         #pragma unroll_loop_end
-
     #endif
-
     #endif
 
     return result;
@@ -2082,9 +3847,7 @@ float getSpotShadowByIndex(int shadowIndex) {
     float result = 1.0;
 
     #ifdef USE_SHADOWMAP
-
     #if NUM_SPOT_LIGHT_SHADOWS > 0
-
         SpotLightShadow spotLight;
 
         #pragma unroll_loop_start
@@ -2102,9 +3865,7 @@ float getSpotShadowByIndex(int shadowIndex) {
             }
         }
         #pragma unroll_loop_end
-
     #endif
-
     #endif
 
     return result;
@@ -2114,9 +3875,7 @@ float getPointShadowByIndex(int shadowIndex) {
     float result = 1.0;
 
     #ifdef USE_SHADOWMAP
-
     #if NUM_POINT_LIGHT_SHADOWS > 0
-
         PointLightShadow pointLight;
 
         #pragma unroll_loop_start
@@ -2136,9 +3895,7 @@ float getPointShadowByIndex(int shadowIndex) {
             }
         }
         #pragma unroll_loop_end
-
     #endif
-
     #endif
 
     return result;
@@ -2151,7 +3908,6 @@ float getCustomLightShadow(int lightIndex) {
     if (shadowIndex < 0) return 1.0;
 
     int type = uLightType[lightIndex];
-
     float shadow = 1.0;
 
     if (type == SA_LIGHT_DIRECTIONAL) {
@@ -2168,57 +3924,126 @@ float getCustomLightShadow(int lightIndex) {
     return mix(1.0, shadow, clamp(uShadowStrength, 0.0, 1.0));
 }
 
-float computeFaceCavityAO(vec2 faceUv) {
-    vec2 uv = clamp(faceUv, vec2(0.0), vec2(1.0));
-    float radius = clamp(uAORadius, 0.0001, 0.5);
+// --- VOXEL-FRIENDLY AMBIENT OCCLUSION ---
 
-    float left = 1.0 - smoothstep(0.0, radius, uv.x);
-    float right = 1.0 - smoothstep(0.0, radius, 1.0 - uv.x);
-    float bottom = 1.0 - smoothstep(0.0, radius, uv.y);
-    float top = 1.0 - smoothstep(0.0, radius, 1.0 - uv.y);
-
-    float edgeAO = max(max(left, right), max(bottom, top));
-    float cornerAO = max(max(left * bottom, left * top), max(right * bottom, right * top));
-
-    return clamp(edgeAO * 0.30 + cornerAO * 0.70, 0.0, 1.0);
-}
-
-float computeHemisphereAO(vec3 normal) {
-    float strength = clamp(uAOStrength, 0.0, 1.0);
-    float downward = clamp(-normal.y, 0.0, 1.0);
-
-    return 1.0 - downward * strength * 0.18;
-}
-
-float computeAmbientOcclusion(vec2 faceUv, vec3 normal) {
+float computeVoxelAO(vec2 faceUv, vec3 normal) {
     if (!uAOEnabled) return 1.0;
 
+    vec2 uv = clamp(faceUv, vec2(0.0), vec2(1.0));
+    float radius = clamp(uAORadius, 0.0001, 0.5);
+    float sharpness = clamp(uAOEdgeSharpness, 1.0, 32.0);
+    float cornerWeight = clamp(uAOCornerWeight, 0.0, 3.0);
+    float faceNormalWeight = clamp(uAOFaceNormalWeight, 0.0, 1.0);
     float strength = clamp(uAOStrength, 0.0, 1.0);
-    float cavity = computeFaceCavityAO(faceUv);
+
+    float faceNormalAO = 1.0;
+    if (faceNormalWeight > 0.0) {
+        float downward = clamp(-normal.y, 0.0, 1.0);
+        faceNormalAO = 1.0 - downward * faceNormalWeight * 0.25;
+    }
+
+    float edgeX = 1.0 - smoothstep(0.0, radius, uv.x) * smoothstep(0.0, radius, 1.0 - uv.x);
+    float edgeY = 1.0 - smoothstep(0.0, radius, uv.y) * smoothstep(0.0, radius, 1.0 - uv.y);
+    
+    edgeX = pow(edgeX, sharpness * 0.1);
+    edgeY = pow(edgeY, sharpness * 0.1);
+    
+    float edgeAO = max(edgeX, edgeY);
+
+    float cornerX = smoothstep(0.0, radius, uv.x) * smoothstep(0.0, radius, 1.0 - uv.x);
+    float cornerY = smoothstep(0.0, radius, uv.y) * smoothstep(0.0, radius, 1.0 - uv.y);
+    float cornerAO = cornerX * cornerY * cornerWeight;
+
+    float cavity = edgeAO + cornerAO;
+    cavity = clamp(cavity, 0.0, 1.0);
 
     float ao = 1.0 - cavity * strength;
-    ao *= computeHemisphereAO(normal);
+    ao *= faceNormalAO;
 
     ao = pow(clamp(ao, 0.0, 1.0), max(uAOPower, 0.001));
 
     return clamp(ao, clamp(uAOMin, 0.0, 1.0), 1.0);
 }
 
-vec3 applyOutputMapping(vec3 color) {
+// --- TONE MAPPING (Linear Workflow Compatible) ---
+
+vec3 acesFilm(vec3 x) {
+    float a = 2.51;
+    float b = 0.03;
+    float c = 2.43;
+    float d = 0.59;
+    float e = 0.14;
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+
+vec3 reinhard(vec3 x) {
+    return x / (x + vec3(1.0));
+}
+
+vec3 uncharted2(vec3 x) {
+    float A = 0.15;
+    float B = 0.50;
+    float C = 0.10;
+    float D = 0.20;
+    float E = 0.02;
+    float F = 0.30;
+    return ((x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F)) - E / F;
+}
+
+vec3 hable(vec3 x) {
+    float A = 0.22;
+    float B = 0.30;
+    float C = 0.10;
+    float D = 0.20;
+    float E = 0.01;
+    float F = 0.30;
+    return ((x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F)) - E / F;
+}
+
+vec3 filmic(vec3 x) {
+    float exposure = max(uExposure, 0.001);
+    x *= exposure;
+    x = max(vec3(0.0), x - 0.004);
+    return (x * (6.2 * x + 0.5)) / (x * (6.2 * x + 1.7) + 0.06);
+}
+
+vec3 linearTone(vec3 x) {
+    return clamp(x * max(uExposure, 0.001), 0.0, 1.0);
+}
+
+vec3 applyToneMapping(vec3 color) {
     color = max(color, vec3(0.0));
-
-    if (uUseToneMapping > 0.5) {
-        float exposure = max(uExposure, 0.001);
-        return vec3(1.0) - exp(-color * exposure);
+    
+    switch (uToneMapping) {
+        case TM_ACES:
+            return acesFilm(color * max(uExposure, 0.001));
+        case TM_REINHARD:
+            return reinhard(color * max(uExposure, 0.001));
+        case TM_UNCHARTED2:
+            return uncharted2(color * max(uExposure, 0.001));
+        case TM_HABLE:
+            return hable(color * max(uExposure, 0.001));
+        case TM_FILMIC:
+            return filmic(color);
+        case TM_LINEAR:
+            return linearTone(color);
+        default:
+            return clamp(color, 0.0, 1.0);
     }
-
-    return clamp(color, 0.0, 1.0);
 }
 
 void main() {
     vec4 texel = texture2D(map, vUv);
 
     if (texel.a < 0.01) discard;
+
+    // --- LINEARIZE INPUT TEXTURE ---
+    // Converts input texture from sRGB to Linear space so lighting math is calculated correctly.
+    #if defined( sRGBToLinear )
+        texel.rgb = sRGBToLinear(texel.rgb);
+    #else
+        texel.rgb = pow(max(texel.rgb, vec3(0.0)), vec3(2.2));
+    #endif
 
     vec3 normal = safeNormalize(vWorldNormal, vec3(0.0, 1.0, 0.0));
 
@@ -2234,7 +4059,7 @@ void main() {
         directLight += lightContribution * shadow;
     }
 
-    float ambientOcclusion = computeAmbientOcclusion(vFaceUv, normal);
+    float ambientOcclusion = computeVoxelAO(vFaceUv, normal);
 
     vec3 ambientLight = max(uAmbientColor, vec3(0.0)) * max(uAmbient, 0.0);
     ambientLight *= ambientOcclusion;
@@ -2242,7 +4067,19 @@ void main() {
     float directAO = mix(1.0, ambientOcclusion, clamp(uAODirectInfluence, 0.0, 1.0));
     vec3 lighting = ambientLight + directLight * directAO;
 
+    // --- LIGHTING CLAMP ---
+    if (uClampLighting) {
+        float maxChannel = max(lighting.r, max(lighting.g, lighting.b));
+        if (maxChannel > 1.0) {
+            lighting /= maxChannel;
+        }
+    }
+
     vec3 finalColor = texel.rgb * lighting;
+
+    // --- HANDLE LIFT INTENSITY ---
+    // Applying flat offsets directly in linear space can destroy dark areas.
+    // If lift is high, apply a soft tint reduction to preserve midtones.
     finalColor += vec3(lift);
     finalColor *= LIGHTCOLOR;
 
@@ -2250,7 +4087,12 @@ void main() {
         finalColor.rg *= vec2(0.6, 0.7);
     }
 
-    finalColor = applyOutputMapping(finalColor);
+    // Apply Tonemapping in Linear Space
+    finalColor = applyToneMapping(finalColor);
+
+    // --- GAMMA CORRECTION ---
+    // Converts the processed linear colors back to sRGB for display.
+    finalColor = pow(max(finalColor, vec3(0.0)), vec3(1.0 / 2.2));
 
     gl_FragColor = vec4(finalColor, texel.a);
 }`,
@@ -2430,11 +4272,11 @@ void main() {
                     }
                 `,
                 uniforms: {
-                    "LIGHTCOLOR": { type: "vec3", value: new THREE.Vector3(1, 1, 1) },
-                    "SHADE": { type: "bool", value: true },
-                    "LIGHTSIDE": { type: "int", value: 0 },
-                    "EMISSIVE": { type: "bool", value: false },
-                    "AMBIENT_INTENSITY": { type: "float", value: 0.4 }
+                    "LIGHTCOLOR": { type: "vec3", value: new THREE.Vector3(1, 1, 1), expose: true },
+                    "SHADE": { type: "bool", value: true, expose: true },
+                    "LIGHTSIDE": { type: "int", value: 0, expose: true, min: 0, max: 5, step: 1, allow_higher: false, allow_lower: false },
+                    "EMISSIVE": { type: "bool", value: false, expose: true },
+                    "AMBIENT_INTENSITY": { type: "float", value: 0.4, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false }
                     // Se han eliminado los uniforms de SHADOW_SNAP, SHADOW_SMOOTH y RESOLUTION_FACTOR
                 },
                 enableShadows: true
@@ -2807,11 +4649,11 @@ void main() {
     }
 }`,
                 uniforms: {
-                    "LIGHTCOLOR": { type: "vec3", value: new THREE.Vector3(1, 1, 1) },
-                    "SHADE": { type: "bool", value: true },
-                    "LIGHTSIDE": { type: "int", value: 0 },
-                    "EMISSIVE": { type: "bool", value: false },
-                    "AMBIENT_INTENSITY": { type: "float", value: 0.4 }
+                    "LIGHTCOLOR": { type: "vec3", value: new THREE.Vector3(1, 1, 1), expose: true },
+                    "SHADE": { type: "bool", value: true, expose: true },
+                    "LIGHTSIDE": { type: "int", value: 0, expose: true, min: 0, max: 5, step: 1, allow_higher: false, allow_lower: false },
+                    "EMISSIVE": { type: "bool", value: false, expose: true },
+                    "AMBIENT_INTENSITY": { type: "float", value: 0.4, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false }
                     // Se han eliminado los uniforms de SHADOW_SNAP, SHADOW_SMOOTH y RESOLUTION_FACTOR
                 },
                 enableShadows: true
@@ -2952,19 +4794,19 @@ void main() {
                                 }
                             `,
                 uniforms: {
-                    "uLightPos": { type: "vec3v", value: Array.from({ length: 16 }, () => new THREE.Vector3()) },
-                    "uLightDir": { type: "vec3v", value: Array.from({ length: 16 }, () => new THREE.Vector3(0, -1, 0)) },
-                    "uLightIntensity": { type: "floatv", value: Array(16).fill(0.0) },
-                    "uLightDistance": { type: "floatv", value: Array(16).fill(0.0) },
-                    "uLightConeAngle": { type: "floatv", value: Array(16).fill(0.0) },
-                    "uLightPenumbra": { type: "floatv", value: Array(16).fill(0.0) },
-                    "uLightType": { type: "intv", value: Array(16).fill(0) },
-                    "uLightColor": { type: "vec3v", value: Array.from({ length: 16 }, () => new THREE.Vector3()) },
-                    "max_light_number": { type: "int", value: 0 },
-                    "uAmbient": { type: "float", value: 0.3 }, // Puedes ajustar esto para subir/bajar la oscuridad de la sombra
-                    "uAmbientColor": { type: "vec3", value: new THREE.Vector3(1, 1, 1) },
-                    "LIGHTCOLOR": { type: "vec3", value: new THREE.Vector3(1, 1, 1) },
-                    "TEXTURE_SIZE": { type: "vec2", value: new THREE.Vector2(16, 16) }
+                    "uLightPos": { type: "vec3v", value: Array.from({ length: 16 }, () => new THREE.Vector3()), expose: false },
+                    "uLightDir": { type: "vec3v", value: Array.from({ length: 16 }, () => new THREE.Vector3(0, -1, 0)), expose: false },
+                    "uLightIntensity": { type: "floatv", value: Array(16).fill(0.0), expose: false },
+                    "uLightDistance": { type: "floatv", value: Array(16).fill(0.0), expose: false },
+                    "uLightConeAngle": { type: "floatv", value: Array(16).fill(0.0), expose: false },
+                    "uLightPenumbra": { type: "floatv", value: Array(16).fill(0.0), expose: false },
+                    "uLightType": { type: "intv", value: Array(16).fill(0), expose: false },
+                    "uLightColor": { type: "vec3v", value: Array.from({ length: 16 }, () => new THREE.Vector3()), expose: false },
+                    "max_light_number": { type: "int", value: 0, expose: true, min: 0, max: 16, step: 1, allow_higher: false, allow_lower: false },
+                    "uAmbient": { type: "float", value: 0.3, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: true, allow_lower: false }, // Puedes ajustar esto para subir/bajar la oscuridad de la sombra
+                    "uAmbientColor": { type: "vec3", value: new THREE.Vector3(1, 1, 1), expose: true },
+                    "LIGHTCOLOR": { type: "vec3", value: new THREE.Vector3(1, 1, 1), expose: true },
+                    "TEXTURE_SIZE": { type: "vec2", value: new THREE.Vector2(16, 16), expose: false }
                 },
                 enableShadows: true
             });
@@ -2994,11 +4836,28 @@ void main() {
             function tick() {
                 let time = self.clock.getElapsedTime();
 
-                // Inject time to any material requesting it
+                // Inject time and global settings to any material requesting it
                 Cube.all.forEach(cube => {
                     self.forEachMeshMaterial(cube.mesh, (mat) => {
-                        if (mat.uniforms && mat.uniforms.uTime) {
-                            mat.uniforms.uTime.value = time;
+                        let updated = false;
+                        if (mat.uniforms) {
+                            if (mat.uniforms.uTime) {
+                                mat.uniforms.uTime.value = time;
+                                updated = true;
+                            }
+
+                            const dynamicKeys = ['SHADE', 'LIGHTSIDE', 'LIGHTCOLOR', 'uAmbientColor', 'uAmbient', 'EMISSIVE'];
+                            dynamicKeys.forEach(uniKey => {
+                                if (mat.uniforms[uniKey]) {
+                                    const resolvedVal = resolveSystemUniformValue(uniKey, cube, mat.uniforms[uniKey].value);
+                                    if (!areUniformValuesEqual(mat.uniforms[uniKey].value, resolvedVal)) {
+                                        mat.uniforms[uniKey].value = resolvedVal;
+                                        updated = true;
+                                    }
+                                }
+                            });
+                        }
+                        if (updated) {
                             mat.uniformsNeedUpdate = true;
                         }
                     });
@@ -3292,6 +5151,7 @@ void main() {
          * @param {FancyShaderMaterial} shader
          */
         applyToMesh(cube, shader) {
+            shader = MaterialManager.getRenderMaterial(shader);
             const mesh = cube.mesh;
             if (!mesh || !mesh.material || !mesh.geometry || !shader) return;
 
@@ -3452,6 +5312,12 @@ void main() {
                 targetMaterial.vertexShader = shader.vertex;
                 targetMaterial.fragmentShader = shader.fragment;
                 targetMaterial.lights = !!shader.enableShadows;
+                targetMaterial.sa_shader_id = shader.baseMaterialId || shader.id || shader.name || 'material';
+                if (shader.materialInstanceId) {
+                    targetMaterial.sa_material_instance_id = shader.materialInstanceId;
+                } else if (targetMaterial.sa_material_instance_id !== undefined) {
+                    delete targetMaterial.sa_material_instance_id;
+                }
 
                 targetMaterial.extensions = targetMaterial.extensions || {};
                 targetMaterial.extensions.derivatives = true;
@@ -3468,6 +5334,16 @@ void main() {
                 for (const key in shader.uniforms) {
                     const def = shader.uniforms[key];
                     let val = def.value;
+
+                    if (isSystemUniform(key)) {
+                        val = resolveSystemUniformValue(key, cube, val);
+                        const dynamicKeys = ['shade', 'lightside', 'lightcolor', 'uambient', 'uambientcolor', 'emissive'];
+                        if (!dynamicKeys.includes(key.toLowerCase())) {
+                            if (targetMaterial.uniforms[key]) {
+                                continue;
+                            }
+                        }
+                    }
 
                     if (def.type === 'color' && def.hexValue) {
                         val = this.hexToVec3(def.hexValue);
@@ -3572,9 +5448,12 @@ void main() {
                     });
 
                     targetMaterial.is_sa_cloned = true;
-                    targetMaterial.sa_shader_id = shader.id || shader.name || 'material';
+                    targetMaterial.sa_shader_id = shader.baseMaterialId || shader.id || shader.name || 'material';
+                    if (shader.materialInstanceId) {
+                        targetMaterial.sa_material_instance_id = shader.materialInstanceId;
+                    }
                     targetMaterial.sa_material_index = materialIndex;
-                    targetMaterial.name = `SA_${shader.id || shader.name || 'material'}_${materialIndex}`;
+                    targetMaterial.name = `SA_${shader.materialInstanceId || shader.id || shader.name || 'material'}_${materialIndex}`;
                 }
 
                 applyShaderUniformsToMaterial(targetMaterial, sourceMaterial, resolvedMap);
@@ -3594,13 +5473,12 @@ void main() {
             setupAlphaShadowMaterials(mesh, firstTexture, firstSourceMaterial, shader);
         },
 
-        updateAllCubes() {
+        updateAllCubes(cause = 'default') {
             Cube.all.forEach(cube => {
                 if (cube.mesh) {
                     cube.mesh.castShadow = true;
                     cube.mesh.receiveShadow = true;
-                    let targetId = cube.sa_material_id || this.globalRenderMode;
-                    let shader = MaterialManager.materials[targetId];
+                    let shader = MaterialManager.resolveCubeMaterial(cube, this.globalRenderMode);
                     if (!shader) shader = MaterialManager.materials['classic'];
 
                     // Pasamos el cubo entero para que `applyToMesh` tenga acceso a los atributos
@@ -3610,6 +5488,77 @@ void main() {
 
             this.updateWorldNormalMatrices();
             this.updateLightUniforms();
+
+            //Dispatch Blockbench event to signal that shaders have been updated
+
+            Blockbench.dispatchEvent('shader_update_complete', {
+                cause
+            });
+
+        },
+
+        updateAllUniforms(cause = 'default') {
+            const cloneUniformValue = (value) => {
+                if (value && typeof value.clone === 'function') return value.clone();
+                if (Array.isArray(value)) return value.map(v => cloneUniformValue(v));
+                return value;
+            };
+
+            Cube.all.forEach(cube => {
+                const mesh = cube.mesh;
+                if (!mesh || !mesh.material) return;
+
+                let shader = MaterialManager.resolveCubeMaterial(cube, this.globalRenderMode);
+                if (!shader) shader = MaterialManager.materials['classic'];
+                shader = MaterialManager.getRenderMaterial(shader);
+                if (!shader) return;
+
+                this.forEachMeshMaterial(mesh, (mat) => {
+                    if (mat && mat.is_sa_cloned && mat.uniforms) {
+                        for (const key in shader.uniforms) {
+                            const def = shader.uniforms[key];
+                            let val = def.value;
+
+                            if (isSystemUniform(key)) {
+                                const dynamicKeys = ['shade', 'lightside', 'lightcolor', 'uambient', 'uambientcolor', 'emissive'];
+                                if (dynamicKeys.includes(key.toLowerCase())) {
+                                    val = resolveSystemUniformValue(key, cube, val);
+                                } else {
+                                    continue;
+                                }
+                            }
+
+                            if (def.type === 'color' && def.hexValue) {
+                                val = this.hexToVec3(def.hexValue);
+                            }
+
+                            val = cloneUniformValue(val);
+
+                            if (mat.uniforms[key]) {
+                                mat.uniforms[key].value = val;
+                            } else {
+                                mat.uniforms[key] = {
+                                    type: def.type === 'color' ? 'vec3' : def.type,
+                                    value: val
+                                };
+                            }
+                        }
+                        mat.uniformsNeedUpdate = true;
+                    }
+                });
+            });
+
+            Blockbench.dispatchEvent('shader_update_complete', {
+                cause
+            });
+
+            if (window.Preview && Array.isArray(Preview.all)) {
+                Preview.all.forEach(p => {
+                    if (typeof p.render === 'function') {
+                        p.render();
+                    }
+                });
+            }
         },
 
         updateWorldNormalMatrices() {
@@ -3622,7 +5571,21 @@ void main() {
                 this.forEachMeshMaterial(mesh, (mat) => {
                     if (!mat.uniforms || !mat.uniforms.uWorldNormalMatrix) return;
 
-                    mat.uniforms.uWorldNormalMatrix.value.getNormalMatrix(mesh.matrixWorld);
+                    let m = mat.uniforms.uWorldNormalMatrix.value;
+
+                    // Garantizar que sea una instancia válida de Matrix3
+                    if (!m || typeof m.getNormalMatrix !== 'function') {
+                        const newMatrix = new THREE.Matrix3();
+                        if (m && m.elements) {
+                            newMatrix.fromArray(m.elements);
+                        } else if (m && Array.isArray(m)) {
+                            newMatrix.fromArray(m);
+                        }
+                        mat.uniforms.uWorldNormalMatrix.value = newMatrix;
+                        m = newMatrix;
+                    }
+
+                    m.getNormalMatrix(mesh.matrixWorld);
                     mat.uniformsNeedUpdate = true;
                 });
             });
@@ -3875,7 +5838,25 @@ void main() {
 
                     if (mat.uniforms.uWorldNormalMatrix) {
                         mesh.updateMatrixWorld(true);
-                        mat.uniforms.uWorldNormalMatrix.value.getNormalMatrix(mesh.matrixWorld);
+                        let m = mat.uniforms.uWorldNormalMatrix.value;
+
+                        // Garantizar que sea una instancia válida de Matrix3 antes de operar con ella
+                        if (!m || (typeof m.getNormalMatrix !== 'function' && typeof m.setFromMatrix4 !== 'function')) {
+                            const newMatrix = new THREE.Matrix3();
+                            if (m && m.elements) {
+                                newMatrix.fromArray(m.elements);
+                            } else if (m && Array.isArray(m)) {
+                                newMatrix.fromArray(m);
+                            }
+                            mat.uniforms.uWorldNormalMatrix.value = newMatrix;
+                            m = newMatrix;
+                        }
+
+                        if (typeof m.getNormalMatrix === 'function') {
+                            m.getNormalMatrix(mesh.matrixWorld);
+                        } else if (typeof m.setFromMatrix4 === 'function') {
+                            m.setFromMatrix4(mesh.matrixWorld).invert().transpose();
+                        }
                     }
 
                     if (!mat.uniforms.max_light_number || !mat.uniforms.uLightPos) return;
@@ -3906,6 +5887,14 @@ void main() {
                     mat.uniformsNeedUpdate = true;
                 });
             });
+
+            if (window.Preview && Array.isArray(Preview.all)) {
+                Preview.all.forEach(p => {
+                    if (typeof p.render === 'function') {
+                        p.render();
+                    }
+                });
+            }
         }
     };
 
@@ -3930,8 +5919,8 @@ void main() {
             title: tl('shader_architect.dialog.studio_title'),
             id: 'sa_material_studio_dialog',
             resizable: true,
-            width: Math.min(1400, window.innerWidth - 100) || 1200,
-            height: Math.min(1000, window.innerHeight - 100) || 800,
+            width: Math.min(1600, window.innerWidth - 60) || 1400,
+            height: Math.min(1100, window.innerHeight - 60) || 900,
             component: {
                 data() {
                     return {
@@ -3940,8 +5929,31 @@ void main() {
                         editingMode: 'vertex',
                         newUniformName: 'u_myVar',
                         newUniformType: 'float',
+                        newUniformExpose: true,
+                        newUniformMin: null,
+                        newUniformMax: null,
+                        newUniformStep: null,
+                        newUniformAllowHigher: true,
+                        newUniformAllowLower: true,
+                        expandedUniforms: {},
+                        newTransLang: {},
+                        newTransVal: {},
                         validationErrors: [],
-                        validating: false
+                        validating: false,
+
+                        // Layout and workspace controls
+                        showLeftSidebar: true,
+                        showRightSidebar: true,
+                        problemsCollapsed: false,
+                        autocomplete: {
+                            show: false,
+                            list: [],
+                            index: 0,
+                            x: 0,
+                            y: 0,
+                            textBefore: '',
+                            word: ''
+                        }
                     };
                 },
                 computed: {
@@ -3960,7 +5972,32 @@ void main() {
                         }
                     }
                 },
+                watch: {
+                    currentShaderCode() {
+                        this.debounceValidate();
+                    },
+                    editingMode() {
+                        this.setupEditorEvents();
+                        this.debounceValidate();
+                        this.closeAutocomplete();
+                    },
+                    selectedId() {
+                        this.setupEditorEvents();
+                        this.debounceValidate();
+                        this.closeAutocomplete();
+                    }
+                },
                 methods: {
+                    tl(key) {
+                        return tl(key);
+                    },
+                    isSystemUniform(name) {
+                        return isSystemUniform(name);
+                    },
+                    formatNumber(val) {
+                        let num = Number(val);
+                        return isNaN(num) ? "0.00" : num.toFixed(2);
+                    },
                     highlighter(code) {
                         if (typeof Prism !== 'undefined' && Prism.languages.glsl) {
                             return Prism.highlight(code, Prism.languages.glsl, 'glsl');
@@ -3970,20 +6007,42 @@ void main() {
                     formatCode() {
                         this.currentShaderCode = formatGLSL(this.currentShaderCode);
                         Blockbench.showToastNotification({ text: 'GLSL Formatted', expire: 1500 });
+                        this.$nextTick(() => {
+                            this.debounceValidate();
+                        });
                     },
                     selectMaterial(id) {
                         this.selectedId = id;
                         this.validationErrors = [];
+                        this.closeAutocomplete();
                     },
                     createNewMaterial() {
                         let m = new FancyShaderMaterial({
                             name: "New Material",
                             vertex: MaterialManager.materials['classic'].vertex,
                             fragment: MaterialManager.materials['classic'].fragment,
-                            uniforms: {}
+                            uniforms: MaterialManager.cloneUniformMap(MaterialManager.materials['classic'].uniforms)
                         });
                         this.$set(this.materials, m.id, m);
+                        MaterialManager.register(m);
                         this.selectMaterial(m.id);
+                    },
+                    duplicateActiveMaterial() {
+                        if (!this.activeMat) return;
+                        let newName = this.activeMat.name + " (Copy)";
+                        let m = new FancyShaderMaterial({
+                            name: newName,
+                            icon: this.activeMat.icon,
+                            vertex: this.activeMat.vertex,
+                            fragment: this.activeMat.fragment,
+                            uniforms: MaterialManager.cloneUniformMap(this.activeMat.uniforms),
+                            isCustom: true,
+                            enableShadows: this.activeMat.enableShadows
+                        });
+                        this.$set(this.materials, m.id, m);
+                        MaterialManager.register(m);
+                        this.selectMaterial(m.id);
+                        Blockbench.showToastNotification({ text: 'Material duplicated successfully', expire: 1500 });
                     },
                     deleteActiveMaterial() {
                         if (this.activeMat && this.activeMat.isCustom && confirm("Delete material?")) {
@@ -4007,6 +6066,15 @@ void main() {
                         else if (this.newUniformType === 'int') def.value = 1;
                         else if (this.newUniformType === 'vec2') def.value = new THREE.Vector2(0, 0);
                         else if (this.newUniformType === 'vec3') def.value = new THREE.Vector3(0, 0, 0);
+
+                        def.expose = this.newUniformExpose;
+                        if (this.newUniformType === 'float' || this.newUniformType === 'int') {
+                            if (this.newUniformMin !== null && this.newUniformMin !== '') def.min = Number(this.newUniformMin);
+                            if (this.newUniformMax !== null && this.newUniformMax !== '') def.max = Number(this.newUniformMax);
+                            if (this.newUniformStep !== null && this.newUniformStep !== '') def.step = Number(this.newUniformStep);
+                            def.allow_higher = this.newUniformAllowHigher;
+                            def.allow_lower = this.newUniformAllowLower;
+                        }
 
                         this.$set(this.activeMat.uniforms, safeVar, def);
                     },
@@ -4051,37 +6119,477 @@ void main() {
                         for (let id in this.materials) {
                             if (this.materials[id].isCustom) MaterialManager.register(this.materials[id]);
                         }
-                        ShaderEngine.updateAllCubes();
+                        ShaderEngine.updateAllCubes('material_studio_live_apply');
                         Blockbench.showToastNotification({ text: tl('shader_architect.toast.applied'), expire: 1500 });
                     },
-                    validateShader() {
-                        this.validating = true;
-                        this.validationErrors = [];
-                        try {
-                            const canvas = document.createElement('canvas');
-                            const gl = canvas.getContext('webgl');
-                            if (!gl) throw new Error("WebGL not supported for validation.");
+                    preprocessShader(code, isVertex) {
+                        if (typeof THREE === 'undefined') return { code, lineMap: (line => line) };
+                        
+                        let prefix = `precision highp float; precision highp int; uniform mat4 modelMatrix; uniform mat4 modelViewMatrix; uniform mat4 projectionMatrix; uniform mat4 viewMatrix; uniform mat3 normalMatrix; uniform vec3 cameraPosition; `;
+                        if (isVertex) {
+                            prefix += `attribute vec3 position; attribute vec3 normal; attribute vec2 uv; `;
+                        }
 
-                            let type = this.editingMode === 'vertex' ? gl.VERTEX_SHADER : gl.FRAGMENT_SHADER;
-                            let shader = gl.createShader(type);
-                            gl.shaderSource(shader, this.currentShaderCode);
-                            gl.compileShader(shader);
+                        let lines = code.split('\n');
+                        let processedLines = [];
+                        let lineMap = []; // lineMap[compiledLineIndex] = originalLineNum (1-based)
 
-                            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-                                let log = gl.getShaderInfoLog(shader);
-                                let lines = log.split('\\n').filter(l => l.trim());
-                                this.validationErrors = lines.map(line => {
-                                    let match = line.match(/ERROR:\\s*\\d+:(\\d+):\\s*(.*)/);
-                                    return match ? { line: parseInt(match[1]), message: match[2] } : { line: null, message: line };
+                        // First pass: extract any #version or #extension directives to prepend before the prefix
+                        let headerLines = [];
+                        let bodyLines = [];
+                        
+                        lines.forEach((line, idx) => {
+                            let trimmed = line.trim();
+                            if (trimmed.startsWith('#version') || trimmed.startsWith('#extension')) {
+                                headerLines.push({ line, originalLineNum: idx + 1 });
+                            } else {
+                                bodyLines.push({ line, originalLineNum: idx + 1 });
+                            }
+                        });
+
+                        // 1. Add header lines (e.g. #version, #extension)
+                        headerLines.forEach(item => {
+                            processedLines.push(item.line);
+                            lineMap[processedLines.length] = item.originalLineNum;
+                        });
+
+                        // 2. Add prefix line
+                        processedLines.push(prefix);
+                        lineMap[processedLines.length] = 1; // map prefix line to user line 1
+
+                        // 3. Add body lines (and resolve #include)
+                        bodyLines.forEach(item => {
+                            let trimmed = item.line.trim();
+                            let includeMatch = trimmed.match(/^#include\s+<([\w_]+)>/);
+                            if (includeMatch) {
+                                let chunkName = includeMatch[1];
+                                let chunkContent = (THREE.ShaderChunk && THREE.ShaderChunk[chunkName]) || "";
+                                let chunkLines = chunkContent.split('\n');
+                                chunkLines.forEach(cl => {
+                                    processedLines.push(cl);
+                                    lineMap[processedLines.length] = item.originalLineNum;
                                 });
                             } else {
-                                Blockbench.showToastNotification({ text: 'GLSL is valid!', expire: 2000 });
+                                processedLines.push(item.line);
+                                lineMap[processedLines.length] = item.originalLineNum;
                             }
-                            gl.deleteShader(shader);
+                        });
+
+                        return {
+                            code: processedLines.join('\n'),
+                            lineMap: (lineNum) => {
+                                return lineMap[lineNum] !== undefined ? lineMap[lineNum] : lineNum;
+                            }
+                        };
+                    },
+                    validateShader(showFeedback = true) {
+                        if (!this.activeMat) return;
+                        this.validating = true;
+                        
+                        try {
+                            const canvas = document.createElement('canvas');
+                            const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+                            if (!gl) throw new Error("WebGL not supported for validation.");
+
+                            let errors = [];
+
+                            // Preprocess vertex shader
+                            const prepVS = this.preprocessShader(this.activeMat.vertex, true);
+                            let vs = gl.createShader(gl.VERTEX_SHADER);
+                            gl.shaderSource(vs, prepVS.code);
+                            gl.compileShader(vs);
+                            let vsSuccess = gl.getShaderParameter(vs, gl.COMPILE_STATUS);
+                            if (!vsSuccess) {
+                                let log = gl.getShaderInfoLog(vs);
+                                let lines = log.split('\n').filter(l => l.trim());
+                                lines.forEach(line => {
+                                    let match = line.match(/ERROR:\s*\d+:(\d+):\s*(.*)/);
+                                    let errLine = match ? parseInt(match[1]) : null;
+                                    let mappedLine = errLine ? prepVS.lineMap(errLine) : null;
+                                    errors.push({
+                                        type: 'vertex',
+                                        line: mappedLine,
+                                        message: match ? match[2] : line,
+                                        severity: 'error'
+                                    });
+                                });
+                            }
+
+                            // Preprocess fragment shader
+                            const prepFS = this.preprocessShader(this.activeMat.fragment, false);
+                            let fs = gl.createShader(gl.FRAGMENT_SHADER);
+                            gl.shaderSource(fs, prepFS.code);
+                            gl.compileShader(fs);
+                            let fsSuccess = gl.getShaderParameter(fs, gl.COMPILE_STATUS);
+                            if (!fsSuccess) {
+                                let log = gl.getShaderInfoLog(fs);
+                                let lines = log.split('\n').filter(l => l.trim());
+                                lines.forEach(line => {
+                                    let match = line.match(/ERROR:\s*\d+:(\d+):\s*(.*)/);
+                                    let errLine = match ? parseInt(match[1]) : null;
+                                    let mappedLine = errLine ? prepFS.lineMap(errLine) : null;
+                                    errors.push({
+                                        type: 'fragment',
+                                        line: mappedLine,
+                                        message: match ? match[2] : line,
+                                        severity: 'error'
+                                    });
+                                });
+                            }
+
+                            // Link shaders
+                            if (vsSuccess && fsSuccess) {
+                                let program = gl.createProgram();
+                                gl.attachShader(program, vs);
+                                gl.attachShader(program, fs);
+                                gl.linkProgram(program);
+                                if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+                                    let log = gl.getProgramInfoLog(program);
+                                    errors.push({
+                                        type: 'linker',
+                                        line: null,
+                                        message: log || "Failed to link shaders.",
+                                        severity: 'error'
+                                    });
+                                }
+                                program = null; // Clean ref
+                            }
+
+                            this.validationErrors = errors;
+
+                            if (errors.length === 0 && showFeedback) {
+                                Blockbench.showToastNotification({ text: 'GLSL program compiles and links successfully!', expire: 2000 });
+                            }
+
+                            gl.deleteShader(vs);
+                            gl.deleteShader(fs);
                         } catch (e) {
-                            this.validationErrors = [{ line: null, message: e.message }];
+                            this.validationErrors = [{ type: 'system', line: null, message: e.message, severity: 'error' }];
+                        } finally {
+                            this.validating = false;
                         }
-                        this.validating = false;
+                    },
+                    validateShaderBackground() {
+                        this.validateShader(false);
+                    },
+                    debounceValidate() {
+                        if (this.validationTimeout) clearTimeout(this.validationTimeout);
+                        this.validationTimeout = setTimeout(() => {
+                            this.validateShaderBackground();
+                        }, 800);
+                    },
+                    expandUniform(key) {
+                        this.$set(this.expandedUniforms, key, !this.expandedUniforms[key]);
+                        if (this.expandedUniforms[key]) {
+                            this.$set(this.newTransLang, key, '');
+                            this.$set(this.newTransVal, key, '');
+                            if (this.activeMat && this.activeMat.uniforms[key]) {
+                                const uni = this.activeMat.uniforms[key];
+                                if (!uni.translations) {
+                                    this.$set(uni, 'translations', {});
+                                }
+                            }
+                        }
+                    },
+                    addCustomTranslation(uni, key) {
+                        const lang = (this.newTransLang[key] || '').trim().toLowerCase();
+                        const val = (this.newTransVal[key] || '').trim();
+                        if (!lang || !val) return;
+                        if (!uni.translations) {
+                            this.$set(uni, 'translations', {});
+                        }
+                        this.$set(uni.translations, lang, val);
+                        this.$set(this.newTransLang, key, '');
+                        this.$set(this.newTransVal, key, '');
+                        this.$forceUpdate();
+                    },
+                    getUniformLabel(uni, key) {
+                        const currentLang = (typeof Language !== 'undefined' && Language.code) ? Language.code : 'en';
+                        if (uni.translations && uni.translations[currentLang]) {
+                            return uni.translations[currentLang];
+                        }
+                        const tlKey = 'shader_architect.uniform.' + key;
+                        const globalTl = tl(tlKey);
+                        if (globalTl !== tlKey) {
+                            return globalTl;
+                        }
+                        if (uni.translations && uni.translations['en']) {
+                            return uni.translations['en'];
+                        }
+                        return '';
+                    },
+
+                    // Editor keys and autocomplete
+                    setupEditorEvents() {
+                        this.$nextTick(() => {
+                            const textarea = this.$el.querySelector('.prism-editor__textarea');
+                            if (!textarea) return;
+
+                            if (textarea.dataset.saInitialized) return;
+                            textarea.dataset.saInitialized = 'true';
+
+                            textarea.addEventListener('keydown', this.handleEditorKeyDown, true);
+                            textarea.addEventListener('input', this.handleEditorInput);
+                            textarea.addEventListener('click', this.closeAutocomplete);
+                            textarea.addEventListener('blur', () => {
+                                setTimeout(() => {
+                                    this.closeAutocomplete();
+                                }, 250);
+                            });
+
+                            const wrapper = this.$el.querySelector('.prism-editor-wrapper');
+                            if (wrapper) {
+                                wrapper.addEventListener('scroll', () => {
+                                    this.closeAutocomplete();
+                                }, { passive: true });
+                            }
+                        });
+                    },
+                    handleEditorKeyDown(e) {
+                        const textarea = e.target;
+
+                        if (e.key === 'Tab') {
+                            if (this.autocomplete.show && this.autocomplete.list.length > 0) {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                this.acceptAutocomplete(textarea);
+                                return;
+                            }
+
+                            // Single or multi-line indent
+                            e.preventDefault();
+                            e.stopPropagation();
+
+                            const start = textarea.selectionStart;
+                            const end = textarea.selectionEnd;
+                            const text = textarea.value;
+                            const spaces = "    ";
+
+                            if (start !== end) {
+                                const lineStart = text.lastIndexOf('\n', start) + 1;
+                                let lineEnd = text.indexOf('\n', end);
+                                if (lineEnd === -1) lineEnd = text.length;
+
+                                const selectedText = text.substring(lineStart, lineEnd);
+                                const lines = selectedText.split('\n');
+                                let newText = '';
+
+                                if (e.shiftKey) {
+                                    // Unindent
+                                    newText = lines.map(line => {
+                                        if (line.startsWith(spaces)) return line.substring(4);
+                                        if (line.startsWith('\t')) return line.substring(1);
+                                        let leading = line.match(/^ +/);
+                                        if (leading) {
+                                            return line.substring(Math.min(leading[0].length, 4));
+                                        }
+                                        return line;
+                                    }).join('\n');
+                                } else {
+                                    // Indent
+                                    newText = lines.map(line => spaces + line).join('\n');
+                                }
+
+                                textarea.value = text.substring(0, lineStart) + newText + text.substring(lineEnd);
+                                textarea.selectionStart = start + (e.shiftKey ? -4 : 4);
+                                textarea.selectionEnd = start + newText.length - (selectedText.length - (end - start));
+                            } else {
+                                if (e.shiftKey) {
+                                    // Shift+Tab: Unindent current line
+                                    const lineStart = text.lastIndexOf('\n', start) + 1;
+                                    const lineText = text.substring(lineStart, start);
+                                    let removeCount = 0;
+                                    if (lineText.startsWith(spaces)) removeCount = 4;
+                                    else if (lineText.startsWith('\t')) removeCount = 1;
+                                    else {
+                                        let leading = lineText.match(/^ +/);
+                                        if (leading) removeCount = Math.min(leading[0].length, 4);
+                                    }
+                                    if (removeCount > 0) {
+                                        textarea.value = text.substring(0, lineStart) + text.substring(lineStart + removeCount);
+                                        textarea.selectionStart = textarea.selectionEnd = start - removeCount;
+                                    }
+                                } else {
+                                    // Insert 4 spaces
+                                    textarea.value = text.substring(0, start) + spaces + text.substring(end);
+                                    textarea.selectionStart = textarea.selectionEnd = start + 4;
+                                }
+                            }
+
+                            this.currentShaderCode = textarea.value;
+                            return;
+                        }
+
+                        if (this.autocomplete.show) {
+                            if (e.key === 'ArrowDown') {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                this.autocomplete.index = (this.autocomplete.index + 1) % this.autocomplete.list.length;
+                                return;
+                            }
+                            if (e.key === 'ArrowUp') {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                this.autocomplete.index = (this.autocomplete.index - 1 + this.autocomplete.list.length) % this.autocomplete.list.length;
+                                return;
+                            }
+                            if (e.key === 'Enter') {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                this.acceptAutocomplete(textarea);
+                                return;
+                            }
+                            if (e.key === 'Escape') {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                this.closeAutocomplete();
+                                return;
+                            }
+                        }
+                    },
+                    handleEditorInput(e) {
+                        const textarea = e.target;
+                        const pos = textarea.selectionStart;
+                        const text = textarea.value;
+
+                        const textBefore = text.slice(0, pos);
+                        const lastWordMatch = textBefore.match(/[a-zA-Z0-9_]+$/);
+
+                        if (!lastWordMatch) {
+                            this.closeAutocomplete();
+                            return;
+                        }
+
+                        const word = lastWordMatch[0];
+                        if (word.length < 1) {
+                            this.closeAutocomplete();
+                            return;
+                        }
+
+                        const suggestions = this.getAutocompleteSuggestions();
+                        const matches = suggestions.filter(s => s.toLowerCase().startsWith(word.toLowerCase()) && s !== word);
+
+                        if (matches.length === 0) {
+                            this.closeAutocomplete();
+                            return;
+                        }
+
+                        // Monospace caret coordinate estimation
+                        const lines = textBefore.split('\n');
+                        const row = lines.length - 1;
+                        const col = lines[row].length;
+
+                        const charWidth = 7.7;
+                        const lineHeight = 20;
+                        const gutterWidth = 42;
+
+                        const wrapper = this.$el.querySelector('.prism-editor-wrapper');
+                        const scrollTop = wrapper ? wrapper.scrollTop : 0;
+                        const scrollLeft = wrapper ? wrapper.scrollLeft : 0;
+
+                        const top = (row + 1) * lineHeight + 4 - scrollTop;
+                        const left = col * charWidth + gutterWidth - scrollLeft;
+
+                        this.autocomplete = {
+                            show: true,
+                            list: matches.slice(0, 10),
+                            index: 0,
+                            x: left,
+                            y: top,
+                            textBefore: textBefore.slice(0, textBefore.length - word.length),
+                            word: word
+                        };
+                    },
+                    getAutocompleteSuggestions() {
+                        const list = [
+                            'void', 'bool', 'int', 'uint', 'float', 'vec2', 'vec3', 'vec4', 'mat2', 'mat3', 'mat4', 'sampler2D', 'samplerCube',
+                            'uniform', 'attribute', 'varying', 'const', 'precision', 'highp', 'mediump', 'lowp', 'in', 'out', 'inout', 'struct',
+                            'break', 'continue', 'discard', 'do', 'else', 'for', 'if', 'return', 'while',
+                            'radians', 'degrees', 'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'pow', 'exp', 'log', 'exp2', 'log2', 'sqrt', 'inversesqrt',
+                            'abs', 'sign', 'floor', 'ceil', 'fract', 'mod', 'min', 'max', 'clamp', 'mix', 'step', 'smoothstep', 'length', 'distance',
+                            'dot', 'cross', 'normalize', 'faceforward', 'reflect', 'refract', 'matrixCompMult', 'lessThan', 'lessThanEqual', 'greaterThan',
+                            'greaterThanEqual', 'equal', 'notEqual', 'any', 'all', 'not', 'texture2D', 'textureCube',
+                            'gl_Position', 'gl_PointSize', 'gl_FragColor', 'gl_FragCoord', 'gl_FrontFacing', 'gl_PointCoord',
+                            'uTime', 'uAmbient', 'uAmbientColor', 'uLightColor', 'uWorldNormalMatrix', 'max_light_number', 'map', 'lightside', 'shade', 'emissive'
+                        ];
+
+                        if (this.activeMat && this.activeMat.uniforms) {
+                            Object.keys(this.activeMat.uniforms).forEach(key => {
+                                if (!list.includes(key)) list.push(key);
+                            });
+                        }
+
+                        return list;
+                    },
+                    getAutocompleteType(name) {
+                        const types = ['void', 'bool', 'int', 'uint', 'float', 'vec2', 'vec3', 'vec4', 'mat2', 'mat3', 'mat4', 'sampler2D', 'samplerCube'];
+                        const keywords = ['uniform', 'attribute', 'varying', 'const', 'precision', 'highp', 'mediump', 'lowp', 'in', 'out', 'inout', 'struct', 'break', 'continue', 'discard', 'do', 'else', 'for', 'if', 'return', 'while'];
+                        const builtins = ['radians', 'degrees', 'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'pow', 'exp', 'log', 'exp2', 'log2', 'sqrt', 'inversesqrt', 'abs', 'sign', 'floor', 'ceil', 'fract', 'mod', 'min', 'max', 'clamp', 'mix', 'step', 'smoothstep', 'length', 'distance', 'dot', 'cross', 'normalize', 'faceforward', 'reflect', 'refract', 'matrixCompMult', 'lessThan', 'lessThanEqual', 'greaterThan', 'greaterThanEqual', 'equal', 'notEqual', 'any', 'all', 'not', 'texture2D', 'textureCube'];
+                        const vars = ['gl_Position', 'gl_PointSize', 'gl_FragColor', 'gl_FragCoord', 'gl_FrontFacing', 'gl_PointCoord'];
+                        
+                        if (types.includes(name)) return 'type';
+                        if (keywords.includes(name)) return 'keyword';
+                        if (builtins.includes(name)) return 'builtin';
+                        if (vars.includes(name)) return 'variable';
+                        return 'uniform';
+                    },
+                    acceptAutocomplete(textarea) {
+                        if (!this.autocomplete.show || this.autocomplete.list.length === 0) return;
+
+                        const selected = this.autocomplete.list[this.autocomplete.index];
+                        const text = textarea.value;
+                        const start = textarea.selectionStart;
+
+                        const prefix = this.autocomplete.textBefore;
+                        const suffix = text.substring(start);
+
+                        textarea.value = prefix + selected + suffix;
+                        this.currentShaderCode = textarea.value;
+
+                        const nextPos = prefix.length + selected.length;
+                        this.$nextTick(() => {
+                            textarea.selectionStart = textarea.selectionEnd = nextPos;
+                            textarea.focus();
+                        });
+
+                        this.closeAutocomplete();
+                    },
+                    closeAutocomplete() {
+                        this.autocomplete.show = false;
+                        this.autocomplete.list = [];
+                        this.autocomplete.index = 0;
+                    },
+                    goToProblemLine(prob) {
+                        if (prob.type !== this.editingMode && (prob.type === 'vertex' || prob.type === 'fragment')) {
+                            this.editingMode = prob.type;
+                        }
+
+                        this.$nextTick(() => {
+                            const textarea = this.$el.querySelector('.prism-editor__textarea');
+                            if (!textarea) return;
+
+                            textarea.focus();
+
+                            if (prob.line) {
+                                const text = textarea.value;
+                                const lines = text.split('\n');
+                                let charIndex = 0;
+
+                                for (let i = 0; i < Math.min(prob.line - 1, lines.length); i++) {
+                                    charIndex += lines[i].length + 1;
+                                }
+
+                                textarea.selectionStart = textarea.selectionEnd = charIndex;
+                                
+                                // Scroll to cursor manually
+                                const rowHeight = 20;
+                                const scrollTop = Math.max(0, (prob.line - 4) * rowHeight);
+                                const scrollContainer = this.$el.querySelector('.prism-editor-wrapper');
+                                if (scrollContainer) {
+                                    scrollContainer.scrollTop = scrollTop;
+                                }
+                            }
+                        });
                     }
                 },
                 created() {
@@ -4091,122 +6599,384 @@ void main() {
                     }
                     this.selectedId = 'classic';
                 },
+                mounted() {
+                    this.setupEditorEvents();
+                    this.debounceValidate();
+
+                    this._shortcutListener = (e) => {
+                        // Collapses Material list (Ctrl+B)
+                        if (e.ctrlKey && e.key === 'b') {
+                            e.preventDefault();
+                            this.showLeftSidebar = !this.showLeftSidebar;
+                        }
+                        // Format code (Shift+Alt+F or Ctrl+Alt+F)
+                        if ((e.shiftKey && e.altKey && e.key === 'F') || (e.ctrlKey && e.altKey && e.key === 'f')) {
+                            e.preventDefault();
+                            if (this.editingMode !== 'uniforms') {
+                                this.formatCode();
+                            }
+                        }
+                        // Validate (Ctrl+S)
+                        if (e.ctrlKey && e.key === 's') {
+                            e.preventDefault();
+                            this.validateShader();
+                        }
+                    };
+                    window.addEventListener('keydown', this._shortcutListener);
+                },
+                beforeDestroy() {
+                    if (this._shortcutListener) {
+                        window.removeEventListener('keydown', this._shortcutListener);
+                    }
+                },
                 components: {
                     'vue-prism-editor': window.VuePrismEditor || VuePrismEditor
                 },
                 template: `
-                <div style="display: flex; height: 100%; gap: 12px;">
-                    <!-- LEFT PANEL: Material List -->
-                    <div style="width: 260px; display: flex; flex-direction: column; gap: 8px; border-right: 1px solid var(--color-border); padding-right: 12px; overflow-y: auto;">
-                        <button @click="createNewMaterial()"><i class="material-icons">add</i> New Material</button>
-                        <button @click="importMaterial()"><i class="material-icons">file_upload</i> Import .samat</button>
-                        <hr style="border: 0; border-top: 1px solid var(--color-border); width: 100%;">
-                        <div v-for="(m, mid) in materials" :key="mid" 
-                             class="sa-materiel-list-item" :class="{selected: selectedId === mid}"
-                             @click="selectMaterial(mid)">
-                             <i class="material-icons">{{m.icon}}</i>
-                             <div style="flex-grow:1; font-weight: bold; font-size:1.1em;">{{m.name}}</div>
-                             <i v-if="!m.isCustom" class="material-icons" style="opacity:0.5; font-size:0.9em;" title="Read Only">lock</i>
+                <div class="sa-studio-container">
+                    <!-- Top toolbar / Header -->
+                    <div class="sa-studio-header">
+                        <div style="display: flex; align-items: center; gap: 8px; flex-grow: 1;">
+                            <button class="sa-icon-btn" :class="{active: showLeftSidebar}" @click="showLeftSidebar = !showLeftSidebar" :title="tl('shader_architect.ui.toggle_left')">
+                                <i class="material-icons">menu</i>
+                            </button>
+                            <div class="sa-editor-header" v-if="activeMat">
+                                <input v-model="activeMat.name" type="text" :disabled="!activeMat.isCustom" class="sa-material-name-input">
+                                <i class="material-icons" style="font-size: 1.4em">{{activeMat.icon}}</i>
+                                <div style="display: flex; align-items: center; gap: 5px;" v-if="activeMat.isCustom">
+                                    <span style="opacity: 0.6; font-size: 0.85em;">Icon:</span>
+                                    <input v-model="activeMat.icon" type="text" title="Material Icon String" style="width: 70px; padding: 2px 4px; font-size:0.9em;">
+                                </div>
+                                <button class="sa-icon-btn" @click="duplicateActiveMaterial()" :title="tl('shader_architect.ui.tooltip.duplicate')"><i class="material-icons">content_copy</i></button>
+                                <button class="sa-icon-btn" @click="exportActive()" v-if="activeMat.isCustom" :title="tl('shader_architect.ui.tooltip.export')"><i class="material-icons">save_alt</i></button>
+                                <button class="sa-icon-btn delete-btn" @click="deleteActiveMaterial()" v-if="activeMat.isCustom" :title="tl('shader_architect.ui.tooltip.delete')"><i class="material-icons">delete</i></button>
+                            </div>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <button class="sa-icon-btn" :class="{active: showRightSidebar}" @click="showRightSidebar = !showRightSidebar" :title="tl('shader_architect.ui.toggle_right')">
+                                <i class="material-icons">tune</i>
+                            </button>
                         </div>
                     </div>
 
-                    <!-- RIGHT PANEL: Editor -->
-                    <div v-if="activeMat" style="flex-grow: 1; display: flex; flex-direction: column; gap: 10px; overflow: hidden;">
+                    <!-- Main Workspace Body -->
+                    <div class="sa-studio-body">
                         
-                        <!-- Metadata Header -->
-                        <div style="display: flex; gap: 10px; align-items: center; background: rgba(0,0,0,0.2); padding: 8px; border-radius: 4px;">
-                            <input v-model="activeMat.name" type="text" :disabled="!activeMat.isCustom" style="font-size: 1.2em; font-weight: bold; flex-grow: 1;">
-                            <i class="material-icons" style="font-size: 1.5em">{{activeMat.icon}}</i>
-                            <input v-model="activeMat.icon" type="text" title="Icon String" :disabled="!activeMat.isCustom" style="width: 80px;">
-                            <button @click="exportActive()" v-if="activeMat.isCustom" title="Export"><i class="material-icons">save_alt</i></button>
-                            <button @click="deleteActiveMaterial()" v-if="activeMat.isCustom" style="color: #fc2f40;" title="Delete"><i class="material-icons">delete</i></button>
-                        </div>
-
-                        <!-- Editor Tabs -->
-                        <div style="display: flex; gap: 5px;">
-                            <button @click="editingMode = 'vertex'" :style="{background: editingMode==='vertex'?'var(--color-accent)':''}">Vertex Shader</button>
-                            <button @click="editingMode = 'fragment'" :style="{background: editingMode==='fragment'?'var(--color-accent)':''}">Fragment Shader</button>
-                            <button @click="editingMode = 'uniforms'" :style="{background: editingMode==='uniforms'?'var(--color-accent)':''}">Uniforms & Properties</button>
-                        </div>
-
-                        <!-- Code Editor Area -->
-                        <div v-if="editingMode !== 'uniforms'" style="flex-grow: 1; border: 1px solid var(--color-border); position: relative; display: flex; flex-direction: column;">
-                            <div style="flex-grow: 1; overflow-y: auto;">
-                                <vue-prism-editor
-                                    class="glsl-editor-instance" 
-                                    v-model="currentShaderCode"
-                                    :highlight="highlighter"
-                                    language="glsl"
-                                    :line-numbers="true"
-                                    :readonly="!activeMat.isCustom"
-                                    style="height: 100%; min-height: 300px;"
-                                ></vue-prism-editor>
+                        <!-- Left Sidebar: Materials Library -->
+                        <div class="sa-studio-sidebar sa-left" :class="{collapsed: !showLeftSidebar}" style="padding: 12px 10px;">
+                            <button class="sa-left-btn" @click="createNewMaterial()"><i class="material-icons">add</i> New Material</button>
+                            <button class="sa-left-btn" @click="importMaterial()"><i class="material-icons">file_upload</i> Import .samat</button>
+                            <div style="font-size: 0.85em; font-weight: bold; opacity: 0.6; text-transform: uppercase; margin: 12px 0 6px 4px; letter-spacing: 0.5px;">Material Library</div>
+                            <div style="flex-grow: 1;">
+                                <div v-for="(m, mid) in materials" :key="mid" 
+                                     class="sa-materiel-list-item" :class="{selected: selectedId === mid}"
+                                     @click="selectMaterial(mid)">
+                                     <i class="material-icons">{{m.icon}}</i>
+                                     <div style="flex-grow:1; font-weight: bold; font-size:1.05em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{m.name}}</div>
+                                     <i v-if="!m.isCustom" class="material-icons" style="opacity:0.5; font-size:0.9em;" title="Read Only">lock</i>
+                                </div>
                             </div>
+                        </div>
+
+                        <!-- Center Panel: Code Editor -->
+                        <div class="sa-studio-main" v-if="activeMat">
                             
-                            <div v-if="validationErrors.length" style="color: #fc2f40; background: rgba(252,47,64,0.1); padding: 8px; border-top: 1px solid #fc2f40; max-height: 100px; overflow-y: auto;">
-                                <b>GLSL Errors:</b><br/>
-                                <span v-for="err in validationErrors" style="display:block"><span v-if="err.line">Line {{err.line}}: </span>{{err.message}}</span>
+                            <!-- VSCode Style Tab Header Bar -->
+                            <div class="sa-vscode-tabs-row">
+                                <button class="sa-vscode-tab" :class="{active: editingMode === 'vertex'}" @click="editingMode = 'vertex'">
+                                    <i class="material-icons" style="font-size:1.15em; color: #8be9fd;">code</i> vertex.glsl
+                                </button>
+                                <button class="sa-vscode-tab" :class="{active: editingMode === 'fragment'}" @click="editingMode = 'fragment'">
+                                    <i class="material-icons" style="font-size:1.15em; color: #ffb86c;">code</i> fragment.glsl
+                                </button>
+                                <button class="sa-vscode-tab" :class="{active: editingMode === 'uniforms'}" @click="editingMode = 'uniforms'">
+                                    <i class="material-icons" style="font-size:1.15em; color: #50fa7b;">settings</i> uniforms.json
+                                </button>
+
+                                <div class="sa-editor-actions-toolbar" v-if="editingMode !== 'uniforms'">
+                                    <button class="sa-icon-btn" @click="formatCode()" :title="tl('shader_architect.ui.format')">
+                                        <i class="material-icons">format_align_left</i>
+                                    </button>
+                                    <button class="sa-icon-btn" @click="validateShader()" :title="tl('shader_architect.ui.validate')">
+                                        <i class="material-icons">check_circle</i>
+                                    </button>
+                                    <button class="sa-icon-btn" style="background: var(--color-accent); color: var(--color-accent_text); border-color: transparent;" @click="applyLive()" :title="tl('shader_architect.ui.apply')">
+                                        <i class="material-icons">play_arrow</i>
+                                    </button>
+                                </div>
                             </div>
 
-                            <div style="padding: 6px; background: var(--color-ui); display: flex; gap: 8px;">
-                                <button @click="formatCode()"><i class="material-icons">format_align_left</i> Format</button>
-                                <button @click="validateShader()"><i class="material-icons">check_circle</i> Validate & Compile</button>
-                                <div style="flex-grow:1"></div>
-                                <button @click="applyLive()" style="background: var(--color-accent);"><i class="material-icons">play_arrow</i> Apply Updates</button>
+                            <!-- Workspace main content (Editor or Uniforms) -->
+                            <div style="flex-grow: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; min-height: 0;">
+                                
+                                <!-- Main Code Editor area -->
+                                    <div v-if="editingMode !== 'uniforms'" class="sa-editor-container" style="flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative;">
+                                        <vue-prism-editor
+                                            class="glsl-editor-instance" 
+                                            v-model="currentShaderCode"
+                                            :highlight="highlighter"
+                                            language="glsl"
+                                            :line-numbers="true"
+                                            :readonly="!activeMat.isCustom"
+                                            style="flex: 1; min-height: 0;"
+                                        ></vue-prism-editor>
+                                    
+                                    <!-- Autocomplete Suggestions popup -->
+                                    <div v-if="autocomplete.show" class="sa-autocomplete-dropdown" :style="{top: autocomplete.y + 'px', left: autocomplete.x + 'px'}">
+                                        <div v-for="(item, idx) in autocomplete.list" :key="item" 
+                                             class="sa-autocomplete-item" :class="{active: idx === autocomplete.index}"
+                                             @mousedown.prevent="autocomplete.index = idx; acceptAutocomplete($el.querySelector('.prism-editor__textarea'))">
+                                             <span>{{item}}</span>
+                                             <span class="type-badge">{{ getAutocompleteType(item) }}</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Uniforms panel inside main area (Full settings schema editor) -->
+                                <div v-if="editingMode === 'uniforms'" style="flex-grow: 1; overflow-y: auto; padding: 16px;">
+                                    <div style="margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--color-border);">
+                                        <h3 style="margin-top:0;">Add Custom Uniform</h3>
+                                        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                                            <input v-model="newUniformName" type="text" placeholder="u_myProperty" :disabled="!activeMat.isCustom" class="dark_bordered" style="padding: 6px;">
+                                            <select v-model="newUniformType" :disabled="!activeMat.isCustom">
+                                                <option value="float">float</option>
+                                                <option value="int">int</option>
+                                                <option value="bool">bool</option>
+                                                <option value="vec2">vec2</option>
+                                                <option value="vec3">vec3</option>
+                                                <option value="color">color (vec3)</option>
+                                            </select>
+                                            <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
+                                                <input type="checkbox" v-model="newUniformExpose" :disabled="!activeMat.isCustom"> Expose
+                                            </label>
+                                            <button @click="addUniform()" :disabled="!activeMat.isCustom"><i class="material-icons" style="font-size:1.1em; vertical-align:middle;">add_box</i> Add</button>
+                                        </div>
+                                        <div v-if="(newUniformType === 'float' || newUniformType === 'int') && activeMat.isCustom" style="display: flex; gap: 12px; align-items: center; margin-top: 8px; flex-wrap: wrap;">
+                                            <label style="display: flex; align-items: center; gap: 4px;">
+                                                Min: <input type="number" placeholder="None" v-model.number="newUniformMin" class="dark_bordered" style="width: 70px; padding: 2px 4px;">
+                                            </label>
+                                            <label style="display: flex; align-items: center; gap: 4px;">
+                                                Max: <input type="number" placeholder="None" v-model.number="newUniformMax" class="dark_bordered" style="width: 70px; padding: 2px 4px;">
+                                            </label>
+                                            <label style="display: flex; align-items: center; gap: 4px;">
+                                                Step: <input type="number" placeholder="None" v-model.number="newUniformStep" class="dark_bordered" style="width: 70px; padding: 2px 4px;">
+                                            </label>
+                                            <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
+                                                <input type="checkbox" v-model="newUniformAllowHigher"> Allow Higher
+                                            </label>
+                                            <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
+                                                <input type="checkbox" v-model="newUniformAllowLower"> Allow Lower
+                                            </label>
+                                        </div>
+                                    </div>
+
+                                    <h3 style="margin-top:0;">Active Uniforms</h3>
+                                    <div v-if="!activeMat.uniforms || Object.keys(activeMat.uniforms).length === 0" style="opacity: 0.5;">No uniforms defined.</div>
+                                    
+                                    <div v-for="(uni, key) in activeMat.uniforms" :key="key" class="sa-uniform-row">
+                                        <div class="sa-uniform-row-header">
+                                            <label :title="key">
+                                                <span>{{key}} <span v-if="getUniformLabel(uni, key)" style="opacity: 0.6; font-size: 0.9em; font-weight: normal;">({{getUniformLabel(uni, key)}})</span></span>
+                                                <span class="uni-type">{{uni.type}}</span>
+                                            </label>
+                                            
+                                            <!-- Editor varies by type -->
+                                            <input v-if="uni.type==='float'" type="number" step="0.1" v-model.number="uni.value" class="dark_bordered" style="width: 100px;">
+                                            <input v-if="uni.type==='int'" type="number" step="1" v-model.number="uni.value" class="dark_bordered" style="width: 100px;">
+                                            <input v-if="uni.type==='bool'" type="checkbox" v-model="uni.value">
+                                            <input v-if="uni.type==='color'" type="color" v-model="uni.hexValue">
+                                            
+                                            <div v-if="uni.type==='vec2'" style="display: flex; gap: 5px; align-items: center;">
+                                                X <input type="number" step="0.1" v-model.number="uni.value.x" class="dark_bordered" style="width: 70px;">
+                                                Y <input type="number" step="0.1" v-model.number="uni.value.y" class="dark_bordered" style="width: 70px;">
+                                            </div>
+
+                                            <div v-if="uni.type==='vec3'" style="display: flex; gap: 5px; align-items: center;">
+                                                X <input type="number" step="0.1" v-model.number="uni.value.x" class="dark_bordered" style="width: 60px;">
+                                                Y <input type="number" step="0.1" v-model.number="uni.value.y" class="dark_bordered" style="width: 60px;">
+                                                Z <input type="number" step="0.1" v-model.number="uni.value.z" class="dark_bordered" style="width: 60px;">
+                                            </div>
+
+                                            <div v-if="uni.type==='vec2v' || uni.type==='vec3v' || uni.type==='floatv'" style="opacity:0.6; font-style:italic;">[Array Data: {{uni.value.length}} items]</div>
+                                            
+                                            <div style="flex-grow:1"></div>
+                                            <button @click="expandUniform(key)" style="background: transparent; border: none; padding: 2px 4px; cursor: pointer; color: var(--color-text); margin-right: 4px;" title="Edit Metadata">
+                                                <i class="material-icons" :style="{color: expandedUniforms[key] ? 'var(--color-accent)' : ''}" style="font-size: 1.2em;">settings</i>
+                                            </button>
+                                            <i v-if="activeMat.isCustom" class="material-icons" @click="removeUniform(key)" style="color: #fc2f40; cursor: pointer;" title="Remove Uniform">close</i>
+                                        </div>
+
+                                        <!-- Expanded Metadata Editor -->
+                                        <div v-if="expandedUniforms[key]" style="margin-top: 8px; padding-top: 8px; border-top: 1px dashed rgba(255,255,255,0.1); display: flex; flex-direction: column; gap: 6px; font-size: 0.9em; opacity: 0.9;">
+                                            <div style="display: flex; gap: 15px; align-items: center;">
+                                                <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
+                                                    <input type="checkbox" v-model="uni.expose" :disabled="!activeMat.isCustom"> Expose to UI
+                                                </label>
+                                            </div>
+                                            <div v-if="uni.type === 'float' || uni.type === 'int'" style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center;">
+                                                <label style="display: flex; align-items: center; gap: 4px;">
+                                                    Min: <input type="number" v-model.number="uni.min" placeholder="None" :disabled="!activeMat.isCustom" class="dark_bordered" style="width: 70px; padding: 2px 4px;">
+                                                </label>
+                                                <label style="display: flex; align-items: center; gap: 4px;">
+                                                    Max: <input type="number" v-model.number="uni.max" placeholder="None" :disabled="!activeMat.isCustom" class="dark_bordered" style="width: 70px; padding: 2px 4px;">
+                                                </label>
+                                                <label style="display: flex; align-items: center; gap: 4px;">
+                                                    Step: <input type="number" v-model.number="uni.step" placeholder="None" :disabled="!activeMat.isCustom" class="dark_bordered" style="width: 70px; padding: 2px 4px;">
+                                                </label>
+                                                <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
+                                                    <input type="checkbox" v-model="uni.allow_higher" :disabled="!activeMat.isCustom"> Allow Higher
+                                                </label>
+                                                <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
+                                                    <input type="checkbox" v-model="uni.allow_lower" :disabled="!activeMat.isCustom"> Allow Lower
+                                                </label>
+                                            </div>
+
+                                            <!-- Description -->
+                                            <div style="display: flex; flex-direction: column; gap: 2px; margin-top: 4px;">
+                                                <label style="font-weight: bold;">Description (Tooltip):</label>
+                                                <input type="text" v-model="uni.description" placeholder="Tooltip description" :disabled="!activeMat.isCustom" class="dark_bordered" style="padding: 4px;">
+                                            </div>
+
+                                            <!-- Translations -->
+                                            <div style="display: flex; flex-direction: column; gap: 4px; margin-top: 4px;">
+                                                <label style="font-weight: bold;">Custom Translations:</label>
+                                                
+                                                <!-- List existing translations -->
+                                                <div v-for="(transVal, langCode) in uni.translations" :key="langCode" style="display: flex; gap: 5px; align-items: center; margin-bottom: 2px;">
+                                                    <span style="font-family: monospace; width: 30px; text-transform: uppercase; opacity: 0.8;">{{langCode}}:</span>
+                                                    <input type="text" v-model="uni.translations[langCode]" :disabled="!activeMat.isCustom" class="dark_bordered" style="flex-grow: 1; padding: 2px 4px;">
+                                                    <button v-if="activeMat.isCustom" @click="$delete(uni.translations, langCode)" style="background: transparent; border: none; color: #fc2f40; cursor: pointer; padding: 0 4px;" title="Remove Translation">
+                                                        <i class="material-icons" style="font-size: 1.1em;">close</i>
+                                                    </button>
+                                                </div>
+
+                                                <!-- Add new translation -->
+                                                <div v-if="activeMat.isCustom" style="display: flex; gap: 5px; align-items: center;">
+                                                    <input type="text" placeholder="Language (e.g. en, es)" v-model="newTransLang[key]" class="dark_bordered" style="width: 100px; padding: 2px 4px;">
+                                                    <input type="text" placeholder="Label translation" v-model="newTransVal[key]" class="dark_bordered" style="flex-grow: 1; padding: 2px 4px;">
+                                                    <button @click="addCustomTranslation(uni, key)" style="padding: 2px 8px; cursor: pointer;">Add</button>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Bottom Problems Console Panel -->
+                                <div v-if="editingMode !== 'uniforms'" class="sa-problems-console" :class="{collapsed: problemsCollapsed}" style="flex-shrink: 0; display: flex; flex-direction: column; max-height: 35%;">
+                                    <div class="sa-problems-header" @click="problemsCollapsed = !problemsCollapsed" style="flex-shrink: 0; cursor: pointer;">
+                                        <span style="display:flex; align-items:center; gap:6px;">
+                                            <i class="material-icons" style="font-size:1.15em;" :style="{color: validationErrors.length > 0 ? '#ff5555' : '#50fa7b'}">
+                                                {{ validationErrors.length > 0 ? 'error' : 'check_circle' }}
+                                            </i>
+                                            {{ tl('shader_architect.ui.problems') }} ({{ validationErrors.length }})
+                                        </span>
+                                        <i class="material-icons" style="font-size:1.15em;">
+                                            {{ problemsCollapsed ? 'keyboard_arrow_up' : 'keyboard_arrow_down' }}
+                                        </i>
+                                    </div>
+                                    <div class="sa-problems-list" v-if="!problemsCollapsed" style="flex: 1; overflow-y: auto;">
+                                        <div v-if="validationErrors.length === 0" style="opacity: 0.5; padding: 8px 12px; font-size:0.95em;">
+                                            {{ tl('shader_architect.ui.no_problems') }}
+                                        </div>
+                                        <div v-for="(prob, pidx) in validationErrors" :key="pidx" 
+                                            class="sa-problem-item error" @click="goToProblemLine(prob)">
+                                            <span class="location">
+                                                [{{ prob.type }}<span v-if="prob.line">:L{{ prob.line }}</span>]
+                                            </span>
+                                            <span class="message">{{ prob.message }}</span>
+                                        </div>
+                                    </div>
+                                </div>
+
                             </div>
+
+                        </div>
+                        <div v-else style="flex-grow: 1; display:flex; align-items:center; justify-content:center; opacity:0.5; font-size:1.5em; background:var(--color-back);">
+                            Select or create a material to edit.
                         </div>
 
-                        <!-- Uniforms Area -->
-                        <div v-if="editingMode === 'uniforms'" style="flex-grow: 1; overflow-y: auto; padding-right: 8px;">
-                            <div style="margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--color-border);">
-                                <h3>Add Custom Uniform</h3>
-                                <div style="display: flex; gap: 8px; align-items: center;">
-                                    <input v-model="newUniformName" type="text" placeholder="u_myProperty" :disabled="!activeMat.isCustom">
-                                    <select v-model="newUniformType" :disabled="!activeMat.isCustom">
-                                        <option value="float">float</option>
-                                        <option value="int">int</option>
-                                        <option value="bool">bool</option>
-                                        <option value="vec2">vec2</option>
-                                        <option value="vec3">vec3</option>
-                                        <option value="color">color (vec3)</option>
-                                    </select>
-                                    <button @click="addUniform()" :disabled="!activeMat.isCustom"><i class="material-icons">add_box</i> Add</button>
+                        <!-- Right Sidebar: Properties and Active Uniforms Quick Tweaks -->
+                        <div class="sa-studio-sidebar sa-right" :class="{collapsed: !showRightSidebar}" style="padding: 16px 12px;">
+                            <div v-if="activeMat">
+                                <h3 style="margin-top:0; border-bottom: 1px solid var(--color-border); padding-bottom:6px; display:flex; align-items:center; gap:6px;">
+                                    <i class="material-icons" style="color:var(--color-accent)">tune</i>
+                                    Quick Tweaks
+                                </h3>
+                                
+                                <div style="font-size:0.85em; opacity:0.6; margin-bottom:12px;">
+                                    Adjust exposed uniforms and properties in real-time to preview in the viewport.
                                 </div>
+
+                                <div v-if="!activeMat.uniforms || Object.keys(activeMat.uniforms).filter(k => activeMat.uniforms[k].expose && !isSystemUniform(k)).length === 0" style="opacity: 0.5; font-style:italic;">
+                                    No exposed properties. Turn on \"Expose\" in Uniforms tab settings.
+                                </div>
+
+                                <div v-for="(uni, key) in activeMat.uniforms" :key="key" v-if="uni.expose && !isSystemUniform(key)" class="sa-uniform-row" style="margin-bottom:10px; padding: 8px;">
+                                    <div style="font-weight:bold; font-size:0.9em; margin-bottom:4px; display:flex; justify-content:space-between; align-items:center;">
+                                        <span>{{ getUniformLabel(uni, key) || key }}</span>
+                                        <span style="opacity:0.4; font-size:0.8em; font-family:monospace;">{{ uni.type }}</span>
+                                    </div>
+
+                                    <!-- Float slider or input -->
+                                    <div v-if="uni.type==='float'">
+                                        <div v-if="uni.min !== undefined && uni.max !== undefined" style="display:flex; align-items:center; gap:6px;">
+                                            <input type="range" :min="uni.min" :max="uni.max" :step="uni.step || 0.05" v-model.number="uni.value" @input="applyLive()" style="flex-grow:1; cursor:pointer; height:4px; padding:0;">
+                                            <span style="font-size:0.85em; font-family:monospace; min-width:32px; text-align:right;">{{ formatNumber(uni.value) }}</span>
+                                        </div>
+                                        <input v-else type="number" step="0.1" v-model.number="uni.value" @change="applyLive()" class="dark_bordered" style="width: 100%; box-sizing:border-box;">
+                                    </div>
+
+                                    <!-- Int input -->
+                                    <div v-if="uni.type==='int'">
+                                        <input type="number" step="1" v-model.number="uni.value" @change="applyLive()" class="dark_bordered" style="width: 100%; box-sizing:border-box;">
+                                    </div>
+
+                                    <!-- Bool check -->
+                                    <div v-if="uni.type==='bool'">
+                                        <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:0.9em; font-weight:normal;">
+                                            <input type="checkbox" v-model="uni.value" @change="applyLive()"> Enabled
+                                        </label>
+                                    </div>
+
+                                    <!-- Color picker -->
+                                    <div v-if="uni.type==='color'">
+                                        <input type="color" v-model="uni.hexValue" @change="applyLive()" style="width:100%; padding:0; border:none; height:24px; cursor:pointer;">
+                                    </div>
+
+                                    <!-- Vec2 input -->
+                                    <div v-if="uni.type==='vec2'" style="display: flex; gap: 5px; align-items: center; font-size:0.85em;">
+                                        X: <input type="number" step="0.1" v-model.number="uni.value.x" @change="applyLive()" class="dark_bordered" style="width: 100%; min-width:30px;">
+                                        Y: <input type="number" step="0.1" v-model.number="uni.value.y" @change="applyLive()" class="dark_bordered" style="width: 100%; min-width:30px;">
+                                    </div>
+
+                                    <!-- Vec3 input -->
+                                    <div v-if="uni.type==='vec3'" style="display: flex; gap: 5px; align-items: center; font-size:0.85em;">
+                                        X: <input type="number" step="0.1" v-model.number="uni.value.x" @change="applyLive()" class="dark_bordered" style="width: 100%; min-width:30px;">
+                                        Y: <input type="number" step="0.1" v-model.number="uni.value.y" @change="applyLive()" class="dark_bordered" style="width: 100%; min-width:30px;">
+                                        Z: <input type="number" step="0.1" v-model.number="uni.value.z" @change="applyLive()" class="dark_bordered" style="width: 100%; min-width:30px;">
+                                    </div>
+                                </div>
+
                             </div>
-
-                            <h3>Active Uniforms</h3>
-                            <div v-if="!activeMat.uniforms || Object.keys(activeMat.uniforms).length === 0" style="opacity: 0.5;">No uniforms defined.</div>
-                            
-                            <div v-for="(uni, key) in activeMat.uniforms" :key="key" class="sa-uniform-row">
-                                <label :title="key">{{key}} ({{uni.type}})</label>
-                                
-                                <!-- Editor varies by type -->
-                                <input v-if="uni.type==='float'" type="number" step="0.1" v-model.number="uni.value" class="dark_bordered" style="width: 100px;">
-                                <input v-if="uni.type==='int'" type="number" step="1" v-model.number="uni.value" class="dark_bordered" style="width: 100px;">
-                                <input v-if="uni.type==='bool'" type="checkbox" v-model="uni.value">
-                                <input v-if="uni.type==='color'" type="color" v-model="uni.hexValue">
-                                
-                                <div v-if="uni.type==='vec2'" style="display: flex; gap: 5px; align-items: center;">
-                                    X <input type="number" step="0.1" v-model.number="uni.value.x" class="dark_bordered" style="width: 70px;">
-                                    Y <input type="number" step="0.1" v-model.number="uni.value.y" class="dark_bordered" style="width: 70px;">
-                                </div>
-
-                                <div v-if="uni.type==='vec3'" style="display: flex; gap: 5px; align-items: center;">
-                                    X <input type="number" step="0.1" v-model.number="uni.value.x" class="dark_bordered" style="width: 60px;">
-                                    Y <input type="number" step="0.1" v-model.number="uni.value.y" class="dark_bordered" style="width: 60px;">
-                                    Z <input type="number" step="0.1" v-model.number="uni.value.z" class="dark_bordered" style="width: 60px;">
-                                </div>
-
-                                <div v-if="uni.type==='vec2v' || uni.type==='vec3v' || uni.type==='floatv'" style="opacity:0.6; font-style:italic;">[Array Data: {{uni.value.length}} items]</div>
-                                
-                                <div style="flex-grow:1"></div>
-                                <i v-if="activeMat.isCustom" class="material-icons" @click="removeUniform(key)" style="color: #fc2f40; cursor: pointer;" title="Remove Uniform">close</i>
+                            <div style="opacity:0.5; text-align:center; padding-top:40px;" v-else>
+                                Select a material to tweak properties.
                             </div>
                         </div>
 
                     </div>
-                    <div v-else style="flex-grow: 1; display:flex; align-items:center; justify-content:center; opacity:0.5; font-size:1.5em;">
-                        Select or create a material to edit.
+
+                    <!-- Status Bar -->
+                    <div class="sa-studio-statusbar">
+                        <div class="sa-statusbar-item">
+                            <i class="material-icons" style="font-size:1.15em;" :style="{color: validationErrors.length > 0 ? '#ff5555' : '#50fa7b'}">
+                                {{ validationErrors.length > 0 ? 'error' : 'offline_pin' }}
+                            </i>
+                            <span>{{ validationErrors.length > 0 ? tl('shader_architect.ui.status_errors') : tl('shader_architect.ui.status_ok') }}</span>
+                        </div>
+                        <div class="sa-statusbar-item" v-if="activeMat">
+                            <span style="opacity:0.5; margin-right:4px;">Language:</span>
+                            <span style="font-weight:bold; color:var(--color-accent)">GLSL ES 100</span>
+                        </div>
                     </div>
                 </div>
                 `
@@ -4218,7 +6988,7 @@ void main() {
                         MaterialManager.register(this.content_vue.materials[id]);
                     }
                 }
-                ShaderEngine.updateAllCubes();
+                ShaderEngine.updateAllCubes('material_studio_confirm');
             }
         });
     }
@@ -4226,6 +6996,38 @@ void main() {
     // =========================================================================
     // 6. PLUGIN INITIALIZATION & MENUS
     // =========================================================================
+    function waitForPluginLightManager(timeout = 5000) {
+        return new Promise((resolve, reject) => {
+
+            // Si A ya cargó antes que B, úsalo inmediatamente
+            if (window.LIGHT_MANAGER_LOADED) {
+                resolve(window.LIGHT_MANAGER_LOADED);
+                return;
+            }
+
+            let finished = false;
+
+            const timer = setTimeout(() => {
+                if (finished) return;
+                finished = true;
+
+                window.removeEventListener('light_manager_initialized', onReady);
+
+                reject(new Error('Light Manager is not available after waiting for ' + timeout + 'ms. Shader Architect requires Light Manager to function properly. Please ensure Light Manager is installed and enabled.));'));
+            }, timeout);
+
+            function onReady(event) {
+                if (finished) return;
+                finished = true;
+
+                clearTimeout(timer);
+                resolve(event.detail || window.LIGHT_MANAGER_LOADED);
+            }
+
+            window.addEventListener('light_manager_initialized', onReady, { once: true });
+        });
+    }
+
 
     let deletables = [];
     let styleEl;
@@ -4238,12 +7040,35 @@ void main() {
         version: '2.0.0',
         variant: 'both',
 
-        onload() {
+        onload: async function () {
+
+            try {
+                await waitForPluginLightManager();
+            }
+            catch (e) {
+                console.error(e);
+                Blockbench.showToastNotification({
+                    text: 'Shader Architect failed to load: Light Manager is required. Please install and enable Light Manager plugin.',
+                    icon: 'error',
+                    expire: 10000
+                });
+                return;
+            }
+
+
             window.ShaderEngine = ShaderEngine;
             window.MaterialManager = MaterialManager;
+            window.FancyShaderMaterial = FancyShaderMaterial;
+            window.FancyShaderMaterialInstance = FancyShaderMaterialInstance;
+            const saProjectInstancesProp = MaterialManager.registerProjectMaterialInstanceProperty();
+            if (saProjectInstancesProp) deletables.push(saProjectInstancesProp);
+            const saMaterialInstanceUndoHooks = MaterialManager.registerMaterialInstanceUndoHooks();
+            if (saMaterialInstanceUndoHooks) deletables.push(saMaterialInstanceUndoHooks);
             // Register Cube property for material persistence in .bbmodel
             let saMatProp = new Property(Cube, 'string', 'sa_material_id', { default: '', exposed: true });
             deletables.push(saMatProp);
+            let saMatInstanceProp = new Property(Cube, 'string', 'sa_material_instance_id', { default: '', exposed: true });
+            deletables.push(saMatInstanceProp);
 
             // Load Styles
             styleEl = document.createElement('style');
@@ -4317,10 +7142,11 @@ void main() {
                             // 5. Aplicamos el nuevo material a cada cubo
                             finalSelection.forEach(cube => {
                                 cube.sa_material_id = formData.target_mat.replace('sa_', '');
+                                cube.sa_material_instance_id = '';
                             });
 
                             // 6. Actualizamos y cerramos
-                            ShaderEngine.updateAllCubes();
+                            ShaderEngine.updateAllCubes('apply_material');
                             this.hide();
                         }
                     }).show();
@@ -4351,13 +7177,11 @@ void main() {
                     const finalSelection = new Set([...directCubes, ...cubesFromGroups]);
 
                     finalSelection.forEach(cube => {
-                        if (cube.sa_material_id !== undefined) {
-                            delete cube.sa_material_id;
-                        }
+                        MaterialManager.clearCubeMaterialAssignment(cube);
                     });
 
                     // 5. Refrescamos el motor
-                    ShaderEngine.updateAllCubes();
+                    ShaderEngine.updateAllCubes('clear_material');
                 }
             });
 
@@ -4374,7 +7198,7 @@ void main() {
                 globalsMenuOptions['sa_' + id] = { name: m.name, icon: m.icon };
             }
 
-            let renderModeSelector = new BarSelect('sa_global_mode', {
+            let renderModeSelector = new window.CompactDropdownSelect('sa_global_mode', {
                 category: 'view',
                 condition: () => Project,
                 value: 'sa_' + ShaderEngine.globalRenderMode,
@@ -4382,7 +7206,7 @@ void main() {
                 options: globalsMenuOptions,
                 onChange() {
                     ShaderEngine.globalRenderMode = this.value.replace('sa_', '');
-                    ShaderEngine.updateAllCubes();
+                    ShaderEngine.updateAllCubes('global_mode_change');
                 }
             });
 
@@ -4418,8 +7242,8 @@ void main() {
             // Project event hooks to auto-update
             let addCubeEvent = Blockbench.on('add_cube', (event) => {
                 if (event.object && event.object.mesh) {
-                    let id = event.object.sa_material_id || ShaderEngine.globalRenderMode;
-                    ShaderEngine.applyToMesh(event.object, MaterialManager.materials[id] || MaterialManager.materials['classic']);
+                    let shader = MaterialManager.resolveCubeMaterial(event.object, ShaderEngine.globalRenderMode);
+                    ShaderEngine.applyToMesh(event.object, shader || MaterialManager.materials['classic']);
                     ShaderEngine.updateLightUniforms();
                 }
             });
@@ -4430,7 +7254,685 @@ void main() {
             });
             deletables.push(transformEvent);
 
-            setTimeout(() => { ShaderEngine.updateAllCubes(); }, 300);
+            const updateProjectEvent = () => {
+                if (!Project.parsed) return;
+                MaterialManager.syncMaterialInstancesFromProject();
+                updateSelection();
+                //ShaderEngine.updateAllCubes('project_update');
+            };
+
+            let onParseProjectEvent = Codecs.project.on('parse', () => {
+                Project.parsed = false;
+                const projectInstancesProp = MaterialManager.registerProjectMaterialInstanceProperty();
+                if (projectInstancesProp && !deletables.includes(projectInstancesProp)) {
+                    deletables.push(projectInstancesProp);
+                }
+            });
+
+            deletables.push(onParseProjectEvent);
+
+            let loadProjectEvent = Codecs.project.on('parsed', () => {
+                Project.parsed = true;
+                updateProjectEvent();
+            });
+
+            deletables.push(loadProjectEvent);
+
+            let selectProjectEvent = Blockbench.on('select_project', () => {
+                updateProjectEvent();
+            });
+
+            deletables.push(selectProjectEvent);
+
+            let updateSelectionEvent = Blockbench.on('update_selection', () => {
+                if (!Project.parsed) return;
+                ShaderEngine.updateAllCubes('update_selection');
+            });
+
+            deletables.push(updateSelectionEvent);
+
+            //setTimeout(() => { ShaderEngine.updateAllCubes(); }, 300);
+
+            let renderWorkspaceMode = new Mode('render', {
+                name: 'Render',
+                icon: 'hangout_video',
+                category: 'navigate',
+                condition: () => Project,
+                onSelect() {
+
+                }
+            });
+            deletables.push(renderWorkspaceMode);
+
+            Panels.outliner.condition.modes.push('render');
+
+            let global_renderer_properties = new Panel('global_renderer_properties', {
+                icon: 'motion_mode',
+                growable: true,
+                resizable: true,
+                condition: { modes: ['render'] },
+                //display_condition: () => (LightElement.selected.length === 1),
+                default_position: {
+                    slot: "left_bar",
+                    float_position: [
+                        1322,
+                        57
+                    ],
+                    float_size: [
+                        314,
+                        57
+                    ],
+                    height: 57,
+                    folded: false,
+                    fixed_height: true,
+                    attached_to: "",
+                    attached_index: 0,
+                    sidebar_index: 0
+                },
+                mode_positions: {
+                    render: {
+                        slot: "left_bar",
+                        float_position: [
+                            1322,
+                            57
+                        ],
+                        float_size: [
+                            314,
+                            57
+                        ],
+                        height: 57,
+                        folded: false,
+                        fixed_height: true,
+                        attached_to: "",
+                        attached_index: 0,
+                        sidebar_index: 0
+                    }
+                },
+                toolbars: [
+                ]
+            });
+
+            deletables.push(global_renderer_properties);
+
+            let material_properties;
+
+            let cube_material_instance;
+            let cube_material_instance_name;
+            let material_instance_properties_toolbar;
+            let create_material_instance;
+            let delete_material_instance;
+            let global_material_instance_text;
+
+            const setBarControl = (control, value) => {
+                if (control && typeof control.set === 'function') control.set(value);
+            };
+
+            const getSelectedCube = () => Cube.selected.length === 1 ? Cube.selected[0] : null;
+            const getSelectedCubes = () => Cube.selected.length > 0 ? Cube.selected.slice() : [];
+            const cubeSelectedCondition = () => Cube.selected.length > 0;
+            const areMultipleSelected = () => Cube.selected.length > 1;
+            const getCubeMaterialInstanceId = cube => cube && cube.sa_material_instance_id ? cube.sa_material_instance_id : '';
+            const allSelectedHaveSameMaterialInstance = () => {
+                const cubes = getSelectedCubes();
+                if (cubes.length === 0) return false;
+                const firstId = getCubeMaterialInstanceId(cubes[0]);
+                return cubes.every(c => getCubeMaterialInstanceId(c) === firstId);
+            };
+
+            const cubeHasMaterialInstance = () => {
+                const cubes = getSelectedCubes();
+                if (cubes.length === 0) return false;
+                if (areMultipleSelected()) {
+                    const instanceId = getCubeMaterialInstanceId(cubes[0]);
+                    return allSelectedHaveSameMaterialInstance() && !!instanceId && !!MaterialManager.instances[instanceId];
+                }
+                const cube = getSelectedCube();
+                if (!cube) return false;
+                const instanceId = getCubeMaterialInstanceId(cube);
+                return !!instanceId && !!MaterialManager.instances[instanceId];
+            };
+
+            const getSharedSelectedMaterialInstanceId = () => {
+                const cubes = getSelectedCubes();
+                if (cubes.length === 0 || !allSelectedHaveSameMaterialInstance()) return '';
+                return getCubeMaterialInstanceId(cubes[0]);
+            };
+
+            const getMaterialInstanceUndoAspects = (cubes = []) => {
+                const aspects = {};
+                if (cubes && cubes.length) aspects.elements = cubes;
+                aspects[MATERIAL_INSTANCES_UNDO_ASPECT] = true;
+                return aspects;
+            };
+
+            const runMaterialInstanceUndo = (labelKey, cubes, callback) => {
+                const aspects = getMaterialInstanceUndoAspects(cubes);
+                Undo.initEdit(aspects);
+                try {
+                    const result = callback();
+                    Undo.finishEdit(tl(labelKey), aspects);
+                    return result;
+                } catch (error) {
+                    Undo.cancelEdit(true);
+                    throw error;
+                }
+            };
+
+            const sanitizeSelectedMaterialInstances = (cubes) => {
+                let changed = false;
+                cubes.forEach(cube => {
+                    const instanceId = getCubeMaterialInstanceId(cube);
+                    if (instanceId && !MaterialManager.instances[instanceId]) {
+                        changed = MaterialManager.clearMissingMaterialInstanceFromCube(cube, instanceId) || changed;
+                    }
+                });
+                if (changed) ShaderEngine.updateAllCubes('sanitize_instances');
+            };
+
+            const updateMaterialInstancePanel = () => {
+                const cubes = getSelectedCubes();
+                if (cubes.length === 0) {
+                    global_material_instance_text.set(tl('shader_architect.material_panel.global_material'));
+                    material_properties.form.form_config = {
+                        no_cube_selected: {
+                            type: 'bar_display',
+                            value: tl('shader_architect.material_panel.no_selected'),
+                            icon: 'deployed_code_alert',
+                            paragraph: false,
+                            expand: true,
+                            color: 'var(--color-text)'
+                        }
+                    };
+                    material_properties.form.buildForm();
+                    return;
+                }
+
+                sanitizeSelectedMaterialInstances(cubes);
+                global_material_instance_text.set(MaterialManager.materials[ShaderEngine.globalRenderMode] ? MaterialManager.materials[ShaderEngine.globalRenderMode].name : tl('shader_architect.material_panel.global_material'));
+
+                const isMultiple = areMultipleSelected();
+                const sameMaterialInstance = allSelectedHaveSameMaterialInstance();
+
+                let material_instances_options = {};
+
+                if (isMultiple && !sameMaterialInstance) {
+                    // Múltiples cubes con DIFERENTES material instances - agregar primero
+                    material_instances_options['__mixed__'] = { name: 'shader_architect.material_panel.mixed_instances', icon: 'bubble_chart' };
+                }
+
+                material_instances_options['global'] = { name: 'shader_architect.material_panel.global_material', icon: 'globe' };
+                for (let id in MaterialManager.instances) {
+                    let inst = MaterialManager.instances[id];
+                    material_instances_options[id] = { name: inst.name, icon: inst.icon };
+                }
+
+                if (isMultiple && !sameMaterialInstance) {
+                    cube_material_instance.setOptions(material_instances_options);
+                    cube_material_instance.update();
+                    setBarControl(cube_material_instance, '__mixed__');
+                    material_properties.form.form_config = {
+                        multiple_instances: {
+                            type: 'bar_display',
+                            value: tl('shader_architect.material_panel.multiple_instances'),
+                            icon: 'deployed_code_alert',
+                            paragraph: false,
+                            expand: true,
+                            color: 'var(--color-text)'
+                        }
+                    };
+                    material_properties.form.buildForm();
+                } else {
+                    // Un solo cube o múltiples con MISMO material instance
+                    const firstCube = cubes[0];
+                    const instanceId = getCubeMaterialInstanceId(firstCube);
+                    cube_material_instance.setOptions(material_instances_options);
+                    cube_material_instance.update();
+                    setBarControl(cube_material_instance, instanceId ? instanceId : 'global');
+
+                    if (instanceId && MaterialManager.instances[instanceId]) {
+                        cube_material_instance_name.set(MaterialManager.instances[instanceId].name);
+                        cube_material_instance_name.update();
+
+                        const instance = MaterialManager.instances[instanceId];
+                        MaterialManager.revalidateMaterialInstance(instance, { save: false });
+
+                        let form_config = {
+                            _sa_properties_info_label_: {
+                                type: 'bar_display',
+                                value: tl('shader_architect.material_panel.properties'),
+                                icon: 'tune',
+                                paragraph: false,
+                                expand: true,
+                                color: 'var(--color-text)'
+                            }
+                        };
+
+                        /**
+                         * @type {FancyShaderMaterial}
+                         */
+                        const baseMat = MaterialManager.materials[instance.baseMaterialId] || MaterialManager.materials['classic'];
+
+                        for (let uniName in instance.uniforms) {
+                            const uni = instance.uniforms[uniName];
+                            if (uni.expose && !isSystemUniform(uniName)) {
+                                const currentLang = (typeof Language !== 'undefined' && Language.code) ? Language.code : 'en';
+
+                                // Resolve Label
+                                let resolvedLabel = uniName;
+                                if (uni.translations && uni.translations[currentLang]) {
+                                    resolvedLabel = uni.translations[currentLang];
+                                } else {
+                                    const tlKey = 'shader_architect.uniform.' + uniName;
+                                    const globalTl = tl(tlKey);
+                                    if (globalTl !== tlKey) {
+                                        resolvedLabel = globalTl;
+                                    } else if (uni.translations && uni.translations['en']) {
+                                        resolvedLabel = uni.translations['en'];
+                                    }
+                                }
+
+                                // Resolve Description/Tooltip (title)
+                                let resolvedDesc = '';
+                                if (uni.translations && uni.translations[currentLang + '_desc']) {
+                                    resolvedDesc = uni.translations[currentLang + '_desc'];
+                                } else if (uni.description) {
+                                    resolvedDesc = uni.description;
+                                } else {
+                                    const descKey = 'shader_architect.uniform.' + uniName + '.desc';
+                                    const globalDesc = tl(descKey);
+                                    if (globalDesc !== descKey) {
+                                        resolvedDesc = globalDesc;
+                                    } else if (uni.translations && uni.translations['en_desc']) {
+                                        resolvedDesc = uni.translations['en_desc'];
+                                    }
+                                }
+
+                                if (uni.type === 'float' || uni.type === 'int') {
+                                    if (uni.min !== undefined && uni.max !== undefined) {
+                                        form_config[uniName] = {
+                                            type: 'combo_slider',
+                                            label: resolvedLabel + ':',
+                                            value: uni.value,
+                                            min: uni.min,
+                                            max: uni.max,
+                                            step: uni.step ? uni.step : (uni.type === 'float') ? uni.min - uni.max * 0.1 : 1,
+                                            resettable: true,
+                                            reset_value: baseMat.uniforms[uniName] ? baseMat.uniforms[uniName].value : (uni.type === 'float' ? 0.0 : 0),
+                                            color: (uni.type === 'float') ? 'var(--color-accent)' : 'var(--color-axis-y)',
+                                            title: resolvedDesc || undefined,
+                                            description: resolvedDesc || undefined
+                                        }
+                                    } else {
+                                        form_config[uniName] = {
+                                            type: 'number',
+                                            label: resolvedLabel + ':',
+                                            value: uni.value,
+                                            step: uni.step !== undefined ? uni.step : (uni.type === 'float' ? 0.1 : 1),
+                                            title: resolvedDesc || undefined,
+                                            description: resolvedDesc || undefined
+                                        }
+                                    }
+                                }
+                                else if (uni.type === 'bool') {
+                                    form_config[uniName] = {
+                                        type: 'custom_checkbox',
+                                        label: resolvedLabel + ':',
+                                        value: uni.value,
+                                        icon_size: '24px',
+                                        layout: 'space_between',
+                                        icon_on: 'check_circle',
+                                        icon_off: 'progress_activity',
+                                        icon_color_on: 'var(--color-axis-y)',
+                                        icon_color_off: 'var(--color-axis-x)',
+                                        title: resolvedDesc || undefined,
+                                        description: resolvedDesc || undefined,
+                                        padding_right: '32px'
+                                    }
+                                }
+                                else if (uni.type === 'color') {
+                                    form_config[uniName] = {
+                                        type: 'color',
+                                        label: resolvedLabel + ':',
+                                        value: uni.hexValue || (uni.value instanceof THREE.Color ? '#' + uni.value.getHexString() : (typeof uni.value === 'string' ? uni.value : '#ffffff')),
+                                        title: resolvedDesc || undefined,
+                                        description: resolvedDesc || undefined
+                                    }
+                                }
+                                else if (uni.type === 'vec2') {
+                                    const val = uni.value || new THREE.Vector2(0, 0);
+                                    form_config[uniName + '_x'] = {
+                                        type: 'number',
+                                        label: resolvedLabel + ' X:',
+                                        value: val.x !== undefined ? val.x : 0,
+                                        step: 0.1,
+                                        title: resolvedDesc || undefined,
+                                        description: resolvedDesc || undefined
+                                    };
+                                    form_config[uniName + '_y'] = {
+                                        type: 'number',
+                                        label: resolvedLabel + ' Y:',
+                                        value: val.y !== undefined ? val.y : 0,
+                                        step: 0.1,
+                                        title: resolvedDesc || undefined,
+                                        description: resolvedDesc || undefined
+                                    };
+                                }
+                                else if (uni.type === 'vec3') {
+                                    const val = uni.value || new THREE.Vector3(0, 0, 0);
+                                    form_config[uniName + '_x'] = {
+                                        type: 'number',
+                                        label: resolvedLabel + ' X:',
+                                        value: val.x !== undefined ? val.x : 0,
+                                        step: 0.1,
+                                        title: resolvedDesc || undefined,
+                                        description: resolvedDesc || undefined
+                                    };
+                                    form_config[uniName + '_y'] = {
+                                        type: 'number',
+                                        label: resolvedLabel + ' Y:',
+                                        value: val.y !== undefined ? val.y : 0,
+                                        step: 0.1,
+                                        title: resolvedDesc || undefined,
+                                        description: resolvedDesc || undefined
+                                    };
+                                    form_config[uniName + '_z'] = {
+                                        type: 'number',
+                                        label: resolvedLabel + ' Z:',
+                                        value: val.z !== undefined ? val.z : 0,
+                                        step: 0.1,
+                                        title: resolvedDesc || undefined,
+                                        description: resolvedDesc || undefined
+                                    };
+                                }
+                            }
+                        }
+
+                        material_properties.form.form_config = form_config;
+                        material_properties.form.buildForm();
+                    }
+                    else {
+                        material_properties.form.form_config = {
+                            no_instance: {
+                                type: 'bar_display',
+                                value: tl('shader_architect.material_panel.no_instance'),
+                                icon: 'lock',
+                                paragraph: false,
+                                expand: true,
+                                color: 'var(--color-text)'
+                            }
+                        };
+                        material_properties.form.buildForm();
+                    }
+                }
+
+                material_instance_properties_toolbar.update();
+            };
+
+            global_material_instance_text = new window.BarDisplay('sa_current_global_material', {
+                icon: 'info',
+                text: tl('shader_architect.material_panel.global_material'),
+                expand: true,
+                condition: () => { return !cubeHasMaterialInstance(); }
+            });
+
+            create_material_instance = new Action('sa_create_material_instance', {
+                name: 'shader_architect.material_panel.create_instance',
+                description: 'shader_architect.material_panel.create_instance.desc',
+                icon: 'masked_transitions_add',
+                category: 'render',
+                condition: cubeSelectedCondition,
+                click() {
+                    var dialog = new Dialog({
+                        id: 'sa_create_material_instance_dialog',
+                        title: 'shader_architect.material_panel.create_instance',
+                        width: 500,
+                        form: {
+                            material_base: {
+                                label: 'shader_architect.material_panel.base_material',
+                                type: 'select',
+                                options: globalsMenuOptions,
+                                value: 'sa_' + ShaderEngine.globalRenderMode,
+                                description: 'shader_architect.material_panel.base_material.desc'
+                            },
+                            name: { label: 'shader_architect.material_panel.instance_name', type: 'text', value: tl('shader_architect.material_panel.new_instance_name') }
+                        },
+                        onConfirm: function (formResult) {
+                            const cubes = getSelectedCubes();
+                            if (cubes.length === 0) return;
+
+                            runMaterialInstanceUndo('shader_architect.material_panel.undo.create_instance', cubes, () => {
+                                const inst = MaterialManager.createInstance(formResult.material_base.replace('sa_', ''), { name: formResult.name });
+                                cubes.forEach(cube => {
+                                    MaterialManager.assignInstanceToCube(cube, inst);
+                                });
+                            });
+                            updateMaterialInstancePanel();
+                            dialog.hide()
+                        }
+                    })
+                    dialog.show()
+                }
+            });
+
+            delete_material_instance = new Action('sa_delete_material_instance', {
+                name: 'shader_architect.material_panel.delete_instance',
+                description: 'shader_architect.material_panel.delete_instance.desc',
+                icon: 'delete',
+                category: 'render',
+                condition: cubeHasMaterialInstance,
+                click() {
+                    const cubes = getSelectedCubes();
+                    if (cubes.length === 0) return;
+                    const instanceId = getSharedSelectedMaterialInstanceId();
+                    if (!instanceId || !MaterialManager.instances[instanceId]) return;
+                    const affectedCubes = Cube.all.filter(cube => getCubeMaterialInstanceId(cube) === instanceId);
+
+                    runMaterialInstanceUndo('shader_architect.material_panel.undo.delete_instance', affectedCubes, () => {
+                        MaterialManager.deleteInstance(instanceId);
+                    });
+                    updateMaterialInstancePanel();
+                }
+            });
+
+            cube_material_instance = new CompactDropdownSelect('sa_cube_material_instance', {
+                name: 'shader_architect.material_panel.instance',
+                description: 'shader_architect.material_panel.instance.desc',
+                options: {
+                    global: { name: 'shader_architect.material_panel.global_material', icon: 'globe' }
+                },
+                condition: cubeSelectedCondition,
+                onChange: function () {
+                    if (this.value === '__mixed__') return;
+
+                    const cubes = getSelectedCubes();
+                    if (cubes.length === 0) return;
+
+                    const nextInstanceId = this.value;
+                    const labelKey = nextInstanceId === 'global'
+                        ? 'shader_architect.material_panel.undo.clear_instance'
+                        : 'shader_architect.material_panel.undo.assign_instance';
+
+                    runMaterialInstanceUndo(labelKey, cubes, () => {
+                        cubes.forEach(cube => {
+                            if (nextInstanceId === 'global') {
+                                MaterialManager.clearCubeMaterialAssignment(cube);
+                            } else {
+                                MaterialManager.assignInstanceToCube(cube, nextInstanceId);
+                            }
+                        });
+                    });
+
+                    ShaderEngine.updateAllCubes('update_instance');
+                    updateMaterialInstancePanel();
+                }
+            });
+
+            cube_material_instance_name = new TextInputWidget('sa_material_instance_name', {
+                name: 'shader_architect.material_panel.instance_name',
+                placeholder: tl('shader_architect.material_panel.instance_name'),
+                default_text: tl('shader_architect.material_panel.new_instance_name'),
+                expand: true,
+                condition: () => {
+                    const cubes = getSelectedCubes();
+                    if (cubes.length === 0) return false;
+                    if (areMultipleSelected() && !allSelectedHaveSameMaterialInstance()) return false;
+                    return cubeHasMaterialInstance();
+                },
+
+                onFinishEdit: (text, event) => {
+                    const cubes = getSelectedCubes();
+                    if (cubes.length === 0) return;
+                    const firstCube = cubes[0];
+                    const instanceId = getCubeMaterialInstanceId(firstCube);
+                    const instance = MaterialManager.instances[instanceId];
+                    if (instance && instance.name !== text) {
+                        runMaterialInstanceUndo('shader_architect.material_panel.undo.rename_instance', [], () => {
+                            instance.name = text;
+                            MaterialManager.saveMaterialInstances();
+                        });
+                        updateMaterialInstancePanel();
+                    }
+                }
+            });
+
+            material_instance_properties_toolbar = new Toolbar({
+                id: 'sa_material_instance_properties',
+                name: 'shader_architect.material_panel.title',
+                label: true,
+                condition: cubeSelectedCondition,
+                children: [
+                    'sa_cube_material_instance',
+                    'sa_current_global_material',
+                    'sa_material_instance_name',
+                    'sa_create_material_instance',
+                    'sa_delete_material_instance'
+                ]
+            });
+            deletables.push(create_material_instance, delete_material_instance, cube_material_instance, cube_material_instance_name, global_material_instance_text, material_instance_properties_toolbar);
+
+            let material_panel_render_listener = Blockbench.on('shader_update_complete', (cause) => {
+                console.log('Shader update complete, cause:', cause);
+                if (cause === 'initial_load' || cause === 'select_project' || cause === 'rename_instance' || cause === 'update_form') return; // Evitar actualización redundante al cargar proyecto o seleccionar proyecto
+                //updateMaterialInstancePanel();
+            });
+            deletables.push(material_panel_render_listener);
+
+            let material_panel_listener = Blockbench.on('update_selection', () => {
+                updateMaterialInstancePanel();
+            });
+            deletables.push(material_panel_listener);
+
+            let material_instances_listener = Blockbench.on('shader_architect_material_instances_changed', () => {
+                updateMaterialInstancePanel();
+            });
+            deletables.push(material_instances_listener);
+
+            material_properties = new Panel('material_properties', {
+                icon: 'motion_mode',
+                growable: true,
+                resizable: true,
+                condition: { modes: ['render'] },
+                //display_condition: () => (LightElement.selected.length === 1),
+                default_position: {
+                    slot: "left_bar",
+                    float_position: [
+                        1322,
+                        57
+                    ],
+                    float_size: [
+                        314,
+                        520
+                    ],
+                    height: 520,
+                    folded: false,
+                    fixed_height: false,
+                    attached_to: "",
+                    attached_index: 0,
+                    sidebar_index: 1
+                },
+                mode_positions: {
+                    render: {
+                        slot: "left_bar",
+                        float_position: [
+                            1322,
+                            57
+                        ],
+                        float_size: [
+                            314,
+                            520
+                        ],
+                        height: 520,
+                        folded: false,
+                        fixed_height: false,
+                        attached_to: "",
+                        attached_index: 0,
+                        sidebar_index: 1
+                    }
+                },
+                toolbars: [
+                    material_instance_properties_toolbar
+                ],
+                form: {
+                    no_cube_selected: {
+                        type: 'bar_display',
+                        value: tl('shader_architect.material_panel.no_selected'),
+                        icon: 'deployed_code_alert',
+                        paragraph: false,
+                        expand: true,
+                        color: 'var(--color-text)'
+                    }
+                }
+            });
+
+            material_properties.form.on('change', ({ result }) => {
+                const cubes = getSelectedCubes();
+                if (cubes.length === 0) return;
+                const firstCube = cubes[0];
+                const instanceId = getCubeMaterialInstanceId(firstCube);
+                if (!instanceId || !MaterialManager.instances[instanceId]) return;
+                const instance = MaterialManager.instances[instanceId];
+
+                for (let key in result) {
+                    if (key.endsWith('_x') || key.endsWith('_y') || key.endsWith('_z')) {
+                        const baseKey = key.slice(0, -2);
+                        const component = key.slice(-1);
+                        if (instance.uniforms[baseKey]) {
+                            const uni = instance.uniforms[baseKey];
+                            if (!uni.value) {
+                                if (uni.type === 'vec2') uni.value = new THREE.Vector2(0, 0);
+                                else if (uni.type === 'vec3') uni.value = new THREE.Vector3(0, 0, 0);
+                            }
+                            uni.value[component] = Number(result[key]);
+                        }
+                    } else if (instance.uniforms[key]) {
+                        const uni = instance.uniforms[key];
+                        uni.value = result[key];
+                        if (uni.type === 'color') {
+                            uni.hexValue = result[key];
+                        }
+                    }
+                }
+                MaterialManager.saveMaterialInstances();
+                ShaderEngine.updateAllUniforms('update_form');
+            });
+
+            Blockbench.addCSS(`
+                #panel_material_properties .form {
+                    overflow-y: auto !important;
+                    overflow-x: hidden;
+                } 
+                /* Opcional: Estilizar la barra de desplazamiento para que se vea nativa de Blockbench */
+                #panel_material_properties .form::-webkit-scrollbar {
+                    width: 6px;
+                }
+                #panel_material_properties .form::-webkit-scrollbar-thumb {
+                    background-color: var(--color-button);
+                    border-radius: 3px;
+                }
+
+            `)
+
+            deletables.push(material_properties);
         },
 
         onunload() {

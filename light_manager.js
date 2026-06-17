@@ -300,6 +300,17 @@ const LightManagerUtils = {
 
 window.three_lights = window.three_lights || {};
 
+function registerLightManagerCanvasGizmo(object) {
+    if (!object || !window.Canvas || !Array.isArray(Canvas.gizmos)) return;
+    if (!Canvas.gizmos.includes(object)) Canvas.gizmos.push(object);
+}
+
+function unregisterLightManagerCanvasGizmo(object) {
+    if (!object || !window.Canvas || !Array.isArray(Canvas.gizmos)) return;
+    const index = Canvas.gizmos.indexOf(object);
+    if (index >= 0) Canvas.gizmos.splice(index, 1);
+}
+
 if (window.LightManagerAreaGizmos && typeof window.LightManagerAreaGizmos.clear === 'function') {
     window.LightManagerAreaGizmos.clear();
 }
@@ -318,6 +329,7 @@ window.LightManagerAreaGizmos = {
             this.group.raycast = () => { };
             window.scene.add(this.group);
         }
+        registerLightManagerCanvasGizmo(this.group);
         return this.group;
     },
 
@@ -542,6 +554,7 @@ window.LightManagerAreaGizmos = {
 
     clear() {
         Array.from(this.helpers.keys()).forEach(uuid => this.destroyHelper(uuid));
+        unregisterLightManagerCanvasGizmo(this.group);
         if (this.group && this.group.parent) this.group.parent.remove(this.group);
         this.group = null;
     },
@@ -922,7 +935,6 @@ if (typeof window.on_light_element_updated !== 'function') {
 }
 
 window.update_light_element_callback = () => {
-    window.on_light_element_updated?.();
     if (!window.scene) return;
 
     // Ensure the main group exists in the scene
@@ -1068,6 +1080,7 @@ window.update_light_element_callback = () => {
     }
 
     window.LightManagerAreaGizmos?.updateAll();
+    window.on_light_element_updated?.();
 };
 
 /** Converts a Kelvin color temperature to a tinycolor instance.
@@ -1122,8 +1135,9 @@ let light_icons_b64 = {};
 
 function initialize_light_plugin() {
     Language.addTranslations('en', {
+        'dialog.preview_options.show_light_area_gizmos': 'Show Light Area Gizmos',
         'panel.light_properties': 'LIGHT',
-        'property.light': 'Light',
+        'property.light_settings': 'Light Settings',
         'property.light_color': 'Light Color',
         'property.light_intensity': 'Intensity',
         'property.light_intensity.desc': 'The brightness of the light. Higher values produce brighter illumination.',
@@ -1143,17 +1157,18 @@ function initialize_light_plugin() {
         'property.cone_angle.desc': 'Angle of the spot light cone in degrees.',
         'property.cone_penumbra': 'Penumbra',
         'property.cone_penumbra.desc': 'Softness of the spot light cone edge (0 to 1).',
-        'property.shadows': 'Shadows',
+        'property.light.quickbuttons': 'Light',
         'property.cast_shadows': 'Cast Shadows',
-        'property.shadow_near': 'Shadow Near',
-        'property.shadow_far': 'Shadow Far',
-        'property.shadow_bounds': 'Shadow Bounds (Directional)',
-        'property.shadow_clip': 'Shadow Clip',
+        'property.shadow_near': 'Near',
+        'property.shadow_far': 'Far',
+        'property.shadow_bounds': 'Bounds',
+        'property.shadow_clip': 'Clip',
         'property.shadow_area': 'Shadow Area',
         'property.shadow_biases': 'Shadow Bias',
-        'property.shadow_resolution': 'Shadow Resolution',
-        'property.shadow_bias': 'Shadow Bias',
-        'property.shadow_normal_bias': 'Shadow Normal Bias',
+        'property.shadow_resolution': 'Resolution',
+        'property.shadow_bias': 'Bias',
+        'property.shadow_bias.desc': 'Adjusts shadow depth to reduce artifacts. Positive values can reduce shadow acne but may cause peter-panning. Default: 0.001',
+        'property.shadow_normal_bias': 'Normal Bias',
         'property.shadow_normal_bias.desc': 'Adjusts bias based on surface normal. Reduces shadow acne on angled surfaces. Default: 0.02',
         'action.edit_light_properties': 'Edit Light Properties',
         'action.fit_light_bounds_to_selection': 'Fit Light Bounds to Selection'
@@ -1174,6 +1189,1396 @@ function initialize_light_plugin() {
         variant: 'both',
 
         onload() {
+            class ComboSlider extends Widget {
+                constructor(id, data) {
+                    if (typeof id === 'object') {
+                        data = id;
+                        id = data.id;
+                    }
+                    super(id, data);
+                    var scope = this;
+
+                    this.type = 'combo_slider';
+                    this.icon = 'fa-sliders-h';
+                    this.value = data.value !== undefined ? data.value : 0;
+
+                    // NUEVO: Bandera para saber si el usuario está arrastrando el slider
+                    this.isDragging = false;
+
+                    this.settings = {
+                        min: data.min !== undefined ? data.min : 0,
+                        max: data.max !== undefined ? data.max : 10,
+                        step: data.step !== undefined ? data.step : 1,
+                        circular: data.circular,
+                        allow_lower: !!data.allow_lower,
+                        allow_higher: !!data.allow_higher,
+                        resettable: !!data.resettable || data.reset_value !== undefined,
+                        reset_value: data.reset_value !== undefined ? data.reset_value : (data.value !== undefined ? data.value : 0)
+                    };
+
+                    // 1. Crear el input tipo Slider (Rango)
+                    let rangeInput = Interface.createElement('input', {
+                        type: 'range',
+                        value: this.value,
+                        min: this.settings.min,
+                        max: this.settings.max,
+                        step: this.settings.step,
+                        class: 'tool disp_range',
+                        style: `margin: 0;flex: 1 1 auto;width: 100%;min-width: 30px;transition: opacity 0.2s, filter 0.2s;${data.color ? '--color-thumb: ' + data.color + ';' : ''}`
+                    });
+
+                    let numberInputOptions = {
+                        type: 'number',
+                        value: this.value,
+                        step: this.settings.step,
+                        class: 'dark_bordered focusable_input',
+                        style: `width: 100%;min-width: 45px;height: 24px;box-sizing: border-box;text-align: center;margin: 0;padding: 0 2px;flex: 0 0 auto;`
+                    };
+
+                    if (!this.settings.allow_lower) numberInputOptions.min = this.settings.min;
+                    if (!this.settings.allow_higher) numberInputOptions.max = this.settings.max;
+
+                    let numberInput = Interface.createElement('input', numberInputOptions);
+
+                    let numberContainer = Interface.createElement('div', {
+                        class: 'numeric_input tool disp_text',
+                        style: `display: flex;align-items: center;margin: 0;flex: 0 0 auto; `
+                    }, [numberInput]);
+
+                    let comboWrapper = Interface.createElement('div', {
+                        class: 'bar slider_input_combo',
+                        title: data.title ? tl(data.title) : '',
+                        style: `display: flex;align-items: center;height: 100%;margin: 0 5px;flex: 1 1 auto;min-width: 0;width: auto; `
+                    }, [rangeInput, numberContainer]);
+
+                    // 4. Construir la estructura final del Widget
+                    let containerChildren = [];
+
+                    // Añadir el ICONO (Opcional)
+                    if (data.icon) {
+                        let isFa = data.icon.startsWith('fa-') || data.icon.startsWith('fas ') || data.icon.startsWith('fab ');
+                        let iconElement = Interface.createElement('i', {
+                            class: isFa ? `fa ${data.icon}` : 'material-icons',
+                            style: 'margin-right: 4px; font-size: 18px; color: var(--color-text); display: flex; align-items: center;'
+                        }, isFa ? '' : data.icon);
+                        containerChildren.push(iconElement);
+                    }
+
+                    // Añadir el LABEL (Opcional)
+                    if (data.label) {
+                        let labelElement = Interface.createElement('span', {
+                            style: 'margin-right: 5px; font-size: 13px; color: var(--color-subtle_text); white-space: nowrap; display: flex; align-items: center;'
+                        }, tl(data.label));
+                        containerChildren.push(labelElement);
+                    }
+
+                    containerChildren.push(comboWrapper);
+
+                    // Crear el botón de reset si está habilitado
+                    if (this.settings.resettable) {
+                        this.resetBtn = Interface.createElement('i', {
+                            class: 'material-icons icon',
+                            title: 'Restablecer valor',
+                            style: `font-size: 18px;cursor: pointer;display: none;margin-left: 2px;color: var(--color-subtle_text);display: flex;align-items: center;`
+                        }, 'replay');
+
+                        this.resetBtn.onclick = (e) => {
+                            if (typeof this.onBefore === 'function') this.onBefore(e);
+                            this.change(this.settings.reset_value, e);
+                            if (typeof this.onAfter === 'function') this.onAfter(e);
+                        };
+
+                        containerChildren.push(this.resetBtn);
+                    }
+
+                    // Estilos dinámicos para el Toolbar
+                    let rootStyles = `display: flex;flex-direction: row;align-items: center;height: 30px;padding: 0 4px;min-width: 0;`;
+
+                    if (data.grow) {
+                        rootStyles += `flex: 1 1 auto;width: auto;min-width: ${data.min_width ? data.min_width + 'px' : '160px'};`;
+                    } else {
+                        rootStyles += `flex: 0 0 auto;width: ${data.width ? data.width + 'px' : '160px'};min-width: ${data.width ? data.width + 'px' : '160px'};`;
+                    }
+
+                    this.node = Interface.createElement('div', {
+                        class: 'tool widget',
+                        toolbar_item: this.id,
+                        style: rootStyles
+                    }, containerChildren);
+
+                    // Asignar callbacks
+                    if (typeof data.onChange === 'function') {
+                        this.onChange = data.onChange;
+                    }
+                    if (typeof data.onBefore === 'function') {
+                        this.onBefore = data.onBefore;
+                    }
+                    if (typeof data.onAfter === 'function') {
+                        this.onAfter = data.onAfter;
+                    }
+
+                    // 5. Eventos para sincronizar ambos inputs
+                    let $inputs = $(this.node).find('input');
+                    let $range = $(this.node).find('input[type="range"]');
+                    let $number = $(this.node).find('input[type="number"]');
+
+                    $inputs.on('input', function (event) {
+                        let val = parseFloat($(event.target).val());
+                        if (isNaN(val)) return;
+                        let is_number_input = event.target === $number[0];
+                        scope.change(val, event.originalEvent, is_number_input);
+                    });
+
+                    $number.on('blur', function (event) {
+                        let val = parseFloat($(this).val());
+                        if (isNaN(val)) {
+                            val = scope.settings.reset_value;
+                        }
+                        scope.change(val, event.originalEvent, false);
+                    });
+
+                    $number.on('keydown', function (event) {
+                        if (event.key === 'Enter' || event.key === 'Escape') {
+                            this.blur();
+                        }
+                    });
+
+                    // NUEVO: Controlar el estado de arrastre (drag)
+                    $range.on('mousedown touchstart', function (event) {
+                        scope.isDragging = true;
+                        if (scope.onBefore) scope.onBefore(event.originalEvent);
+                    });
+
+                    // Al soltar el ratón, se termina el drag y se actualiza el botón
+                    $range.on('mouseup touchend', function (event) {
+                        scope.isDragging = false;
+                        scope.updateResetButton();
+                    });
+
+                    $number.on('focus', function (event) {
+                        if (scope.onBefore) scope.onBefore(event.originalEvent);
+                    });
+
+                    $inputs.on('change', function (event) {
+                        scope.isDragging = false; // Por seguridad nos aseguramos que drag termine
+                        scope.updateResetButton();
+                        if (scope.onAfter) scope.onAfter(event.originalEvent);
+                    });
+
+                    // 6. Atajos de teclado
+                    this.addSubKeybind('increase', 'keybindings.item.num_slider.increase', data.sub_keybinds?.increase, (event) => {
+                        if (!Condition(this.condition)) return false;
+                        if (typeof this.onBefore === 'function') this.onBefore(event);
+                        let value = this.get() + this.settings.step;
+                        if (this.settings.circular && value > this.settings.max) value = this.settings.min;
+                        this.change(value, event);
+                        if (typeof this.onAfter === 'function') this.onAfter(event);
+                    });
+
+                    this.addSubKeybind('decrease', 'keybindings.item.num_slider.decrease', data.sub_keybinds?.decrease, (event) => {
+                        if (!Condition(this.condition)) return false;
+                        if (typeof this.onBefore === 'function') this.onBefore(event);
+                        let value = this.get() - this.settings.step;
+                        if (this.settings.circular && value < this.settings.min) value = this.settings.max;
+                        this.change(value, event);
+                        if (typeof this.onAfter === 'function') this.onAfter(event);
+                    });
+
+                    this.set(this.value);
+                }
+
+                // NUEVO: Método dedicado para mostrar/ocultar el botón
+                updateResetButton() {
+                    if (!this.settings.resettable || !this.resetBtn) return;
+
+                    // Si el usuario está arrastrando la barra, NO ocultamos/mostramos nada
+                    // para evitar el bug que rompe el "drag"
+                    if (this.isDragging) return;
+
+                    if (parseFloat(this.value) !== parseFloat(this.settings.reset_value)) {
+                        this.resetBtn.style.display = 'flex';
+                    } else {
+                        this.resetBtn.style.display = 'none';
+                    }
+                }
+
+                change(value, event, skip_number_input_update = false) {
+                    if (!this.settings.allow_lower && value < this.settings.min) {
+                        value = this.settings.min;
+                    }
+                    if (!this.settings.allow_higher && value > this.settings.max) {
+                        value = this.settings.max;
+                    }
+
+                    this.set(value, skip_number_input_update);
+                    if (this.onChange) {
+                        this.onChange(event);
+                    }
+                    this.dispatchEvent('change', { value: this.value });
+                }
+
+                set(value, skip_number_input_update = false) {
+                    this.value = value;
+                    let $range = $(this.node).find('input[type="range"]');
+                    let $number = $(this.node).find('input[type="number"]');
+
+                    $range.val(value);
+                    if (!skip_number_input_update) {
+                        $number.val(value);
+                    }
+
+                    // LÓGICA VISUAL FUERA DE RANGO
+                    let isOutOfBounds = false;
+
+                    if (this.settings.allow_lower && value < this.settings.min) isOutOfBounds = true;
+                    if (this.settings.allow_higher && value > this.settings.max) isOutOfBounds = true;
+
+                    if (isOutOfBounds) {
+                        $range.css({
+                            'opacity': '0.3',
+                            'filter': 'grayscale(100%)'
+                        });
+                    } else {
+                        $range.css({
+                            'opacity': '1',
+                            'filter': 'none'
+                        });
+                    }
+
+                    // Llamamos a actualizar el botón, internamente ignorará si 'isDragging' es true
+                    this.updateResetButton();
+                }
+
+                get() {
+                    return this.value;
+                }
+            }
+
+            window.ComboSlider = ComboSlider;
+
+            class CompactDropdownSelect extends Widget {
+                constructor(id, data) {
+                    super(id, data);
+                    this.type = 'select';
+                    this.value = data.value;
+                    this.values = [];
+                    this.options = data.options || {};
+                    this.onChange = data.onChange;
+
+                    // Extraer las keys de las opciones
+                    for (let key in this.options) {
+                        if (!this.value) this.value = key; // Seleccionar el primero por defecto si no hay value
+                        this.values.push(key);
+                    }
+
+                    // --- CREACIÓN DEL DOM ---
+                    // Contenedor principal
+                    this.node = document.createElement('div');
+                    this.node.className = 'tool widget compact_dropdown_select';
+                    this.node.setAttribute('toolbar_item', this.id);
+
+                    // Contenedor del Icono Principal
+                    this.icon_wrapper = document.createElement('div');
+                    this.icon_wrapper.className = 'main_icon_wrapper';
+
+                    // La flechita desplegable (estilo Blockbench)
+                    this.arrow_node = document.createElement('i');
+                    this.arrow_node.className = 'fas fa-caret-down dropdown_arrow';
+
+                    // Añadir al contenedor
+                    this.node.append(this.icon_wrapper, this.arrow_node);
+
+                    // Eventos
+                    this.node.addEventListener('click', (event) => {
+                        this.open(event);
+                    });
+
+                    // Soporte para scroll del ratón (cambiar opciones rápido)
+                    $(this.node).on('wheel', event => {
+                        let e = event.originalEvent;
+                        let index = this.values.indexOf(this.value);
+                        index += e.deltaY < 0 ? -1 : 1;
+                        if (index < 0) index = this.values.length - 1;
+                        if (index >= this.values.length) index = 0;
+                        this.change(this.values[index], e);
+                    });
+
+                    this.nodes.push(this.node);
+                    this.set(this.value); // Configurar el icono inicial
+                }
+
+                // Abre el menú nativo de Blockbench con nuestras opciones
+                open(event) {
+                    if (Menu.closed_in_this_click == this.id) return this;
+                    let scope = this;
+                    let items = [];
+
+                    for (let key in this.options) {
+                        let opt = this.options[key];
+                        if (opt) {
+                            items.push({
+                                name: opt.name || key,
+                                icon: opt.icon,
+                                color: opt.color, // Soporte para colores nativo en el menú
+                                condition: opt.condition,
+                                click: (e) => {
+                                    scope.change(key, e);
+                                }
+                            });
+                        }
+                    }
+
+                    // SOLUCIÓN AL ERROR: Pasamos solo una clase base al constructor
+                    let menu = new Menu(this.id, items, { class: 'select_menu' });
+
+                    // Añadimos nuestra clase personalizada de forma segura usando classList
+                    if (menu.node) {
+                        menu.node.classList.add('compact_dropdown_menu');
+                        // Ajustamos el ancho mínimo al tamaño de nuestro botón
+                        menu.node.style['min-width'] = this.node.clientWidth + 'px';
+                    }
+
+                    menu.open(this.node, this);
+                }
+
+                // Cambia el valor y dispara los eventos
+                change(value, event) {
+                    this.set(value);
+                    if (this.onChange) {
+                        this.onChange(this, event);
+                    }
+                    this.dispatchEvent('change', { value, event });
+                    return this;
+                }
+
+                // Actualiza el HTML para mostrar el icono de la opción seleccionada
+                set(key) {
+                    if (!this.options[key]) return this;
+                    this.value = key;
+                    let opt = this.options[key];
+
+                    // Cambiar el tooltip (hover) para que muestre el nombre del widget y la opción actual
+                    this.node.title = `${this.name ? this.name + ': ' : ''}${opt.name || key}`;
+
+                    // Reemplazar el icono visual en todas las instancias del widget
+                    this.nodes.forEach(n => {
+                        let wrapper = n.querySelector('.main_icon_wrapper');
+                        if (wrapper) {
+                            wrapper.innerHTML = ''; // Limpiar anterior
+
+                            let iconElement = Blockbench.getIconNode(opt.icon || 'help');
+
+                            // ¡Aplicar color personalizado al icono principal!
+                            if (opt.color) {
+                                iconElement.style.color = opt.color;
+                            }
+
+                            wrapper.append(iconElement);
+                        }
+                    });
+
+                    return this;
+                }
+
+                setOptions(options) {
+                    this.options = options || {};
+                    this.values = [];
+
+                    // Extraer las keys de las nuevas opciones
+                    for (let key in this.options) {
+                        this.values.push(key);
+                    }
+
+                    // Si el valor actual no existe en las nuevas opciones, seleccionar el primero
+                    if (!this.options[this.value] && this.values.length > 0) {
+                        this.value = this.values[0];
+                    }
+
+                    // Actualizar la visualización
+                    this.set(this.value);
+                    return this;
+                }
+
+                update() {
+                    this.set(this.value);
+                    if (this.onUpdate) {
+                        this.onUpdate(this);
+                    }
+                    return this;
+                }
+
+                get() {
+                    return this.value;
+                }
+            }
+
+            window.CompactDropdownSelect = CompactDropdownSelect;
+
+            class BarDisplay extends Widget {
+                constructor(id, data) {
+                    // Manejo del constructor estándar de Blockbench
+                    if (typeof id == 'object') {
+                        data = id;
+                        id = data.id;
+                    }
+                    super(id, data);
+                    this.type = 'bar_display'; // Nuevo tipo para evitar conflictos internos
+
+                    // Propiedades de visualización
+                    this.text = data.text || '';
+                    this.label = data.label || '';
+                    this.color = data.color || '';
+                    this.icon_name = data.icon || '';
+                    this.is_paragraph = !!data.paragraph;
+                    this.expand = !!data.expand;
+                    this.text_alignment = data.text_alignment || 'left'; // 'left', 'center', 'right'
+                    this.onUpdate = data.onUpdate;
+
+                    // Construcción del Nodo DOM
+                    this.node = document.createElement('div');
+                    this.node.className = `tool widget bar_display ${this.is_paragraph ? 'bar_display_paragraph' : ''}`;
+                    this.node.setAttribute('toolbar_item', this.id);
+
+                    // Estilos para un elemento puramente visual
+                    this.node.style.display = 'flex';
+                    this.node.style.alignItems = this.is_paragraph ? 'flex-start' : 'center';
+                    this.node.style.gap = '6px';
+                    this.node.style.padding = '0 8px'; // Espaciado cómodo en la barra
+                    this.node.style.cursor = 'default'; // Sin cursor de botón
+                    if (this.expand) {
+                        this.node.style.flex = '1 1 0';
+                        this.node.style.minWidth = '0';
+                        this.node.style.width = 'auto';
+                    }
+                    if (this.color) this.node.style.color = this.color;
+
+                    // Iniciar la estructura interna
+                    this.nodes = [this.node];
+                    this.buildDOM();
+
+                    // Aplicar estado inicial (evaluar condición si existe)
+                    this.update();
+                }
+
+                /**
+                 * Construye o reconstruye los elementos internos del DOM
+                 */
+                buildDOM() {
+                    this.node.innerHTML = ''; // Limpiar previo
+
+                    // 1. Añadir Ícono (si existe)
+                    if (this.icon_name) {
+                        let icon_node = Blockbench.getIconNode(this.icon_name);
+                        icon_node.style.fontSize = '1.1em';
+                        this.node.append(icon_node);
+                    }
+
+                    // 2. Añadir Label (si existe)
+                    if (this.label) {
+                        let label_node = document.createElement('span');
+                        label_node.className = 'bar_display_label';
+                        label_node.style.fontWeight = 'bold';
+                        label_node.style.opacity = '0.85'; // Diferenciación visual sutil
+                        label_node.innerText = this.label;
+                        this.node.append(label_node);
+                    }
+
+                    // 3. Añadir Contenedor de Texto
+                    let text_node = document.createElement('span');
+                    text_node.className = 'bar_display_content';
+                    if (this.expand) {
+                        text_node.style.flex = '1 1 0';
+                        text_node.style.minWidth = '0';
+                    }
+                    text_node.style.textAlign = this.text_alignment;
+                    if (this.is_paragraph) {
+                        text_node.style.whiteSpace = 'pre-wrap'; // Permite saltos de línea (\n)
+                        text_node.style.lineHeight = '1.4';
+                        text_node.style.maxWidth = '250px'; // Evita que rompa barras de herramientas
+                    }
+                    text_node.innerHTML = this.text;
+                    this.node.append(text_node);
+                }
+
+                /**
+                 * Actualiza el texto principal.
+                 */
+                set(text) {
+                    this.text = text;
+                    this.nodes.forEach(node => {
+                        let content = node.querySelector('.bar_display_content');
+                        if (content) content.innerHTML = text;
+                    });
+                    return this;
+                }
+
+                /**
+                 * Actualiza la etiqueta (label).
+                 */
+                setLabel(label) {
+                    this.label = label;
+                    this.buildDOM(); // Reconstruye para asegurar el orden correcto
+                    return this;
+                }
+
+                /**
+                 * Actualiza el ícono dinámicamente.
+                 */
+                setIcon(icon) {
+                    this.icon_name = icon;
+                    this.buildDOM();
+                    return this;
+                }
+
+                /**
+                 * Cambia el color del texto y el ícono.
+                 */
+                setColor(color) {
+                    this.color = color;
+                    this.nodes.forEach(node => {
+                        node.style.color = color;
+                    });
+                    return this;
+                }
+
+                /**
+                 * Función llamada por Blockbench o manualmente para refrescar el widget.
+                 */
+                update() {
+                    // Evaluar la condición nativa de Blockbench para mostrar/ocultar
+                    let condition_met = Condition(this.condition);
+                    this.nodes.forEach(node => {
+                        // Usa 'flex' en lugar de un display genérico para no romper el layout
+                        node.style.display = condition_met ? 'flex' : 'none';
+                    });
+
+                    // Ejecutar callback personalizado si el dev lo configuró
+                    if (typeof this.onUpdate === 'function') {
+                        this.onUpdate(this);
+                    }
+
+                    this.dispatchEvent('update', {});
+                    return this;
+                }
+            }
+
+            window.BarDisplay = BarDisplay;
+
+            class TextInputWidget extends Widget {
+                constructor(id, data) {
+                    // Handle standard Blockbench constructor pattern
+                    if (typeof id === 'object') {
+                        data = id;
+                        id = data.id;
+                    }
+                    super(id, data);
+
+                    // Define widget properties
+                    this.type = 'text_input';
+                    this.value = data.default_text || '';
+                    this.placeholder = data.placeholder || '';
+                    this.icon_name = data.icon || '';
+                    this.expand = data.expand || false;
+                    this.width = typeof data.width === 'number' ? data.width + 'px' : (data.width || '120px');
+
+                    // Callbacks
+                    this.onEdit = data.onEdit;
+                    this.onFinishEdit = data.onFinishEdit;
+
+                    // Outer Container Node
+                    this.node = document.createElement('div');
+                    this.node.className = 'tool wide widget text_input_widget';
+                    this.node.setAttribute('toolbar_item', this.id);
+
+                    // Styling the container to blend with Blockbench toolbars
+                    this.node.style.display = 'flex';
+                    this.node.style.alignItems = 'center';
+                    this.node.style.width = this.expand ? 'auto' : this.width + 'px';
+                    this.node.style.background = 'var(--color-back)';
+                    this.node.style.border = '1px solid var(--color-border)';
+                    this.node.style.borderRadius = '2px';
+                    this.node.style.padding = '0 4px';
+                    this.node.style.boxSizing = 'border-box';
+
+                    if (this.expand) {
+                        this.node.style.flex = '1 1 0';
+                        this.node.style.minWidth = '0';
+                    }
+
+                    if (this.color) {
+                        this.node.style.borderColor = this.color;
+                    }
+
+                    // Build internal DOM
+                    this.buildDOM();
+
+                    // jQuery wrapper for robust event handling (matches Blockbench native style)
+                    this.jq_input = $(this.input_node);
+                    this.bindEvents();
+
+                    // Initial condition check
+                    this.update();
+                }
+
+                /**
+                 * Constructs the internal DOM elements (Icon and Input field)
+                 */
+                buildDOM() {
+                    this.node.innerHTML = ''; // Clear previous
+
+                    // 1. Add Icon if defined
+                    if (this.icon_name) {
+                        let icon_node = Blockbench.getIconNode(this.icon_name);
+                        icon_node.style.fontSize = '1em';
+                        icon_node.style.marginRight = '4px';
+                        icon_node.style.color = this.color || 'var(--color-text)';
+                        this.node.append(icon_node);
+                    }
+
+                    // 2. Add standard Input element
+                    this.input_node = document.createElement('input');
+                    this.input_node.type = 'text';
+                    this.input_node.value = this.value;
+                    this.input_node.placeholder = this.placeholder;
+
+                    // Style the input to remove default web styling and fit Blockbench
+                    this.input_node.style.flex = '1';
+                    this.input_node.style.width = '100%';
+                    this.input_node.style.minWidth = '10px'; // Prevent collapsing
+                    this.input_node.style.background = 'transparent';
+                    this.input_node.style.border = 'none';
+                    this.input_node.style.color = 'var(--color-text)';
+                    this.input_node.style.outline = 'none';
+
+                    this.node.append(this.input_node);
+                }
+
+                /**
+                 * Binds all necessary events for the input field
+                 */
+                bindEvents() {
+                    const scope = this;
+
+                    this.jq_input
+                        // Triggered every time a character is typed or deleted
+                        .on('input', function (e) {
+                            scope.value = this.value;
+
+                            if (typeof scope.onEdit === 'function') {
+                                scope.onEdit(scope.value, e);
+                            }
+                            scope.dispatchEvent('edit', { value: scope.value });
+                        })
+                        // Handle specific keys and prevent Blockbench hotkeys from firing
+                        .on('keydown', function (e) {
+                            // Prevent Blockbench global keybinds (like Delete removing a cube) while typing
+                            e.stopPropagation();
+
+                            if (e.key === 'Enter') {
+                                e.preventDefault();
+                                this.blur(); // Triggers focusout
+                            } else if (e.key === 'Escape') {
+                                e.preventDefault();
+                                this.blur();
+                            }
+                        })
+                        // Triggered when clicking outside or hitting Enter
+                        .on('focusout', function (e) {
+                            if (typeof scope.onFinishEdit === 'function') {
+                                scope.onFinishEdit(scope.value, e);
+                            }
+                            scope.dispatchEvent('finish_edit', { value: scope.value });
+                        })
+                        // Allow easy selection of text
+                        .on('dblclick', function () {
+                            this.select();
+                        });
+                }
+
+                /**
+                 * Get the current text value
+                 * @returns {string}
+                 */
+                get() {
+                    return this.value;
+                }
+
+                /**
+                 * Set the text value programmatically
+                 * @param {string} text 
+                 */
+                set(text) {
+                    this.value = text;
+                    if (this.input_node) {
+                        this.input_node.value = text;
+                    }
+                    return this;
+                }
+
+                /**
+                 * Change the placeholder dynamically
+                 * @param {string} text 
+                 */
+                setPlaceholder(text) {
+                    this.placeholder = text;
+                    if (this.input_node) {
+                        this.input_node.placeholder = text;
+                    }
+                    return this;
+                }
+
+                /**
+                 * Adjust the width of the widget
+                 * @param {number} width 
+                 */
+                setWidth(width) {
+                    this.width = width;
+                    this.node.style.width = width + 'px';
+                    return this;
+                }
+
+                /**
+                 * Standard update method called by Blockbench
+                 */
+                update() {
+                    // Evaluate the native Blockbench condition to show/hide
+                    let condition_met = Condition(this.condition);
+                    this.node.style.display = condition_met ? 'flex' : 'none';
+
+                    // Keep input synchronized if value was modified externally
+                    if (this.input_node.value !== this.value) {
+                        this.input_node.value = this.value;
+                    }
+
+                    this.dispatchEvent('update', {});
+                    return this;
+                }
+            }
+
+            window.TextInputWidget = TextInputWidget;
+
+            // MARK: Combo Slider
+            FormElement.types.combo_slider = class FormElementComboSlider extends FormElement {
+                // Al devolver 'true', evitamos que Blockbench divida la fila en "Label Izquierda | Input Derecha"
+                get uses_wide_inputs() { return true; }
+
+                setup() {
+                    let tempDesc = this.options.description;
+                    this.options.description = null;
+                    super.setup();
+                    this.options.description = tempDesc;
+                }
+
+                build(bar) {
+                    this.bar = bar;
+                    // Obligamos a que ocupe todo el ancho y quitamos márgenes nativos para que luzca como toolbar
+                    bar.classList.add('full_width_dialog_bar');
+                    bar.style.padding = '0';
+                    bar.style.background = 'transparent';
+
+                    let data = this.options;
+                    this.value = data.value !== undefined ? data.value : (data.default !== undefined ? data.default : 0);
+                    this.isDragging = false;
+
+                    this.settings = {
+                        min: data.min !== undefined ? data.min : 0,
+                        max: data.max !== undefined ? data.max : 10,
+                        step: data.step !== undefined ? data.step : 1,
+                        circular: data.circular,
+                        allow_lower: !!data.allow_lower,
+                        allow_higher: !!data.allow_higher,
+                        resettable: !!data.resettable || data.reset_value !== undefined,
+                        reset_value: data.reset_value !== undefined ? data.reset_value : this.value
+                    };
+
+                    // 1. Inputs (IDÉNTICOS a tu código original)
+                    let rangeInput = Interface.createElement('input', {
+                        type: 'range',
+                        value: this.value,
+                        min: this.settings.min,
+                        max: this.settings.max,
+                        step: this.settings.step,
+                        class: 'tool disp_range',
+                        style: `margin: 0;flex: 1 1 auto;width: 100%;min-width: 30px;transition: opacity 0.2s, filter 0.2s;${data.color ? '--color-thumb: ' + data.color + ';' : ''}`
+                    });
+
+                    let numberInputOptions = {
+                        type: 'number',
+                        value: this.value,
+                        step: this.settings.step,
+                        class: 'dark_bordered focusable_input',
+                        style: `width: 100%;min-width: 45px;height: 24px;box-sizing: border-box;text-align: center;margin: 0;padding: 0 2px;flex: 0 0 auto;`
+                    };
+
+                    if (!this.settings.allow_lower) numberInputOptions.min = this.settings.min;
+                    if (!this.settings.allow_higher) numberInputOptions.max = this.settings.max;
+
+                    let numberInput = Interface.createElement('input', numberInputOptions);
+
+                    let numberContainer = Interface.createElement('div', {
+                        class: 'numeric_input tool disp_text',
+                        style: `display: flex;align-items: center;margin: 0;flex: 0 0 auto;`
+                    }, [numberInput]);
+
+                    let comboWrapper = Interface.createElement('div', {
+                        class: 'bar slider_input_combo',
+                        title: data.description ? tl(data.description) : '',
+                        style: `display: flex;align-items: center;height: 100%;margin: 0 5px;flex: 1 1 auto;min-width: 0;width: auto;`
+                    }, [rangeInput, numberContainer]);
+
+                    // 2. Construcción final con la MISMA disposición de tu Widget
+                    let containerChildren = [];
+
+                    // Ícono original alineado a la izquierda
+                    if (data.icon) {
+                        let isFa = data.icon.startsWith('fa-') || data.icon.startsWith('fas ') || data.icon.startsWith('fab ');
+                        let iconElement = Interface.createElement('i', {
+                            class: isFa ? `fa ${data.icon}` : 'material-icons',
+                            style: 'margin-right: 4px; font-size: 18px; color: var(--color-text); display: flex; align-items: center;'
+                        }, isFa ? '' : data.icon);
+                        containerChildren.push(iconElement);
+                    }
+
+                    // Label original integrado y en línea (sin usar el split feo de Blockbench)
+                    if (data.label) {
+                        let labelElement = Interface.createElement('span', {
+                            style: 'margin-right: 5px; font-size: 13px; color: var(--color-subtle_text); white-space: nowrap; display: flex; align-items: center;'
+                        }, tl(data.label));
+                        containerChildren.push(labelElement);
+                    }
+
+                    containerChildren.push(comboWrapper);
+
+                    // Botón Reset
+                    if (this.settings.resettable) {
+                        this.resetBtn = Interface.createElement('i', {
+                            class: 'material-icons icon',
+                            title: 'Reset',
+                            style: `font-size: 18px;cursor: pointer;display: none;margin-left: 2px;color: var(--color-subtle_text);display: flex;align-items: center;`
+                        }, 'replay');
+
+                        this.resetBtn.onclick = (e) => {
+                            this.setValue(this.settings.reset_value);
+                            this.change();
+                        };
+
+                        containerChildren.push(this.resetBtn);
+                    }
+
+                    // 3. Contenedor Raíz
+                    this.node = Interface.createElement('div', {
+                        class: 'tool widget',
+                        style: `display: flex;flex-direction: row;align-items: center;height: 30px;padding: 0 4px;min-width: 0; width: 100%; box-sizing: border-box;`
+                    }, containerChildren);
+
+                    bar.append(this.node);
+
+                    // 4. Eventos idénticos
+                    let scope = this;
+                    let $inputs = $(this.node).find('input');
+                    let $range = $(this.node).find('input[type="range"]');
+                    let $number = $(this.node).find('input[type="number"]');
+
+                    $inputs.on('input', function (event) {
+                        let val = parseFloat($(event.target).val());
+                        if (isNaN(val)) return;
+                        let is_number_input = event.target === $number[0];
+                        scope.setValue(val, false, is_number_input); // Actualizar visual y notificar
+                        scope.change();
+                    });
+
+                    $number.on('blur', function (event) {
+                        let val = parseFloat($(this).val());
+                        if (isNaN(val)) {
+                            val = scope.settings.reset_value;
+                        }
+                        scope.setValue(val, true, false);
+                    });
+
+                    $number.on('keydown', function (event) {
+                        if (event.key === 'Enter' || event.key === 'Escape') {
+                            this.blur();
+                        }
+                    });
+
+                    $range.on('mousedown touchstart', function () { scope.isDragging = true; });
+                    $range.on('mouseup touchend', function () { scope.isDragging = false; scope.updateResetButton(); });
+                    $inputs.on('change', function () { scope.isDragging = false; scope.updateResetButton(); });
+
+                    this.setValue(this.value, false);
+                }
+
+                updateResetButton() {
+                    if (!this.settings.resettable || !this.resetBtn) return;
+                    if (this.isDragging) return;
+                    if (parseFloat(this.value) !== parseFloat(this.settings.reset_value)) {
+                        this.resetBtn.style.display = 'flex';
+                    } else {
+                        this.resetBtn.style.display = 'none';
+                    }
+                }
+
+                getValue() {
+                    return this.value;
+                }
+
+                setValue(value, dispatch = true, skip_number_input_update = false) {
+                    if (!this.settings.allow_lower && value < this.settings.min) {
+                        value = this.settings.min;
+                    }
+                    if (!this.settings.allow_higher && value > this.settings.max) {
+                        value = this.settings.max;
+                    }
+                    this.value = value;
+                    let $range = $(this.node).find('input[type="range"]');
+                    let $number = $(this.node).find('input[type="number"]');
+
+                    $range.val(value);
+                    if (!skip_number_input_update) {
+                        $number.val(value);
+                    }
+
+                    let isOutOfBounds = false;
+                    if (this.settings.allow_lower && value < this.settings.min) isOutOfBounds = true;
+                    if (this.settings.allow_higher && value > this.settings.max) isOutOfBounds = true;
+
+                    if (isOutOfBounds) {
+                        $range.css({ 'opacity': '0.3', 'filter': 'grayscale(100%)' });
+                    } else {
+                        $range.css({ 'opacity': '1', 'filter': 'none' });
+                    }
+                    this.updateResetButton();
+                    if (dispatch) this.change();
+                }
+
+                getDefault() {
+                    return this.settings.reset_value !== undefined ? this.settings.reset_value : 0;
+                }
+            };
+
+            // MARK: Compact Dropdown Select
+            FormElement.types.compact_select = class FormElementCompactDropdown extends FormElement {
+                get uses_wide_inputs() { return true; }
+                setup() {
+                    let tempDesc = this.options.description;
+                    this.options.description = null;
+                    super.setup();
+                    this.options.description = tempDesc;
+                }
+                build(bar) {
+                    this.bar = bar;
+                    bar.classList.add('full_width_dialog_bar');
+                    bar.style.padding = '0';
+                    bar.style.background = 'transparent';
+
+                    let data = this.options;
+                    this.options_dict = data.options || {};
+                    this.values = Object.keys(this.options_dict);
+                    this.value = data.value !== undefined ? data.value : (data.default !== undefined ? data.default : this.values[0]);
+
+                    // DOM del botón idéntico al original
+                    this.node = document.createElement('div');
+                    this.node.className = 'tool widget compact_dropdown_select';
+                    this.node.style = 'display: flex; align-items: center; cursor: pointer; padding: 2px 6px; background: var(--color-button); border-radius: 2px; height: 30px; box-sizing: border-box; flex-shrink: 0;';
+
+                    this.icon_wrapper = document.createElement('div');
+                    this.icon_wrapper.className = 'main_icon_wrapper';
+                    this.icon_wrapper.style = 'display: flex; align-items: center; margin-right: 4px;';
+
+                    this.arrow_node = document.createElement('i');
+                    this.arrow_node.className = 'fas fa-caret-down dropdown_arrow';
+                    this.arrow_node.style = 'font-size: 12px; color: var(--color-text); display: flex; align-items: center;';
+
+                    this.node.append(this.icon_wrapper, this.arrow_node);
+
+                    // Agrupar con el Label si existe (pero sin separar la fila a la mitad)
+                    let outerContainer = document.createElement('div');
+                    outerContainer.style = 'display: flex; align-items: center; gap: 8px; width: 100%; height: 30px; padding: 0 4px; box-sizing: border-box;';
+
+                    if (data.label) {
+                        let labelElement = document.createElement('span');
+                        labelElement.style = 'font-size: 13px; color: var(--color-text); white-space: nowrap;';
+                        labelElement.innerText = tl(data.label);
+                        outerContainer.append(labelElement);
+                    }
+
+                    outerContainer.append(this.node);
+                    bar.append(outerContainer);
+
+                    // Eventos
+                    this.node.addEventListener('click', (event) => {
+                        this.open(event);
+                    });
+
+                    $(this.node).on('wheel', event => {
+                        let e = event.originalEvent;
+                        let index = this.values.indexOf(this.value);
+                        index += e.deltaY < 0 ? -1 : 1;
+                        if (index < 0) index = this.values.length - 1;
+                        if (index >= this.values.length) index = 0;
+                        this.setValue(this.values[index]);
+                        this.change();
+                    });
+
+                    this.updateVisuals();
+                }
+
+                open(event) {
+                    if (Menu.closed_in_this_click == this.id) return;
+                    let scope = this;
+                    let items = [];
+
+                    for (let key in this.options_dict) {
+                        let opt = this.options_dict[key];
+                        if (opt) {
+                            items.push({
+                                name: opt.name || key,
+                                icon: opt.icon,
+                                color: opt.color,
+                                condition: opt.condition,
+                                click: (e) => {
+                                    scope.setValue(key);
+                                    scope.change();
+                                }
+                            });
+                        }
+                    }
+
+                    let menu = new Menu(this.id, items, { class: 'select_menu' });
+                    if (menu.node) {
+                        menu.node.classList.add('compact_dropdown_menu');
+                        menu.node.style['min-width'] = this.node.clientWidth + 'px';
+                    }
+                    menu.open(this.node);
+                }
+
+                updateVisuals() {
+                    let opt = this.options_dict[this.value];
+                    if (!opt) return;
+
+                    let baseName = this.options.label ? tl(this.options.label) + ': ' : '';
+                    this.node.title = `${baseName}${opt.name || this.value}`;
+
+                    this.icon_wrapper.innerHTML = '';
+                    let iconElement = Blockbench.getIconNode(opt.icon || 'help');
+                    if (opt.color) {
+                        iconElement.style.color = opt.color;
+                    }
+                    this.icon_wrapper.append(iconElement);
+                }
+
+                getValue() {
+                    return this.value;
+                }
+
+                setValue(value) {
+                    this.value = value;
+                    this.updateVisuals();
+                }
+
+                getDefault() {
+                    return this.values[0] || '';
+                }
+            };
+
+            // MARK: Bar Display
+            FormElement.types.bar_display = class FormElementBarDisplay extends FormElement {
+                get uses_wide_inputs() { return true; }
+                setup() {
+                    let tempDesc = this.options.description;
+                    this.options.description = null;
+                    super.setup();
+                    this.options.description = tempDesc;
+                }
+                build(bar) {
+                    this.bar = bar;
+                    bar.classList.add('full_width_dialog_bar');
+                    bar.style.padding = '0';
+                    bar.style.background = 'transparent';
+
+                    let data = this.options;
+                    this.text = data.text !== undefined ? data.text : (data.value || '');
+                    this.inline_label = data.label || '';
+                    this.color = data.color || '';
+                    this.icon_name = data.icon || '';
+                    this.is_paragraph = !!data.paragraph;
+                    this.expand = !!data.expand;
+                    this.text_alignment = data.text_alignment || 'left';
+
+                    this.node = document.createElement('div');
+                    this.node.className = `tool widget bar_display ${this.is_paragraph ? 'bar_display_paragraph' : ''}`;
+                    this.node.style = 'display: flex; gap: 6px; padding: 0 4px; cursor: default; width: 100%; box-sizing: border-box; align-items: ' + (this.is_paragraph ? 'flex-start' : 'center') + ';';
+
+                    if (this.color) this.node.style.color = this.color;
+
+                    bar.append(this.node);
+                    this.buildDOM();
+                }
+
+                buildDOM() {
+                    this.node.innerHTML = '';
+
+                    if (this.icon_name) {
+                        let icon_node = Blockbench.getIconNode(this.icon_name);
+                        icon_node.style.fontSize = '1.1em';
+                        icon_node.style.display = 'flex';
+                        icon_node.style.alignItems = 'center';
+                        this.node.append(icon_node);
+                    }
+
+                    if (this.inline_label) {
+                        let label_node = document.createElement('span');
+                        label_node.className = 'bar_display_label';
+                        label_node.style.fontWeight = 'bold';
+                        label_node.style.opacity = '0.85';
+                        label_node.style.display = 'flex';
+                        label_node.style.alignItems = 'center';
+                        label_node.innerText = tl(this.inline_label);
+                        this.node.append(label_node);
+                    }
+
+                    this.content_node = document.createElement('span');
+                    this.content_node.className = 'bar_display_content';
+                    if (this.expand) {
+                        this.content_node.style.flex = '1 1 0';
+                        this.content_node.style.minWidth = '0';
+                    }
+                    this.content_node.style.textAlign = this.text_alignment;
+
+                    if (this.is_paragraph) {
+                        this.content_node.style.whiteSpace = 'pre-wrap';
+                        this.content_node.style.lineHeight = '1.4';
+                    } else {
+                        this.content_node.style.display = 'flex';
+                        this.content_node.style.alignItems = 'center';
+                    }
+
+                    this.content_node.innerHTML = this.text;
+                    this.node.append(this.content_node);
+                }
+
+                getValue() {
+                    return this.text;
+                }
+
+                setValue(value) {
+                    this.text = value;
+                    if (this.content_node) {
+                        this.content_node.innerHTML = value;
+                    }
+                }
+
+                getDefault() {
+                    return '';
+                }
+            };
+
+            // MARK: Custom Checkbox
+            FormElement.types.custom_checkbox = class FormElementCustomCheckbox extends FormElement {
+                // Prevents Blockbench from splitting the row in half
+                get uses_wide_inputs() { return true; }
+
+                setup() {
+                    // Temporarily hide the description during base setup to avoid the default '?' icon
+                    let tempDesc = this.options.description;
+                    this.options.description = null;
+                    super.setup();
+                    this.options.description = tempDesc;
+                }
+
+                build(bar) {
+                    this.bar = bar;
+                    bar.classList.add('full_width_dialog_bar');
+                    bar.style.padding = '0';
+                    bar.style.background = 'transparent';
+
+                    let data = this.options;
+                    this.value = data.value !== undefined ? !!data.value : (data.default !== undefined ? !!data.default : false);
+
+                    // --- Customization Settings ---
+                    this.icon_on = data.icon_on || 'check_box';
+                    this.icon_off = data.icon_off || 'check_box_outline_blank';
+                    this.icon_color_on = data.icon_color_on || 'var(--color-text)';
+                    this.icon_color_off = data.icon_color_off || 'var(--color-subtle_text)';
+                    this.label_color = data.label_color || 'var(--color-subtle_text)';
+                    this.layout = data.layout || 'icon_left'; // Options: 'icon_left', 'icon_right', 'space_between'
+                    this.icon_size = data.icon_size || '18px';
+
+                    // Dynamic Padding Compilation
+                    let padding_value = data.padding !== undefined ? data.padding : '0 4px';
+                    if (data.padding_left !== undefined || data.padding_right !== undefined || data.padding_top !== undefined || data.padding_bottom !== undefined) {
+                        let top = data.padding_top || '0';
+                        let right = data.padding_right || '0';
+                        let bottom = data.padding_bottom || '0';
+                        let left = data.padding_left || '0';
+                        padding_value = `${top} ${right} ${bottom} ${left}`;
+                    }
+
+                    // Main Interactive Container
+                    this.node = document.createElement('div');
+                    this.node.className = 'tool widget custom_checkbox';
+                    Object.assign(this.node.style, {
+                        display: 'flex',
+                        alignItems: 'center',
+                        height: '30px',
+                        padding: padding_value,
+                        boxSizing: 'border-box',
+                        width: '100%',
+                        cursor: 'pointer',
+                        userSelect: 'none'
+                    });
+
+                    // Native Tooltip (Description)
+                    if (data.description) {
+                        this.node.title = tl(data.description);
+                    }
+
+                    // --- Create Icon Wrapper & Node ---
+                    this.icon_wrapper = document.createElement('div');
+                    Object.assign(this.icon_wrapper.style, {
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        flexShrink: '0',
+                        // Slightly larger than the icon to prevent cropping during bounce animation
+                        width: `calc(${this.icon_size} + 4px)`,
+                        height: `calc(${this.icon_size} + 4px)`
+                    });
+
+                    this.icon_node = document.createElement('i');
+                    Object.assign(this.icon_node.style, {
+                        fontSize: this.icon_size,
+                        lineHeight: '1', // Prevents font ascender/descender clipping
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        transformOrigin: 'center', // Perfect center scaling
+                        transition: 'color 0.25s ease, transform 0.15s cubic-bezier(0.2, 1.5, 0.4, 1)'
+                    });
+
+                    this.icon_wrapper.append(this.icon_node);
+
+                    // Create Label Node
+                    this.label_node = document.createElement('span');
+                    Object.assign(this.label_node.style, {
+                        fontSize: '13px',
+                        color: this.label_color,
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        flexShrink: '1'
+                    });
+
+                    if (data.label) {
+                        this.label_node.innerText = tl(data.label);
+                    }
+
+                    // --- Layout Configuration ---
+                    if (this.layout === 'icon_left') {
+                        this.node.style.justifyContent = 'flex-start';
+                        this.node.style.gap = '8px';
+                        this.node.append(this.icon_wrapper, this.label_node);
+
+                    } else if (this.layout === 'icon_right') {
+                        this.node.style.justifyContent = 'flex-start';
+                        this.node.style.gap = '8px';
+                        this.node.append(this.label_node, this.icon_wrapper);
+
+                    } else if (this.layout === 'space_between') {
+                        this.node.style.justifyContent = 'space-between';
+                        this.node.append(this.label_node, this.icon_wrapper);
+                    }
+
+                    bar.append(this.node);
+
+                    // Click Event Listener
+                    this.node.addEventListener('click', () => {
+                        this.setValue(!this.value);
+                    });
+
+                    // Apply initial visual state
+                    this.updateVisuals(false);
+                }
+
+                updateVisuals(animate = true) {
+                    let current_icon = this.value ? this.icon_on : this.icon_off;
+                    let current_color = this.value ? this.icon_color_on : this.icon_color_off;
+
+                    // Reset classes
+                    this.icon_node.className = '';
+                    this.icon_node.innerText = '';
+
+                    // Detect FontAwesome vs Material Icons
+                    let isFa = /^(fa-|fas |fab |far )/.test(current_icon);
+
+                    if (isFa) {
+                        this.icon_node.className = `fa ${current_icon}`;
+                    } else {
+                        this.icon_node.className = 'material-icons';
+                        this.icon_node.innerText = current_icon;
+                    }
+
+                    // Apply dynamic color
+                    this.icon_node.style.color = current_color;
+
+                    // Trigger scale "pop" animation
+                    if (animate) {
+                        this.icon_node.style.transform = 'scale(0.7)';
+                        setTimeout(() => {
+                            this.icon_node.style.transform = 'scale(1)';
+                        }, 50); // Slight delay allows the browser to register the transform change
+                    } else {
+                        this.icon_node.style.transform = 'scale(1)';
+                    }
+                }
+
+                getValue() {
+                    return this.value;
+                }
+
+                setValue(val, dispatch = true) {
+                    this.value = !!val; // Enforce boolean
+                    this.updateVisuals(true);
+                    if (dispatch) this.change(); // Notify form of the change
+                }
+
+                getDefault() {
+                    return false;
+                }
+            };
+
+            Blockbench.addCSS(
+                `.compact_dropdown_select {
+                    display: flex !important;
+                    align-items: center;
+                    justify-content: center;
+                    padding: 0 4px !important;
+                    cursor: pointer;
+                    position: relative;
+                    width: auto !important;
+                    min-width: 32px;
+                }
+
+                .compact_dropdown_select:hover {
+                    background-color: var(--color-button);
+                }
+
+                .compact_dropdown_select .main_icon_wrapper {
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    font-size: 16px; /* Tamaño del icono */
+                }
+
+                .compact_dropdown_select .dropdown_arrow {
+                    font-size: 10px;
+                    margin-left: 4px;
+                    color: var(--color-text);
+                    opacity: 0.6;
+                }`
+            );
+
+
             // Configure three-dimensional textures based on the base64 dictionary
             for (let key in light_icons_b64) {
                 let tex = new THREE.TextureLoader().load(light_icons_b64[key]);
@@ -1256,6 +2661,7 @@ function initialize_light_plugin() {
                     unique_name: true,
                     movable: true,
                     rotatable: true, // Allowing rotation is now necessary to orient Directional and Spot lights
+                    hide_in_screenshot: true,
                 }
             }
             window.LightElement = LightElement;
@@ -1341,8 +2747,10 @@ function initialize_light_plugin() {
                     mesh.add(sprite);
                     mesh.sprite = sprite;
                     // Blockbench only raycasts non-locator custom elements when element.mesh has geometry.
-                    // Keep the root visually empty, but let it enter Canvas.raycast and delegate to the visible sprite.
-                    mesh.geometry = {};
+                    // Use a valid empty geometry so Box3.expandByObject can inspect it without changing model bounds.
+                    let selectionGeometry = new THREE.BufferGeometry();
+                    selectionGeometry.boundingBox = new THREE.Box3().makeEmpty();
+                    mesh.geometry = selectionGeometry;
                     mesh.raycast = function (raycaster, intersects) {
                         if (!this.sprite || this.sprite.visible === false) return;
                         this.sprite.updateMatrixWorld(true);
@@ -1734,20 +3142,18 @@ function initialize_light_plugin() {
                 if (typeof action.update === 'function') action.update();
             };
 
-            let toggleLightAreaGizmosAction = new Action('toggle_light_area_gizmos', {
-                name: window.LightManagerAreaGizmos.enabled ? 'Hide Light Area Gizmos' : 'Show Light Area Gizmos',
-                description: 'Show or hide light area visualizers.',
-                icon: window.LightManagerAreaGizmos.enabled ? 'visibility' : 'visibility_off',
-                category: 'view',
-                condition: () => Project,
-                click() {
-                    const enabled = window.LightManagerAreaGizmos.toggle();
-                    updateAreaGizmoActionState(this);
-                    Blockbench.showQuickMessage(enabled ? 'Light area gizmos enabled' : 'Light area gizmos disabled');
+            ViewOptionsDialog.form_config.show_light_area_gizmos = {
+                label: 'dialog.preview_options.show_light_area_gizmos', type: 'checkbox',
+                style: 'toggle_switch', value: window.LightManagerAreaGizmos.enabled
+            };
+            //ViewOptionsDialog.form.buildForm();
+            let last_viewOptions_OnFormChange = ViewOptionsDialog.onFormChange;
+            ViewOptionsDialog.onFormChange = (result) => {
+                if (result.show_light_area_gizmos !== undefined) {
+                    window.LightManagerAreaGizmos.setEnabled(result.show_light_area_gizmos);
                 }
-            });
-            deletables.push(toggleLightAreaGizmosAction);
-            MenuBar.addAction(toggleLightAreaGizmosAction, 'view');
+                last_viewOptions_OnFormChange(result);
+            };
 
             let fitLightBoundsAction = new Action('fit_light_bounds_to_selection', {
                 name: 'Fit Lights to Selection...',
@@ -1857,22 +3263,17 @@ function initialize_light_plugin() {
 
             let light_type_select;
             let light_intensity_slider;
-            let light_intensity_sliderbox;
+
             let light_color_picker;
             let light_temperature_slider;
-            let light_temperature_sliderbox;
             let light_distance_slider;
-            let light_distance_sliderbox;
             let light_cone_angle_slider;
-            let light_cone_angle_sliderbox;
             let light_cone_penumbra_slider;
-            let light_cone_penumbra_sliderbox;
             let cast_shadows_toggle;
             let light_shadow_resolution_select;
             let light_shadow_near_sliderbox;
             let light_shadow_far_sliderbox;
             let light_shadow_bounds_slider;
-            let light_shadow_bounds_sliderbox;
             let light_shadow_bias_sliderbox;
             let light_shadow_normal_bias_sliderbox;
 
@@ -1926,12 +3327,10 @@ function initialize_light_plugin() {
 
             const updateConditionalLightToolbars = () => {
                 [
-                    'light_distance_settings_toolbar',
-                    'light_cone_angle_settings_toolbar',
-                    'light_cone_penumbra_settings_toolbar',
-                    'light_shadows_toolbar',
+                    'light_settings_toolbar',
+                    'light_quickbuttons_toolbar',
                     'light_shadow_clip_settings_toolbar',
-                    'light_shadow_bounds_settings_toolbar',
+
                     'light_shadow_bias_settings_toolbar'
                 ].forEach(key => LIGHT_SETTINGS_GROUP[key]?.update?.());
             };
@@ -1977,26 +3376,21 @@ function initialize_light_plugin() {
                 try {
                     setBarControl(light_type_select, light.light_type);
                     setBarControl(light_intensity_slider, light.intensity);
-                    setNumControl(light_intensity_sliderbox, light.intensity);
+
                     light_color_picker?.set?.(LightManagerUtils.colorHex(light.color));
 
                     let selectedTemp = light.temperature || 6500;
                     setBarControl(light_temperature_slider, selectedTemp);
-                    setNumControl(light_temperature_sliderbox, selectedTemp);
 
                     setBarControl(light_distance_slider, light.distance);
-                    setNumControl(light_distance_sliderbox, light.distance);
                     setBarControl(light_cone_angle_slider, light.angle);
-                    setNumControl(light_cone_angle_sliderbox, light.angle);
                     setBarControl(light_cone_penumbra_slider, light.penumbra);
-                    setNumControl(light_cone_penumbra_sliderbox, light.penumbra);
 
                     cast_shadows_toggle?.set?.(light.has_shadow !== false);
                     setBarControl(light_shadow_resolution_select, String(LightManagerUtils.shadowResolution(light.shadow_resolution)));
                     setNumControl(light_shadow_near_sliderbox, light.shadow_near);
                     setNumControl(light_shadow_far_sliderbox, light.shadow_far);
-                    setBarControl(light_shadow_bounds_slider, light.shadow_bounds);
-                    setNumControl(light_shadow_bounds_sliderbox, light.shadow_bounds);
+                    setNumControl(light_shadow_bounds_slider, light.shadow_bounds);
                     setNumControl(light_shadow_bias_sliderbox, light.shadow_bias);
                     setNumControl(light_shadow_normal_bias_sliderbox, light.shadow_normal_bias);
                 } finally {
@@ -2042,7 +3436,7 @@ function initialize_light_plugin() {
                 return true;
             };
 
-            light_type_select = new BarSelect('light_type_select', {
+            light_type_select = new CompactDropdownSelect('light_type_select', {
                 name: 'property.light_type',
                 icon_mode: true,
                 options: {
@@ -2054,38 +3448,6 @@ function initialize_light_plugin() {
                 onChange: function () {
                     applyLightPanelValue('light_type', this.value, 'Change light type');
                 }
-            });
-
-            light_intensity_slider = new BarSlider('light_intensity_slider', {
-                name: 'property.light_intensity',
-                condition: singleLightCondition,
-                min: 0, max: 10, step: 0.1, circular: true,
-                get: function () {
-                    let light = getSelectedLight();
-                    return light ? light.intensity : 0;
-                },
-                onBefore: () => beginLightEdit('Change light intensity'),
-                onChange: function () {
-                    applyLightPanelValue('intensity', this.value);
-                },
-                onAfter: () => finishLightEdit('Change light intensity')
-            });
-
-            light_intensity_sliderbox = new NumSlider('light_intensity_sliderbox', {
-                name: tl('property.light_intensity'),
-                description: tl('property.light_intensity.desc'),
-                settings: { default: 1, min: 0, max: 100000, step: 0.1 },
-                condition: singleLightCondition,
-                onBefore: () => beginLightEdit('Change light intensity'),
-                onChange: modify => applyLightPanelValue('intensity', modify),
-                onAfter: () => finishLightEdit('Change light intensity')
-            });
-
-            let light_settings_toolbar = new Toolbar({
-                id: 'light_intensity',
-                name: 'property.light',
-                label: true,
-                children: ['+', 'light_intensity_slider', 'light_intensity_sliderbox', '+', 'light_type_select']
             });
 
             light_color_picker = new ColorPicker({
@@ -2102,10 +3464,20 @@ function initialize_light_plugin() {
                 onAfter: () => finishLightEdit('Change light color')
             });
 
-            light_temperature_slider = new BarSlider('light_temperature_slider', {
-                name: 'property.light_temperature',
+            light_temperature_slider = new ComboSlider('light_temperature_slider', {
+                label: 'property.light_temperature',
+                title: 'property.light_temperature.desc',
+                grow: true,
+                color: 'var(--color-warning)',
                 condition: singleLightCondition,
-                min: 2700, max: 6500, step: 100, circular: true,
+                value: 6500,
+                reset_value: 6500,
+                min: 2700,
+                max: 6500,
+                step: 100,
+                circular: true,
+                allow_higher: false,
+                allow_lower: false,
                 get: function () {
                     let light = getSelectedLight();
                     return light ? (light.temperature || 6500) : 6500;
@@ -2115,125 +3487,6 @@ function initialize_light_plugin() {
                     applyLightPanelValue('temperature', this.value);
                 },
                 onAfter: () => finishLightEdit('Change light temperature')
-            });
-
-            light_temperature_sliderbox = new NumSlider('light_temperature_sliderbox', {
-                name: tl('property.light_temperature'),
-                description: tl('property.light_temperature.desc'),
-                settings: { default: 6500, min: 2700, max: 6500, step: 100 },
-                condition: singleLightCondition,
-                onBefore: () => beginLightEdit('Change light temperature'),
-                onChange: modify => applyLightPanelValue('temperature', modify),
-                onAfter: () => finishLightEdit('Change light temperature')
-            });
-
-            let light_color_settings_toolbar = new Toolbar({
-                id: 'light_color_settings',
-                name: 'property.light_color',
-                label: true,
-                children: ['+', 'light_color_picker', 'light_temperature_slider', 'light_temperature_sliderbox', '+']
-            });
-
-            light_distance_slider = new BarSlider('light_distance_slider', {
-                name: tl('property.distance'),
-                description: tl('property.distance.desc'),
-                condition: rangeLightCondition,
-                min: 0, max: 100, step: 0.5, circular: true,
-                get: function () {
-                    let light = getSelectedLight();
-                    return light ? light.distance : 0;
-                },
-                onBefore: () => beginLightEdit('Change light distance'),
-                onChange: function () {
-                    applyLightPanelValue('distance', this.value);
-                },
-                onAfter: () => finishLightEdit('Change light distance')
-            });
-
-            light_distance_sliderbox = new NumSlider('light_distance_sliderbox', {
-                name: tl('property.distance'),
-                description: tl('property.distance.desc'),
-                settings: { default: 0, min: 0, max: 100000, step: 0.5 },
-                condition: rangeLightCondition,
-                onBefore: () => beginLightEdit('Change light distance'),
-                onChange: modify => applyLightPanelValue('distance', modify),
-                onAfter: () => finishLightEdit('Change light distance')
-            });
-
-            let light_distance_settings_toolbar = new Toolbar({
-                id: 'light_distance_settings',
-                name: 'property.distance',
-                label: true,
-                condition: rangeLightCondition,
-                children: ['+', 'light_distance_slider', 'light_distance_sliderbox', '+']
-            });
-
-            light_cone_angle_slider = new BarSlider('light_cone_angle_slider', {
-                name: tl('property.cone_angle'),
-                description: tl('property.cone_angle.desc'),
-                condition: spotLightCondition,
-                min: 0.1, max: 89.9, step: 0.1, circular: true, color: '#b28cff',
-                get: function () {
-                    let light = getSelectedLight();
-                    return light ? light.angle : 45;
-                },
-                onBefore: () => beginLightEdit('Change light cone angle'),
-                onChange: function () {
-                    applyLightPanelValue('angle', this.value);
-                },
-                onAfter: () => finishLightEdit('Change light cone angle')
-            });
-
-            light_cone_angle_sliderbox = new NumSlider('light_cone_angle_sliderbox', {
-                name: tl('property.cone_angle'),
-                description: tl('property.cone_angle.desc'),
-                settings: { default: 45, min: 0.1, max: 89.9, step: 0.1 },
-                condition: spotLightCondition,
-                onBefore: () => beginLightEdit('Change light cone angle'),
-                onChange: modify => applyLightPanelValue('angle', modify),
-                onAfter: () => finishLightEdit('Change light cone angle')
-            });
-
-            let light_cone_angle_settings_toolbar = new Toolbar({
-                id: 'light_cone_angle_settings',
-                name: 'property.cone_angle',
-                label: true,
-                condition: spotLightCondition,
-                children: ['+', 'light_cone_angle_slider', 'light_cone_angle_sliderbox', '+']
-            });
-
-            light_cone_penumbra_slider = new BarSlider('light_cone_penumbra_slider', {
-                name: tl('property.cone_penumbra'),
-                description: tl('property.cone_penumbra.desc'),
-                condition: spotLightCondition,
-                min: 0, max: 1, step: 0.01, circular: true, color: '#b28cff',
-                get: function () {
-                    let light = getSelectedLight();
-                    return light ? light.penumbra : 0;
-                },
-                onBefore: () => beginLightEdit('Change light penumbra'),
-                onChange: function () {
-                    applyLightPanelValue('penumbra', this.value);
-                },
-                onAfter: () => finishLightEdit('Change light penumbra')
-            });
-
-            light_cone_penumbra_sliderbox = new NumSlider('light_cone_penumbra_sliderbox', {
-                name: tl('property.cone_penumbra'),
-                description: tl('property.cone_penumbra.desc'),
-                settings: { default: 0, min: 0, max: 1, step: 0.01 },
-                condition: spotLightCondition,
-                onBefore: () => beginLightEdit('Change light penumbra'),
-                onChange: modify => applyLightPanelValue('penumbra', modify),
-                onAfter: () => finishLightEdit('Change light penumbra')
-            });
-
-            let light_cone_penumbra_settings_toolbar = new Toolbar({
-                id: 'light_cone_penumbra_settings',
-                name: 'property.cone_penumbra',
-                label: true,
-                condition: spotLightCondition,
-                children: ['+', 'light_cone_penumbra_slider', 'light_cone_penumbra_sliderbox', '+']
             });
 
             cast_shadows_toggle = new Toggle('cast_shadows', {
@@ -2262,16 +3515,123 @@ function initialize_light_plugin() {
                 }
             });
 
-            let light_shadows_toolbar = new Toolbar({
-                id: 'light_shadows',
-                name: 'property.shadows',
+            let light_quickbuttons_toolbar = new Toolbar({
+                id: 'light_quickbuttons',
+                name: 'property.light.quickbuttons',
                 label: true,
                 condition: singleLightCondition,
-                children: ['+', 'cast_shadows', 'light_shadow_resolution_select', '+']
+                children: ['light_type_select', 'light_color_picker', '+', 'cast_shadows', 'light_shadow_resolution_select', '#', 'light_temperature_slider']
+            });
+
+            light_intensity_slider = new ComboSlider('light_intensity_slider', {
+                label: 'property.light_intensity',
+                //icon: 'flare',
+                title: 'property.light_intensity.desc',
+                grow: true,
+                color: 'var(--color-axis-w)',
+                value: 1.0,
+                reset_value: 1.0,
+                min: 0.0,
+                max: 3.0,
+                step: 0.1,
+                allow_higher: true,
+                allow_lower: false,
+                get: function () {
+                    let light = getSelectedLight();
+                    return light ? light.intensity : 0;
+                },
+                onBefore: () => beginLightEdit('Change light intensity'),
+                onChange: function () {
+                    applyLightPanelValue('intensity', this.value);
+                },
+                onAfter: () => finishLightEdit('Change light intensity')
+            });
+
+            light_distance_slider = new ComboSlider('light_distance_slider', {
+                label: 'property.distance',
+                title: 'property.distance.desc',
+                grow: true,
+                color: 'var(--color-axis-z)',
+                condition: rangeLightCondition,
+                value: 0,
+                reset_value: 0,
+                min: 0,
+                max: 100,
+                step: 0.5,
+                allow_higher: true,
+                allow_lower: false,
+                get: function () {
+                    let light = getSelectedLight();
+                    return light ? light.distance : 0;
+                },
+                onBefore: () => beginLightEdit('Change light distance'),
+                onChange: function () {
+                    applyLightPanelValue('distance', this.value);
+                },
+                onAfter: () => finishLightEdit('Change light distance')
+            });
+
+            light_cone_angle_slider = new ComboSlider('light_cone_angle_slider', {
+                label: 'property.cone_angle',
+                title: 'property.cone_angle.desc',
+                grow: true,
+                color: 'var(--color-axis-x)',
+                condition: spotLightCondition,
+                value: 45,
+                reset_value: 45,
+                min: 0.1,
+                max: 89.9,
+                step: 0.1,
+                allow_higher: false,
+                allow_lower: false,
+                get: function () {
+                    let light = getSelectedLight();
+                    return light ? light.angle : 45;
+                },
+                onBefore: () => beginLightEdit('Change light cone angle'),
+                onChange: function () {
+                    applyLightPanelValue('angle', this.value);
+                },
+                onAfter: () => finishLightEdit('Change light cone angle')
+            });
+
+            light_cone_penumbra_slider = new ComboSlider('light_cone_penumbra_slider', {
+                label: 'property.cone_penumbra',
+                title: 'property.cone_penumbra.desc',
+                grow: true,
+                color: 'var(--color-axis-y)',
+                condition: spotLightCondition,
+                value: 0,
+                reset_value: 0,
+                min: 0,
+                max: 1,
+                step: 0.01,
+                allow_higher: false,
+                allow_lower: false,
+                get: function () {
+                    let light = getSelectedLight();
+                    return light ? light.penumbra : 0;
+                },
+                onBefore: () => beginLightEdit('Change light penumbra'),
+                onChange: function () {
+                    applyLightPanelValue('penumbra', this.value);
+                },
+                onAfter: () => finishLightEdit('Change light penumbra')
+            });
+
+
+
+            let light_settings_toolbar = new Toolbar({
+                id: 'light_settings',
+                name: 'property.light_settings',
+                condition: singleLightCondition,
+                label: true,
+                children: ['light_intensity_slider', '#', 'light_distance_slider', '#', 'light_cone_angle_slider', '#', 'light_cone_penumbra_slider']
             });
 
             light_shadow_near_sliderbox = new NumSlider('light_shadow_near_sliderbox', {
                 name: tl('property.shadow_near'),
+                color: 'var(--color-axis-x)',
                 settings: { default: 0.1, min: 0, max: 100000, step: 0.05 },
                 condition: shadowLightCondition,
                 onBefore: () => beginLightEdit('Change shadow clip'),
@@ -2279,8 +3639,15 @@ function initialize_light_plugin() {
                 onAfter: () => finishLightEdit('Change shadow clip')
             });
 
+            Object.assign(light_shadow_near_sliderbox.node.style, {
+                flex: '1 1 0',
+                minWidth: 0,
+                width: 'auto'
+            });
+
             light_shadow_far_sliderbox = new NumSlider('light_shadow_far_sliderbox', {
                 name: tl('property.shadow_far'),
+                color: 'var(--color-axis-w)',
                 settings: { default: 200, min: 0.001, max: 100000, step: 1 },
                 condition: shadowLightCondition,
                 onBefore: () => beginLightEdit('Change shadow clip'),
@@ -2288,18 +3655,22 @@ function initialize_light_plugin() {
                 onAfter: () => finishLightEdit('Change shadow clip')
             });
 
-            let light_shadow_clip_settings_toolbar = new Toolbar({
-                id: 'light_shadow_clip_settings',
-                name: 'property.shadow_clip',
-                label: true,
-                condition: shadowLightCondition,
-                children: ['+', 'light_shadow_near_sliderbox', 'light_shadow_far_sliderbox', '+']
+            Object.assign(light_shadow_far_sliderbox.node.style, {
+                flex: '1 1 0',
+                minWidth: 0,
+                width: 'auto'
             });
 
-            light_shadow_bounds_slider = new BarSlider('light_shadow_bounds_slider', {
-                name: tl('property.shadow_bounds'),
+            light_shadow_bounds_slider = new NumSlider('light_shadow_bounds_slider', {
+                name: 'property.shadow_bounds',
+                color: '#b28cff',
                 condition: directionalShadowCondition,
-                min: 1, max: 128, step: 1, circular: true, color: '#ffd866',
+                settings: {
+                    default: 35,
+                    min: 1,
+                    max: 128,
+                    step: 1
+                },
                 get: function () {
                     let light = getSelectedLight();
                     return light ? light.shadow_bounds : 35;
@@ -2311,39 +3682,48 @@ function initialize_light_plugin() {
                 onAfter: () => finishLightEdit('Change shadow bounds')
             });
 
-            light_shadow_bounds_sliderbox = new NumSlider('light_shadow_bounds_sliderbox', {
-                name: tl('property.shadow_bounds'),
-                settings: { default: 35, min: 0.001, max: 100000, step: 1 },
-                condition: directionalShadowCondition,
-                onBefore: () => beginLightEdit('Change shadow bounds'),
-                onChange: modify => applyLightPanelValue('shadow_bounds', modify),
-                onAfter: () => finishLightEdit('Change shadow bounds')
+            Object.assign(light_shadow_bounds_slider.node.style, {
+                flex: '1 1 0',
+                minWidth: 0,
+                width: 'auto'
             });
 
-            let light_shadow_bounds_settings_toolbar = new Toolbar({
-                id: 'light_shadow_bounds_settings',
-                name: 'property.shadow_area',
+            let light_shadow_clip_settings_toolbar = new Toolbar({
+                id: 'light_shadow_clip_settings',
+                name: 'property.shadow_clip',
                 label: true,
-                condition: directionalShadowCondition,
-                children: ['+', 'light_shadow_bounds_slider', 'light_shadow_bounds_sliderbox', '+']
+                condition: shadowLightCondition,
+                children: ['light_shadow_near_sliderbox', 'light_shadow_far_sliderbox', 'light_shadow_bounds_slider']
             });
 
-            light_shadow_bias_sliderbox = new NumSlider('light_shadow_bias_sliderbox', {
-                name: tl('property.shadow_bias'),
-                settings: { default: DEFAULT_SHADOW_BIAS, min: -1, max: 1, step: 0.0001 },
+            light_shadow_bias_sliderbox = new ComboSlider('light_shadow_bias_sliderbox', {
+                label: tl('property.shadow_bias'),
+                color: 'var(--color-axis-z)',
+                grow: true,
+                value: DEFAULT_SHADOW_BIAS,
+                reset_value: DEFAULT_SHADOW_BIAS,
+                min: -1, max: 1, step: 0.0001,
                 condition: shadowLightCondition,
                 onBefore: () => beginLightEdit('Change shadow bias'),
-                onChange: modify => applyLightPanelValue('shadow_bias', modify),
+                onChange: function () {
+                    applyLightPanelValue('shadow_bias', this.value);
+                },
                 onAfter: () => finishLightEdit('Change shadow bias')
             });
 
-            light_shadow_normal_bias_sliderbox = new NumSlider('light_shadow_normal_bias_sliderbox', {
-                name: tl('property.shadow_normal_bias'),
+            light_shadow_normal_bias_sliderbox = new ComboSlider('light_shadow_normal_bias_sliderbox', {
+                label: tl('property.shadow_normal_bias'),
+                color: 'var(--color-axis-u)',
+                grow: true,
                 description: tl('property.shadow_normal_bias.desc'),
-                settings: { default: DEFAULT_SHADOW_NORMAL_BIAS, min: -1, max: 1, step: 0.0001 },
+                value: DEFAULT_SHADOW_NORMAL_BIAS,
+                reset_value: DEFAULT_SHADOW_NORMAL_BIAS,
+                min: -1, max: 1, step: 0.0001,
                 condition: shadowLightCondition,
                 onBefore: () => beginLightEdit('Change shadow normal bias'),
-                onChange: modify => applyLightPanelValue('shadow_normal_bias', modify),
+                onChange: function () {
+                    applyLightPanelValue('shadow_normal_bias', this.value);
+                },
                 onAfter: () => finishLightEdit('Change shadow normal bias')
             });
 
@@ -2352,36 +3732,31 @@ function initialize_light_plugin() {
                 name: 'property.shadow_biases',
                 label: true,
                 condition: shadowLightCondition,
-                children: ['+', 'light_shadow_bias_sliderbox', 'light_shadow_normal_bias_sliderbox', '+']
+                children: ['light_shadow_bias_sliderbox', '#', 'light_shadow_normal_bias_sliderbox']
             });
 
             Object.assign(LIGHT_SETTINGS_GROUP, {
                 light_type_select,
                 light_intensity_slider,
-                light_intensity_sliderbox,
+
                 light_settings_toolbar,
                 light_color_picker,
                 light_temperature_slider,
-                light_temperature_sliderbox,
-                light_color_settings_toolbar,
+
                 light_distance_slider,
-                light_distance_sliderbox,
-                light_distance_settings_toolbar,
+
                 light_cone_angle_slider,
-                light_cone_angle_sliderbox,
-                light_cone_angle_settings_toolbar,
+
                 light_cone_penumbra_slider,
-                light_cone_penumbra_sliderbox,
-                light_cone_penumbra_settings_toolbar,
+
                 cast_shadows_toggle,
                 light_shadow_resolution_select,
-                light_shadows_toolbar,
+                light_quickbuttons_toolbar,
                 light_shadow_near_sliderbox,
                 light_shadow_far_sliderbox,
                 light_shadow_clip_settings_toolbar,
                 light_shadow_bounds_slider,
-                light_shadow_bounds_sliderbox,
-                light_shadow_bounds_settings_toolbar,
+
                 light_shadow_bias_sliderbox,
                 light_shadow_normal_bias_sliderbox,
                 light_shadow_bias_settings_toolbar
@@ -2390,7 +3765,8 @@ function initialize_light_plugin() {
             let light_properties_panel = new Panel('light_properties', {
                 icon: 'lightbulb',
                 growable: true,
-                condition: { modes: ['edit'], method: () => (LightElement.selected.length > 0) },
+                resizable: true,
+                condition: { modes: ['edit', 'render'], method: () => (LightElement.selected.length > 0) },
                 display_condition: () => (LightElement.selected.length === 1),
                 default_position: {
                     slot: 'right_bar',
@@ -2401,29 +3777,83 @@ function initialize_light_plugin() {
                     attached_index: 1,
                     sidebar_index: 2,
                 },
+                mode_positions: {
+                    edit: {
+                        slot: 'right_bar',
+                        float_position: [0, 0],
+                        float_size: [320, 520],
+                        height: 520,
+                        attached_to: 'transform',
+                        attached_index: 1,
+                        sidebar_index: 2,
+                    },
+                    render: {
+                        slot: "left_bar",
+                        float_position: [
+                            1322,
+                            57
+                        ],
+                        float_size: [
+                            314,
+                            520
+                        ],
+                        height: 520,
+                        folded: false,
+                        fixed_height: false,
+                        attached_to: "material_properties",
+                        sidebar_index: 1
+                    }
+                },
                 toolbars: [
+                    light_quickbuttons_toolbar,
                     light_settings_toolbar,
-                    light_color_settings_toolbar,
-                    light_distance_settings_toolbar,
-                    light_cone_angle_settings_toolbar,
-                    light_cone_penumbra_settings_toolbar,
-                    light_shadows_toolbar,
+
+
+
+
                     light_shadow_clip_settings_toolbar,
-                    light_shadow_bounds_settings_toolbar,
+
                     light_shadow_bias_settings_toolbar
                 ]
             });
             window.light_properties_panel = light_properties_panel;
             window.LIGHT_SETTINGS_GROUP = LIGHT_SETTINGS_GROUP;
 
+            let styles = Blockbench.addCSS(`
+                #panel_light_properties {
+                    overflow-y: auto !important;
+                    overflow-x: hidden;
+                }
+                /* Opcional: Estilizar la barra de desplazamiento para que se vea nativa de Blockbench */
+                #panel_light_properties::-webkit-scrollbar {
+                    width: 6px;
+                }
+                #panel_light_properties::-webkit-scrollbar-thumb {
+                    background-color: var(--color-button);
+                    border-radius: 3px;
+                }
+
+            `);
+
             let lightPanelSelectionListener = Blockbench.on('update_selection', () => {
                 const light = getSelectedLight();
                 if (light) syncLightSettingsPanel(light);
                 if (light_properties_panel.isVisible() && LightElement.selected.length === 0) {
                     Panels.transform.selectTab();
+                    if (Project.mode === 'render') {
+                        Panels.material_properties.selectTab(Panels.material_properties);
+                    }
+                }
+                if (Project.mode === 'render' && LightElement.selected.length > 0 && (Cube.selected.length === 0)) {
+                    Panels.material_properties.selectTab(Panels.light_properties);
                 }
             });
             deletables.push(lightPanelSelectionListener);
+
+            window.LIGHT_MANAGER_LOADED = true;
+            window.dispatchEvent(new CustomEvent('light_manager_initialized', {
+                detail: 'Light Manager plugin has been initialized and is ready to use.'
+            }));
 
         },
 
