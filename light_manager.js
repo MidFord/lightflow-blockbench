@@ -2547,6 +2547,695 @@ function initialize_light_plugin() {
                 }
             };
 
+            // MARK: Custom Vector
+            FormElement.types.custom_vector = class FormElementCustomVector extends FormElement {
+                get uses_wide_inputs() { return true; }
+
+                setup() {
+                    // Quitamos la inyección automática del '?' para ponerla nosotros de forma nativa junto al título
+                    let tempDesc = this.options.description;
+                    this.options.description = null;
+                    super.setup();
+                    this.options.description = tempDesc;
+                }
+
+                build(bar) {
+                    this.bar = bar;
+                    bar.classList.add('full_width_dialog_bar');
+                    bar.style.padding = '0';
+                    bar.style.background = 'transparent';
+                    bar.style.display = 'flex';
+                    bar.style.flexDirection = 'column';
+
+                    let data = this.options;
+                    this.dimensions = data.dimensions || 3;
+
+                    // Inicializar los valores y parsear de forma segura a floats
+                    this.value = Array.isArray(data.value) ? data.value.slice() : new Array(this.dimensions).fill(0);
+                    if (!data.value && Array.isArray(data.default)) {
+                        this.value = data.default.slice();
+                    }
+
+                    for (let i = 0; i < this.dimensions; i++) {
+                        this.value[i] = parseFloat(this.value[i]) || 0;
+                    }
+
+                    const axes = [
+                        { name: 'X', key: 'x', color: 'x', css: 'var(--color-axis-x)' },
+                        { name: 'Y', key: 'y', color: 'y', css: 'var(--color-axis-y)' },
+                        { name: 'Z', key: 'z', color: 'z', css: 'var(--color-axis-z)' },
+                        { name: 'W', key: 'w', color: 'w', css: 'var(--color-axis-w, var(--color-text))' }
+                    ];
+
+                    let has_any_range = false;
+                    for (let i = 0; i < this.dimensions; i++) {
+                        let axis = axes[i] || { key: String(i) };
+                        let cConfig = (data.ranges && data.ranges[axis.key]) ? data.ranges[axis.key] : {};
+
+                        let minCheck = cConfig.min !== undefined ? cConfig.min : (Array.isArray(data.min) ? data.min[i] : data.min);
+                        let maxCheck = cConfig.max !== undefined ? cConfig.max : (Array.isArray(data.max) ? data.max[i] : data.max);
+
+                        if (minCheck !== undefined && maxCheck !== undefined) {
+                            has_any_range = true;
+                            break;
+                        }
+                    }
+
+                    // --- 1. TÍTULO Y BOTÓN DE RESET ---
+                    let labelWrapper = document.createElement('div');
+                    // space-between asegura que el Reset vaya a la derecha y el Label se quede en la izquierda
+                    labelWrapper.style = 'margin-bottom: 4px; display: flex; align-items: center; justify-content: space-between; width: 100%;';
+
+                    let titleGroup = document.createElement('div');
+                    titleGroup.style = 'display: flex; align-items: center; gap: 4px;  height: 22px;';
+
+                    if (data.label) {
+                        let labelElement = document.createElement('span');
+                        // Color igualado al del combo_slider
+                        labelElement.style = 'font-size: 13px; color: var(--color-subtle_text); display: flex; align-items: center; white-space: nowrap;';
+                        labelElement.innerText = (typeof tl !== 'undefined' ? tl(data.label) : data.label);
+                        titleGroup.append(labelElement);
+                    }
+
+                    if (data.description) {
+                        let infoIcon = document.createElement('i');
+                        infoIcon.className = 'fa fa-question dialog_form_description';
+                        infoIcon.style = 'font-size: 14px; cursor: help; margin: 0; color: var(--color-subtle_text);';
+                        infoIcon.title = typeof tl !== 'undefined' ? tl(data.description) : data.description;
+                        titleGroup.append(infoIcon);
+                    }
+
+                    labelWrapper.append(titleGroup);
+
+                    let resetBtn = null;
+                    let updateResetButtonVisibility = () => {
+                        let defaultArr = Array.isArray(data.default) ? data.default : new Array(this.dimensions).fill(0);
+                        let isChanged = this.value.some((val, idx) => parseFloat(val) !== parseFloat(defaultArr[idx]));
+
+                        if (resetBtn) {
+                            resetBtn.style.display = (data.resettable !== false && isChanged) ? 'flex' : 'none';
+                        }
+                    };
+
+                    if (data.resettable !== false) {
+                        resetBtn = document.createElement('i');
+                        resetBtn.className = 'material-icons icon';
+                        resetBtn.innerText = 'replay';
+                        resetBtn.title = 'Reset Vector';
+                        // Icono replicado exactamente en aspecto y tamaño a tus otros componentes
+                        resetBtn.style = 'font-size: 18px; padding: 2px; color: var(--color-subtle_text); cursor: pointer; display: flex; align-items: center;';
+                        resetBtn.onclick = () => {
+                            let defaultArr = Array.isArray(data.default) ? data.default : new Array(this.dimensions).fill(0);
+                            this.setValue(defaultArr);
+                            updateResetButtonVisibility();
+                        };
+                        labelWrapper.append(resetBtn);
+                    }
+
+                    this.updateResetButtonVisibility = updateResetButtonVisibility;
+
+                    bar.append(labelWrapper);
+
+                    // --- 2. CONTENEDOR DE INPUTS ---
+                    this.inputs_container = document.createElement('div');
+                    this.inputs_container.style = has_any_range
+                        ? 'display: flex; flex-direction: column; gap: 4px; width: 100%;' // Apilados verticalmente (combo-style)
+                        : 'display: flex; flex-direction: row; gap: 4px; width: 100%;';   // Distribuidos horizontalmente (numslider nativo)
+
+                    bar.append(this.inputs_container);
+                    this.inputs = [];
+
+                    for (let i = 0; i < this.dimensions; i++) {
+                        let axis = axes[i] || { name: String(i), key: String(i), color: '', css: 'var(--color-text)' };
+                        let val = parseFloat(this.value[i]) || 0;
+
+                        let cConfig = (data.ranges && data.ranges[axis.key]) ? data.ranges[axis.key] : {};
+
+                        let minVal = cConfig.min !== undefined ? cConfig.min : (Array.isArray(data.min) ? data.min[i] : data.min);
+                        let maxVal = cConfig.max !== undefined ? cConfig.max : (Array.isArray(data.max) ? data.max[i] : data.max);
+                        let stepVal = cConfig.step !== undefined ? cConfig.step : (data.step !== undefined ? data.step : (data.integer ? 1 : 0.1));
+
+                        let allowLower = cConfig.allow_lower !== undefined ? cConfig.allow_lower : (Array.isArray(data.allow_lower) ? data.allow_lower[i] : !!data.allow_lower);
+                        let allowHigher = cConfig.allow_higher !== undefined ? cConfig.allow_higher : (cConfig.allow_greater !== undefined ? cConfig.allow_greater : (Array.isArray(data.allow_higher) ? data.allow_higher[i] : !!data.allow_higher));
+
+                        let is_range = minVal !== undefined && maxVal !== undefined;
+
+                        // Wrapper de Fila (Usado solo si al menos hay UN slider presente en este Vector)
+                        let rowContainer = null;
+                        if (has_any_range) {
+                            rowContainer = document.createElement('div');
+                            rowContainer.style = 'display: flex; flex-direction: row; align-items: center; height: 30px; width: 100%; box-sizing: border-box;';
+
+                            let axisLabel = document.createElement('span');
+                            axisLabel.style = `margin-right: 5px; font-size: 13px; color: ${axis.css}; font-weight: bold; white-space: nowrap; display: flex; align-items: center; width: 14px; justify-content: center; font-family: monospace;`;
+                            axisLabel.innerText = axis.name;
+                            rowContainer.append(axisLabel);
+                        }
+
+                        if (is_range) {
+                            // --- MODO: REPLICA EXACTA DE COMBO_SLIDER ---
+                            let sliderInitVal = val;
+                            if (!allowLower && sliderInitVal < minVal) sliderInitVal = minVal;
+                            if (!allowHigher && sliderInitVal > maxVal) sliderInitVal = maxVal;
+
+                            let rangeInput = Interface.createElement('input', {
+                                type: 'range',
+                                value: sliderInitVal,
+                                min: minVal,
+                                max: maxVal,
+                                step: stepVal,
+                                class: 'tool disp_range',
+                                style: `margin: 0; flex: 1 1 auto; width: 100%; min-width: 30px; transition: opacity 0.2s, filter 0.2s; --color-thumb: ${axis.css};`
+                            });
+
+                            let numberInputAttrs = {
+                                type: 'number',
+                                value: val,
+                                step: stepVal,
+                                class: 'dark_bordered focusable_input',
+                                style: `width: 100%; min-width: 45px; height: 24px; box-sizing: border-box; text-align: center; margin: 0; padding: 0 2px; flex: 0 0 auto;`
+                            };
+                            if (!allowLower) numberInputAttrs.min = minVal;
+                            if (!allowHigher) numberInputAttrs.max = maxVal;
+
+                            let numberInput = Interface.createElement('input', numberInputAttrs);
+
+                            let numberContainer = Interface.createElement('div', {
+                                class: 'numeric_input tool disp_text',
+                                style: `display: flex; align-items: center; margin: 0; flex: 0 0 auto;`
+                            }, [numberInput]);
+
+                            let comboWrapper = Interface.createElement('div', {
+                                class: 'bar slider_input_combo',
+                                style: `display: flex; align-items: center; height: 100%; margin: 0; flex: 1 1 auto; min-width: 0; width: auto;`
+                            }, [rangeInput, numberContainer]);
+
+                            if (rowContainer) {
+                                rowContainer.append(comboWrapper);
+                                this.inputs_container.append(rowContainer);
+                            }
+
+                            // Comportamiento visual de limites de "combo_slider"
+                            let updateVisuals = (currentVal) => {
+                                let isOutOfBounds = false;
+                                if (allowLower && currentVal < minVal) isOutOfBounds = true;
+                                if (allowHigher && currentVal > maxVal) isOutOfBounds = true;
+
+                                if (isOutOfBounds) {
+                                    rangeInput.style.opacity = '0.3';
+                                    rangeInput.style.filter = 'grayscale(100%)';
+                                } else {
+                                    rangeInput.style.opacity = '1';
+                                    rangeInput.style.filter = 'none';
+                                }
+                            };
+                            updateVisuals(val);
+
+                            let sync = (e) => {
+                                let num = parseFloat(e.target.value);
+                                if (isNaN(num)) {
+                                    if (e.target.value === "" || e.target.value === "-") return;
+                                    num = 0;
+                                }
+                                if (data.integer) num = Math.round(num);
+
+                                let clampedNum = num;
+                                if (!allowLower && clampedNum < minVal) clampedNum = minVal;
+                                if (!allowHigher && clampedNum > maxVal) clampedNum = maxVal;
+
+                                let sliderNum = clampedNum;
+                                if (sliderNum < minVal) sliderNum = minVal;
+                                if (sliderNum > maxVal) sliderNum = maxVal;
+
+                                rangeInput.value = sliderNum;
+                                if (e.target === rangeInput || num !== clampedNum) {
+                                    numberInput.value = clampedNum;
+                                }
+
+                                let finalVal = typeof trimFloatNumber !== 'undefined' ? trimFloatNumber(parseFloat(clampedNum) || 0) : parseFloat(clampedNum);
+                                this.value[i] = finalVal;
+                                updateVisuals(clampedNum);
+                                this.change();
+                                this.updateResetButtonVisibility();
+                            };
+
+                            $(rangeInput).on('input', sync);
+                            $(numberInput).on('input', sync);
+                            $(numberInput).on('blur', (e) => {
+                                let num = parseFloat(e.target.value);
+                                if (isNaN(num)) num = 0;
+                                if (data.integer) num = Math.round(num);
+
+                                let clampedNum = num;
+                                if (!allowLower && clampedNum < minVal) clampedNum = minVal;
+                                if (!allowHigher && clampedNum > maxVal) clampedNum = maxVal;
+
+                                e.target.value = clampedNum;
+                                this.value[i] = typeof trimFloatNumber !== 'undefined' ? trimFloatNumber(parseFloat(clampedNum) || 0) : clampedNum;
+                                updateVisuals(clampedNum);
+                                this.change();
+                            });
+
+                            this.inputs.push({
+                                is_custom: true,
+                                range: rangeInput,
+                                number: numberInput,
+                                min: minVal,
+                                max: maxVal,
+                                allowLower,
+                                allowHigher,
+                                updateVisuals
+                            });
+
+                            // Context menu for combo slider inputs
+                            const showContextMenu = (event) => {
+                                event.preventDefault();
+                                if (typeof Menu !== 'undefined') {
+                                    new Menu([
+                                        '_',
+                                        {
+                                            id: 'copy',
+                                            name: 'action.copy',
+                                            icon: 'content_copy',
+                                            click: () => {
+                                                if (typeof Clipbench !== 'undefined') Clipbench.setText(this.value[i].toString());
+                                            }
+                                        },
+                                        {
+                                            id: 'copy_vector',
+                                            name: 'menu.text_edit.copy_vector',
+                                            icon: 'content_copy',
+                                            condition: () => this.dimensions > 1,
+                                            click: () => {
+                                                let text = this.value.map(v => typeof trimFloatNumber !== 'undefined' ? trimFloatNumber(v) : v).join(' ');
+                                                if (typeof Clipbench !== 'undefined') Clipbench.setText(text);
+                                            }
+                                        },
+                                        {
+                                            id: 'paste',
+                                            name: 'action.paste',
+                                            icon: 'content_paste',
+                                            click: async () => {
+                                                let text = await navigator.clipboard.readText();
+                                                let components = text.split(/\s+/g);
+                                                if (components.length === this.dimensions) {
+                                                    let vec = components.map(c => {
+                                                        let num = parseFloat(c);
+                                                        return isNaN(num) ? 0 : num;
+                                                    });
+                                                    this.setValue(vec);
+                                                } else {
+                                                    let num = parseFloat(text);
+                                                    if (isNaN(num)) {
+                                                        try {
+                                                            if (typeof NumSlider !== 'undefined' && NumSlider.MolangParser) {
+                                                                num = NumSlider.MolangParser.parse(text, { val: parseFloat(this.value[i]) || 0, n: 0 });
+                                                            } else { num = 0; }
+                                                        } catch (err) { num = 0; }
+                                                    }
+                                                    let newValue = this.value.slice();
+                                                    newValue[i] = num;
+                                                    this.setValue(newValue);
+                                                }
+                                            }
+                                        },
+                                        '_',
+                                        {
+                                            id: 'round',
+                                            name: 'menu.slider.round_value',
+                                            icon: 'percent',
+                                            click: () => {
+                                                let old_val = parseFloat(this.value[i]) || 0;
+                                                let rounded = Math.round(old_val);
+                                                let newValue = this.value.slice();
+                                                newValue[i] = rounded;
+                                                this.setValue(newValue);
+                                            }
+                                        },
+                                        {
+                                            id: 'reset_vector',
+                                            name: 'menu.slider.reset_vector',
+                                            icon: 'replay',
+                                            condition: () => this.dimensions > 1,
+                                            click: () => {
+                                                let defaultArr = Array.isArray(data.default) ? data.default : new Array(this.dimensions).fill(0);
+                                                this.setValue(defaultArr);
+                                            }
+                                        }
+                                    ]).open(event);
+                                }
+                            };
+
+                            rangeInput.addEventListener('contextmenu', showContextMenu);
+                            numberInput.addEventListener('contextmenu', showContextMenu);
+
+                        } else {
+                            // --- MODO: NUMSLIDER MANUAL Y SEGURO ---
+                            let numSliderNode = document.createElement('div');
+                            numSliderNode.className = 'tool wide widget nslide_tool';
+
+                            if (axis.color) {
+                                let css_color = 'uvwxyz'.includes(axis.color.toString()) ? `var(--color-axis-${axis.color})` : axis.color;
+                                numSliderNode.style.setProperty('--corner-color', css_color);
+                                numSliderNode.classList.add('is_colored');
+                            }
+
+                            let nslideInner = document.createElement('div');
+                            nslideInner.className = 'nslide tab_target';
+                            nslideInner.setAttribute('inputmode', 'decimal');
+                            nslideInner.innerText = typeof trimFloatNumber !== 'undefined' ? trimFloatNumber(parseFloat(val) || 0) : val;
+                            numSliderNode.append(nslideInner);
+
+                            let jq_outer = $(numSliderNode);
+                            let jq_inner = $(nslideInner);
+
+                            let defaultVal = data.default ? (Array.isArray(data.default) ? data.default[i] : data.default) : 0;
+                            let sensitivity = 30;
+
+                            let getInterval = (e) => {
+                                let interval = stepVal;
+                                if (e && !e.shiftKey && !e.ctrlOrCmd) return interval;
+                                if (e && e.ctrlOrCmd && e.shiftKey) return interval * 0.025;
+                                if (e && e.ctrlOrCmd) return interval * 0.1;
+                                if (e && e.shiftKey) return interval * 0.25;
+                                return interval;
+                            };
+
+                            let updateCustomSliderValue = (num, dispatch = true) => {
+                                num = parseFloat(num);
+                                if (isNaN(num)) num = 0;
+                                if (data.integer) num = Math.round(num);
+
+                                // Float seguro para prevenir el error "i.toFixed is not a function"
+                                let trimmed = typeof trimFloatNumber !== 'undefined' ? trimFloatNumber(num) : num;
+                                this.value[i] = trimmed;
+                                nslideInner.innerText = trimmed;
+                                if (dispatch) this.change();
+                                if (this.updateResetButtonVisibility) this.updateResetButtonVisibility();
+                            };
+
+                            let last_value = val;
+
+                            jq_inner.on('mousedown touchstart', async (event) => {
+                                if (jq_inner.hasClass('editing')) return;
+                                last_value = parseFloat(this.value[i]) || 0;
+
+                                let drag_event = await new Promise((resolve) => {
+                                    function move(e2) {
+                                        if (!e2.clientX || Math.abs(e2.clientX - event.clientX) > 2) {
+                                            document.removeEventListener('mousemove', move);
+                                            document.removeEventListener('touchmove', move);
+                                            document.removeEventListener('mouseup', stop);
+                                            document.removeEventListener('touchend', stop);
+                                            resolve(e2);
+                                        }
+                                    }
+                                    function stop(e2) {
+                                        document.removeEventListener('mousemove', move);
+                                        document.removeEventListener('touchmove', move);
+                                        document.removeEventListener('mouseup', stop);
+                                        document.removeEventListener('touchend', stop);
+                                        if (event.target == e2.target) startInput();
+                                        resolve(false);
+                                    }
+                                    document.addEventListener('mousemove', move);
+                                    document.addEventListener('touchmove', move);
+                                    document.addEventListener('mouseup', stop);
+                                    document.addEventListener('touchend', stop);
+                                });
+
+                                if (!drag_event) return;
+
+                                if (typeof convertTouchEvent !== 'undefined') convertTouchEvent(drag_event);
+                                let clientX = drag_event.clientX;
+                                let pre = 0;
+                                let sliding_start_pos = clientX;
+                                let move_calls = 0;
+
+                                if (!('touches' in drag_event)) jq_inner.get(0).requestPointerLock();
+
+                                let move = (e) => {
+                                    if (typeof convertTouchEvent !== 'undefined') convertTouchEvent(e);
+                                    if (drag_event && 'touches' in drag_event) {
+                                        clientX = e.clientX;
+                                    } else {
+                                        let limit = move_calls <= 2 ? 1 : 160;
+                                        clientX += Math.clamp(e.movementX, -limit, limit);
+                                    }
+
+                                    let offset = Math.round((clientX - sliding_start_pos) / sensitivity);
+                                    let difference = (offset - pre) * getInterval(e);
+                                    pre = offset;
+
+                                    if (difference) {
+                                        let old_val = parseFloat(this.value[i]) || 0;
+                                        updateCustomSliderValue(old_val + difference);
+
+                                        let new_val = parseFloat(this.value[i]) || 0;
+                                        let display_offset = typeof trimFloatNumber !== 'undefined' ? trimFloatNumber(new_val - last_value) : (new_val - last_value);
+                                        if (typeof Blockbench !== 'undefined' && !Blockbench.isMobile) {
+                                            Blockbench.setStatusBarText(display_offset);
+                                        }
+                                    }
+                                    move_calls++;
+                                };
+
+                                let stop = (e) => {
+                                    document.removeEventListener('mousemove', move);
+                                    document.removeEventListener('touchmove', move);
+                                    document.removeEventListener('mouseup', stop);
+                                    document.removeEventListener('touchend', stop);
+                                    document.exitPointerLock();
+                                    if (typeof Blockbench !== 'undefined') Blockbench.setStatusBarText();
+                                };
+
+                                document.addEventListener('mousemove', move);
+                                document.addEventListener('touchmove', move);
+                                document.addEventListener('mouseup', stop);
+                                document.addEventListener('touchend', stop);
+                            });
+
+                            let startInput = () => {
+                                jq_inner.find('.nslide_arrow').remove();
+                                jq_inner.attr('contenteditable', 'true');
+                                jq_inner.addClass('editing');
+                                jq_inner.focus();
+                                document.execCommand('selectAll');
+                            };
+
+                            let stopInput = () => {
+                                if (!jq_inner.hasClass('editing')) return;
+                                let text = jq_inner.text();
+
+                                if (last_value.toString() !== text) {
+                                    if (text.split(/\s+/g).length === this.dimensions) {
+                                        let components = text.split(/\s+/g);
+                                        components.forEach((inputStr, axisIndex) => {
+                                            let number = parseFloat(inputStr);
+                                            if (isNaN(number)) number = 0;
+
+                                            let targetInput = this.inputs[axisIndex];
+                                            if (targetInput) {
+                                                if (targetInput.is_custom) {
+                                                    let clampedNum = number;
+                                                    if (!targetInput.allowLower && targetInput.min !== undefined && clampedNum < targetInput.min) clampedNum = targetInput.min;
+                                                    if (!targetInput.allowHigher && targetInput.max !== undefined && clampedNum > targetInput.max) clampedNum = targetInput.max;
+                                                    targetInput.range.value = clampedNum;
+                                                    targetInput.number.value = number;
+                                                    this.value[axisIndex] = typeof trimFloatNumber !== 'undefined' ? trimFloatNumber(parseFloat(number) || 0) : number;
+                                                    if (targetInput.updateVisuals) targetInput.updateVisuals(number);
+                                                } else {
+                                                    targetInput.updateCustomSliderValue(number, false);
+                                                }
+                                            }
+                                        });
+                                        this.change();
+                                    } else {
+                                        text = text.replace(/,(?=\d+$)/, '.');
+                                        let num = parseFloat(text);
+                                        if (isNaN(num)) {
+                                            try {
+                                                if (typeof NumSlider !== 'undefined' && NumSlider.MolangParser) {
+                                                    num = NumSlider.MolangParser.parse(text, { val: parseFloat(this.value[i]) || 0, n: 0 });
+                                                } else { num = 0; }
+                                            } catch (err) { num = 0; }
+                                        }
+                                        updateCustomSliderValue(num);
+                                    }
+                                }
+                                jq_inner.removeClass('editing');
+                                jq_inner.attr('contenteditable', 'false');
+                                nslideInner.innerText = typeof trimFloatNumber !== 'undefined' ? trimFloatNumber(parseFloat(this.value[i]) || 0) : this.value[i];
+                            };
+
+                            jq_inner
+                                .on('keypress', function (e) {
+                                    if (e.keyCode === 10 || e.keyCode === 13) {
+                                        e.preventDefault();
+                                        stopInput();
+                                    }
+                                })
+                                .on('keyup', (e) => {
+                                    if (e.keyCode !== 10 && e.keyCode !== 13) { last_value = parseFloat(this.value[i]) || 0; }
+                                    if (e.keyCode === 27) {
+                                        if (!jq_inner.hasClass('editing')) return;
+                                        e.preventDefault();
+                                        jq_inner.removeClass('editing');
+                                        jq_inner.attr('contenteditable', 'false');
+                                        nslideInner.innerText = typeof trimFloatNumber !== 'undefined' ? trimFloatNumber(parseFloat(this.value[i]) || 0) : this.value[i];
+                                    }
+                                })
+                                .on('focusout', function () { stopInput(); })
+                                .on('dblclick', function (event) {
+                                    if (event.target != this) return;
+                                    jq_inner.text(defaultVal.toString());
+                                    stopInput();
+                                })
+                                .on('contextmenu', (event) => {
+                                    event.preventDefault();
+                                    if (typeof Menu !== 'undefined') {
+                                        new Menu([
+                                            '_',
+                                            {
+                                                id: 'copy',
+                                                name: 'action.copy',
+                                                icon: 'content_copy',
+                                                click: () => {
+                                                    if (typeof Clipbench !== 'undefined') Clipbench.setText(this.value[i].toString());
+                                                }
+                                            },
+                                            {
+                                                id: 'copy_vector',
+                                                name: 'menu.text_edit.copy_vector',
+                                                icon: 'content_copy',
+                                                condition: () => this.dimensions > 1,
+                                                click: () => {
+                                                    let text = this.value.map(v => typeof trimFloatNumber !== 'undefined' ? trimFloatNumber(v) : v).join(' ');
+                                                    if (typeof Clipbench !== 'undefined') Clipbench.setText(text);
+                                                }
+                                            },
+                                            {
+                                                id: 'paste',
+                                                name: 'action.paste',
+                                                icon: 'content_paste',
+                                                click: async () => {
+                                                    let text = await navigator.clipboard.readText();
+                                                    let components = text.split(/\s+/g);
+                                                    if (components.length === this.dimensions) {
+                                                        let vec = components.map(c => {
+                                                            let num = parseFloat(c);
+                                                            return isNaN(num) ? 0 : num;
+                                                        });
+                                                        this.setValue(vec);
+                                                    } else {
+                                                        let num = parseFloat(text);
+                                                        if (isNaN(num)) {
+                                                            try {
+                                                                if (typeof NumSlider !== 'undefined' && NumSlider.MolangParser) {
+                                                                    num = NumSlider.MolangParser.parse(text, { val: parseFloat(this.value[i]) || 0, n: 0 });
+                                                                } else { num = 0; }
+                                                            } catch (err) { num = 0; }
+                                                        }
+                                                        updateCustomSliderValue(num);
+                                                    }
+                                                }
+                                            },
+                                            '_',
+                                            {
+                                                id: 'round',
+                                                name: 'menu.slider.round_value',
+                                                icon: 'percent',
+                                                click: () => {
+                                                    let old_val = parseFloat(this.value[i]) || 0;
+                                                    updateCustomSliderValue(Math.round(old_val));
+                                                }
+                                            },
+                                            {
+                                                id: 'reset_vector',
+                                                name: 'menu.slider.reset_vector',
+                                                icon: 'replay',
+                                                condition: () => this.dimensions > 1,
+                                                click: () => {
+                                                    let defaultArr = Array.isArray(data.default) ? data.default : new Array(this.dimensions).fill(0);
+                                                    this.setValue(defaultArr);
+                                                }
+                                            }
+                                        ]).open(event);
+                                    }
+                                });
+
+                            jq_outer
+                                .on('mouseenter', () => {
+                                    jq_outer.append(
+                                        '<div class="nslide_arrow na_left" ><i class="material-icons">navigate_before</i></div>' +
+                                        '<div class="nslide_arrow na_right"><i class="material-icons">navigate_next</i></div>'
+                                    );
+                                    let n = Math.clamp(numSliderNode.clientWidth / 2 - 22, 6, 1000);
+                                    jq_outer.find('.nslide_arrow.na_left').click((e) => {
+                                        let old_val = parseFloat(this.value[i]) || 0;
+                                        updateCustomSliderValue(old_val - getInterval(e));
+                                    }).css('margin-left', (-n - 22) + 'px');
+
+                                    jq_outer.find('.nslide_arrow.na_right').click((e) => {
+                                        let old_val = parseFloat(this.value[i]) || 0;
+                                        updateCustomSliderValue(old_val + getInterval(e));
+                                    }).css('margin-left', (n) + 'px');
+                                })
+                                .on('mouseleave', () => {
+                                    jq_outer.find('.nslide_arrow').remove();
+                                });
+
+                            if (rowContainer) {
+                                numSliderNode.style.height = '24px'; // Emparejarlo visualmente con el numero input en la fila
+                                numSliderNode.style.flex = '1 1 auto';
+                                rowContainer.append(numSliderNode);
+                                this.inputs_container.append(rowContainer);
+                            } else {
+                                numSliderNode.style.flex = '1 1 0';
+                                numSliderNode.style.minWidth = '0';
+                                numSliderNode.style.width = 'auto';
+                                this.inputs_container.append(numSliderNode);
+                            }
+
+                            this.inputs.push({ is_custom: false, updateCustomSliderValue });
+                        }
+                    }
+                }
+
+                getValue() {
+                    return this.value.map(val => parseFloat(val) || 0);
+                }
+
+                setValue(arr, dispatch = true) {
+                    for (let i = 0; i < this.dimensions; i++) {
+                        let val = arr[i] !== undefined ? arr[i] : 0;
+                        val = parseFloat(val) || 0;
+                        this.value[i] = typeof trimFloatNumber !== 'undefined' ? trimFloatNumber(val) : val;
+
+                        let inputObj = this.inputs[i];
+                        if (!inputObj) continue;
+
+                        if (inputObj.is_custom) {
+                            let sliderNum = val;
+                            if (!inputObj.allowLower && inputObj.min !== undefined && sliderNum < inputObj.min) sliderNum = inputObj.min;
+                            if (!inputObj.allowHigher && inputObj.max !== undefined && sliderNum > inputObj.max) sliderNum = inputObj.max;
+
+                            inputObj.range.value = sliderNum;
+                            inputObj.number.value = val;
+                            if (inputObj.updateVisuals) inputObj.updateVisuals(val);
+                        } else {
+                            inputObj.updateCustomSliderValue(val, false);
+                        }
+                    }
+                    if (dispatch) this.change();
+                    if (this.updateResetButtonVisibility) this.updateResetButtonVisibility();
+                }
+
+                getDefault() {
+                    return new Array(this.dimensions).fill(0);
+                }
+            };
+
             Blockbench.addCSS(
                 `.compact_dropdown_select {
                     display: flex !important;

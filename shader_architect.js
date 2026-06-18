@@ -570,11 +570,23 @@
     const MATERIAL_INSTANCES_UNDO_ASPECT = 'sa_material_instances';
     const pluginStyle = /*css*/`
     /* Dialog Layout Restructuring for fixed window with internal scrollbars */
+    #sa_material_studio_dialog {
+        display: flex !important;
+        flex-direction: column !important;
+    }
+    #sa_material_studio_dialog .dialog_wrapper {
+        flex-grow: 1 !important;
+        display: flex !important;
+        flex-direction: column !important;
+        min-height: 0 !important;
+        width: 100% !important;
+    }
     #sa_material_studio_dialog .dialog_content {
         background: var(--color-back);
         color: var(--color-text);
         padding: 0px !important;
-        height: 100%;
+        flex-grow: 1 !important;  /* Reemplaza height: 100% */
+        min-height: 0 !important; /* Vital para que el scroll interior funcione */
         display: flex;
         flex-direction: column;
         overflow: hidden !important;
@@ -652,18 +664,19 @@
         display: flex !important;
         flex-direction: row !important;
         align-items: stretch !important;
-        height: 100% !important;
+        flex-grow: 1 !important; /* Creado para llenar el espacio flex */
+        min-height: 0 !important; /* Previene desbordamiento oculto */
         width: 100% !important;
         overflow: auto !important;
         position: relative !important;
-        background: #1e1e1e;
+        background: var(--color-back);
         box-sizing: border-box;
         tab-size: 4;
     }
     .prism-editor__container {
         position: relative !important;
         flex-grow: 1 !important;
-        min-height: 100% !important;
+        min-height: max-content !important; /* FIX: Permite que el contenedor crezca con el scroll */
         height: auto !important;
         box-sizing: border-box;
         overflow: visible !important;
@@ -706,7 +719,7 @@
     }
     .prism-editor__line-numbers {
         height: auto !important;
-        min-height: 100% !important;
+        min-height: max-content !important; /* FIX: Evita que los números se corten al hacer scroll */
         overflow: hidden !important;
         flex-shrink: 0 !important;
         padding: 10px 8px 10px 8px !important;
@@ -822,7 +835,11 @@
         font-family: 'Consolas', 'Courier New', monospace;
         font-size: 13px;
         line-height: 20px;
-        height: 100%;
+        /* FIX: Dejar que Flexbox controle el tamaño en lugar de height: 100% */
+        flex-grow: 1;
+        display: flex;
+        flex-direction: column;
+        min-height: 0 !important;
     }
 
     .glsl-editor-instance textarea {
@@ -864,12 +881,18 @@
     }
     .sa-autocomplete-item .type-badge {
         font-size: 0.8em;
-        opacity: 0.6;
+        opacity: 0.8;
         padding: 1px 4px;
         border-radius: 3px;
         background: rgba(255, 255, 255, 0.15);
         color: #f8f8f2;
     }
+    .sa-autocomplete-item .type-badge.type { background: rgba(189, 147, 249, 0.2); color: #bd93f9; border: 1px solid rgba(189, 147, 249, 0.4); opacity: 1; }
+    .sa-autocomplete-item .type-badge.keyword { background: rgba(255, 121, 198, 0.2); color: #ff79c6; border: 1px solid rgba(255, 121, 198, 0.4); opacity: 1; }
+    .sa-autocomplete-item .type-badge.builtin { background: rgba(80, 250, 123, 0.2); color: #50fa7b; border: 1px solid rgba(80, 250, 123, 0.4); opacity: 1; }
+    .sa-autocomplete-item .type-badge.variable { background: rgba(255, 184, 108, 0.2); color: #ffb86c; border: 1px solid rgba(255, 184, 108, 0.4); opacity: 1; }
+    .sa-autocomplete-item .type-badge.uniform { background: rgba(139, 233, 253, 0.2); color: #8be9fd; border: 1px solid rgba(139, 233, 253, 0.4); opacity: 1; }
+    .sa-autocomplete-item .type-badge.function { background: rgba(255, 85, 85, 0.2); color: #ff5555; border: 1px solid rgba(255, 85, 85, 0.4); opacity: 1; }
 
     /* Problems Console styling */
     .sa-problems-console {
@@ -1156,6 +1179,15 @@
             this.uniforms = props.uniforms || {};
             this.isCustom = props.isCustom !== undefined ? props.isCustom : true;
             this.enableShadows = props.enableShadows !== undefined ? props.enableShadows : false;
+
+            if (!this.uniforms.map) {
+                this.uniforms.map = { type: 'sampler2D', value: null, expose: true, repeat: false };
+            } else {
+                this.uniforms.map.type = 'sampler2D';
+                if (this.uniforms.map.repeat === undefined) {
+                    this.uniforms.map.repeat = false;
+                }
+            }
         }
 
         // Serializer for the JSON format
@@ -1473,7 +1505,7 @@
                 });
                 this.syncMaterialInstancesFromProject();
                 ShaderEngine.updateAllCubes('undo_material_instances');
-                Blockbench.dispatchEvent('shader_architect_material_instances_changed', { undo: true });
+                Blockbench.dispatchEvent('shader_architect_material_instances_changed', { cause: 'undo', undo: true });
             });
 
             this.materialInstancesUndoHooks = {
@@ -1522,7 +1554,7 @@
                 const json = JSON.stringify(this.serializeMaterialInstances());
                 const saved = this.setProjectMaterialInstancesJSON(json, project, options);
                 if (saved && options.dispatch !== false && typeof Blockbench !== 'undefined') {
-                    Blockbench.dispatchEvent('shader_architect_material_instances_changed', {});
+                    Blockbench.dispatchEvent('shader_architect_material_instances_changed', { cause: options.cause ? options.cause : 'save_instances' });
                 }
                 return saved;
             } catch (ignore) {
@@ -2941,6 +2973,11 @@ void main() {
 
             const createLightflowUniforms = (withShadowBinding = false) => {
                 const uniforms = {
+                    "map": {
+                        type: "sampler2D",
+                        repeat: true,
+                        expose: true
+                    },
                     "uClampLighting": {
                         type: "bool",
                         value: false,
@@ -3172,6 +3209,14 @@ void main() {
                         value: new THREE.Vector3(1, 1, 1),
                         expose: true
                     },
+                    "TILING": {
+                        type: "vec2",
+                        value: new THREE.Vector2(1, 1),
+                        expose: true,
+                        min: 0.1,
+                        max: 10.0,
+                        step: 0.1
+                    },
                     "TEXTURE_SIZE": {
                         type: "vec2",
                         value: new THREE.Vector2(16, 16),
@@ -3292,6 +3337,7 @@ void main() {
 }`,
                 fragment: `uniform sampler2D map;
 uniform vec3 LIGHTCOLOR;
+uniform vec2 TILING;
 
 uniform vec3 uLightPos[16];
 uniform vec3 uLightDir[16];
@@ -3536,7 +3582,7 @@ vec3 applyToneMapping(vec3 color) {
 }
 
 void main() {
-    vec4 texel = texture2D(map, vUv);
+    vec4 texel = texture2D(map, vUv * TILING);
 
     if (texel.a < 0.01) discard;
 
@@ -3683,6 +3729,7 @@ void main() {
 
 uniform sampler2D map;
 uniform vec3 LIGHTCOLOR;
+uniform vec2 TILING;
 
 uniform vec3 uLightPos[16];
 uniform vec3 uLightDir[16];
@@ -4033,7 +4080,7 @@ vec3 applyToneMapping(vec3 color) {
 }
 
 void main() {
-    vec4 texel = texture2D(map, vUv);
+    vec4 texel = texture2D(map, vUv * TILING);
 
     if (texel.a < 0.01) discard;
 
@@ -4168,6 +4215,7 @@ void main() {
                     uniform bool EMISSIVE; 
                     uniform vec3 LIGHTCOLOR;
                     uniform float AMBIENT_INTENSITY;
+                    uniform vec2 TILING;
 
                     varying vec2 vUv; 
                     varying float light; 
@@ -4246,7 +4294,7 @@ void main() {
 
                     // 3. FINALMENTE EL MAIN
                     void main() {
-                        vec4 color = texture2D(map, vUv);
+                        vec4 color = texture2D(map, vUv * TILING);
                         if(color.a < 0.01) discard;
 
                         // Aquí puedes alterar las UVs de las que leerás la sombra
@@ -4276,7 +4324,8 @@ void main() {
                     "SHADE": { type: "bool", value: true, expose: true },
                     "LIGHTSIDE": { type: "int", value: 0, expose: true, min: 0, max: 5, step: 1, allow_higher: false, allow_lower: false },
                     "EMISSIVE": { type: "bool", value: false, expose: true },
-                    "AMBIENT_INTENSITY": { type: "float", value: 0.4, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false }
+                    "AMBIENT_INTENSITY": { type: "float", value: 0.4, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
+                    "TILING": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true, min: 0.1, max: 10.0, step: 0.1 }
                     // Se han eliminado los uniforms de SHADOW_SNAP, SHADOW_SMOOTH y RESOLUTION_FACTOR
                 },
                 enableShadows: true
@@ -5335,6 +5384,16 @@ void main() {
                     const def = shader.uniforms[key];
                     let val = def.value;
 
+                    if (def.type === 'sampler2D' && val && val.isTexture) {
+                        const repeat = !!def.repeat;
+                        const wrapMode = repeat ? THREE.RepeatWrapping : THREE.ClampToEdgeWrapping;
+                        if (val.wrapS !== wrapMode || val.wrapT !== wrapMode) {
+                            val.wrapS = wrapMode;
+                            val.wrapT = wrapMode;
+                            val.needsUpdate = true;
+                        }
+                    }
+
                     if (isSystemUniform(key)) {
                         val = resolveSystemUniformValue(key, cube, val);
                         const dynamicKeys = ['shade', 'lightside', 'lightcolor', 'uambient', 'uambientcolor', 'emissive'];
@@ -5358,6 +5417,17 @@ void main() {
                         };
                     } else {
                         targetMaterial.uniforms[key].value = val;
+                    }
+                }
+
+                const mapDef = shader.uniforms.map;
+                if (resolvedMap && mapDef) {
+                    const repeat = !!mapDef.repeat;
+                    const wrapMode = repeat ? THREE.RepeatWrapping : THREE.ClampToEdgeWrapping;
+                    if (resolvedMap.wrapS !== wrapMode || resolvedMap.wrapT !== wrapMode) {
+                        resolvedMap.wrapS = wrapMode;
+                        resolvedMap.wrapT = wrapMode;
+                        resolvedMap.needsUpdate = true;
                     }
                 }
 
@@ -5921,6 +5991,14 @@ void main() {
             resizable: true,
             width: Math.min(1600, window.innerWidth - 60) || 1400,
             height: Math.min(1100, window.innerHeight - 60) || 900,
+            onOpen() {
+                // FIX: Inyectamos la altura manualmente apenas el diálogo se abre en el DOM
+                let h = Math.min(1100, window.innerHeight - 60) || 900;
+                this.object.style.height = h + 'px';
+                if (this.content_vue) {
+                    this.content_vue.setupEditorEvents();
+                }
+            },
             component: {
                 data() {
                     return {
@@ -5935,6 +6013,12 @@ void main() {
                         newUniformStep: null,
                         newUniformAllowHigher: true,
                         newUniformAllowLower: true,
+                        // Per-channel range for vec2 / vec3
+                        newUniformChannels: {
+                            x: { min: null, max: null, step: null, allow_higher: true, allow_lower: true, enabled: false },
+                            y: { min: null, max: null, step: null, allow_higher: true, allow_lower: true, enabled: false },
+                            z: { min: null, max: null, step: null, allow_higher: true, allow_lower: true, enabled: false }
+                        },
                         expandedUniforms: {},
                         newTransLang: {},
                         newTransVal: {},
@@ -6074,6 +6158,24 @@ void main() {
                             if (this.newUniformStep !== null && this.newUniformStep !== '') def.step = Number(this.newUniformStep);
                             def.allow_higher = this.newUniformAllowHigher;
                             def.allow_lower = this.newUniformAllowLower;
+                        } else if (this.newUniformType === 'vec2' || this.newUniformType === 'vec3') {
+                            const axes = this.newUniformType === 'vec2' ? ['x', 'y'] : ['x', 'y', 'z'];
+                            const channels = {};
+                            let hasAny = false;
+                            axes.forEach(axis => {
+                                const ch = this.newUniformChannels[axis];
+                                if (ch.enabled) {
+                                    hasAny = true;
+                                    const c = {};
+                                    if (ch.min !== null && ch.min !== '') c.min = Number(ch.min);
+                                    if (ch.max !== null && ch.max !== '') c.max = Number(ch.max);
+                                    if (ch.step !== null && ch.step !== '') c.step = Number(ch.step);
+                                    c.allow_higher = ch.allow_higher;
+                                    c.allow_lower = ch.allow_lower;
+                                    channels[axis] = c;
+                                }
+                            });
+                            if (hasAny) def.channels = channels;
                         }
 
                         this.$set(this.activeMat.uniforms, safeVar, def);
@@ -6124,7 +6226,7 @@ void main() {
                     },
                     preprocessShader(code, isVertex) {
                         if (typeof THREE === 'undefined') return { code, lineMap: (line => line) };
-                        
+
                         let prefix = `precision highp float; precision highp int; uniform mat4 modelMatrix; uniform mat4 modelViewMatrix; uniform mat4 projectionMatrix; uniform mat4 viewMatrix; uniform mat3 normalMatrix; uniform vec3 cameraPosition; `;
                         if (isVertex) {
                             prefix += `attribute vec3 position; attribute vec3 normal; attribute vec2 uv; `;
@@ -6137,7 +6239,7 @@ void main() {
                         // First pass: extract any #version or #extension directives to prepend before the prefix
                         let headerLines = [];
                         let bodyLines = [];
-                        
+
                         lines.forEach((line, idx) => {
                             let trimmed = line.trim();
                             if (trimmed.startsWith('#version') || trimmed.startsWith('#extension')) {
@@ -6185,7 +6287,7 @@ void main() {
                     validateShader(showFeedback = true) {
                         if (!this.activeMat) return;
                         this.validating = true;
-                        
+
                         try {
                             const canvas = document.createElement('canvas');
                             const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
@@ -6321,17 +6423,24 @@ void main() {
 
                     // Editor keys and autocomplete
                     setupEditorEvents() {
-                        this.$nextTick(() => {
-                            const textarea = this.$el.querySelector('.prism-editor__textarea');
-                            if (!textarea) return;
+                        setTimeout(() => {
+                            if (!this.$el) return;
 
-                            if (textarea.dataset.saInitialized) return;
-                            textarea.dataset.saInitialized = 'true';
+                            // FIX: Apuntamos a la clase correcta según el DOM real (un <pre> editable)
+                            const editorElement = this.$el.querySelector('.prism-editor__code') || this.$el.querySelector('[contenteditable="true"]');
 
-                            textarea.addEventListener('keydown', this.handleEditorKeyDown, true);
-                            textarea.addEventListener('input', this.handleEditorInput);
-                            textarea.addEventListener('click', this.closeAutocomplete);
-                            textarea.addEventListener('blur', () => {
+                            console.log("Editor Element Encontrado:", editorElement);
+
+                            if (!editorElement) return;
+
+                            // Evitamos asignar los eventos más de una vez
+                            if (editorElement.dataset.saInitialized) return;
+                            editorElement.dataset.saInitialized = 'true';
+
+                            editorElement.addEventListener('keydown', this.handleEditorKeyDown, true);
+                            editorElement.addEventListener('input', this.handleEditorInput);
+                            editorElement.addEventListener('click', this.closeAutocomplete);
+                            editorElement.addEventListener('blur', () => {
                                 setTimeout(() => {
                                     this.closeAutocomplete();
                                 }, 250);
@@ -6343,27 +6452,29 @@ void main() {
                                     this.closeAutocomplete();
                                 }, { passive: true });
                             }
-                        });
+                        }, 150);
                     },
                     handleEditorKeyDown(e) {
-                        const textarea = e.target;
+                        const editorElement = e.target;
 
                         if (e.key === 'Tab') {
                             if (this.autocomplete.show && this.autocomplete.list.length > 0) {
                                 e.preventDefault();
                                 e.stopPropagation();
-                                this.acceptAutocomplete(textarea);
+                                this.acceptAutocomplete(editorElement);
                                 return;
                             }
 
-                            // Single or multi-line indent
                             e.preventDefault();
                             e.stopPropagation();
 
-                            const start = textarea.selectionStart;
-                            const end = textarea.selectionEnd;
-                            const text = textarea.value;
+                            const { start, end } = this.getSelectionRange(editorElement);
+                            const text = this.currentShaderCode || "";
                             const spaces = "    ";
+
+                            let newStart = start;
+                            let newEnd = end;
+                            let newText = '';
 
                             if (start !== end) {
                                 const lineStart = text.lastIndexOf('\n', start) + 1;
@@ -6372,30 +6483,31 @@ void main() {
 
                                 const selectedText = text.substring(lineStart, lineEnd);
                                 const lines = selectedText.split('\n');
-                                let newText = '';
 
                                 if (e.shiftKey) {
-                                    // Unindent
-                                    newText = lines.map(line => {
-                                        if (line.startsWith(spaces)) return line.substring(4);
-                                        if (line.startsWith('\t')) return line.substring(1);
+                                    let removedChars = 0;
+                                    const modifiedLines = lines.map(line => {
+                                        if (line.startsWith(spaces)) { removedChars += 4; return line.substring(4); }
+                                        if (line.startsWith('\t')) { removedChars += 1; return line.substring(1); }
                                         let leading = line.match(/^ +/);
                                         if (leading) {
-                                            return line.substring(Math.min(leading[0].length, 4));
+                                            let rem = Math.min(leading[0].length, 4);
+                                            removedChars += rem;
+                                            return line.substring(rem);
                                         }
                                         return line;
-                                    }).join('\n');
+                                    });
+                                    newText = text.substring(0, lineStart) + modifiedLines.join('\n') + text.substring(lineEnd);
+                                    newStart = start + (e.shiftKey ? -4 : 4);
+                                    newEnd = start + modifiedLines.join('\n').length - (selectedText.length - (end - start));
                                 } else {
-                                    // Indent
-                                    newText = lines.map(line => spaces + line).join('\n');
+                                    const modifiedLines = lines.map(line => spaces + line).join('\n');
+                                    newText = text.substring(0, lineStart) + modifiedLines + text.substring(lineEnd);
+                                    newStart = start + 4;
+                                    newEnd = start + modifiedLines.length - (selectedText.length - (end - start));
                                 }
-
-                                textarea.value = text.substring(0, lineStart) + newText + text.substring(lineEnd);
-                                textarea.selectionStart = start + (e.shiftKey ? -4 : 4);
-                                textarea.selectionEnd = start + newText.length - (selectedText.length - (end - start));
                             } else {
                                 if (e.shiftKey) {
-                                    // Shift+Tab: Unindent current line
                                     const lineStart = text.lastIndexOf('\n', start) + 1;
                                     const lineText = text.substring(lineStart, start);
                                     let removeCount = 0;
@@ -6406,110 +6518,277 @@ void main() {
                                         if (leading) removeCount = Math.min(leading[0].length, 4);
                                     }
                                     if (removeCount > 0) {
-                                        textarea.value = text.substring(0, lineStart) + text.substring(lineStart + removeCount);
-                                        textarea.selectionStart = textarea.selectionEnd = start - removeCount;
+                                        newText = text.substring(0, lineStart) + text.substring(lineStart + removeCount);
+                                        newStart = newEnd = start - removeCount;
+                                    } else {
+                                        newText = text;
                                     }
                                 } else {
-                                    // Insert 4 spaces
-                                    textarea.value = text.substring(0, start) + spaces + text.substring(end);
-                                    textarea.selectionStart = textarea.selectionEnd = start + 4;
+                                    newText = text.substring(0, start) + spaces + text.substring(end);
+                                    newStart = newEnd = start + 4;
                                 }
                             }
 
-                            this.currentShaderCode = textarea.value;
+                            this.currentShaderCode = newText;
+
+                            // Sincronizar el cursor asegurando la última posición
+                            this._lastKnownCursor = { start: newStart, end: newEnd };
+                            this.$nextTick(() => {
+                                this.setSelectionRange(editorElement, newStart, newEnd);
+                                editorElement.focus();
+                            });
+
                             return;
                         }
 
                         if (this.autocomplete.show) {
                             if (e.key === 'ArrowDown') {
-                                e.preventDefault();
-                                e.stopPropagation();
+                                e.preventDefault(); e.stopPropagation();
                                 this.autocomplete.index = (this.autocomplete.index + 1) % this.autocomplete.list.length;
                                 return;
                             }
                             if (e.key === 'ArrowUp') {
-                                e.preventDefault();
-                                e.stopPropagation();
+                                e.preventDefault(); e.stopPropagation();
                                 this.autocomplete.index = (this.autocomplete.index - 1 + this.autocomplete.list.length) % this.autocomplete.list.length;
                                 return;
                             }
                             if (e.key === 'Enter') {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                this.acceptAutocomplete(textarea);
+                                e.preventDefault(); e.stopPropagation();
+                                this.acceptAutocomplete(editorElement);
                                 return;
                             }
                             if (e.key === 'Escape') {
-                                e.preventDefault();
-                                e.stopPropagation();
+                                e.preventDefault(); e.stopPropagation();
                                 this.closeAutocomplete();
                                 return;
                             }
                         }
-                    },
-                    handleEditorInput(e) {
-                        const textarea = e.target;
-                        const pos = textarea.selectionStart;
-                        const text = textarea.value;
 
-                        const textBefore = text.slice(0, pos);
+                        if (e.key === 'Enter' && !this.autocomplete.show) {
+                            e.preventDefault();
+                            e.stopPropagation();
+
+                            const { start, end } = this.getSelectionRange(editorElement);
+                            const text = this.currentShaderCode || "";
+
+                            const textBefore = text.substring(0, start);
+                            const lineStart = textBefore.lastIndexOf('\n') + 1;
+                            const currentLine = textBefore.substring(lineStart);
+                            const indentMatch = currentLine.match(/^[ \t]+/);
+                            const indent = indentMatch ? indentMatch[0] : "";
+
+                            const newText = text.substring(0, start) + '\n' + indent + text.substring(end);
+                            this.currentShaderCode = newText;
+
+                            const newPos = start + 1 + indent.length;
+
+                            // Sincronizar el cursor asegurando la última posición
+                            this._lastKnownCursor = { start: newPos, end: newPos };
+                            this.$nextTick(() => {
+                                this.setSelectionRange(editorElement, newPos, newPos);
+                                editorElement.focus();
+                            });
+                            return;
+                        }
+                    },
+
+                    // Extracción ultra precisa del cursor (soporta offsets entre nodos)
+                    getSelectionRange(element) {
+                        let start = 0, end = 0;
+                        const sel = window.getSelection();
+                        if (!sel || sel.rangeCount === 0) return { start, end };
+
+                        const range = sel.getRangeAt(0);
+                        let charIndex = 0;
+                        let foundStart = false;
+                        let foundEnd = false;
+
+                        function traverse(node) {
+                            if (foundStart && foundEnd) return;
+
+                            if (node === range.startContainer) {
+                                start = charIndex + (node.nodeType === 3 ? range.startOffset : 0);
+                                foundStart = true;
+                            }
+                            if (node === range.endContainer) {
+                                end = charIndex + (node.nodeType === 3 ? range.endOffset : 0);
+                                foundEnd = true;
+                            }
+
+                            if (node.nodeType === 3) {
+                                charIndex += node.length;
+                            } else if (node.nodeName === 'BR') {
+                                charIndex += 1;
+                            } else {
+                                // Revisar si el rango apunta a los índices hijos del contenedor
+                                for (let i = 0; i < node.childNodes.length; i++) {
+                                    if (!foundStart && node === range.startContainer && i === range.startOffset) {
+                                        start = charIndex; foundStart = true;
+                                    }
+                                    if (!foundEnd && node === range.endContainer && i === range.endOffset) {
+                                        end = charIndex; foundEnd = true;
+                                    }
+                                    traverse(node.childNodes[i]);
+                                }
+                                // Atrapar offset que cae justo al final de todos los hijos
+                                if (!foundStart && node === range.startContainer && range.startOffset === node.childNodes.length) {
+                                    start = charIndex; foundStart = true;
+                                }
+                                if (!foundEnd && node === range.endContainer && range.endOffset === node.childNodes.length) {
+                                    end = charIndex; foundEnd = true;
+                                }
+                            }
+                        }
+
+                        traverse(element);
+                        return { start, end };
+                    },
+
+                    // Restauración ultra precisa simétrica
+                    setSelectionRange(element, start, end) {
+                        const sel = window.getSelection();
+                        if (!sel) return;
+
+                        const range = document.createRange();
+                        let charIndex = 0;
+                        let startNode = null, startOffset = 0;
+                        let endNode = null, endOffset = 0;
+
+                        function traverse(node) {
+                            if (startNode && endNode) return;
+
+                            if (node.nodeType === 3) {
+                                const nextCharIndex = charIndex + node.length;
+                                if (!startNode && start >= charIndex && start <= nextCharIndex) {
+                                    startNode = node; startOffset = start - charIndex;
+                                }
+                                if (!endNode && end >= charIndex && end <= nextCharIndex) {
+                                    endNode = node; endOffset = end - charIndex;
+                                }
+                                charIndex = nextCharIndex;
+                            } else if (node.nodeName === 'BR') {
+                                if (!startNode && start === charIndex) {
+                                    startNode = node.parentNode; startOffset = Array.prototype.indexOf.call(node.parentNode.childNodes, node);
+                                }
+                                if (!endNode && end === charIndex) {
+                                    endNode = node.parentNode; endOffset = Array.prototype.indexOf.call(node.parentNode.childNodes, node);
+                                }
+                                charIndex += 1;
+                            } else {
+                                for (let i = 0; i < node.childNodes.length; i++) {
+                                    traverse(node.childNodes[i]);
+                                }
+                                // Si el cursor cae al final exacto de un contenedor sin texto adicional
+                                if (!startNode && start === charIndex) {
+                                    startNode = node; startOffset = node.childNodes.length;
+                                }
+                                if (!endNode && end === charIndex) {
+                                    endNode = node; endOffset = node.childNodes.length;
+                                }
+                            }
+                        }
+
+                        traverse(element);
+
+                        if (!startNode) { startNode = element; startOffset = element.childNodes.length; }
+                        if (!endNode) { endNode = startNode; endOffset = startOffset; }
+
+                        try {
+                            range.setStart(startNode, startOffset);
+                            range.setEnd(endNode, endOffset);
+                            sel.removeAllRanges();
+                            sel.addRange(range);
+                        } catch (e) { }
+                    },
+
+                    handleEditorInput(e) {
+                        const editorElement = e.target;
+                        const currentSelection = this.getSelectionRange(editorElement);
+
+                        // Guardar SIEMPRE la última posición absoluta digitada nativamente
+                        this._lastKnownCursor = currentSelection;
+
+                        const text = this.currentShaderCode || "";
+                        const textBefore = text.slice(0, currentSelection.start);
                         const lastWordMatch = textBefore.match(/[a-zA-Z0-9_]+$/);
 
-                        if (!lastWordMatch) {
-                            this.closeAutocomplete();
-                            return;
-                        }
+                        let matches = [];
+                        let word = '';
 
-                        const word = lastWordMatch[0];
-                        if (word.length < 1) {
-                            this.closeAutocomplete();
-                            return;
+                        if (lastWordMatch && lastWordMatch[0].length >= 1) {
+                            word = lastWordMatch[0];
+                            const suggestions = this.getAutocompleteSuggestions();
+                            // Se oculta la sugerencia si ya escribió la palabra completa exacta
+                            matches = suggestions.filter(s => s.toLowerCase().startsWith(word.toLowerCase()) && s !== word);
                         }
-
-                        const suggestions = this.getAutocompleteSuggestions();
-                        const matches = suggestions.filter(s => s.toLowerCase().startsWith(word.toLowerCase()) && s !== word);
 
                         if (matches.length === 0) {
                             this.closeAutocomplete();
-                            return;
+                        } else {
+                            const lines = textBefore.split('\n');
+                            const row = lines.length - 1;
+                            const col = lines[row].length;
+
+                            const charWidth = 7.7;
+                            const lineHeight = 20;
+                            const gutterWidth = 42;
+
+                            const wrapper = this.$el.querySelector('.prism-editor-wrapper');
+                            const scrollTop = wrapper ? wrapper.scrollTop : 0;
+                            const scrollLeft = wrapper ? wrapper.scrollLeft : 0;
+
+                            const top = (row + 1) * lineHeight + 4 - scrollTop;
+                            const left = col * charWidth + gutterWidth - scrollLeft;
+
+                            this.autocomplete = {
+                                show: true,
+                                list: matches.slice(0, 10),
+                                index: 0,
+                                x: left,
+                                y: top,
+                                textBefore: textBefore.slice(0, textBefore.length - word.length),
+                                word: word
+                            };
                         }
 
-                        // Monospace caret coordinate estimation
-                        const lines = textBefore.split('\n');
-                        const row = lines.length - 1;
-                        const col = lines[row].length;
+                        // ANTI-CARRERA (Debounce del cursor): 
+                        // Cancelar cualquier intento anterior de restaurar el cursor si el usuario sigue tecleando
+                        if (this._cursorRestoreTimeout) {
+                            clearTimeout(this._cursorRestoreTimeout);
+                        }
 
-                        const charWidth = 7.7;
-                        const lineHeight = 20;
-                        const gutterWidth = 42;
+                        // Usar un timeout mínimo para restaurar SOLO si Vue o Prism rompieron el cursor real
+                        this._cursorRestoreTimeout = setTimeout(() => {
+                            if (!this._lastKnownCursor) return;
 
-                        const wrapper = this.$el.querySelector('.prism-editor-wrapper');
-                        const scrollTop = wrapper ? wrapper.scrollTop : 0;
-                        const scrollLeft = wrapper ? wrapper.scrollLeft : 0;
+                            const actualSelection = this.getSelectionRange(editorElement);
 
-                        const top = (row + 1) * lineHeight + 4 - scrollTop;
-                        const left = col * charWidth + gutterWidth - scrollLeft;
-
-                        this.autocomplete = {
-                            show: true,
-                            list: matches.slice(0, 10),
-                            index: 0,
-                            x: left,
-                            y: top,
-                            textBefore: textBefore.slice(0, textBefore.length - word.length),
-                            word: word
-                        };
+                            // Si el DOM fue reconstruido bruscamente y el navegador perdió la posición nativa
+                            // solo en ese caso forzamos el cursor a la última posición sabida.
+                            if (actualSelection.start !== this._lastKnownCursor.start || actualSelection.end !== this._lastKnownCursor.end) {
+                                this.setSelectionRange(editorElement, this._lastKnownCursor.start, this._lastKnownCursor.end);
+                            }
+                        }, 10);
                     },
                     getAutocompleteSuggestions() {
                         const list = [
-                            'void', 'bool', 'int', 'uint', 'float', 'vec2', 'vec3', 'vec4', 'mat2', 'mat3', 'mat4', 'sampler2D', 'samplerCube',
+                            // Types
+                            'void', 'bool', 'int', 'uint', 'float', 'vec2', 'vec3', 'vec4', 'bvec2', 'bvec3', 'bvec4', 'ivec2', 'ivec3', 'ivec4', 'uvec2', 'uvec3', 'uvec4',
+                            'mat2', 'mat3', 'mat4', 'mat2x2', 'mat2x3', 'mat2x4', 'mat3x2', 'mat3x3', 'mat3x4', 'mat4x2', 'mat4x3', 'mat4x4',
+                            'sampler2D', 'samplerCube', 'sampler3D', 'sampler2DShadow', 'samplerCubeShadow', 'sampler2DArray', 'sampler2DArrayShadow',
+                            // Keywords
                             'uniform', 'attribute', 'varying', 'const', 'precision', 'highp', 'mediump', 'lowp', 'in', 'out', 'inout', 'struct',
-                            'break', 'continue', 'discard', 'do', 'else', 'for', 'if', 'return', 'while',
+                            'break', 'continue', 'discard', 'do', 'else', 'for', 'if', 'return', 'while', 'switch', 'case', 'default', 'layout', 'flat', 'smooth',
+                            // Built-in Functions
                             'radians', 'degrees', 'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'pow', 'exp', 'log', 'exp2', 'log2', 'sqrt', 'inversesqrt',
-                            'abs', 'sign', 'floor', 'ceil', 'fract', 'mod', 'min', 'max', 'clamp', 'mix', 'step', 'smoothstep', 'length', 'distance',
-                            'dot', 'cross', 'normalize', 'faceforward', 'reflect', 'refract', 'matrixCompMult', 'lessThan', 'lessThanEqual', 'greaterThan',
-                            'greaterThanEqual', 'equal', 'notEqual', 'any', 'all', 'not', 'texture2D', 'textureCube',
-                            'gl_Position', 'gl_PointSize', 'gl_FragColor', 'gl_FragCoord', 'gl_FrontFacing', 'gl_PointCoord',
+                            'abs', 'sign', 'floor', 'ceil', 'fract', 'mod', 'min', 'max', 'clamp', 'mix', 'step', 'smoothstep', 'modf', 'trunc', 'round', 'roundEven',
+                            'length', 'distance', 'dot', 'cross', 'normalize', 'faceforward', 'reflect', 'refract', 'matrixCompMult', 'outerProduct', 'transpose', 'determinant', 'inverse',
+                            'lessThan', 'lessThanEqual', 'greaterThan', 'greaterThanEqual', 'equal', 'notEqual', 'any', 'all', 'not',
+                            'texture2D', 'textureCube', 'texture', 'textureProj', 'textureLod', 'textureProjLod', 'textureGrad', 'textureProjGrad',
+                            // Built-in variables
+                            'gl_Position', 'gl_PointSize', 'gl_FragColor', 'gl_FragCoord', 'gl_FrontFacing', 'gl_PointCoord', 'gl_VertexID', 'gl_InstanceID', 'gl_FragData', 'gl_FragDepth',
+                            // Three.js / Shader Architect standard built-ins & injected variables
+                            'modelMatrix', 'modelViewMatrix', 'projectionMatrix', 'viewMatrix', 'normalMatrix', 'cameraPosition', 'position', 'normal', 'uv',
                             'uTime', 'uAmbient', 'uAmbientColor', 'uLightColor', 'uWorldNormalMatrix', 'max_light_number', 'map', 'lightside', 'shade', 'emissive'
                         ];
 
@@ -6519,37 +6798,113 @@ void main() {
                             });
                         }
 
+                        // Parse user-defined functions and variables from the code!
+                        const code = this.currentShaderCode || '';
+
+                        // Strip comments first to avoid picking up commented-out words
+                        const cleanCode = code.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '');
+
+                        // 1. Find user functions: returnType funcName(params) {
+                        const functionRegex = /\b([a-zA-Z_][a-zA-Z0-9_]*)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(([^)]*)\)\s*(?:\{|;)/g;
+                        const excludeKeywords = new Set([
+                            'if', 'for', 'while', 'switch', 'else', 'return', 'discard', 'do', 'in', 'out', 'inout', 'struct', 'true', 'false',
+                            'void', 'bool', 'int', 'uint', 'float', 'vec2', 'vec3', 'vec4', 'mat2', 'mat3', 'mat4', 'sampler2D', 'samplerCube'
+                        ]);
+                        let match;
+                        const userFunctions = new Set();
+                        while ((match = functionRegex.exec(cleanCode)) !== null) {
+                            const funcName = match[2];
+                            if (!excludeKeywords.has(funcName)) {
+                                userFunctions.add(funcName);
+                            }
+                        }
+
+                        // 2. Find user variables: match all identifiers
+                        const words = cleanCode.match(/\b[a-zA-Z_][a-zA-Z0-9_]*\b/g) || [];
+                        const userVariables = new Set();
+
+                        // We filter out any identifier that is a standard keyword, builtin, or already a function
+                        const standardNames = new Set([
+                            ...list,
+                            'void', 'bool', 'int', 'uint', 'float', 'vec2', 'vec3', 'vec4', 'mat2', 'mat3', 'mat4', 'sampler2D', 'samplerCube',
+                            'uniform', 'attribute', 'varying', 'const', 'precision', 'highp', 'mediump', 'lowp', 'in', 'out', 'inout', 'struct',
+                            'break', 'continue', 'discard', 'do', 'else', 'for', 'if', 'return', 'while', 'switch', 'case', 'default', 'true', 'false'
+                        ]);
+
+                        words.forEach(word => {
+                            if (!standardNames.has(word) && !userFunctions.has(word) && !/^\d+$/.test(word)) {
+                                userVariables.add(word);
+                            }
+                        });
+
+                        // Add user functions and variables to the autocomplete list
+                        userFunctions.forEach(func => {
+                            if (!list.includes(func)) list.push(func);
+                        });
+                        userVariables.forEach(v => {
+                            if (!list.includes(v)) list.push(v);
+                        });
+
+                        // Keep these sets available for getAutocompleteType
+                        this.userFunctions = userFunctions;
+                        this.userVariables = userVariables;
+
                         return list;
                     },
                     getAutocompleteType(name) {
-                        const types = ['void', 'bool', 'int', 'uint', 'float', 'vec2', 'vec3', 'vec4', 'mat2', 'mat3', 'mat4', 'sampler2D', 'samplerCube'];
-                        const keywords = ['uniform', 'attribute', 'varying', 'const', 'precision', 'highp', 'mediump', 'lowp', 'in', 'out', 'inout', 'struct', 'break', 'continue', 'discard', 'do', 'else', 'for', 'if', 'return', 'while'];
-                        const builtins = ['radians', 'degrees', 'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'pow', 'exp', 'log', 'exp2', 'log2', 'sqrt', 'inversesqrt', 'abs', 'sign', 'floor', 'ceil', 'fract', 'mod', 'min', 'max', 'clamp', 'mix', 'step', 'smoothstep', 'length', 'distance', 'dot', 'cross', 'normalize', 'faceforward', 'reflect', 'refract', 'matrixCompMult', 'lessThan', 'lessThanEqual', 'greaterThan', 'greaterThanEqual', 'equal', 'notEqual', 'any', 'all', 'not', 'texture2D', 'textureCube'];
-                        const vars = ['gl_Position', 'gl_PointSize', 'gl_FragColor', 'gl_FragCoord', 'gl_FrontFacing', 'gl_PointCoord'];
-                        
+                        const types = [
+                            'void', 'bool', 'int', 'uint', 'float', 'vec2', 'vec3', 'vec4', 'bvec2', 'bvec3', 'bvec4', 'ivec2', 'ivec3', 'ivec4', 'uvec2', 'uvec3', 'uvec4',
+                            'mat2', 'mat3', 'mat4', 'mat2x2', 'mat2x3', 'mat2x4', 'mat3x2', 'mat3x3', 'mat3x4', 'mat4x2', 'mat4x3', 'mat4x4',
+                            'sampler2D', 'samplerCube', 'sampler3D', 'sampler2DShadow', 'samplerCubeShadow', 'sampler2DArray', 'sampler2DArrayShadow'
+                        ];
+                        const keywords = [
+                            'uniform', 'attribute', 'varying', 'const', 'precision', 'highp', 'mediump', 'lowp', 'in', 'out', 'inout', 'struct',
+                            'break', 'continue', 'discard', 'do', 'else', 'for', 'if', 'return', 'while', 'switch', 'case', 'default', 'layout', 'flat', 'smooth'
+                        ];
+                        const builtins = [
+                            'radians', 'degrees', 'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'pow', 'exp', 'log', 'exp2', 'log2', 'sqrt', 'inversesqrt',
+                            'abs', 'sign', 'floor', 'ceil', 'fract', 'mod', 'min', 'max', 'clamp', 'mix', 'step', 'smoothstep', 'modf', 'trunc', 'round', 'roundEven',
+                            'length', 'distance', 'dot', 'cross', 'normalize', 'faceforward', 'reflect', 'refract', 'matrixCompMult', 'outerProduct', 'transpose', 'determinant', 'inverse',
+                            'lessThan', 'lessThanEqual', 'greaterThan', 'greaterThanEqual', 'equal', 'notEqual', 'any', 'all', 'not',
+                            'texture2D', 'textureCube', 'texture', 'textureProj', 'textureLod', 'textureProjLod', 'textureGrad', 'textureProjGrad'
+                        ];
+                        const vars = [
+                            'gl_Position', 'gl_PointSize', 'gl_FragColor', 'gl_FragCoord', 'gl_FrontFacing', 'gl_PointCoord', 'gl_VertexID', 'gl_InstanceID', 'gl_FragData', 'gl_FragDepth',
+                            'modelMatrix', 'modelViewMatrix', 'projectionMatrix', 'viewMatrix', 'normalMatrix', 'cameraPosition', 'position', 'normal', 'uv'
+                        ];
+
                         if (types.includes(name)) return 'type';
                         if (keywords.includes(name)) return 'keyword';
                         if (builtins.includes(name)) return 'builtin';
                         if (vars.includes(name)) return 'variable';
+
+                        if (this.userFunctions && this.userFunctions.has(name)) return 'function';
+                        if (this.userVariables && this.userVariables.has(name)) return 'variable';
+
                         return 'uniform';
                     },
-                    acceptAutocomplete(textarea) {
-                        if (!this.autocomplete.show || this.autocomplete.list.length === 0) return;
+                    acceptAutocomplete(editorElement) {
+                        if (!this.autocomplete.show || this.autocomplete.list.length === 0 || !editorElement) return;
 
                         const selected = this.autocomplete.list[this.autocomplete.index];
-                        const text = textarea.value;
-                        const start = textarea.selectionStart;
+                        const text = this.currentShaderCode || "";
+
+                        const { start } = this.getSelectionRange(editorElement);
 
                         const prefix = this.autocomplete.textBefore;
                         const suffix = text.substring(start);
 
-                        textarea.value = prefix + selected + suffix;
-                        this.currentShaderCode = textarea.value;
+                        const newText = prefix + selected + suffix;
+                        this.currentShaderCode = newText;
 
                         const nextPos = prefix.length + selected.length;
+
+                        // Advertimos a _lastKnownCursor para que el timeout del input no retroceda
+                        this._lastKnownCursor = { start: nextPos, end: nextPos };
+
                         this.$nextTick(() => {
-                            textarea.selectionStart = textarea.selectionEnd = nextPos;
-                            textarea.focus();
+                            this.setSelectionRange(editorElement, nextPos, nextPos);
+                            editorElement.focus();
                         });
 
                         this.closeAutocomplete();
@@ -6580,7 +6935,7 @@ void main() {
                                 }
 
                                 textarea.selectionStart = textarea.selectionEnd = charIndex;
-                                
+
                                 // Scroll to cursor manually
                                 const rowHeight = 20;
                                 const scrollTop = Math.max(0, (prob.line - 4) * rowHeight);
@@ -6679,61 +7034,88 @@ void main() {
                         </div>
 
                         <!-- Center Panel: Code Editor -->
-                        <div class="sa-studio-main" v-if="activeMat">
+                        <div class="sa-studio-main" v-if="activeMat" style="flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden;">
                             
                             <!-- VSCode Style Tab Header Bar -->
-                            <div class="sa-vscode-tabs-row">
-                                <button class="sa-vscode-tab" :class="{active: editingMode === 'vertex'}" @click="editingMode = 'vertex'">
-                                    <i class="material-icons" style="font-size:1.15em; color: #8be9fd;">code</i> vertex.glsl
-                                </button>
-                                <button class="sa-vscode-tab" :class="{active: editingMode === 'fragment'}" @click="editingMode = 'fragment'">
-                                    <i class="material-icons" style="font-size:1.15em; color: #ffb86c;">code</i> fragment.glsl
-                                </button>
-                                <button class="sa-vscode-tab" :class="{active: editingMode === 'uniforms'}" @click="editingMode = 'uniforms'">
-                                    <i class="material-icons" style="font-size:1.15em; color: #50fa7b;">settings</i> uniforms.json
-                                </button>
+                                <div class="sa-vscode-tabs-row" style="flex-shrink: 0; z-index: 2;">
+                                    <button class="sa-vscode-tab" :class="{active: editingMode === 'vertex'}" @click="editingMode = 'vertex'">
+                                        <i class="material-icons" style="font-size:1.15em; color: #8be9fd;">code</i> vertex.glsl
+                                    </button>
+                                    <button class="sa-vscode-tab" :class="{active: editingMode === 'fragment'}" @click="editingMode = 'fragment'">
+                                        <i class="material-icons" style="font-size:1.15em; color: #ffb86c;">code</i> fragment.glsl
+                                    </button>
+                                    <button class="sa-vscode-tab" :class="{active: editingMode === 'uniforms'}" @click="editingMode = 'uniforms'">
+                                        <i class="material-icons" style="font-size:1.15em; color: #50fa7b;">settings</i> uniforms.json
+                                    </button>
 
-                                <div class="sa-editor-actions-toolbar" v-if="editingMode !== 'uniforms'">
-                                    <button class="sa-icon-btn" @click="formatCode()" :title="tl('shader_architect.ui.format')">
-                                        <i class="material-icons">format_align_left</i>
-                                    </button>
-                                    <button class="sa-icon-btn" @click="validateShader()" :title="tl('shader_architect.ui.validate')">
-                                        <i class="material-icons">check_circle</i>
-                                    </button>
-                                    <button class="sa-icon-btn" style="background: var(--color-accent); color: var(--color-accent_text); border-color: transparent;" @click="applyLive()" :title="tl('shader_architect.ui.apply')">
-                                        <i class="material-icons">play_arrow</i>
-                                    </button>
+                                    <div class="sa-editor-actions-toolbar" v-if="editingMode !== 'uniforms'">
+                                        <button class="sa-icon-btn" @click="formatCode()" :title="tl('shader_architect.ui.format')">
+                                            <i class="material-icons">format_align_left</i>
+                                        </button>
+                                        <button class="sa-icon-btn" @click="validateShader()" :title="tl('shader_architect.ui.validate')">
+                                            <i class="material-icons">check_circle</i>
+                                        </button>
+                                        <button class="sa-icon-btn" style="background: var(--color-accent); color: var(--color-accent_text); border-color: transparent;" @click="applyLive()" :title="tl('shader_architect.ui.apply')">
+                                            <i class="material-icons">play_arrow</i>
+                                        </button>
+                                    </div>
                                 </div>
-                            </div>
 
                             <!-- Workspace main content (Editor or Uniforms) -->
-                            <div style="flex-grow: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; min-height: 0;">
+                            <div style="flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; min-height: 0;">
                                 
                                 <!-- Main Code Editor area -->
-                                    <div v-if="editingMode !== 'uniforms'" class="sa-editor-container" style="flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative;">
-                                        <vue-prism-editor
-                                            class="glsl-editor-instance" 
-                                            v-model="currentShaderCode"
-                                            :highlight="highlighter"
-                                            language="glsl"
-                                            :line-numbers="true"
-                                            :readonly="!activeMat.isCustom"
-                                            style="flex: 1; min-height: 0;"
-                                        ></vue-prism-editor>
+                                <div v-if="editingMode !== 'uniforms'" class="sa-editor-container" style="flex: 1; display: flex; flex-direction: column; min-height: 0; position: relative; width: 100%;">
+                                    
+                                    <vue-prism-editor
+                                        class="glsl-editor-instance" 
+                                        v-model="currentShaderCode"
+                                        :highlight="highlighter"
+                                        language="glsl"
+                                        :line-numbers="true"
+                                        :readonly="!activeMat.isCustom"
+                                    ></vue-prism-editor>
                                     
                                     <!-- Autocomplete Suggestions popup -->
-                                    <div v-if="autocomplete.show" class="sa-autocomplete-dropdown" :style="{top: autocomplete.y + 'px', left: autocomplete.x + 'px'}">
+                                    <div v-if="autocomplete.show" class="sa-autocomplete-dropdown" :style="{top: autocomplete.y + 'px', left: autocomplete.x + 'px', zIndex: 100}">
                                         <div v-for="(item, idx) in autocomplete.list" :key="item" 
-                                             class="sa-autocomplete-item" :class="{active: idx === autocomplete.index}"
-                                             @mousedown.prevent="autocomplete.index = idx; acceptAutocomplete($el.querySelector('.prism-editor__textarea'))">
-                                             <span>{{item}}</span>
-                                             <span class="type-badge">{{ getAutocompleteType(item) }}</span>
+                                            class="sa-autocomplete-item" :class="{active: idx === autocomplete.index}"
+                                            @mousedown.prevent="autocomplete.index = idx; acceptAutocomplete($el.querySelector('.prism-editor__code') || $el.querySelector('[contenteditable=\\'true\\']'))">
+                                            <span>{{item}}</span>
+                                            <span class="type-badge" :class="getAutocompleteType(item)">{{ getAutocompleteType(item) }}</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Bottom Problems Console Panel -->
+                                <div v-if="editingMode !== 'uniforms'" class="sa-problems-console" :class="{collapsed: problemsCollapsed}" style="flex-shrink: 0; display: flex; flex-direction: column; max-height: 40%; z-index: 10; background: var(--color-back); border-top: 1px solid var(--color-border);">
+                                    <div class="sa-problems-header" @click="problemsCollapsed = !problemsCollapsed" style="flex-shrink: 0; cursor: pointer; padding: 6px 12px;">
+                                        <span style="display:flex; align-items:center; gap:6px;">
+                                            <i class="material-icons" style="font-size:1.15em;" :style="{color: validationErrors.length > 0 ? '#ff5555' : '#50fa7b'}">
+                                                {{ validationErrors.length > 0 ? 'error' : 'check_circle' }}
+                                            </i>
+                                            {{ tl('shader_architect.ui.problems') }} ({{ validationErrors.length }})
+                                        </span>
+                                        <i class="material-icons" style="font-size:1.15em;">
+                                            {{ problemsCollapsed ? 'keyboard_arrow_up' : 'keyboard_arrow_down' }}
+                                        </i>
+                                    </div>
+                                    <div class="sa-problems-list" v-if="!problemsCollapsed" style="flex: 1; overflow-y: auto;">
+                                        <div v-if="validationErrors.length === 0" style="opacity: 0.5; padding: 8px 12px; font-size:0.95em;">
+                                            {{ tl('shader_architect.ui.no_problems') }}
+                                        </div>
+                                        <div v-for="(prob, pidx) in validationErrors" :key="pidx" 
+                                            class="sa-problem-item error" @click="goToProblemLine(prob)">
+                                            <span class="location">
+                                                [{{ prob.type }}<span v-if="prob.line">:L{{ prob.line }}</span>]
+                                            </span>
+                                            <span class="message">{{ prob.message }}</span>
                                         </div>
                                     </div>
                                 </div>
 
                                 <!-- Uniforms panel inside main area (Full settings schema editor) -->
-                                <div v-if="editingMode === 'uniforms'" style="flex-grow: 1; overflow-y: auto; padding: 16px;">
+                                <div v-if="editingMode === 'uniforms'" style="flex: 1; overflow-y: auto; padding: 16px;">
                                     <div style="margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--color-border);">
                                         <h3 style="margin-top:0;">Add Custom Uniform</h3>
                                         <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
@@ -6768,6 +7150,31 @@ void main() {
                                                 <input type="checkbox" v-model="newUniformAllowLower"> Allow Lower
                                             </label>
                                         </div>
+                                        <!-- Per-channel range for vec2 / vec3 -->
+                                        <div v-if="(newUniformType === 'vec2' || newUniformType === 'vec3') && activeMat.isCustom" style="margin-top: 8px; display: flex; flex-direction: column; gap: 6px;">
+                                            <div v-for="axis in (newUniformType === 'vec2' ? ['x','y'] : ['x','y','z'])" :key="axis" style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 4px 0; border-top: 1px dashed rgba(255,255,255,0.08);">
+                                                <label style="display: flex; align-items: center; gap: 4px; min-width: 100px; cursor: pointer;">
+                                                    <input type="checkbox" v-model="newUniformChannels[axis].enabled"> Range <b style="text-transform:uppercase;">{{ axis }}</b>
+                                                </label>
+                                                <template v-if="newUniformChannels[axis].enabled">
+                                                    <label style="display: flex; align-items: center; gap: 4px;">
+                                                        Min: <input type="number" placeholder="None" v-model.number="newUniformChannels[axis].min" class="dark_bordered" style="width: 65px; padding: 2px 4px;">
+                                                    </label>
+                                                    <label style="display: flex; align-items: center; gap: 4px;">
+                                                        Max: <input type="number" placeholder="None" v-model.number="newUniformChannels[axis].max" class="dark_bordered" style="width: 65px; padding: 2px 4px;">
+                                                    </label>
+                                                    <label style="display: flex; align-items: center; gap: 4px;">
+                                                        Step: <input type="number" placeholder="None" v-model.number="newUniformChannels[axis].step" class="dark_bordered" style="width: 65px; padding: 2px 4px;">
+                                                    </label>
+                                                    <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
+                                                        <input type="checkbox" v-model="newUniformChannels[axis].allow_higher"> Allow Higher
+                                                    </label>
+                                                    <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
+                                                        <input type="checkbox" v-model="newUniformChannels[axis].allow_lower"> Allow Lower
+                                                    </label>
+                                                </template>
+                                            </div>
+                                        </div>
                                     </div>
 
                                     <h3 style="margin-top:0;">Active Uniforms</h3>
@@ -6786,6 +7193,13 @@ void main() {
                                             <input v-if="uni.type==='bool'" type="checkbox" v-model="uni.value">
                                             <input v-if="uni.type==='color'" type="color" v-model="uni.hexValue">
                                             
+                                            <div v-if="uni.type==='sampler2D'" style="display: flex; gap: 8px; align-items: center;">
+                                                <label style="display: flex; align-items: center; gap: 4px; font-weight: normal; cursor: pointer; font-size:0.9em;">
+                                                    <input type="checkbox" v-model="uni.repeat" @change="applyLive()">
+                                                    Repeat (Tiling)
+                                                </label>
+                                            </div>
+                                            
                                             <div v-if="uni.type==='vec2'" style="display: flex; gap: 5px; align-items: center;">
                                                 X <input type="number" step="0.1" v-model.number="uni.value.x" class="dark_bordered" style="width: 70px;">
                                                 Y <input type="number" step="0.1" v-model.number="uni.value.y" class="dark_bordered" style="width: 70px;">
@@ -6800,10 +7214,10 @@ void main() {
                                             <div v-if="uni.type==='vec2v' || uni.type==='vec3v' || uni.type==='floatv'" style="opacity:0.6; font-style:italic;">[Array Data: {{uni.value.length}} items]</div>
                                             
                                             <div style="flex-grow:1"></div>
-                                            <button @click="expandUniform(key)" style="background: transparent; border: none; padding: 2px 4px; cursor: pointer; color: var(--color-text); margin-right: 4px;" title="Edit Metadata">
+                                            <button v-if="key !== 'map'" @click="expandUniform(key)" style="background: transparent; border: none; padding: 2px 4px; cursor: pointer; color: var(--color-text); margin-right: 4px;" title="Edit Metadata">
                                                 <i class="material-icons" :style="{color: expandedUniforms[key] ? 'var(--color-accent)' : ''}" style="font-size: 1.2em;">settings</i>
                                             </button>
-                                            <i v-if="activeMat.isCustom" class="material-icons" @click="removeUniform(key)" style="color: #fc2f40; cursor: pointer;" title="Remove Uniform">close</i>
+                                            <i v-if="activeMat.isCustom && key !== 'map'" class="material-icons" @click="removeUniform(key)" style="color: #fc2f40; cursor: pointer;" title="Remove Uniform">close</i>
                                         </div>
 
                                         <!-- Expanded Metadata Editor -->
@@ -6829,6 +7243,36 @@ void main() {
                                                 <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
                                                     <input type="checkbox" v-model="uni.allow_lower" :disabled="!activeMat.isCustom"> Allow Lower
                                                 </label>
+                                            </div>
+                                            <!-- Per-channel range for vec2 / vec3 in expanded metadata -->
+                                            <div v-if="uni.type === 'vec2' || uni.type === 'vec3'" style="display: flex; flex-direction: column; gap: 5px; margin-top: 4px;">
+                                                <div style="font-size: 0.85em; opacity: 0.7; margin-bottom: 2px;">Per-channel range (optional):</div>
+                                                <div v-for="axis in (uni.type === 'vec2' ? ['x','y'] : ['x','y','z'])" :key="axis" style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 4px 6px; background: rgba(255,255,255,0.03); border-radius: 4px;">
+                                                    <label style="min-width: 110px; display: flex; align-items: center; gap: 4px; cursor: pointer; font-weight: bold;">
+                                                        <input type="checkbox"
+                                                            :checked="uni.channels && uni.channels[axis] !== undefined"
+                                                            :disabled="!activeMat.isCustom"
+                                                            @change="e => { if (!uni.channels) $set(uni, 'channels', {}); if (e.target.checked) { $set(uni.channels, axis, { min: 0, max: 1, step: 0.05, allow_higher: false, allow_lower: false }); } else { $delete(uni.channels, axis); } }">
+                                                        <span style="text-transform: uppercase; font-family: monospace;">{{ axis }}</span>
+                                                    </label>
+                                                    <template v-if="uni.channels && uni.channels[axis] !== undefined">
+                                                        <label style="display: flex; align-items: center; gap: 4px;">
+                                                            Min: <input type="number" v-model.number="uni.channels[axis].min" placeholder="None" :disabled="!activeMat.isCustom" class="dark_bordered" style="width: 65px; padding: 2px 4px;">
+                                                        </label>
+                                                        <label style="display: flex; align-items: center; gap: 4px;">
+                                                            Max: <input type="number" v-model.number="uni.channels[axis].max" placeholder="None" :disabled="!activeMat.isCustom" class="dark_bordered" style="width: 65px; padding: 2px 4px;">
+                                                        </label>
+                                                        <label style="display: flex; align-items: center; gap: 4px;">
+                                                            Step: <input type="number" v-model.number="uni.channels[axis].step" placeholder="None" :disabled="!activeMat.isCustom" class="dark_bordered" style="width: 65px; padding: 2px 4px;">
+                                                        </label>
+                                                        <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
+                                                            <input type="checkbox" v-model="uni.channels[axis].allow_higher" :disabled="!activeMat.isCustom"> Allow Higher
+                                                        </label>
+                                                        <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
+                                                            <input type="checkbox" v-model="uni.channels[axis].allow_lower" :disabled="!activeMat.isCustom"> Allow Lower
+                                                        </label>
+                                                    </template>
+                                                </div>
                                             </div>
 
                                             <!-- Description -->
@@ -6861,32 +7305,7 @@ void main() {
                                     </div>
                                 </div>
 
-                                <!-- Bottom Problems Console Panel -->
-                                <div v-if="editingMode !== 'uniforms'" class="sa-problems-console" :class="{collapsed: problemsCollapsed}" style="flex-shrink: 0; display: flex; flex-direction: column; max-height: 35%;">
-                                    <div class="sa-problems-header" @click="problemsCollapsed = !problemsCollapsed" style="flex-shrink: 0; cursor: pointer;">
-                                        <span style="display:flex; align-items:center; gap:6px;">
-                                            <i class="material-icons" style="font-size:1.15em;" :style="{color: validationErrors.length > 0 ? '#ff5555' : '#50fa7b'}">
-                                                {{ validationErrors.length > 0 ? 'error' : 'check_circle' }}
-                                            </i>
-                                            {{ tl('shader_architect.ui.problems') }} ({{ validationErrors.length }})
-                                        </span>
-                                        <i class="material-icons" style="font-size:1.15em;">
-                                            {{ problemsCollapsed ? 'keyboard_arrow_up' : 'keyboard_arrow_down' }}
-                                        </i>
-                                    </div>
-                                    <div class="sa-problems-list" v-if="!problemsCollapsed" style="flex: 1; overflow-y: auto;">
-                                        <div v-if="validationErrors.length === 0" style="opacity: 0.5; padding: 8px 12px; font-size:0.95em;">
-                                            {{ tl('shader_architect.ui.no_problems') }}
-                                        </div>
-                                        <div v-for="(prob, pidx) in validationErrors" :key="pidx" 
-                                            class="sa-problem-item error" @click="goToProblemLine(prob)">
-                                            <span class="location">
-                                                [{{ prob.type }}<span v-if="prob.line">:L{{ prob.line }}</span>]
-                                            </span>
-                                            <span class="message">{{ prob.message }}</span>
-                                        </div>
-                                    </div>
-                                </div>
+
 
                             </div>
 
@@ -6907,11 +7326,11 @@ void main() {
                                     Adjust exposed uniforms and properties in real-time to preview in the viewport.
                                 </div>
 
-                                <div v-if="!activeMat.uniforms || Object.keys(activeMat.uniforms).filter(k => activeMat.uniforms[k].expose && !isSystemUniform(k)).length === 0" style="opacity: 0.5; font-style:italic;">
-                                    No exposed properties. Turn on \"Expose\" in Uniforms tab settings.
+                                <div v-if="!activeMat.uniforms || Object.keys(activeMat.uniforms).filter(k => (activeMat.uniforms[k].expose || k === 'map') && !isSystemUniform(k)).length === 0" style="opacity: 0.5; font-style:italic;">
+                                    No exposed properties. Turn on "Expose" in Uniforms tab settings.
                                 </div>
 
-                                <div v-for="(uni, key) in activeMat.uniforms" :key="key" v-if="uni.expose && !isSystemUniform(key)" class="sa-uniform-row" style="margin-bottom:10px; padding: 8px;">
+                                <div v-for="(uni, key) in activeMat.uniforms" :key="key" v-if="(uni.expose || key === 'map') && !isSystemUniform(key)" class="sa-uniform-row" style="margin-bottom:10px; padding: 8px;">
                                     <div style="font-weight:bold; font-size:0.9em; margin-bottom:4px; display:flex; justify-content:space-between; align-items:center;">
                                         <span>{{ getUniformLabel(uni, key) || key }}</span>
                                         <span style="opacity:0.4; font-size:0.8em; font-family:monospace;">{{ uni.type }}</span>
@@ -6938,22 +7357,56 @@ void main() {
                                         </label>
                                     </div>
 
+                                    <!-- sampler2D -->
+                                    <div v-if="uni.type==='sampler2D'">
+                                        <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:0.9em; font-weight:normal;">
+                                            <input type="checkbox" v-model="uni.repeat" @change="applyLive()"> Repeat (Tiling)
+                                        </label>
+                                    </div>
+
                                     <!-- Color picker -->
                                     <div v-if="uni.type==='color'">
                                         <input type="color" v-model="uni.hexValue" @change="applyLive()" style="width:100%; padding:0; border:none; height:24px; cursor:pointer;">
                                     </div>
 
-                                    <!-- Vec2 input -->
-                                    <div v-if="uni.type==='vec2'" style="display: flex; gap: 5px; align-items: center; font-size:0.85em;">
-                                        X: <input type="number" step="0.1" v-model.number="uni.value.x" @change="applyLive()" class="dark_bordered" style="width: 100%; min-width:30px;">
-                                        Y: <input type="number" step="0.1" v-model.number="uni.value.y" @change="applyLive()" class="dark_bordered" style="width: 100%; min-width:30px;">
+                                    <!-- Vec2 input with optional per-channel sliders -->
+                                    <div v-if="uni.type==='vec2'" style="display: flex; flex-direction: column; gap: 4px; font-size:0.85em; width: 100%;">
+                                        <div v-for="axis in ['x','y']" :key="axis" style="display: flex; align-items: center; gap: 4px;">
+                                            <span style="font-family: monospace; text-transform: uppercase; min-width: 14px;">{{ axis }}:</span>
+                                            <template v-if="uni.channels && uni.channels[axis] !== undefined">
+                                                <input type="range"
+                                                    :min="uni.channels[axis].min !== undefined ? uni.channels[axis].min : 0"
+                                                    :max="uni.channels[axis].max !== undefined ? uni.channels[axis].max : 1"
+                                                    :step="uni.channels[axis].step || 0.05"
+                                                    v-model.number="uni.value[axis]"
+                                                    @input="applyLive()"
+                                                    style="flex-grow:1; cursor:pointer; height:4px; padding:0;">
+                                                <span style="font-family:monospace; min-width:36px; text-align:right;">{{ formatNumber(uni.value[axis]) }}</span>
+                                            </template>
+                                            <template v-else>
+                                                <input type="number" :step="0.1" v-model.number="uni.value[axis]" @change="applyLive()" class="dark_bordered" style="flex-grow:1; min-width:30px;">
+                                            </template>
+                                        </div>
                                     </div>
 
-                                    <!-- Vec3 input -->
-                                    <div v-if="uni.type==='vec3'" style="display: flex; gap: 5px; align-items: center; font-size:0.85em;">
-                                        X: <input type="number" step="0.1" v-model.number="uni.value.x" @change="applyLive()" class="dark_bordered" style="width: 100%; min-width:30px;">
-                                        Y: <input type="number" step="0.1" v-model.number="uni.value.y" @change="applyLive()" class="dark_bordered" style="width: 100%; min-width:30px;">
-                                        Z: <input type="number" step="0.1" v-model.number="uni.value.z" @change="applyLive()" class="dark_bordered" style="width: 100%; min-width:30px;">
+                                    <!-- Vec3 input with optional per-channel sliders -->
+                                    <div v-if="uni.type==='vec3'" style="display: flex; flex-direction: column; gap: 4px; font-size:0.85em; width: 100%;">
+                                        <div v-for="axis in ['x','y','z']" :key="axis" style="display: flex; align-items: center; gap: 4px;">
+                                            <span style="font-family: monospace; text-transform: uppercase; min-width: 14px;">{{ axis }}:</span>
+                                            <template v-if="uni.channels && uni.channels[axis] !== undefined">
+                                                <input type="range"
+                                                    :min="uni.channels[axis].min !== undefined ? uni.channels[axis].min : 0"
+                                                    :max="uni.channels[axis].max !== undefined ? uni.channels[axis].max : 1"
+                                                    :step="uni.channels[axis].step || 0.05"
+                                                    v-model.number="uni.value[axis]"
+                                                    @input="applyLive()"
+                                                    style="flex-grow:1; cursor:pointer; height:4px; padding:0;">
+                                                <span style="font-family:monospace; min-width:36px; text-align:right;">{{ formatNumber(uni.value[axis]) }}</span>
+                                            </template>
+                                            <template v-else>
+                                                <input type="number" :step="0.1" v-model.number="uni.value[axis]" @change="applyLive()" class="dark_bordered" style="flex-grow:1; min-width:30px;">
+                                            </template>
+                                        </div>
                                     </div>
                                 </div>
 
@@ -7257,8 +7710,8 @@ void main() {
             const updateProjectEvent = () => {
                 if (!Project.parsed) return;
                 MaterialManager.syncMaterialInstancesFromProject();
-                updateSelection();
-                //ShaderEngine.updateAllCubes('project_update');
+                //updateSelection();
+                ShaderEngine.updateAllCubes('project_update');
             };
 
             let onParseProjectEvent = Codecs.project.on('parse', () => {
@@ -7430,6 +7883,7 @@ void main() {
             };
 
             const updateMaterialInstancePanel = () => {
+                //console.log('Updating Material Instance Panel...');
                 const cubes = getSelectedCubes();
                 if (cubes.length === 0) {
                     global_material_instance_text.set(tl('shader_architect.material_panel.global_material'));
@@ -7512,9 +7966,14 @@ void main() {
                          */
                         const baseMat = MaterialManager.materials[instance.baseMaterialId] || MaterialManager.materials['classic'];
 
-                        for (let uniName in instance.uniforms) {
+                        for (let uniName in baseMat.uniforms) {
+                            if (!instance.uniforms.hasOwnProperty(uniName)) {
+                                console.warn(`Uniform '${uniName}' from base material '${baseMat.name}' is missing in instance '${instance.name}'. Adding it with default value.`);
+                                instance.uniforms[uniName] = Object.assign({}, baseMat.uniforms[uniName]);
+                            };
+                            if (isSystemUniform(uniName)) continue; // Skip system uniforms
                             const uni = instance.uniforms[uniName];
-                            if (uni.expose && !isSystemUniform(uniName)) {
+                            if ((uni.expose || uniName === 'map') && !isSystemUniform(uniName)) {
                                 const currentLang = (typeof Language !== 'undefined' && Language.code) ? Language.code : 'en';
 
                                 // Resolve Label
@@ -7589,6 +8048,22 @@ void main() {
                                         padding_right: '32px'
                                     }
                                 }
+                                else if (uni.type === 'sampler2D') {
+                                    form_config[uniName + '_repeat'] = {
+                                        type: 'custom_checkbox',
+                                        label: (uniName === 'map' ? 'Repeat Texture' : resolvedLabel) + ':',
+                                        value: !!uni.repeat,
+                                        icon_size: '24px',
+                                        layout: 'space_between',
+                                        icon_on: 'check_circle',
+                                        icon_off: 'progress_activity',
+                                        icon_color_on: 'var(--color-axis-y)',
+                                        icon_color_off: 'var(--color-axis-x)',
+                                        title: resolvedDesc || undefined,
+                                        description: resolvedDesc || undefined,
+                                        padding_right: '32px'
+                                    }
+                                }
                                 else if (uni.type === 'color') {
                                     form_config[uniName] = {
                                         type: 'color',
@@ -7600,48 +8075,30 @@ void main() {
                                 }
                                 else if (uni.type === 'vec2') {
                                     const val = uni.value || new THREE.Vector2(0, 0);
-                                    form_config[uniName + '_x'] = {
-                                        type: 'number',
-                                        label: resolvedLabel + ' X:',
-                                        value: val.x !== undefined ? val.x : 0,
-                                        step: 0.1,
-                                        title: resolvedDesc || undefined,
-                                        description: resolvedDesc || undefined
-                                    };
-                                    form_config[uniName + '_y'] = {
-                                        type: 'number',
-                                        label: resolvedLabel + ' Y:',
-                                        value: val.y !== undefined ? val.y : 0,
-                                        step: 0.1,
-                                        title: resolvedDesc || undefined,
-                                        description: resolvedDesc || undefined
+                                    const base_val = baseMat.uniforms[uniName] ? baseMat.uniforms[uniName].value : new THREE.Vector2(0, 0);
+                                    form_config[uniName] = {
+                                        type: 'custom_vector',
+                                        label: resolvedLabel + ':',
+                                        dimensions: 2,
+                                        value: [val.x !== undefined ? parseFloat(val.x) || 0 : 0, val.y !== undefined ? parseFloat(val.y) || 0 : 0],
+                                        description: resolvedDesc || undefined,
+                                        ranges: baseMat.uniforms[uniName] && baseMat.uniforms[uniName].channels ? baseMat.uniforms[uniName].channels : undefined,
+                                        resettable: true,
+                                        default: [base_val.x !== undefined ? parseFloat(base_val.x) || 0 : 0, base_val.y !== undefined ? parseFloat(base_val.y) || 0 : 0]
                                     };
                                 }
                                 else if (uni.type === 'vec3') {
                                     const val = uni.value || new THREE.Vector3(0, 0, 0);
-                                    form_config[uniName + '_x'] = {
-                                        type: 'number',
-                                        label: resolvedLabel + ' X:',
-                                        value: val.x !== undefined ? val.x : 0,
-                                        step: 0.1,
-                                        title: resolvedDesc || undefined,
-                                        description: resolvedDesc || undefined
-                                    };
-                                    form_config[uniName + '_y'] = {
-                                        type: 'number',
-                                        label: resolvedLabel + ' Y:',
-                                        value: val.y !== undefined ? val.y : 0,
-                                        step: 0.1,
-                                        title: resolvedDesc || undefined,
-                                        description: resolvedDesc || undefined
-                                    };
-                                    form_config[uniName + '_z'] = {
-                                        type: 'number',
-                                        label: resolvedLabel + ' Z:',
-                                        value: val.z !== undefined ? val.z : 0,
-                                        step: 0.1,
-                                        title: resolvedDesc || undefined,
-                                        description: resolvedDesc || undefined
+                                    const base_val = baseMat.uniforms[uniName] ? baseMat.uniforms[uniName].value : new THREE.Vector3(0, 0, 0);
+                                    form_config[uniName] = {
+                                        type: 'custom_vector',
+                                        label: resolvedLabel + ':',
+                                        dimensions: 3,
+                                        value: [val.x !== undefined ? parseFloat(val.x) || 0 : 0, val.y !== undefined ? parseFloat(val.y) || 0 : 0, val.z !== undefined ? parseFloat(val.z) || 0 : 0],
+                                        description: resolvedDesc || undefined,
+                                        ranges: baseMat.uniforms[uniName] && baseMat.uniforms[uniName].channels ? baseMat.uniforms[uniName].channels : undefined,
+                                        resettable: true,
+                                        default: [base_val.x !== undefined ? parseFloat(base_val.x) || 0 : 0, base_val.y !== undefined ? parseFloat(base_val.y) || 0 : 0, base_val.z !== undefined ? parseFloat(base_val.z) || 0 : 0]
                                     };
                                 }
                             }
@@ -7811,8 +8268,8 @@ void main() {
             deletables.push(create_material_instance, delete_material_instance, cube_material_instance, cube_material_instance_name, global_material_instance_text, material_instance_properties_toolbar);
 
             let material_panel_render_listener = Blockbench.on('shader_update_complete', (cause) => {
-                console.log('Shader update complete, cause:', cause);
-                if (cause === 'initial_load' || cause === 'select_project' || cause === 'rename_instance' || cause === 'update_form') return; // Evitar actualización redundante al cargar proyecto o seleccionar proyecto
+                //console.log('Shader update complete, cause:', cause);
+                if (cause === 'project_update' || cause === 'select_project' || cause === 'rename_instance' || cause === 'update_form') return; // Evitar actualización redundante al cargar proyecto o seleccionar proyecto
                 //updateMaterialInstancePanel();
             });
             deletables.push(material_panel_render_listener);
@@ -7822,7 +8279,8 @@ void main() {
             });
             deletables.push(material_panel_listener);
 
-            let material_instances_listener = Blockbench.on('shader_architect_material_instances_changed', () => {
+            let material_instances_listener = Blockbench.on('shader_architect_material_instances_changed', (cause) => {
+                if (cause && cause.cause === 'update_form') return; // Evitar actualización redundante al actualizar desde el formulario
                 updateMaterialInstancePanel();
             });
             deletables.push(material_instances_listener);
@@ -7904,15 +8362,52 @@ void main() {
                             }
                             uni.value[component] = Number(result[key]);
                         }
+                    } else if (key.endsWith('_repeat')) {
+                        const baseKey = key.slice(0, -7);
+                        if (instance.uniforms[baseKey]) {
+                            const uni = instance.uniforms[baseKey];
+                            uni.repeat = !!result[key];
+                        }
                     } else if (instance.uniforms[key]) {
                         const uni = instance.uniforms[key];
-                        uni.value = result[key];
+                        if (uni.type === 'float') {
+                            uni.value = parseFloat(result[key]) || 0;
+                        } else if (uni.type === 'int') {
+                            uni.value = parseInt(result[key]) || 0;
+                        } else if (uni.type === 'bool') {
+                            uni.value = !!result[key];
+                        } else if (uni.type === 'vec2') {
+                            //Make sure the value is a THREE.Vector2
+                            if (!(uni.value instanceof THREE.Vector2)) {
+                                uni.value = new THREE.Vector2(0, 0);
+                            }
+                            uni.value.x = parseFloat(result[key][0]) || 0;
+                            uni.value.y = parseFloat(result[key][1]) || 0;
+                        } else if (uni.type === 'vec3') {
+                            //Make sure the value is a THREE.Vector3
+                            if (!(uni.value instanceof THREE.Vector3)) {
+                                uni.value = new THREE.Vector3(0, 0, 0);
+                            }
+                            uni.value.x = parseFloat(result[key][0]) || 0;
+                            uni.value.y = parseFloat(result[key][1]) || 0;
+                            uni.value.z = parseFloat(result[key][2]) || 0;
+                        } else if (uni.type === 'vec4') {
+                            //Make sure the value is a THREE.Vector4
+                            if (!(uni.value instanceof THREE.Vector4)) {
+                                uni.value = new THREE.Vector4(0, 0, 0, 0);
+                            }
+                            uni.value.x = parseFloat(result[key][0]) || 0;
+                            uni.value.y = parseFloat(result[key][1]) || 0;
+                            uni.value.z = parseFloat(result[key][2]) || 0;
+                            uni.value.w = parseFloat(result[key][3]) || 0;
+                        }
+
                         if (uni.type === 'color') {
                             uni.hexValue = result[key];
                         }
                     }
                 }
-                MaterialManager.saveMaterialInstances();
+                MaterialManager.saveMaterialInstances({ cause: 'update_form' });
                 ShaderEngine.updateAllUniforms('update_form');
             });
 
