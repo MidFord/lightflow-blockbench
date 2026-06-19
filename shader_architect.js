@@ -568,6 +568,7 @@
     const PLUGIN_STYLE_ID = 'shader-architect-styles';
     const PROJECT_MATERIAL_INSTANCES_PROP = 'sa_material_instances_json';
     const MATERIAL_INSTANCES_UNDO_ASPECT = 'sa_material_instances';
+    const GLOBAL_MATERIAL_LIST_EVENT = 'update_global_material_list';
     const pluginStyle = /*css*/`
     /* Dialog Layout Restructuring for fixed window with internal scrollbars */
     #sa_material_studio_dialog {
@@ -664,8 +665,8 @@
         display: flex !important;
         flex-direction: row !important;
         align-items: stretch !important;
-        flex-grow: 1 !important; /* Creado para llenar el espacio flex */
-        min-height: 0 !important; /* Previene desbordamiento oculto */
+        flex-grow: 1 !important; /* Fill the available flex space */
+        min-height: 0 !important; /* Prevent hidden overflow */
         width: 100% !important;
         overflow: auto !important;
         position: relative !important;
@@ -676,7 +677,7 @@
     .prism-editor__container {
         position: relative !important;
         flex-grow: 1 !important;
-        min-height: max-content !important; /* FIX: Permite que el contenedor crezca con el scroll */
+        min-height: max-content !important; /* Allow the container to grow with scroll content */
         height: auto !important;
         box-sizing: border-box;
         overflow: visible !important;
@@ -719,7 +720,7 @@
     }
     .prism-editor__line-numbers {
         height: auto !important;
-        min-height: max-content !important; /* FIX: Evita que los números se corten al hacer scroll */
+        min-height: max-content !important; /* Prevent line numbers from being clipped while scrolling */
         overflow: hidden !important;
         flex-shrink: 0 !important;
         padding: 10px 8px 10px 8px !important;
@@ -835,7 +836,7 @@
         font-family: 'Consolas', 'Courier New', monospace;
         font-size: 13px;
         line-height: 20px;
-        /* FIX: Dejar que Flexbox controle el tamaño en lugar de height: 100% */
+        /* Let Flexbox control the editor size instead of forcing height: 100% */
         flex-grow: 1;
         display: flex;
         flex-direction: column;
@@ -857,17 +858,18 @@
         border: 1px solid var(--color-border);
         border-radius: 4px;
         box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
-        z-index: 9999;
-        max-height: 200px;
+        z-index: 100000;
+        max-height: 260px;
         overflow-y: auto;
-        width: 220px;
+        width: 380px;
         pointer-events: auto;
     }
     .sa-autocomplete-item {
-        display: flex;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
         align-items: center;
-        justify-content: space-between;
-        padding: 6px 10px;
+        gap: 10px;
+        padding: 7px 10px;
         cursor: pointer;
         font-family: 'Consolas', monospace;
         font-size: 12px;
@@ -878,6 +880,40 @@
     .sa-autocomplete-item:hover, .sa-autocomplete-item.active {
         background: var(--color-accent);
         color: var(--color-accent_text);
+    }
+    .sa-autocomplete-main {
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+    }
+    .sa-autocomplete-name {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-weight: 600;
+    }
+    .sa-autocomplete-signature {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        opacity: 0.72;
+        font-size: 0.9em;
+    }
+    .sa-autocomplete-meta {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 6px;
+        min-width: 0;
+    }
+    .sa-autocomplete-return {
+        max-width: 92px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        opacity: 0.82;
+        font-size: 0.86em;
     }
     .sa-autocomplete-item .type-badge {
         font-size: 0.8em;
@@ -1294,15 +1330,29 @@
             this.revalidateAllMaterialInstances({ save: false });
         },
 
+        dispatchGlobalMaterialListUpdate(action, material, options = {}) {
+            if (typeof Blockbench === 'undefined') return;
+            Blockbench.dispatchEvent(GLOBAL_MATERIAL_LIST_EVENT, {
+                cause: options.cause || `${action}_material`,
+                action,
+                materialId: material && material.id ? material.id : material
+            });
+        },
+
         register(mat) {
+            const isNewMaterial = !this.materials[mat.id];
             this.materials[mat.id] = mat;
             this.revalidateMaterialInstancesForMaterial(mat.id, { save: false });
             this.saveCustomMaterials();
             this.saveMaterialInstances();
+            if (isNewMaterial) {
+                this.dispatchGlobalMaterialListUpdate('add', mat);
+            }
         },
 
         deleteMaterial(id) {
             if (this.materials[id] && this.materials[id].isCustom) {
+                const removedMaterial = this.materials[id];
                 delete this.materials[id];
                 this.rebaseMaterialInstances(id, 'classic');
                 this.saveCustomMaterials();
@@ -1318,6 +1368,7 @@
                     ShaderEngine.globalRenderMode = 'classic';
                 }
                 ShaderEngine.updateAllCubes('delete_material');
+                this.dispatchGlobalMaterialListUpdate('delete', removedMaterial);
             }
         },
 
@@ -2005,6 +2056,7 @@
                 icon: 'deployed_code',
                 isCustom: false,
                 vertex: `
+                    //Classic
                     attribute float highlight;
                     
                     uniform bool SHADE; 
@@ -2084,7 +2136,7 @@
 #include <shadowmap_pars_vertex>
 
 attribute float highlight;
-attribute vec2 uv_fit_fixed;
+attribute vec2 normalizedFaceUv;
 
 uniform bool SHADE;
 uniform int LIGHTSIDE;
@@ -2155,7 +2207,7 @@ void main() {
     }
 
     vUv = uv;
-    vFaceUv = uv_fit_fixed;
+    vFaceUv = normalizedFaceUv;
     vViewDir = safeNormalizeVertex(cameraPosition - vWorldPos, vec3(0.0, 0.0, 1.0));
 
     lift = highlight == 2.0 ? 0.22 :
@@ -3269,7 +3321,7 @@ void main() {
                 icon: 'wb_iridescent',
                 isCustom: false,
                 vertex: `attribute float highlight;
-attribute vec2 uv_fit_fixed;
+attribute vec2 normalizedFaceUv;
 
 uniform bool SHADE;
 uniform int LIGHTSIDE;
@@ -3327,7 +3379,7 @@ void main() {
     }
 
     vUv = uv;
-    vFaceUv = uv_fit_fixed;
+    vFaceUv = normalizedFaceUv;
 
     lift = highlight == 2.0 ? 0.22 :
            highlight == 1.0 ? 0.10 :
@@ -3647,7 +3699,7 @@ void main() {
 #include <shadowmap_pars_vertex>
 
 attribute float highlight;
-attribute vec2 uv_fit_fixed;
+attribute vec2 normalizedFaceUv;
 
 uniform bool SHADE;
 uniform int LIGHTSIDE;
@@ -3712,7 +3764,7 @@ void main() {
     }
 
     vUv = uv;
-    vFaceUv = uv_fit_fixed;
+    vFaceUv = normalizedFaceUv;
 
     lift = highlight == 2.0 ? 0.22 :
            highlight == 1.0 ? 0.10 :
@@ -4159,8 +4211,9 @@ void main() {
                     #include <shadowmap_pars_vertex> 
 
                     attribute float highlight;
-                    attribute vec2 uv_fit_fixed;
+                    attribute vec2 normalizedFaceUv;
                     attribute vec2 faceSize;
+                    attribute vec2 globalFaceSize;
                     attribute vec2 uvSize;
 
                     uniform bool SHADE; 
@@ -4170,8 +4223,9 @@ void main() {
                     varying float light; 
                     varying float lift;
 
-                    varying vec2 vuv_fit_fixed;
+                    varying vec2 vNormalizedFaceUv;
                     varying vec2 vfaceSize;
+                    varying vec2 vGlobalFaceSize;
                     varying vec2 vuvSize;
 
                     void main() {
@@ -4195,8 +4249,9 @@ void main() {
                         lift = (highlight == 2.0) ? 0.22 : (highlight == 1.0) ? 0.1 : 0.0;
                         vUv = uv; 
                         
-                        vuv_fit_fixed = uv_fit_fixed;
+                        vNormalizedFaceUv = normalizedFaceUv;
                         vfaceSize = faceSize;
+                        vGlobalFaceSize = globalFaceSize;
                         vuvSize = uvSize;
                         
                         gl_Position = projectionMatrix * viewMatrix * worldPosition;
@@ -4221,8 +4276,9 @@ void main() {
                     varying float light; 
                     varying float lift;
                     
-                    varying vec2 vuv_fit_fixed;
+                    varying vec2 vNormalizedFaceUv;
                     varying vec2 vfaceSize;
+                    varying vec2 vGlobalFaceSize;
                     varying vec2 vuvSize;
 
                     // 2. LUEGO LAS FUNCIONES QUE LOS UTILIZAN
@@ -4343,8 +4399,9 @@ void main() {
 #include <shadowmap_pars_vertex>
 
 attribute float highlight;
-attribute vec2 uv_fit_fixed;
+attribute vec2 normalizedFaceUv;
 attribute vec2 faceSize;
+attribute vec2 globalFaceSize;
 attribute vec2 uvSize;
 
 uniform bool SHADE;
@@ -4354,8 +4411,9 @@ varying vec2 vUv;
 varying float light;
 varying float lift;
 
-varying vec2 vuv_fit_fixed;
+varying vec2 vNormalizedFaceUv;
 varying vec2 vfaceSize;
+varying vec2 vGlobalFaceSize;
 varying vec2 vuvSize;
 
 void main() {
@@ -4402,8 +4460,9 @@ void main() {
 
     vUv = uv;
 
-    vuv_fit_fixed = uv_fit_fixed;
+    vNormalizedFaceUv = normalizedFaceUv;
     vfaceSize = faceSize;
+    vGlobalFaceSize = globalFaceSize;
     vuvSize = uvSize;
 
     gl_Position = projectionMatrix * viewMatrix * worldPosition;
@@ -4424,8 +4483,9 @@ varying vec2 vUv;
 varying float light;
 varying float lift;
 
-varying vec2 vuv_fit_fixed;
+varying vec2 vNormalizedFaceUv;
 varying vec2 vfaceSize;
+varying vec2 vGlobalFaceSize;
 varying vec2 vuvSize;
 
 #define SHADOW_DET_EPS 1e-12
@@ -4673,7 +4733,7 @@ void main() {
         usa dFdx/dFdy. Las derivadas son más estables antes de descartar fragmentos.
     */
 
-    vec2 shadowCurrentUV = vuv_fit_fixed;
+    vec2 shadowCurrentUV = vNormalizedFaceUv;
     vec2 shadowTargetUV = getPixelCenterUV(shadowCurrentUV, vfaceSize);
 
     float shadow = getPixelatedShadowAtUV(shadowTargetUV, shadowCurrentUV);
@@ -4947,20 +5007,20 @@ void main() {
 
             smoothnessFactor = Math.max(0, Math.min(1, smoothnessFactor));
 
-            const fixedPrecalculatedFitUV = [0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0];
+            const normalizedFaceUvData = [0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0];
 
-            geometry.setAttribute('uv_fit_fixed', new THREE.BufferAttribute(new Float32Array(fixedPrecalculatedFitUV), 2));
-            geometry.attributes.uv_fit_fixed.needsUpdate = true;
+            geometry.setAttribute('normalizedFaceUv', new THREE.BufferAttribute(new Float32Array(normalizedFaceUvData), 2));
+            geometry.attributes.normalizedFaceUv.needsUpdate = true;
 
-            geometry.setAttribute('uv_shadow_map', new THREE.BufferAttribute(new Float32Array(fixedPrecalculatedFitUV), 2));
+            geometry.setAttribute('uv_shadow_map', new THREE.BufferAttribute(new Float32Array(normalizedFaceUvData), 2));
             geometry.attributes.uv_shadow_map.needsUpdate = true;
 
             const posAttr = geometry.getAttribute('position');
-            const uvAttr = geometry.getAttribute('uv_fit_fixed');
+            const uvAttr = geometry.getAttribute('normalizedFaceUv');
             const index = geometry.getIndex();
 
             if (!posAttr || !uvAttr) {
-                if (window.DebugTools) DebugTools.logError("Geometry must have position and uv_fit_fixed attributes for aspect ratio calculation.");
+                if (window.DebugTools) DebugTools.logError("Geometry must have position and normalizedFaceUv attributes for aspect ratio calculation.");
             }
 
             const vertexCount = posAttr.count;
@@ -5045,9 +5105,23 @@ void main() {
             // --- CÁLCULO DE FACE SIZE ---
             if (posAttr) {
                 const faceSizes = new Float32Array(vertexCount * 2);
+                const globalFaceSizes = new Float32Array(vertexCount * 2);
+                const worldScale = new THREE.Vector3(1, 1, 1);
                 const posA = new THREE.Vector3();
                 const posB = new THREE.Vector3();
                 const posC = new THREE.Vector3();
+
+                if (cube?.mesh?.isObject3D) {
+                    if (typeof cube.mesh.updateMatrixWorld === 'function') {
+                        cube.mesh.updateMatrixWorld(true);
+                    }
+                    cube.mesh.getWorldScale(worldScale);
+                    worldScale.set(
+                        Math.abs(worldScale.x) || 1,
+                        Math.abs(worldScale.y) || 1,
+                        Math.abs(worldScale.z) || 1
+                    );
+                }
 
                 for (let i = 0; i < faceCount; i++) {
                     let idxA, idxB, idxC;
@@ -5072,25 +5146,36 @@ void main() {
 
                     let sizeX = maxX - minX;
                     let sizeY = maxY - minY;
+                    let scaleX = worldScale.x;
+                    let scaleY = worldScale.y;
                     if (Math.abs(sizeX) < 1e-6) {
                         const minZ = Math.min(posA.z, posB.z, posC.z);
                         const maxZ = Math.max(posA.z, posB.z, posC.z);
                         sizeX = maxZ - minZ;
+                        scaleX = worldScale.z;
                         if (Math.abs(sizeX) < 1e-6) sizeX = 1;
                     }
                     if (Math.abs(sizeY) < 1e-6) {
                         const minZ = Math.min(posA.z, posB.z, posC.z);
                         const maxZ = Math.max(posA.z, posB.z, posC.z);
                         sizeY = maxZ - minZ;
+                        scaleY = worldScale.z;
                         if (Math.abs(sizeY) < 1e-6) sizeY = 1;
                     }
 
                     faceSizes[idxA * 2] = sizeX; faceSizes[idxA * 2 + 1] = sizeY;
                     faceSizes[idxB * 2] = sizeX; faceSizes[idxB * 2 + 1] = sizeY;
                     faceSizes[idxC * 2] = sizeX; faceSizes[idxC * 2 + 1] = sizeY;
+
+                    globalFaceSizes[idxA * 2] = sizeX * scaleX; globalFaceSizes[idxA * 2 + 1] = sizeY * scaleY;
+                    globalFaceSizes[idxB * 2] = sizeX * scaleX; globalFaceSizes[idxB * 2 + 1] = sizeY * scaleY;
+                    globalFaceSizes[idxC * 2] = sizeX * scaleX; globalFaceSizes[idxC * 2 + 1] = sizeY * scaleY;
                 }
                 geometry.setAttribute('faceSize', new THREE.BufferAttribute(faceSizes, 2));
                 geometry.attributes.faceSize.needsUpdate = true;
+
+                geometry.setAttribute('globalFaceSize', new THREE.BufferAttribute(globalFaceSizes, 2));
+                geometry.attributes.globalFaceSize.needsUpdate = true;
 
                 const faces_ = ['east', 'west', 'up', 'down', 'south', 'north'];
                 // --- CÁLCULO DE UV SIZE ---
@@ -5979,7 +6064,7 @@ void main() {
 
 
     // =========================================================================
-    // 5. MATERIAL STUDIO INTERFACE (Dialog & Vue Vue)
+    // 5. MATERIAL STUDIO INTERFACE (Dialog & Vue)
     // =========================================================================
 
     let MaterialStudioDialog;
@@ -5992,7 +6077,7 @@ void main() {
             width: Math.min(1600, window.innerWidth - 60) || 1400,
             height: Math.min(1100, window.innerHeight - 60) || 900,
             onOpen() {
-                // FIX: Inyectamos la altura manualmente apenas el diálogo se abre en el DOM
+                // Apply the resolved height after Blockbench mounts the dialog.
                 let h = Math.min(1100, window.innerHeight - 60) || 900;
                 this.object.style.height = h + 'px';
                 if (this.content_vue) {
@@ -6036,7 +6121,9 @@ void main() {
                             x: 0,
                             y: 0,
                             textBefore: '',
-                            word: ''
+                            word: '',
+                            replaceStart: 0,
+                            replaceEnd: 0
                         }
                     };
                 },
@@ -6426,15 +6513,8 @@ void main() {
                         setTimeout(() => {
                             if (!this.$el) return;
 
-                            // FIX: Apuntamos a la clase correcta según el DOM real (un <pre> editable)
-                            const editorElement = this.$el.querySelector('.prism-editor__code') || this.$el.querySelector('[contenteditable="true"]');
-
-                            console.log("Editor Element Encontrado:", editorElement);
-
-                            if (!editorElement) return;
-
-                            // Evitamos asignar los eventos más de una vez
-                            if (editorElement.dataset.saInitialized) return;
+                            const editorElement = this.getEditorInputElement();
+                            if (!editorElement || editorElement.dataset.saInitialized) return;
                             editorElement.dataset.saInitialized = 'true';
 
                             editorElement.addEventListener('keydown', this.handleEditorKeyDown, true);
@@ -6443,16 +6523,32 @@ void main() {
                             editorElement.addEventListener('blur', () => {
                                 setTimeout(() => {
                                     this.closeAutocomplete();
-                                }, 250);
+                                }, 200);
                             });
 
                             const wrapper = this.$el.querySelector('.prism-editor-wrapper');
-                            if (wrapper) {
+                            if (wrapper && !wrapper.dataset.saAutocompleteScrollInitialized) {
+                                wrapper.dataset.saAutocompleteScrollInitialized = 'true';
                                 wrapper.addEventListener('scroll', () => {
                                     this.closeAutocomplete();
                                 }, { passive: true });
                             }
                         }, 150);
+                    },
+                    getEditorInputElement() {
+                        if (!this.$el) return null;
+                        return this.$el.querySelector('.prism-editor__textarea')
+                            || this.$el.querySelector('.glsl-editor-instance textarea')
+                            || this.$el.querySelector('[contenteditable="true"]')
+                            || this.$el.querySelector('.prism-editor__code');
+                    },
+                    isTextInputElement(element) {
+                        return !!element && typeof element.value === 'string' && typeof element.selectionStart === 'number';
+                    },
+                    getEditorText(element) {
+                        if (!element) return this.currentShaderCode || '';
+                        if (typeof element.value === 'string') return element.value;
+                        return element.textContent || '';
                     },
                     handleEditorKeyDown(e) {
                         const editorElement = e.target;
@@ -6469,7 +6565,7 @@ void main() {
                             e.stopPropagation();
 
                             const { start, end } = this.getSelectionRange(editorElement);
-                            const text = this.currentShaderCode || "";
+                            const text = this.getEditorText(editorElement);
                             const spaces = "    ";
 
                             let newStart = start;
@@ -6529,14 +6625,7 @@ void main() {
                                 }
                             }
 
-                            this.currentShaderCode = newText;
-
-                            // Sincronizar el cursor asegurando la última posición
-                            this._lastKnownCursor = { start: newStart, end: newEnd };
-                            this.$nextTick(() => {
-                                this.setSelectionRange(editorElement, newStart, newEnd);
-                                editorElement.focus();
-                            });
+                            this.syncEditorText(editorElement, newText, newStart, newEnd);
 
                             return;
                         }
@@ -6569,7 +6658,7 @@ void main() {
                             e.stopPropagation();
 
                             const { start, end } = this.getSelectionRange(editorElement);
-                            const text = this.currentShaderCode || "";
+                            const text = this.getEditorText(editorElement);
 
                             const textBefore = text.substring(0, start);
                             const lineStart = textBefore.lastIndexOf('\n') + 1;
@@ -6578,27 +6667,31 @@ void main() {
                             const indent = indentMatch ? indentMatch[0] : "";
 
                             const newText = text.substring(0, start) + '\n' + indent + text.substring(end);
-                            this.currentShaderCode = newText;
 
                             const newPos = start + 1 + indent.length;
-
-                            // Sincronizar el cursor asegurando la última posición
-                            this._lastKnownCursor = { start: newPos, end: newPos };
-                            this.$nextTick(() => {
-                                this.setSelectionRange(editorElement, newPos, newPos);
-                                editorElement.focus();
-                            });
+                            this.syncEditorText(editorElement, newText, newPos, newPos);
                             return;
                         }
                     },
 
-                    // Extracción ultra precisa del cursor (soporta offsets entre nodos)
+                    // Read selection from the real input when available; keep a DOM fallback for older editor builds.
                     getSelectionRange(element) {
+                        if (this.isTextInputElement(element)) {
+                            return {
+                                start: element.selectionStart || 0,
+                                end: element.selectionEnd || element.selectionStart || 0
+                            };
+                        }
+
                         let start = 0, end = 0;
                         const sel = window.getSelection();
                         if (!sel || sel.rangeCount === 0) return { start, end };
 
                         const range = sel.getRangeAt(0);
+                        if (!element || !element.contains(range.startContainer) || !element.contains(range.endContainer)) {
+                            return { start, end };
+                        }
+
                         let charIndex = 0;
                         let foundStart = false;
                         let foundEnd = false;
@@ -6620,7 +6713,6 @@ void main() {
                             } else if (node.nodeName === 'BR') {
                                 charIndex += 1;
                             } else {
-                                // Revisar si el rango apunta a los índices hijos del contenedor
                                 for (let i = 0; i < node.childNodes.length; i++) {
                                     if (!foundStart && node === range.startContainer && i === range.startOffset) {
                                         start = charIndex; foundStart = true;
@@ -6630,7 +6722,6 @@ void main() {
                                     }
                                     traverse(node.childNodes[i]);
                                 }
-                                // Atrapar offset que cae justo al final de todos los hijos
                                 if (!foundStart && node === range.startContainer && range.startOffset === node.childNodes.length) {
                                     start = charIndex; foundStart = true;
                                 }
@@ -6644,8 +6735,20 @@ void main() {
                         return { start, end };
                     },
 
-                    // Restauración ultra precisa simétrica
+                    // Restore the caret without touching unrelated selection state.
                     setSelectionRange(element, start, end) {
+                        if (!element) return;
+
+                        const textLength = this.getEditorText(element).length;
+                        start = Math.max(0, Math.min(start, textLength));
+                        end = Math.max(0, Math.min(end, textLength));
+
+                        if (this.isTextInputElement(element)) {
+                            element.focus();
+                            element.setSelectionRange(start, end);
+                            return;
+                        }
+
                         const sel = window.getSelection();
                         if (!sel) return;
 
@@ -6678,7 +6781,6 @@ void main() {
                                 for (let i = 0; i < node.childNodes.length; i++) {
                                     traverse(node.childNodes[i]);
                                 }
-                                // Si el cursor cae al final exacto de un contenedor sin texto adicional
                                 if (!startNode && start === charIndex) {
                                     startNode = node; startOffset = node.childNodes.length;
                                 }
@@ -6700,158 +6802,408 @@ void main() {
                             sel.addRange(range);
                         } catch (e) { }
                     },
+                    syncEditorText(editorElement, value, selectionStart, selectionEnd) {
+                        this.currentShaderCode = value;
+
+                        if (this.isTextInputElement(editorElement)) {
+                            editorElement.value = value;
+                        }
+
+                        this._lastKnownCursor = { start: selectionStart, end: selectionEnd };
+                        this.$nextTick(() => {
+                            const liveEditor = this.getEditorInputElement() || editorElement;
+                            this.setSelectionRange(liveEditor, selectionStart, selectionEnd);
+                            if (liveEditor) liveEditor.focus();
+                        });
+                    },
+                    restoreEditorCaretAfterRender(editorElement, expectedText, expectedSelection, revision) {
+                        this.$nextTick(() => {
+                            requestAnimationFrame(() => {
+                                if (revision !== this._editorInputRevision) return;
+
+                                const liveEditor = this.getEditorInputElement() || editorElement;
+                                if (!liveEditor || document.activeElement !== liveEditor) return;
+                                if (this.getEditorText(liveEditor) !== expectedText) return;
+
+                                const actualSelection = this.getSelectionRange(liveEditor);
+                                if (actualSelection.start !== expectedSelection.start || actualSelection.end !== expectedSelection.end) {
+                                    this.setSelectionRange(liveEditor, expectedSelection.start, expectedSelection.end);
+                                }
+                            });
+                        });
+                    },
 
                     handleEditorInput(e) {
                         const editorElement = e.target;
                         const currentSelection = this.getSelectionRange(editorElement);
+                        const text = this.getEditorText(editorElement);
 
-                        // Guardar SIEMPRE la última posición absoluta digitada nativamente
+                        this._editorInputRevision = (this._editorInputRevision || 0) + 1;
+                        const revision = this._editorInputRevision;
+
+                        this.currentShaderCode = text;
                         this._lastKnownCursor = currentSelection;
 
-                        const text = this.currentShaderCode || "";
-                        const textBefore = text.slice(0, currentSelection.start);
-                        const lastWordMatch = textBefore.match(/[a-zA-Z0-9_]+$/);
+                        if (currentSelection.start !== currentSelection.end) {
+                            this.closeAutocomplete();
+                            this.restoreEditorCaretAfterRender(editorElement, text, currentSelection, revision);
+                            return;
+                        }
+
+                        const currentWord = this.getCurrentEditorWord(text, currentSelection.start);
 
                         let matches = [];
-                        let word = '';
+                        let word = currentWord ? currentWord.word : '';
 
-                        if (lastWordMatch && lastWordMatch[0].length >= 1) {
-                            word = lastWordMatch[0];
-                            const suggestions = this.getAutocompleteSuggestions();
-                            // Se oculta la sugerencia si ya escribió la palabra completa exacta
-                            matches = suggestions.filter(s => s.toLowerCase().startsWith(word.toLowerCase()) && s !== word);
+                        if (currentWord && word.length >= 1) {
+                            const suggestions = this.getAutocompleteSuggestions(text);
+                            const search = word.toLowerCase();
+                            matches = suggestions.filter(item => {
+                                const label = this.getAutocompleteLabel(item);
+                                const isExactMatch = label.toLowerCase() === search;
+                                return label.toLowerCase().startsWith(search) && (!isExactMatch || this.isAutocompleteFunction(item));
+                            });
                         }
 
                         if (matches.length === 0) {
                             this.closeAutocomplete();
                         } else {
-                            const lines = textBefore.split('\n');
-                            const row = lines.length - 1;
-                            const col = lines[row].length;
-
-                            const charWidth = 7.7;
-                            const lineHeight = 20;
-                            const gutterWidth = 42;
-
-                            const wrapper = this.$el.querySelector('.prism-editor-wrapper');
-                            const scrollTop = wrapper ? wrapper.scrollTop : 0;
-                            const scrollLeft = wrapper ? wrapper.scrollLeft : 0;
-
-                            const top = (row + 1) * lineHeight + 4 - scrollTop;
-                            const left = col * charWidth + gutterWidth - scrollLeft;
+                            const position = this.getAutocompletePosition(editorElement, currentSelection.start, matches.length);
 
                             this.autocomplete = {
                                 show: true,
                                 list: matches.slice(0, 10),
                                 index: 0,
-                                x: left,
-                                y: top,
-                                textBefore: textBefore.slice(0, textBefore.length - word.length),
-                                word: word
+                                x: position.x,
+                                y: position.y,
+                                textBefore: text.slice(0, currentWord.start),
+                                word: word,
+                                replaceStart: currentWord.start,
+                                replaceEnd: currentWord.end
                             };
                         }
 
-                        // ANTI-CARRERA (Debounce del cursor): 
-                        // Cancelar cualquier intento anterior de restaurar el cursor si el usuario sigue tecleando
-                        if (this._cursorRestoreTimeout) {
-                            clearTimeout(this._cursorRestoreTimeout);
+                        this.restoreEditorCaretAfterRender(editorElement, text, currentSelection, revision);
+                    },
+                    getCurrentEditorWord(text, cursorPosition) {
+                        const beforeCursor = text.slice(0, cursorPosition);
+                        const prefixMatch = beforeCursor.match(/[a-zA-Z_][a-zA-Z0-9_]*$/);
+                        if (!prefixMatch) return null;
+
+                        const suffixMatch = text.slice(cursorPosition).match(/^[a-zA-Z0-9_]*/);
+                        const word = prefixMatch[0];
+                        const start = cursorPosition - word.length;
+                        const end = cursorPosition + (suffixMatch ? suffixMatch[0].length : 0);
+
+                        return { word, start, end };
+                    },
+                    getAutocompletePosition(editorElement, cursorPosition, itemCount) {
+                        const editorContainer = this.$el ? this.$el.querySelector('.sa-editor-container') : null;
+                        if (!editorElement || !editorContainer) return { x: 0, y: 0 };
+
+                        const editorRect = editorContainer.getBoundingClientRect();
+                        const style = window.getComputedStyle(editorElement);
+                        const lineHeight = parseFloat(style.lineHeight) || 20;
+                        let caret = null;
+
+                        if (this.isTextInputElement(editorElement)) {
+                            caret = this.getTextareaCaretCoordinates(editorElement, cursorPosition);
                         }
 
-                        // Usar un timeout mínimo para restaurar SOLO si Vue o Prism rompieron el cursor real
-                        this._cursorRestoreTimeout = setTimeout(() => {
-                            if (!this._lastKnownCursor) return;
+                        if (!caret) {
+                            const textBefore = this.getEditorText(editorElement).slice(0, cursorPosition);
+                            const lines = textBefore.split('\n');
+                            const row = lines.length - 1;
+                            const col = lines[row].length;
+                            const charWidth = 7.7;
+                            const wrapper = this.$el.querySelector('.prism-editor-wrapper');
+                            caret = {
+                                left: editorRect.left + 42 + (col * charWidth) - (wrapper ? wrapper.scrollLeft : 0),
+                                top: editorRect.top + (row * lineHeight) - (wrapper ? wrapper.scrollTop : 0),
+                                height: lineHeight
+                            };
+                        }
 
-                            const actualSelection = this.getSelectionRange(editorElement);
+                        const dropdownWidth = 380;
+                        const dropdownHeight = Math.min(220, Math.max(1, Math.min(itemCount, 10)) * 29 + 2);
+                        let x = caret.left - editorRect.left;
+                        let y = caret.top - editorRect.top + caret.height + 8;
 
-                            // Si el DOM fue reconstruido bruscamente y el navegador perdió la posición nativa
-                            // solo en ese caso forzamos el cursor a la última posición sabida.
-                            if (actualSelection.start !== this._lastKnownCursor.start || actualSelection.end !== this._lastKnownCursor.end) {
-                                this.setSelectionRange(editorElement, this._lastKnownCursor.start, this._lastKnownCursor.end);
-                            }
-                        }, 10);
+                        if (y + dropdownHeight > editorRect.height - 4) {
+                            y = caret.top - editorRect.top - dropdownHeight - 8;
+                        }
+
+                        x = Math.max(4, Math.min(x, Math.max(4, editorRect.width - dropdownWidth - 4)));
+                        y = Math.max(4, Math.min(y, Math.max(4, editorRect.height - dropdownHeight - 4)));
+
+                        return { x: Math.round(x), y: Math.round(y) };
                     },
-                    getAutocompleteSuggestions() {
-                        const list = [
-                            // Types
-                            'void', 'bool', 'int', 'uint', 'float', 'vec2', 'vec3', 'vec4', 'bvec2', 'bvec3', 'bvec4', 'ivec2', 'ivec3', 'ivec4', 'uvec2', 'uvec3', 'uvec4',
-                            'mat2', 'mat3', 'mat4', 'mat2x2', 'mat2x3', 'mat2x4', 'mat3x2', 'mat3x3', 'mat3x4', 'mat4x2', 'mat4x3', 'mat4x4',
-                            'sampler2D', 'samplerCube', 'sampler3D', 'sampler2DShadow', 'samplerCubeShadow', 'sampler2DArray', 'sampler2DArrayShadow',
-                            // Keywords
-                            'uniform', 'attribute', 'varying', 'const', 'precision', 'highp', 'mediump', 'lowp', 'in', 'out', 'inout', 'struct',
-                            'break', 'continue', 'discard', 'do', 'else', 'for', 'if', 'return', 'while', 'switch', 'case', 'default', 'layout', 'flat', 'smooth',
-                            // Built-in Functions
-                            'radians', 'degrees', 'sin', 'cos', 'tan', 'asin', 'acos', 'atan', 'pow', 'exp', 'log', 'exp2', 'log2', 'sqrt', 'inversesqrt',
-                            'abs', 'sign', 'floor', 'ceil', 'fract', 'mod', 'min', 'max', 'clamp', 'mix', 'step', 'smoothstep', 'modf', 'trunc', 'round', 'roundEven',
-                            'length', 'distance', 'dot', 'cross', 'normalize', 'faceforward', 'reflect', 'refract', 'matrixCompMult', 'outerProduct', 'transpose', 'determinant', 'inverse',
-                            'lessThan', 'lessThanEqual', 'greaterThan', 'greaterThanEqual', 'equal', 'notEqual', 'any', 'all', 'not',
-                            'texture2D', 'textureCube', 'texture', 'textureProj', 'textureLod', 'textureProjLod', 'textureGrad', 'textureProjGrad',
-                            // Built-in variables
-                            'gl_Position', 'gl_PointSize', 'gl_FragColor', 'gl_FragCoord', 'gl_FrontFacing', 'gl_PointCoord', 'gl_VertexID', 'gl_InstanceID', 'gl_FragData', 'gl_FragDepth',
-                            // Three.js / Shader Architect standard built-ins & injected variables
-                            'modelMatrix', 'modelViewMatrix', 'projectionMatrix', 'viewMatrix', 'normalMatrix', 'cameraPosition', 'position', 'normal', 'uv',
-                            'uTime', 'uAmbient', 'uAmbientColor', 'uLightColor', 'uWorldNormalMatrix', 'max_light_number', 'map', 'lightside', 'shade', 'emissive'
+                    getTextareaCaretCoordinates(textarea, cursorPosition) {
+                        const rect = textarea.getBoundingClientRect();
+                        const style = window.getComputedStyle(textarea);
+                        const beforeCursor = textarea.value.slice(0, cursorPosition);
+                        const lines = beforeCursor.split('\n');
+                        const row = lines.length - 1;
+                        const col = lines[row].length;
+                        const lineHeight = parseFloat(style.lineHeight) || 20;
+                        const paddingLeft = parseFloat(style.paddingLeft) || 0;
+                        const paddingTop = parseFloat(style.paddingTop) || 0;
+                        const wrapper = this.$el ? this.$el.querySelector('.prism-editor-wrapper') : null;
+                        const scrollLeft = textarea.scrollLeft || (wrapper ? wrapper.scrollLeft : 0);
+                        const scrollTop = textarea.scrollTop || (wrapper ? wrapper.scrollTop : 0);
+                        const charWidth = this.getEditorCharacterWidth(textarea, style);
+
+                        return {
+                            left: rect.left + paddingLeft + (col * charWidth) - scrollLeft,
+                            top: rect.top + paddingTop + (row * lineHeight) - scrollTop,
+                            height: lineHeight
+                        };
+                    },
+                    getEditorCharacterWidth(textarea, style) {
+                        const probe = document.createElement('span');
+                        probe.textContent = 'mmmmmmmmmm';
+                        probe.style.position = 'absolute';
+                        probe.style.visibility = 'hidden';
+                        probe.style.whiteSpace = 'pre';
+                        probe.style.fontFamily = style.fontFamily;
+                        probe.style.fontSize = style.fontSize;
+                        probe.style.fontWeight = style.fontWeight;
+                        probe.style.fontStyle = style.fontStyle;
+                        probe.style.letterSpacing = style.letterSpacing;
+                        probe.style.left = '-9999px';
+                        probe.style.top = '0';
+
+                        document.body.appendChild(probe);
+                        const width = probe.getBoundingClientRect().width / 10;
+                        document.body.removeChild(probe);
+
+                        return width || 7.7;
+                    },
+                    normalizeAutocompleteItem(item) {
+                        if (typeof item === 'string') {
+                            return { label: item, kind: this.getAutocompleteType(item) };
+                        }
+                        return Object.assign({
+                            label: '',
+                            kind: 'uniform',
+                            signature: '',
+                            returnType: '',
+                            dataType: '',
+                            argCount: null,
+                            params: [],
+                            insertKind: null
+                        }, item || {});
+                    },
+                    getBuiltinFunctionCompletions() {
+                        const defs = [
+                            ['radians', 'genType', 'genType degrees'], ['degrees', 'genType', 'genType radians'],
+                            ['sin', 'genType', 'genType angle'], ['cos', 'genType', 'genType angle'], ['tan', 'genType', 'genType angle'],
+                            ['asin', 'genType', 'genType x'], ['acos', 'genType', 'genType x'], ['atan', 'genType', 'genType y, genType x', '1-2'],
+                            ['pow', 'genType', 'genType x, genType y'], ['exp', 'genType', 'genType x'], ['log', 'genType', 'genType x'],
+                            ['exp2', 'genType', 'genType x'], ['log2', 'genType', 'genType x'], ['sqrt', 'genType', 'genType x'], ['inversesqrt', 'genType', 'genType x'],
+                            ['abs', 'genType', 'genType x'], ['sign', 'genType', 'genType x'], ['floor', 'genType', 'genType x'], ['ceil', 'genType', 'genType x'],
+                            ['fract', 'genType', 'genType x'], ['mod', 'genType', 'genType x, genType y'], ['min', 'genType', 'genType x, genType y'],
+                            ['max', 'genType', 'genType x, genType y'], ['clamp', 'genType', 'genType x, genType minVal, genType maxVal'],
+                            ['mix', 'genType', 'genType x, genType y, genType a'], ['step', 'genType', 'genType edge, genType x'],
+                            ['smoothstep', 'genType', 'genType edge0, genType edge1, genType x'], ['modf', 'genType', 'genType x, out genType i'],
+                            ['trunc', 'genType', 'genType x'], ['round', 'genType', 'genType x'], ['roundEven', 'genType', 'genType x'],
+                            ['length', 'float', 'genType x'], ['distance', 'float', 'genType p0, genType p1'], ['dot', 'float', 'genType x, genType y'],
+                            ['cross', 'vec3', 'vec3 x, vec3 y'], ['normalize', 'genType', 'genType x'], ['faceforward', 'genType', 'genType N, genType I, genType Nref'],
+                            ['reflect', 'genType', 'genType I, genType N'], ['refract', 'genType', 'genType I, genType N, float eta'],
+                            ['matrixCompMult', 'mat', 'mat x, mat y'], ['outerProduct', 'mat', 'vec c, vec r'], ['transpose', 'mat', 'mat m'],
+                            ['determinant', 'float', 'mat m'], ['inverse', 'mat', 'mat m'],
+                            ['lessThan', 'bvec', 'vec x, vec y'], ['lessThanEqual', 'bvec', 'vec x, vec y'], ['greaterThan', 'bvec', 'vec x, vec y'],
+                            ['greaterThanEqual', 'bvec', 'vec x, vec y'], ['equal', 'bvec', 'vec x, vec y'], ['notEqual', 'bvec', 'vec x, vec y'],
+                            ['any', 'bool', 'bvec x'], ['all', 'bool', 'bvec x'], ['not', 'bvec', 'bvec x'],
+                            ['texture2D', 'vec4', 'sampler2D sampler, vec2 coord, float bias', '2-3'],
+                            ['textureCube', 'vec4', 'samplerCube sampler, vec3 coord, float bias', '2-3'],
+                            ['texture', 'vec4', 'sampler sampler, vec coord, float bias', '2-3'],
+                            ['textureProj', 'vec4', 'sampler sampler, vec coord, float bias', '2-3'],
+                            ['textureLod', 'vec4', 'sampler sampler, vec coord, float lod'],
+                            ['textureProjLod', 'vec4', 'sampler sampler, vec coord, float lod'],
+                            ['textureGrad', 'vec4', 'sampler sampler, vec coord, vec dPdx, vec dPdy'],
+                            ['textureProjGrad', 'vec4', 'sampler sampler, vec coord, vec dPdx, vec dPdy']
                         ];
 
-                        if (this.activeMat && this.activeMat.uniforms) {
-                            Object.keys(this.activeMat.uniforms).forEach(key => {
-                                if (!list.includes(key)) list.push(key);
+                        const functions = {};
+                        defs.forEach(def => {
+                            const params = this.parseFunctionParameters(def[2]);
+                            functions[def[0]] = {
+                                label: def[0],
+                                kind: 'builtin',
+                                insertKind: 'function',
+                                returnType: def[1],
+                                params,
+                                argCount: def[3] || params.length,
+                                signature: `${def[1]} ${def[0]}(${def[2]})`,
+                                source: 'global'
+                            };
+                        });
+                        return functions;
+                    },
+                    getBuiltinVariableCompletions() {
+                        const defs = {
+                            gl_Position: 'vec4', gl_PointSize: 'float', gl_FragColor: 'vec4', gl_FragCoord: 'vec4',
+                            gl_FrontFacing: 'bool', gl_PointCoord: 'vec2', gl_VertexID: 'int', gl_InstanceID: 'int',
+                            gl_FragData: 'vec4[]', gl_FragDepth: 'float',
+                            modelMatrix: 'mat4', modelViewMatrix: 'mat4', projectionMatrix: 'mat4', viewMatrix: 'mat4',
+                            normalMatrix: 'mat3', cameraPosition: 'vec3', position: 'vec3', normal: 'vec3', uv: 'vec2',
+                            normalizedFaceUv: 'vec2', faceSize: 'vec2', globalFaceSize: 'vec2', uvSize: 'vec2',
+                            uTime: 'float', uAmbient: 'float', uAmbientColor: 'vec3', uLightColor: 'vec3',
+                            uWorldNormalMatrix: 'mat3', max_light_number: 'int', map: 'sampler2D',
+                            lightside: 'float', shade: 'float', emissive: 'vec3'
+                        };
+
+                        const variables = {};
+                        Object.keys(defs).forEach(label => {
+                            variables[label] = {
+                                label,
+                                kind: 'variable',
+                                dataType: defs[label],
+                                signature: `${defs[label]} ${label}`,
+                                source: 'global'
+                            };
+                        });
+                        return variables;
+                    },
+                    parseFunctionParameters(paramSource) {
+                        const source = (paramSource || '').trim();
+                        if (!source || source === 'void') return [];
+
+                        return source.split(',').map(rawParam => {
+                            const display = rawParam.trim().replace(/\s+/g, ' ');
+                            const tokens = display.split(/\s+/).filter(Boolean);
+                            const filtered = tokens.filter(token => !['const', 'in', 'out', 'inout'].includes(token));
+                            const name = filtered.length > 1 ? filtered[filtered.length - 1].replace(/\[[^\]]*\]$/, '') : '';
+                            const type = filtered.length > 1 ? filtered.slice(0, -1).join(' ') : filtered[0] || display;
+                            return { display, type, name };
+                        });
+                    },
+                    getUserVariableTypeMap(cleanCode) {
+                        const declarations = new Map();
+                        const glslTypes = [
+                            'bool', 'int', 'uint', 'float', 'vec2', 'vec3', 'vec4', 'bvec2', 'bvec3', 'bvec4',
+                            'ivec2', 'ivec3', 'ivec4', 'uvec2', 'uvec3', 'uvec4', 'mat2', 'mat3', 'mat4',
+                            'sampler2D', 'samplerCube', 'sampler3D'
+                        ];
+                        const declarationRegex = new RegExp(`\\b(?:const\\s+)?(${glslTypes.join('|')})\\s+([^;]+);`, 'g');
+                        let match;
+
+                        while ((match = declarationRegex.exec(cleanCode)) !== null) {
+                            const dataType = match[1];
+                            match[2].split(',').forEach(part => {
+                                const nameMatch = part.trim().match(/^([a-zA-Z_][a-zA-Z0-9_]*)/);
+                                if (nameMatch) declarations.set(nameMatch[1], dataType);
                             });
                         }
 
-                        // Parse user-defined functions and variables from the code!
-                        const code = this.currentShaderCode || '';
+                        return declarations;
+                    },
+                    getAutocompleteSuggestions(codeOverride) {
+                        const list = [];
+                        const seen = new Set();
+                        const addSuggestion = (item) => {
+                            const entry = this.normalizeAutocompleteItem(item);
+                            if (!entry.label || seen.has(entry.label)) return;
+                            seen.add(entry.label);
+                            list.push(entry);
+                        };
 
-                        // Strip comments first to avoid picking up commented-out words
-                        const cleanCode = code.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '');
+                        const types = [
+                            'void', 'bool', 'int', 'uint', 'float', 'vec2', 'vec3', 'vec4', 'bvec2', 'bvec3', 'bvec4', 'ivec2', 'ivec3', 'ivec4', 'uvec2', 'uvec3', 'uvec4',
+                            'mat2', 'mat3', 'mat4', 'mat2x2', 'mat2x3', 'mat2x4', 'mat3x2', 'mat3x3', 'mat3x4', 'mat4x2', 'mat4x3', 'mat4x4',
+                            'sampler2D', 'samplerCube', 'sampler3D', 'sampler2DShadow', 'samplerCubeShadow', 'sampler2DArray', 'sampler2DArrayShadow'
+                        ];
+                        const keywords = [
+                            'uniform', 'attribute', 'varying', 'const', 'precision', 'highp', 'mediump', 'lowp', 'in', 'out', 'inout', 'struct',
+                            'break', 'continue', 'discard', 'do', 'else', 'for', 'if', 'return', 'while', 'switch', 'case', 'default', 'layout', 'flat', 'smooth'
+                        ];
 
-                        // 1. Find user functions: returnType funcName(params) {
-                        const functionRegex = /\b([a-zA-Z_][a-zA-Z0-9_]*)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(([^)]*)\)\s*(?:\{|;)/g;
-                        const excludeKeywords = new Set([
-                            'if', 'for', 'while', 'switch', 'else', 'return', 'discard', 'do', 'in', 'out', 'inout', 'struct', 'true', 'false',
-                            'void', 'bool', 'int', 'uint', 'float', 'vec2', 'vec3', 'vec4', 'mat2', 'mat3', 'mat4', 'sampler2D', 'samplerCube'
-                        ]);
-                        let match;
-                        const userFunctions = new Set();
-                        while ((match = functionRegex.exec(cleanCode)) !== null) {
-                            const funcName = match[2];
-                            if (!excludeKeywords.has(funcName)) {
-                                userFunctions.add(funcName);
-                            }
+                        types.forEach(label => addSuggestion({ label, kind: 'type', dataType: 'GLSL type' }));
+                        keywords.forEach(label => addSuggestion({ label, kind: 'keyword' }));
+
+                        const builtinFunctions = this.getBuiltinFunctionCompletions();
+                        Object.keys(builtinFunctions).forEach(label => addSuggestion(builtinFunctions[label]));
+
+                        const builtinVariables = this.getBuiltinVariableCompletions();
+                        Object.keys(builtinVariables).forEach(label => addSuggestion(builtinVariables[label]));
+
+                        if (this.activeMat && this.activeMat.uniforms) {
+                            Object.keys(this.activeMat.uniforms).forEach(key => {
+                                const uniform = this.activeMat.uniforms[key] || {};
+                                addSuggestion({
+                                    label: key,
+                                    kind: 'uniform',
+                                    dataType: uniform.type || 'uniform',
+                                    signature: `${uniform.type || 'uniform'} ${key}`
+                                });
+                            });
                         }
 
-                        // 2. Find user variables: match all identifiers
-                        const words = cleanCode.match(/\b[a-zA-Z_][a-zA-Z0-9_]*\b/g) || [];
-                        const userVariables = new Set();
-
-                        // We filter out any identifier that is a standard keyword, builtin, or already a function
-                        const standardNames = new Set([
-                            ...list,
-                            'void', 'bool', 'int', 'uint', 'float', 'vec2', 'vec3', 'vec4', 'mat2', 'mat3', 'mat4', 'sampler2D', 'samplerCube',
-                            'uniform', 'attribute', 'varying', 'const', 'precision', 'highp', 'mediump', 'lowp', 'in', 'out', 'inout', 'struct',
-                            'break', 'continue', 'discard', 'do', 'else', 'for', 'if', 'return', 'while', 'switch', 'case', 'default', 'true', 'false'
+                        const code = typeof codeOverride === 'string' ? codeOverride : (this.currentShaderCode || '');
+                        const cleanCode = code.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '');
+                        const excludeKeywords = new Set([
+                            ...types, ...keywords,
+                            'if', 'for', 'while', 'switch', 'else', 'return', 'discard', 'do', 'true', 'false'
                         ]);
 
-                        words.forEach(word => {
-                            if (!standardNames.has(word) && !userFunctions.has(word) && !/^\d+$/.test(word)) {
-                                userVariables.add(word);
+                        const userFunctions = new Map();
+                        const functionRegex = /\b([a-zA-Z_][a-zA-Z0-9_]*)\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\(([^)]*)\)\s*(?:\{|;)/g;
+                        let match;
+                        while ((match = functionRegex.exec(cleanCode)) !== null) {
+                            const returnType = match[1];
+                            const funcName = match[2];
+                            if (excludeKeywords.has(funcName)) continue;
+
+                            const params = this.parseFunctionParameters(match[3]);
+                            const signature = `${returnType} ${funcName}(${params.map(param => param.display).join(', ')})`;
+                            const entry = {
+                                label: funcName,
+                                kind: 'function',
+                                insertKind: 'function',
+                                returnType,
+                                params,
+                                argCount: params.length,
+                                signature,
+                                source: 'local'
+                            };
+                            userFunctions.set(funcName, entry);
+                            addSuggestion(entry);
+                        }
+
+                        const userVariableTypes = this.getUserVariableTypeMap(cleanCode);
+                        userVariableTypes.forEach((dataType, label) => {
+                            if (!excludeKeywords.has(label) && !userFunctions.has(label)) {
+                                addSuggestion({
+                                    label,
+                                    kind: 'variable',
+                                    dataType,
+                                    signature: `${dataType} ${label}`,
+                                    source: 'local'
+                                });
                             }
                         });
 
-                        // Add user functions and variables to the autocomplete list
-                        userFunctions.forEach(func => {
-                            if (!list.includes(func)) list.push(func);
-                        });
-                        userVariables.forEach(v => {
-                            if (!list.includes(v)) list.push(v);
+                        const words = cleanCode.match(/\b[a-zA-Z_][a-zA-Z0-9_]*\b/g) || [];
+                        const userVariables = new Set();
+                        const standardNames = new Set([...seen, ...types, ...keywords, ...userFunctions.keys()]);
+                        words.forEach(word => {
+                            if (!standardNames.has(word) && !excludeKeywords.has(word) && !/^\d+$/.test(word)) {
+                                userVariables.add(word);
+                                addSuggestion({ label: word, kind: 'variable', source: 'local' });
+                            }
                         });
 
-                        // Keep these sets available for getAutocompleteType
-                        this.userFunctions = userFunctions;
+                        this.userFunctions = new Set(userFunctions.keys());
                         this.userVariables = userVariables;
 
                         return list;
                     },
                     getAutocompleteType(name) {
+                        if (name && typeof name === 'object') {
+                            return name.kind || 'uniform';
+                        }
+
                         const types = [
                             'void', 'bool', 'int', 'uint', 'float', 'vec2', 'vec3', 'vec4', 'bvec2', 'bvec3', 'bvec4', 'ivec2', 'ivec3', 'ivec4', 'uvec2', 'uvec3', 'uvec4',
                             'mat2', 'mat3', 'mat4', 'mat2x2', 'mat2x3', 'mat2x4', 'mat3x2', 'mat3x3', 'mat3x4', 'mat4x2', 'mat4x3', 'mat4x4',
@@ -6870,7 +7222,8 @@ void main() {
                         ];
                         const vars = [
                             'gl_Position', 'gl_PointSize', 'gl_FragColor', 'gl_FragCoord', 'gl_FrontFacing', 'gl_PointCoord', 'gl_VertexID', 'gl_InstanceID', 'gl_FragData', 'gl_FragDepth',
-                            'modelMatrix', 'modelViewMatrix', 'projectionMatrix', 'viewMatrix', 'normalMatrix', 'cameraPosition', 'position', 'normal', 'uv'
+                            'modelMatrix', 'modelViewMatrix', 'projectionMatrix', 'viewMatrix', 'normalMatrix', 'cameraPosition', 'position', 'normal', 'uv',
+                            'normalizedFaceUv', 'faceSize', 'globalFaceSize', 'uvSize'
                         ];
 
                         if (types.includes(name)) return 'type';
@@ -6883,30 +7236,62 @@ void main() {
 
                         return 'uniform';
                     },
+                    getAutocompleteLabel(item) {
+                        return typeof item === 'string' ? item : (item && item.label) || '';
+                    },
+                    getAutocompleteKey(item) {
+                        if (typeof item === 'string') return item;
+                        return `${item.kind || 'item'}:${item.label || ''}:${item.signature || ''}`;
+                    },
+                    getAutocompleteSignature(item) {
+                        if (!item || typeof item === 'string') return '';
+                        return item.signature || '';
+                    },
+                    getAutocompleteReturnInfo(item) {
+                        if (!item || typeof item === 'string') return '';
+
+                        if (this.isAutocompleteFunction(item)) {
+                            const args = item.argCount === 1 ? '1 arg' : `${item.argCount} args`;
+                            return `${item.returnType || 'void'} - ${args}`;
+                        }
+
+                        return item.dataType || '';
+                    },
+                    isAutocompleteFunction(item) {
+                        if (!item || typeof item === 'string') return false;
+                        return item.insertKind === 'function' || item.kind === 'function' || item.kind === 'builtin';
+                    },
                     acceptAutocomplete(editorElement) {
                         if (!this.autocomplete.show || this.autocomplete.list.length === 0 || !editorElement) return;
 
                         const selected = this.autocomplete.list[this.autocomplete.index];
-                        const text = this.currentShaderCode || "";
-
+                        const selectedLabel = this.getAutocompleteLabel(selected);
+                        const text = this.getEditorText(editorElement);
                         const { start } = this.getSelectionRange(editorElement);
+                        const liveWord = this.getCurrentEditorWord(text, start);
+                        const replaceStart = liveWord ? liveWord.start : this.autocomplete.replaceStart;
+                        const replaceEnd = liveWord ? liveWord.end : this.autocomplete.replaceEnd;
 
-                        const prefix = this.autocomplete.textBefore;
-                        const suffix = text.substring(start);
+                        let insertText = selectedLabel;
+                        let nextPos = replaceStart + selectedLabel.length;
+                        const suffix = text.slice(replaceEnd);
 
-                        const newText = prefix + selected + suffix;
-                        this.currentShaderCode = newText;
+                        if (this.isAutocompleteFunction(selected)) {
+                            if (suffix.startsWith('(')) {
+                                insertText = selectedLabel;
+                                nextPos = replaceStart + selectedLabel.length + 1;
+                            } else if (selected.argCount === 0) {
+                                insertText = `${selectedLabel}()`;
+                                nextPos = replaceStart + insertText.length;
+                            } else {
+                                insertText = `${selectedLabel}(`;
+                                nextPos = replaceStart + insertText.length;
+                            }
+                        }
 
-                        const nextPos = prefix.length + selected.length;
+                        const newText = text.slice(0, replaceStart) + insertText + suffix;
 
-                        // Advertimos a _lastKnownCursor para que el timeout del input no retroceda
-                        this._lastKnownCursor = { start: nextPos, end: nextPos };
-
-                        this.$nextTick(() => {
-                            this.setSelectionRange(editorElement, nextPos, nextPos);
-                            editorElement.focus();
-                        });
-
+                        this.syncEditorText(editorElement, newText, nextPos, nextPos);
                         this.closeAutocomplete();
                     },
                     closeAutocomplete() {
@@ -7077,12 +7462,18 @@ void main() {
                                     ></vue-prism-editor>
                                     
                                     <!-- Autocomplete Suggestions popup -->
-                                    <div v-if="autocomplete.show" class="sa-autocomplete-dropdown" :style="{top: autocomplete.y + 'px', left: autocomplete.x + 'px', zIndex: 100}">
-                                        <div v-for="(item, idx) in autocomplete.list" :key="item" 
+                                    <div v-if="autocomplete.show" class="sa-autocomplete-dropdown" :style="{top: autocomplete.y + 'px', left: autocomplete.x + 'px'}">
+                                        <div v-for="(item, idx) in autocomplete.list" :key="getAutocompleteKey(item)"
                                             class="sa-autocomplete-item" :class="{active: idx === autocomplete.index}"
-                                            @mousedown.prevent="autocomplete.index = idx; acceptAutocomplete($el.querySelector('.prism-editor__code') || $el.querySelector('[contenteditable=\\'true\\']'))">
-                                            <span>{{item}}</span>
-                                            <span class="type-badge" :class="getAutocompleteType(item)">{{ getAutocompleteType(item) }}</span>
+                                            @mousedown.prevent="autocomplete.index = idx; acceptAutocomplete(getEditorInputElement())">
+                                            <div class="sa-autocomplete-main">
+                                                <span class="sa-autocomplete-name">{{ getAutocompleteLabel(item) }}</span>
+                                                <span v-if="getAutocompleteSignature(item)" class="sa-autocomplete-signature">{{ getAutocompleteSignature(item) }}</span>
+                                            </div>
+                                            <div class="sa-autocomplete-meta">
+                                                <span v-if="getAutocompleteReturnInfo(item)" class="sa-autocomplete-return">{{ getAutocompleteReturnInfo(item) }}</span>
+                                                <span class="type-badge" :class="getAutocompleteType(item)">{{ getAutocompleteType(item) }}</span>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
@@ -7481,9 +7872,58 @@ void main() {
         });
     }
 
+    /**
+     * Wraps an existing function to dispatch a Blockbench event before or after its execution.
+     * The wrapped function perfectly preserves the original arguments, 'this' context, and return value.
+     *
+     * @param {Function} originalFunction - The original function/method to wrap.
+     * @param {string} eventName - The name of the Blockbench event to dispatch.
+     * @param {Object} [options] - Configuration options.
+     * @param {'before' | 'after'} [options.mode='before'] - When to dispatch the event relative to the function execution.
+     * @param {Object} [options.eventData={}] - Additional data/arguments to pass to the Blockbench event.
+     * @returns {Function} The new wrapped function.
+     */
+    function wrapWithBlockbenchEvent(originalFunction, eventName, options = {}) {
+        // Destructure options with safe defaults
+        const { mode = 'before', eventData = {} } = options;
+
+        // Fallback to a no-op if the original target isn't a valid function
+        const targetFn = typeof originalFunction === 'function' ? originalFunction : () => { };
+
+        // We use a standard 'function' here (NOT an arrow function) to preserve the 'this' context.
+        return function (...args) {
+            // 1. Execute BEFORE
+            if (mode === 'before') {
+                Blockbench.dispatchEvent(eventName, eventData);
+            }
+
+            // 2. Execute original function, maintaining exact context and arguments
+            const result = targetFn.apply(this, args);
+
+            // 3. Execute AFTER
+            if (mode === 'after') {
+                Blockbench.dispatchEvent(eventName, eventData);
+            }
+
+            // 4. Return the exact value the original function returned
+            return result;
+        };
+    }
 
     let deletables = [];
     let styleEl;
+
+    let renderModeSelector;
+
+    let material_properties;
+
+    let cube_material_instance;
+    let cube_material_instance_name;
+    let material_instance_properties_toolbar;
+    let create_material_instance;
+    let delete_material_instance;
+    let global_material_instance_text;
+
 
     Plugin.register('shader_architect', {
         title: 'Shader Architect V2',
@@ -7507,7 +7947,6 @@ void main() {
                 });
                 return;
             }
-
 
             window.ShaderEngine = ShaderEngine;
             window.MaterialManager = MaterialManager;
@@ -7645,39 +8084,37 @@ void main() {
             }
 
             // UI: Global Render Mode Selector (In Preview window)
-            let globalsMenuOptions = {};
-            for (let id in MaterialManager.materials) {
-                let m = MaterialManager.materials[id];
-                globalsMenuOptions['sa_' + id] = { name: m.name, icon: m.icon };
-            }
+            const getglobalsMenuOptions = () => {
+                let globalsMenuOptions = {};
+                for (let id in MaterialManager.materials) {
+                    let m = MaterialManager.materials[id];
+                    globalsMenuOptions['sa_' + id] = { name: m.name, icon: m.icon };
+                };
+                return globalsMenuOptions;
+            };
 
-            let renderModeSelector = new window.CompactDropdownSelect('sa_global_mode', {
+            renderModeSelector = new window.CompactDropdownSelect('sa_global_mode', {
                 category: 'view',
                 condition: () => Project,
                 value: 'sa_' + ShaderEngine.globalRenderMode,
                 icon_mode: true,
-                options: globalsMenuOptions,
+                options: getglobalsMenuOptions(),
                 onChange() {
                     ShaderEngine.globalRenderMode = this.value.replace('sa_', '');
                     ShaderEngine.updateAllCubes('global_mode_change');
                 }
             });
 
-            // Keep select updated with newly created mats
-            let pUpdate = setInterval(() => {
-                let currentKeys = Object.keys(renderModeSelector.options).sort().join(',');
-                let newKeys = Object.keys(MaterialManager.materials).map(k => 'sa_' + k).sort().join(',');
-                if (currentKeys !== newKeys) {
-                    let newDict = {};
-                    for (let id in MaterialManager.materials) {
-                        let m = MaterialManager.materials[id];
-                        newDict['sa_' + id] = { name: m.name, icon: m.icon };
-                    }
-                    renderModeSelector.options = newDict;
-                    renderModeSelector.update();
-                }
-            }, 1000);
-            deletables.push({ delete: () => clearInterval(pUpdate) });
+            const refreshGlobalMaterialSelector = () => {
+                if (!renderModeSelector) return;
+                renderModeSelector.setOptions(getglobalsMenuOptions());
+                const selectorValue = 'sa_' + ShaderEngine.globalRenderMode;
+                renderModeSelector.set(selectorValue);
+                renderModeSelector.update();
+            };
+
+            let globalMaterialListEvent = Blockbench.on(GLOBAL_MATERIAL_LIST_EVENT, refreshGlobalMaterialSelector);
+            deletables.push(globalMaterialListEvent);
 
             let mainPreview = Preview.all.find(p => p.id === 'main');
             if (mainPreview && mainPreview.node.childNodes[1]) {
@@ -7692,57 +8129,7 @@ void main() {
                 }
             });
 
-            // Project event hooks to auto-update
-            let addCubeEvent = Blockbench.on('add_cube', (event) => {
-                if (event.object && event.object.mesh) {
-                    let shader = MaterialManager.resolveCubeMaterial(event.object, ShaderEngine.globalRenderMode);
-                    ShaderEngine.applyToMesh(event.object, shader || MaterialManager.materials['classic']);
-                    ShaderEngine.updateLightUniforms();
-                }
-            });
-            deletables.push(addCubeEvent);
 
-            let transformEvent = Blockbench.on('update_transform', () => {
-                ShaderEngine.updateLightUniforms();
-            });
-            deletables.push(transformEvent);
-
-            const updateProjectEvent = () => {
-                if (!Project.parsed) return;
-                MaterialManager.syncMaterialInstancesFromProject();
-                //updateSelection();
-                ShaderEngine.updateAllCubes('project_update');
-            };
-
-            let onParseProjectEvent = Codecs.project.on('parse', () => {
-                Project.parsed = false;
-                const projectInstancesProp = MaterialManager.registerProjectMaterialInstanceProperty();
-                if (projectInstancesProp && !deletables.includes(projectInstancesProp)) {
-                    deletables.push(projectInstancesProp);
-                }
-            });
-
-            deletables.push(onParseProjectEvent);
-
-            let loadProjectEvent = Codecs.project.on('parsed', () => {
-                Project.parsed = true;
-                updateProjectEvent();
-            });
-
-            deletables.push(loadProjectEvent);
-
-            let selectProjectEvent = Blockbench.on('select_project', () => {
-                updateProjectEvent();
-            });
-
-            deletables.push(selectProjectEvent);
-
-            let updateSelectionEvent = Blockbench.on('update_selection', () => {
-                if (!Project.parsed) return;
-                ShaderEngine.updateAllCubes('update_selection');
-            });
-
-            deletables.push(updateSelectionEvent);
 
             //setTimeout(() => { ShaderEngine.updateAllCubes(); }, 300);
 
@@ -7807,14 +8194,7 @@ void main() {
 
             deletables.push(global_renderer_properties);
 
-            let material_properties;
 
-            let cube_material_instance;
-            let cube_material_instance_name;
-            let material_instance_properties_toolbar;
-            let create_material_instance;
-            let delete_material_instance;
-            let global_material_instance_text;
 
             const setBarControl = (control, value) => {
                 if (control && typeof control.set === 'function') control.set(value);
@@ -7883,7 +8263,6 @@ void main() {
             };
 
             const updateMaterialInstancePanel = () => {
-                //console.log('Updating Material Instance Panel...');
                 const cubes = getSelectedCubes();
                 if (cubes.length === 0) {
                     global_material_instance_text.set(tl('shader_architect.material_panel.global_material'));
@@ -8147,7 +8526,7 @@ void main() {
                             material_base: {
                                 label: 'shader_architect.material_panel.base_material',
                                 type: 'select',
-                                options: globalsMenuOptions,
+                                options: getglobalsMenuOptions(),
                                 value: 'sa_' + ShaderEngine.globalRenderMode,
                                 description: 'shader_architect.material_panel.base_material.desc'
                             },
@@ -8268,9 +8647,8 @@ void main() {
             deletables.push(create_material_instance, delete_material_instance, cube_material_instance, cube_material_instance_name, global_material_instance_text, material_instance_properties_toolbar);
 
             let material_panel_render_listener = Blockbench.on('shader_update_complete', (cause) => {
-                //console.log('Shader update complete, cause:', cause);
                 if (cause === 'project_update' || cause === 'select_project' || cause === 'rename_instance' || cause === 'update_form') return; // Evitar actualización redundante al cargar proyecto o seleccionar proyecto
-                //updateMaterialInstancePanel();
+                updateMaterialInstancePanel();
             });
             deletables.push(material_panel_render_listener);
 
@@ -8428,6 +8806,82 @@ void main() {
             `)
 
             deletables.push(material_properties);
+
+            //MARK: Events
+            const registerNativeListeners = () => {
+                Texture.prototype.apply = wrapWithBlockbenchEvent(Texture.prototype.apply, 'texture_apply', { mode: 'after' });
+                let textureApplyEvent = Blockbench.on('texture_apply', () => {
+                    if (!Project.parsed) return;
+                    ShaderEngine.updateAllCubes('texture_apply');
+                });
+                deletables.push(textureApplyEvent);
+
+                Canvas.updateAllFaces = wrapWithBlockbenchEvent(Canvas.updateAllFaces, 'canvas_update_all_faces', { mode: 'after' });
+                let canvasUpdateEvent = Blockbench.on('canvas_update_all_faces', () => {
+                    /*if (Texture.all && Texture.all.length > 0) {
+                        //get completed and incompleted textures in a boolean array with texture.img.complete === true, since some textures might be in the process of loading and we don't want to trigger updates until they are fully loaded
+                        const textureStatus = Texture.all.map(tex => tex.img && tex.img.complete);
+                    }*/
+                    if (!Project.parsed) return;
+                    ShaderEngine.updateAllCubes('canvas_update_all_faces');
+                });
+                deletables.push(canvasUpdateEvent);
+
+                // Project event hooks to auto-update
+                let addCubeEvent = Blockbench.on('add_cube', (event) => {
+                    if (event.object && event.object.mesh) {
+                        let shader = MaterialManager.resolveCubeMaterial(event.object, ShaderEngine.globalRenderMode);
+                        ShaderEngine.applyToMesh(event.object, shader || MaterialManager.materials['classic']);
+                        ShaderEngine.updateLightUniforms();
+                    }
+                });
+                deletables.push(addCubeEvent);
+
+                let transformEvent = Blockbench.on('update_transform', () => {
+                    ShaderEngine.updateLightUniforms();
+                });
+                deletables.push(transformEvent);
+
+                const updateProjectEvent = (project) => {
+                    if (!Project.parsed) return;
+                    if (!project) project = MaterialManager.getActiveProject();
+                    MaterialManager.syncMaterialInstancesFromProject(project);
+                    //updateSelection();
+                    ShaderEngine.updateAllCubes('project_update');
+                };
+
+                let onParseProjectEvent = Codecs.project.on('parse', () => {
+                    Project.parsed = false;
+                    const projectInstancesProp = MaterialManager.registerProjectMaterialInstanceProperty();
+                    if (projectInstancesProp && !deletables.includes(projectInstancesProp)) {
+                        deletables.push(projectInstancesProp);
+                    }
+                });
+
+                deletables.push(onParseProjectEvent);
+
+                let loadProjectEvent = Codecs.project.on('parsed', () => {
+                    Project.parsed = true;
+                    updateProjectEvent();
+                });
+
+                deletables.push(loadProjectEvent);
+
+                let selectProjectEvent = Blockbench.on('select_project', (args) => {
+                    updateProjectEvent(args.project);
+                });
+
+                deletables.push(selectProjectEvent);
+
+                let updateSelectionEvent = Blockbench.on('update_selection', () => {
+                    if (!Project.parsed) return;
+                    if (Blockbench.hasFlag('switching_project')) return;
+                    ShaderEngine.updateAllCubes('update_selection');
+                });
+
+                deletables.push(updateSelectionEvent);
+            };
+            registerNativeListeners();
         },
 
         onunload() {
