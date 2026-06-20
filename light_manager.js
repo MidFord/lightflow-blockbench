@@ -951,22 +951,22 @@ window.update_light_element_callback = () => {
     }
 
     // Keep track of active UUIDs to remove deleted lights
-    const active_uuids = new Set();
+    const activeUuids = new Set();
 
     if (typeof LightElement !== 'undefined' && LightElement.all) {
         LightElement.all.forEach(element => {
             LightManagerUtils.sanitizeLight(element);
-            active_uuids.add(element.uuid);
+            activeUuids.add(element.uuid);
 
             let light = window.three_lights[element.uuid];
 
             // Determine required THREE light type based on user config
-            let LightClass = THREE.PointLight;
-            if (element.light_type === 'directional') LightClass = THREE.DirectionalLight;
-            else if (element.light_type === 'spot') LightClass = THREE.SpotLight;
+            let LightConstructor = THREE.PointLight;
+            if (element.light_type === 'directional') LightConstructor = THREE.DirectionalLight;
+            else if (element.light_type === 'spot') LightConstructor = THREE.SpotLight;
 
             // Recreate if type changed or it doesn't exist
-            if (!light || light.constructor !== LightClass) {
+            if (!light || light.constructor !== LightConstructor) {
                 if (light) {
                     window.three_lights_group.remove(light);
                     if (light.target) window.three_lights_group.remove(light.target);
@@ -975,7 +975,7 @@ window.update_light_element_callback = () => {
 
                 const safeColor = LightManagerUtils.colorArray(element.color);
                 const colorHex = new THREE.Color(safeColor[0] / 255, safeColor[1] / 255, safeColor[2] / 255).getHex();
-                light = new LightClass(colorHex, element.intensity);
+                light = new LightConstructor(colorHex, element.intensity);
 
                 // Shadow initialization is now handled dynamically in the sync phase below
 
@@ -995,11 +995,11 @@ window.update_light_element_callback = () => {
 
             // Sync dynamic shadow properties
             if (light.shadow) {
-                let current_res = light.shadow.mapSize.width;
-                let target_res = LightManagerUtils.shadowResolution(element.shadow_resolution);
-                if (current_res !== target_res) {
-                    light.shadow.mapSize.width = target_res;
-                    light.shadow.mapSize.height = target_res;
+                let currentResolution = light.shadow.mapSize.width;
+                let targetResolution = LightManagerUtils.shadowResolution(element.shadow_resolution);
+                if (currentResolution !== targetResolution) {
+                    light.shadow.mapSize.width = targetResolution;
+                    light.shadow.mapSize.height = targetResolution;
                     if (light.shadow.map) {
                         light.shadow.map.dispose();
                         light.shadow.map = null;
@@ -1009,14 +1009,14 @@ window.update_light_element_callback = () => {
                 light.shadow.bias = LightManagerUtils.num(element.shadow_bias, DEFAULT_SHADOW_BIAS, -1, 1);
                 light.shadow.normalBias = LightManagerUtils.num(element.shadow_normal_bias, DEFAULT_SHADOW_NORMAL_BIAS, -1, 1);
 
-                let update_camera = false;
+                let shouldUpdateCamera = false;
                 let near = LightManagerUtils.num(element.shadow_near, 0.1, 0, 99999);
                 let far = Math.max(near + 0.001, LightManagerUtils.num(element.shadow_far, 200, 0.001, 100000));
 
                 if (light.shadow.camera.near !== near || light.shadow.camera.far !== far) {
                     light.shadow.camera.near = near;
                     light.shadow.camera.far = far;
-                    update_camera = true;
+                    shouldUpdateCamera = true;
                 }
 
                 if (element.light_type === 'directional') {
@@ -1026,19 +1026,19 @@ window.update_light_element_callback = () => {
                         light.shadow.camera.bottom = -bounds;
                         light.shadow.camera.left = -bounds;
                         light.shadow.camera.right = bounds;
-                        update_camera = true;
+                        shouldUpdateCamera = true;
                     }
                 }
 
-                if (update_camera) {
+                if (shouldUpdateCamera) {
                     light.shadow.camera.updateProjectionMatrix();
                 }
             }
 
             if (element.distance !== undefined) {
                 light.distance = LightManagerUtils.num(element.distance, 0, 0, 100000);
-                // Solución al error del shader: Definir explícitamente el decay
-                // 2 es el valor realista físicamente correcto. 0 desactiva el decaimiento.
+                // Define decay explicitly to keep the shader path stable.
+                // 2 is physically realistic; 0 disables decay.
                 light.decay = light.distance === 0 ? 0 : 2;
             }
 
@@ -1068,7 +1068,7 @@ window.update_light_element_callback = () => {
 
     // Cleanup deleted lights
     for (const uuid in window.three_lights) {
-        if (!active_uuids.has(uuid)) {
+        if (!activeUuids.has(uuid)) {
             const light = window.three_lights[uuid];
             if (light) {
                 window.three_lights_group.remove(light);
@@ -1178,7 +1178,23 @@ function initialize_light_plugin() {
     let deletables = [];
     let lightTextures = {}; // THREE.Texture instances will be loaded here
 
-    const anim_sign = Blockbench.isNewerThan('4.99') ? 1 : -1;
+    const animationSign = Blockbench.isNewerThan('4.99') ? 1 : -1;
+
+    function disposeLightManagerResources() {
+        const resources = deletables.slice();
+        deletables.length = 0;
+        resources.forEach(item => {
+            if (item && typeof item.delete === 'function') item.delete();
+        });
+    }
+
+    function disposeThreeLight(light) {
+        if (!light) return;
+        if (light.parent) light.parent.remove(light);
+        if (light.target && light.target.parent) light.target.parent.remove(light.target);
+        if (light.shadow && light.shadow.map) light.shadow.map.dispose();
+        if (typeof light.dispose === 'function') light.dispose();
+    }
 
     Plugin.register('light_manager', {
         title: 'Light Entity Manager',
@@ -1189,6 +1205,8 @@ function initialize_light_plugin() {
         variant: 'both',
 
         onload() {
+            disposeLightManagerResources();
+
             class ComboSlider extends Widget {
                 constructor(id, data) {
                     if (typeof id === 'object') {
@@ -1196,13 +1214,13 @@ function initialize_light_plugin() {
                         id = data.id;
                     }
                     super(id, data);
-                    var scope = this;
+                    const scope = this;
 
                     this.type = 'combo_slider';
                     this.icon = 'fa-sliders-h';
                     this.value = data.value !== undefined ? data.value : 0;
 
-                    // NUEVO: Bandera para saber si el usuario está arrastrando el slider
+                    // Tracks active range dragging so the reset button cannot steal focus.
                     this.isDragging = false;
 
                     this.settings = {
@@ -1216,7 +1234,7 @@ function initialize_light_plugin() {
                         reset_value: data.reset_value !== undefined ? data.reset_value : (data.value !== undefined ? data.value : 0)
                     };
 
-                    // 1. Crear el input tipo Slider (Rango)
+                    // Range slider input.
                     let rangeInput = Interface.createElement('input', {
                         type: 'range',
                         value: this.value,
@@ -1251,10 +1269,10 @@ function initialize_light_plugin() {
                         style: `display: flex;align-items: center;height: 100%;margin: 0 5px;flex: 1 1 auto;min-width: 0;width: auto; `
                     }, [rangeInput, numberContainer]);
 
-                    // 4. Construir la estructura final del Widget
+                    // Build the final widget structure.
                     let containerChildren = [];
 
-                    // Añadir el ICONO (Opcional)
+                    // Optional icon.
                     if (data.icon) {
                         let isFa = data.icon.startsWith('fa-') || data.icon.startsWith('fas ') || data.icon.startsWith('fab ');
                         let iconElement = Interface.createElement('i', {
@@ -1264,7 +1282,7 @@ function initialize_light_plugin() {
                         containerChildren.push(iconElement);
                     }
 
-                    // Añadir el LABEL (Opcional)
+                    // Optional label.
                     if (data.label) {
                         let labelElement = Interface.createElement('span', {
                             style: 'margin-right: 5px; font-size: 13px; color: var(--color-subtle_text); white-space: nowrap; display: flex; align-items: center;'
@@ -1274,11 +1292,11 @@ function initialize_light_plugin() {
 
                     containerChildren.push(comboWrapper);
 
-                    // Crear el botón de reset si está habilitado
+                    // Optional reset button.
                     if (this.settings.resettable) {
                         this.resetBtn = Interface.createElement('i', {
                             class: 'material-icons icon',
-                            title: 'Restablecer valor',
+                            title: 'Reset value',
                             style: `font-size: 18px;cursor: pointer;display: none;margin-left: 2px;color: var(--color-subtle_text);display: flex;align-items: center;`
                         }, 'replay');
 
@@ -1291,7 +1309,7 @@ function initialize_light_plugin() {
                         containerChildren.push(this.resetBtn);
                     }
 
-                    // Estilos dinámicos para el Toolbar
+                    // Dynamic toolbar sizing.
                     let rootStyles = `display: flex;flex-direction: row;align-items: center;height: 30px;padding: 0 4px;min-width: 0;`;
 
                     if (data.grow) {
@@ -1306,7 +1324,7 @@ function initialize_light_plugin() {
                         style: rootStyles
                     }, containerChildren);
 
-                    // Asignar callbacks
+                    // Assign callbacks.
                     if (typeof data.onChange === 'function') {
                         this.onChange = data.onChange;
                     }
@@ -1317,7 +1335,7 @@ function initialize_light_plugin() {
                         this.onAfter = data.onAfter;
                     }
 
-                    // 5. Eventos para sincronizar ambos inputs
+                    // Keep both inputs synchronized.
                     let $inputs = $(this.node).find('input');
                     let $range = $(this.node).find('input[type="range"]');
                     let $number = $(this.node).find('input[type="number"]');
@@ -1343,13 +1361,13 @@ function initialize_light_plugin() {
                         }
                     });
 
-                    // NUEVO: Controlar el estado de arrastre (drag)
+                    // Track dragging state.
                     $range.on('mousedown touchstart', function (event) {
                         scope.isDragging = true;
                         if (scope.onBefore) scope.onBefore(event.originalEvent);
                     });
 
-                    // Al soltar el ratón, se termina el drag y se actualiza el botón
+                    // Finish dragging and refresh reset button visibility.
                     $range.on('mouseup touchend', function (event) {
                         scope.isDragging = false;
                         scope.updateResetButton();
@@ -1360,12 +1378,12 @@ function initialize_light_plugin() {
                     });
 
                     $inputs.on('change', function (event) {
-                        scope.isDragging = false; // Por seguridad nos aseguramos que drag termine
+                        scope.isDragging = false;
                         scope.updateResetButton();
                         if (scope.onAfter) scope.onAfter(event.originalEvent);
                     });
 
-                    // 6. Atajos de teclado
+                    // Keyboard shortcuts.
                     this.addSubKeybind('increase', 'keybindings.item.num_slider.increase', data.sub_keybinds?.increase, (event) => {
                         if (!Condition(this.condition)) return false;
                         if (typeof this.onBefore === 'function') this.onBefore(event);
@@ -1387,12 +1405,11 @@ function initialize_light_plugin() {
                     this.set(this.value);
                 }
 
-                // NUEVO: Método dedicado para mostrar/ocultar el botón
+                // Updates reset button visibility.
                 updateResetButton() {
                     if (!this.settings.resettable || !this.resetBtn) return;
 
-                    // Si el usuario está arrastrando la barra, NO ocultamos/mostramos nada
-                    // para evitar el bug que rompe el "drag"
+                    // Do not change visibility while dragging; it can steal pointer capture.
                     if (this.isDragging) return;
 
                     if (parseFloat(this.value) !== parseFloat(this.settings.reset_value)) {
@@ -1427,7 +1444,7 @@ function initialize_light_plugin() {
                         $number.val(value);
                     }
 
-                    // LÓGICA VISUAL FUERA DE RANGO
+                    // Visual out-of-range state.
                     let isOutOfBounds = false;
 
                     if (this.settings.allow_lower && value < this.settings.min) isOutOfBounds = true;
@@ -1445,7 +1462,7 @@ function initialize_light_plugin() {
                         });
                     }
 
-                    // Llamamos a actualizar el botón, internamente ignorará si 'isDragging' es true
+                    // This internally no-ops while dragging.
                     this.updateResetButton();
                 }
 
@@ -1465,35 +1482,32 @@ function initialize_light_plugin() {
                     this.options = data.options || {};
                     this.onChange = data.onChange;
 
-                    // Extraer las keys de las opciones
+                    // Collect available option keys.
                     for (let key in this.options) {
-                        if (!this.value) this.value = key; // Seleccionar el primero por defecto si no hay value
+                        if (!this.value) this.value = key;
                         this.values.push(key);
                     }
 
-                    // --- CREACIÓN DEL DOM ---
-                    // Contenedor principal
+                    // Main DOM node.
                     this.node = document.createElement('div');
                     this.node.className = 'tool widget compact_dropdown_select';
                     this.node.setAttribute('toolbar_item', this.id);
 
-                    // Contenedor del Icono Principal
+                    // Main icon container.
                     this.icon_wrapper = document.createElement('div');
                     this.icon_wrapper.className = 'main_icon_wrapper';
 
-                    // La flechita desplegable (estilo Blockbench)
+                    // Native-style dropdown arrow.
                     this.arrow_node = document.createElement('i');
                     this.arrow_node.className = 'fas fa-caret-down dropdown_arrow';
 
-                    // Añadir al contenedor
                     this.node.append(this.icon_wrapper, this.arrow_node);
 
-                    // Eventos
                     this.node.addEventListener('click', (event) => {
                         this.open(event);
                     });
 
-                    // Soporte para scroll del ratón (cambiar opciones rápido)
+                    // Mouse wheel support for quick option switching.
                     $(this.node).on('wheel', event => {
                         let e = event.originalEvent;
                         let index = this.values.indexOf(this.value);
@@ -1504,10 +1518,10 @@ function initialize_light_plugin() {
                     });
 
                     this.nodes.push(this.node);
-                    this.set(this.value); // Configurar el icono inicial
+                    this.set(this.value);
                 }
 
-                // Abre el menú nativo de Blockbench con nuestras opciones
+                // Opens the native Blockbench menu with this widget's options.
                 open(event) {
                     if (Menu.closed_in_this_click == this.id) return this;
                     let scope = this;
@@ -1519,7 +1533,7 @@ function initialize_light_plugin() {
                             items.push({
                                 name: opt.name || key,
                                 icon: opt.icon,
-                                color: opt.color, // Soporte para colores nativo en el menú
+                                color: opt.color,
                                 condition: opt.condition,
                                 click: (e) => {
                                     scope.change(key, e);
@@ -1528,20 +1542,20 @@ function initialize_light_plugin() {
                         }
                     }
 
-                    // SOLUCIÓN AL ERROR: Pasamos solo una clase base al constructor
+                    // Pass a single base class to the Menu constructor.
                     let menu = new Menu(this.id, items, { class: 'select_menu' });
 
-                    // Añadimos nuestra clase personalizada de forma segura usando classList
+                    // Add the custom menu class safely through classList.
                     if (menu.node) {
                         menu.node.classList.add('compact_dropdown_menu');
-                        // Ajustamos el ancho mínimo al tamaño de nuestro botón
+                        // Match the menu width to the button.
                         menu.node.style['min-width'] = this.node.clientWidth + 'px';
                     }
 
                     menu.open(this.node, this);
                 }
 
-                // Cambia el valor y dispara los eventos
+                // Changes the value and dispatches widget events.
                 change(value, event) {
                     this.set(value);
                     if (this.onChange) {
@@ -1551,24 +1565,24 @@ function initialize_light_plugin() {
                     return this;
                 }
 
-                // Actualiza el HTML para mostrar el icono de la opción seleccionada
+                // Updates the DOM to show the selected option icon.
                 set(key) {
                     if (!this.options[key]) return this;
                     this.value = key;
                     let opt = this.options[key];
 
-                    // Cambiar el tooltip (hover) para que muestre el nombre del widget y la opción actual
+                    // Tooltip includes the widget name and current option.
                     this.node.title = `${this.name ? this.name + ': ' : ''}${opt.name || key}`;
 
-                    // Reemplazar el icono visual en todas las instancias del widget
+                    // Replace the visible icon in every widget instance.
                     this.nodes.forEach(n => {
                         let wrapper = n.querySelector('.main_icon_wrapper');
                         if (wrapper) {
-                            wrapper.innerHTML = ''; // Limpiar anterior
+                            wrapper.innerHTML = '';
 
                             let iconElement = Blockbench.getIconNode(opt.icon || 'help');
 
-                            // ¡Aplicar color personalizado al icono principal!
+                            // Apply custom color to the main icon.
                             if (opt.color) {
                                 iconElement.style.color = opt.color;
                             }
@@ -1589,12 +1603,12 @@ function initialize_light_plugin() {
                         this.values.push(key);
                     }
 
-                    // Si el valor actual no existe en las nuevas opciones, seleccionar el primero
+                    // Fallback to the first option when the current value no longer exists.
                     if (!this.options[this.value] && this.values.length > 0) {
                         this.value = this.values[0];
                     }
 
-                    // Actualizar la visualización
+                    // Refresh the displayed value.
                     this.set(this.value);
                     return this;
                 }
@@ -1616,35 +1630,35 @@ function initialize_light_plugin() {
 
             class BarDisplay extends Widget {
                 constructor(id, data) {
-                    // Manejo del constructor estándar de Blockbench
+                    // Standard Blockbench constructor handling.
                     if (typeof id == 'object') {
                         data = id;
                         id = data.id;
                     }
                     super(id, data);
-                    this.type = 'bar_display'; // Nuevo tipo para evitar conflictos internos
+                    this.type = 'bar_display';
 
-                    // Propiedades de visualización
+                    // Display state.
                     this.text = data.text || '';
                     this.label = data.label || '';
                     this.color = data.color || '';
                     this.icon_name = data.icon || '';
                     this.is_paragraph = !!data.paragraph;
                     this.expand = !!data.expand;
-                    this.text_alignment = data.text_alignment || 'left'; // 'left', 'center', 'right'
+                    this.text_alignment = data.text_alignment || 'left';
                     this.onUpdate = data.onUpdate;
 
-                    // Construcción del Nodo DOM
+                    // DOM node.
                     this.node = document.createElement('div');
                     this.node.className = `tool widget bar_display ${this.is_paragraph ? 'bar_display_paragraph' : ''}`;
                     this.node.setAttribute('toolbar_item', this.id);
 
-                    // Estilos para un elemento puramente visual
+                    // Visual-only toolbar item.
                     this.node.style.display = 'flex';
                     this.node.style.alignItems = this.is_paragraph ? 'flex-start' : 'center';
                     this.node.style.gap = '6px';
-                    this.node.style.padding = '0 8px'; // Espaciado cómodo en la barra
-                    this.node.style.cursor = 'default'; // Sin cursor de botón
+                    this.node.style.padding = '0 8px';
+                    this.node.style.cursor = 'default';
                     if (this.expand) {
                         this.node.style.flex = '1 1 0';
                         this.node.style.minWidth = '0';
@@ -1652,38 +1666,38 @@ function initialize_light_plugin() {
                     }
                     if (this.color) this.node.style.color = this.color;
 
-                    // Iniciar la estructura interna
+                    // Initialize node tracking.
                     this.nodes = [this.node];
                     this.buildDOM();
 
-                    // Aplicar estado inicial (evaluar condición si existe)
+                    // Apply initial state.
                     this.update();
                 }
 
                 /**
-                 * Construye o reconstruye los elementos internos del DOM
+                 * Builds or rebuilds internal DOM nodes.
                  */
                 buildDOM() {
-                    this.node.innerHTML = ''; // Limpiar previo
+                    this.node.innerHTML = '';
 
-                    // 1. Añadir Ícono (si existe)
+                    // Optional icon.
                     if (this.icon_name) {
                         let icon_node = Blockbench.getIconNode(this.icon_name);
                         icon_node.style.fontSize = '1.1em';
                         this.node.append(icon_node);
                     }
 
-                    // 2. Añadir Label (si existe)
+                    // Optional label.
                     if (this.label) {
                         let label_node = document.createElement('span');
                         label_node.className = 'bar_display_label';
                         label_node.style.fontWeight = 'bold';
-                        label_node.style.opacity = '0.85'; // Diferenciación visual sutil
+                        label_node.style.opacity = '0.85';
                         label_node.innerText = this.label;
                         this.node.append(label_node);
                     }
 
-                    // 3. Añadir Contenedor de Texto
+                    // Text container.
                     let text_node = document.createElement('span');
                     text_node.className = 'bar_display_content';
                     if (this.expand) {
@@ -1692,16 +1706,16 @@ function initialize_light_plugin() {
                     }
                     text_node.style.textAlign = this.text_alignment;
                     if (this.is_paragraph) {
-                        text_node.style.whiteSpace = 'pre-wrap'; // Permite saltos de línea (\n)
+                        text_node.style.whiteSpace = 'pre-wrap';
                         text_node.style.lineHeight = '1.4';
-                        text_node.style.maxWidth = '250px'; // Evita que rompa barras de herramientas
+                        text_node.style.maxWidth = '250px';
                     }
                     text_node.innerHTML = this.text;
                     this.node.append(text_node);
                 }
 
                 /**
-                 * Actualiza el texto principal.
+                 * Updates the main text.
                  */
                 set(text) {
                     this.text = text;
@@ -1713,16 +1727,16 @@ function initialize_light_plugin() {
                 }
 
                 /**
-                 * Actualiza la etiqueta (label).
+                 * Updates the label.
                  */
                 setLabel(label) {
                     this.label = label;
-                    this.buildDOM(); // Reconstruye para asegurar el orden correcto
+                    this.buildDOM();
                     return this;
                 }
 
                 /**
-                 * Actualiza el ícono dinámicamente.
+                 * Updates the icon dynamically.
                  */
                 setIcon(icon) {
                     this.icon_name = icon;
@@ -1731,7 +1745,7 @@ function initialize_light_plugin() {
                 }
 
                 /**
-                 * Cambia el color del texto y el ícono.
+                 * Changes text and icon color.
                  */
                 setColor(color) {
                     this.color = color;
@@ -1742,17 +1756,17 @@ function initialize_light_plugin() {
                 }
 
                 /**
-                 * Función llamada por Blockbench o manualmente para refrescar el widget.
+                 * Called by Blockbench or manually to refresh the widget.
                  */
                 update() {
-                    // Evaluar la condición nativa de Blockbench para mostrar/ocultar
+                    // Evaluate the native Blockbench display condition.
                     let condition_met = Condition(this.condition);
                     this.nodes.forEach(node => {
-                        // Usa 'flex' en lugar de un display genérico para no romper el layout
+                        // Keep flex display so the toolbar layout remains stable.
                         node.style.display = condition_met ? 'flex' : 'none';
                     });
 
-                    // Ejecutar callback personalizado si el dev lo configuró
+                    // Run the optional custom update callback.
                     if (typeof this.onUpdate === 'function') {
                         this.onUpdate(this);
                     }
@@ -1971,7 +1985,7 @@ function initialize_light_plugin() {
 
                 build(bar) {
                     this.bar = bar;
-                    // Obligamos a que ocupe todo el ancho y quitamos márgenes nativos para que luzca como toolbar
+                    // Make it fill the toolbar width without native margins.
                     bar.classList.add('full_width_dialog_bar');
                     bar.style.padding = '0';
                     bar.style.background = 'transparent';
@@ -1991,7 +2005,7 @@ function initialize_light_plugin() {
                         reset_value: data.reset_value !== undefined ? data.reset_value : this.value
                     };
 
-                    // 1. Inputs (IDÉNTICOS a tu código original)
+                    // Inputs.
                     let rangeInput = Interface.createElement('input', {
                         type: 'range',
                         value: this.value,
@@ -2026,10 +2040,10 @@ function initialize_light_plugin() {
                         style: `display: flex;align-items: center;height: 100%;margin: 0 5px;flex: 1 1 auto;min-width: 0;width: auto;`
                     }, [rangeInput, numberContainer]);
 
-                    // 2. Construcción final con la MISMA disposición de tu Widget
+                    // Final widget layout.
                     let containerChildren = [];
 
-                    // Ícono original alineado a la izquierda
+                    // Optional left-aligned icon.
                     if (data.icon) {
                         let isFa = data.icon.startsWith('fa-') || data.icon.startsWith('fas ') || data.icon.startsWith('fab ');
                         let iconElement = Interface.createElement('i', {
@@ -2039,7 +2053,7 @@ function initialize_light_plugin() {
                         containerChildren.push(iconElement);
                     }
 
-                    // Label original integrado y en línea (sin usar el split feo de Blockbench)
+                    // Inline label.
                     if (data.label) {
                         let labelElement = Interface.createElement('span', {
                             style: 'margin-right: 5px; font-size: 13px; color: var(--color-subtle_text); white-space: nowrap; display: flex; align-items: center;'
@@ -2049,7 +2063,7 @@ function initialize_light_plugin() {
 
                     containerChildren.push(comboWrapper);
 
-                    // Botón Reset
+                    // Reset button.
                     if (this.settings.resettable) {
                         this.resetBtn = Interface.createElement('i', {
                             class: 'material-icons icon',
@@ -2065,7 +2079,7 @@ function initialize_light_plugin() {
                         containerChildren.push(this.resetBtn);
                     }
 
-                    // 3. Contenedor Raíz
+                    // Root container.
                     this.node = Interface.createElement('div', {
                         class: 'tool widget',
                         style: `display: flex;flex-direction: row;align-items: center;height: 30px;padding: 0 4px;min-width: 0; width: 100%; box-sizing: border-box;`
@@ -2073,7 +2087,7 @@ function initialize_light_plugin() {
 
                     bar.append(this.node);
 
-                    // 4. Eventos idénticos
+                    // Match native event behavior.
                     let scope = this;
                     let $inputs = $(this.node).find('input');
                     let $range = $(this.node).find('input[type="range"]');
@@ -2083,7 +2097,7 @@ function initialize_light_plugin() {
                         let val = parseFloat($(event.target).val());
                         if (isNaN(val)) return;
                         let is_number_input = event.target === $number[0];
-                        scope.setValue(val, false, is_number_input); // Actualizar visual y notificar
+                        scope.setValue(val, false, is_number_input);
                         scope.change();
                     });
 
@@ -2176,7 +2190,7 @@ function initialize_light_plugin() {
                     this.values = Object.keys(this.options_dict);
                     this.value = data.value !== undefined ? data.value : (data.default !== undefined ? data.default : this.values[0]);
 
-                    // DOM del botón idéntico al original
+                    // Button DOM mirrors the original widget.
                     this.node = document.createElement('div');
                     this.node.className = 'tool widget compact_dropdown_select';
                     this.node.style = 'display: flex; align-items: center; cursor: pointer; padding: 2px 6px; background: var(--color-button); border-radius: 2px; height: 30px; box-sizing: border-box; flex-shrink: 0;';
@@ -2191,7 +2205,7 @@ function initialize_light_plugin() {
 
                     this.node.append(this.icon_wrapper, this.arrow_node);
 
-                    // Agrupar con el Label si existe (pero sin separar la fila a la mitad)
+                    // Group with the label when present without splitting the row in half.
                     let outerContainer = document.createElement('div');
                     outerContainer.style = 'display: flex; align-items: center; gap: 8px; width: 100%; height: 30px; padding: 0 4px; box-sizing: border-box;';
 
@@ -2205,7 +2219,7 @@ function initialize_light_plugin() {
                     outerContainer.append(this.node);
                     bar.append(outerContainer);
 
-                    // Eventos
+                    // Events.
                     this.node.addEventListener('click', (event) => {
                         this.open(event);
                     });
@@ -2552,7 +2566,7 @@ function initialize_light_plugin() {
                 get uses_wide_inputs() { return true; }
 
                 setup() {
-                    // Quitamos la inyección automática del '?' para ponerla nosotros de forma nativa junto al título
+                    // Own the help icon placement so it sits natively beside the title.
                     let tempDesc = this.options.description;
                     this.options.description = null;
                     super.setup();
@@ -2570,7 +2584,7 @@ function initialize_light_plugin() {
                     let data = this.options;
                     this.dimensions = data.dimensions || 3;
 
-                    // Inicializar los valores y parsear de forma segura a floats
+                    // Initialize values and parse them safely as floats.
                     this.value = Array.isArray(data.value) ? data.value.slice() : new Array(this.dimensions).fill(0);
                     if (!data.value && Array.isArray(data.default)) {
                         this.value = data.default.slice();
@@ -2601,9 +2615,8 @@ function initialize_light_plugin() {
                         }
                     }
 
-                    // --- 1. TÍTULO Y BOTÓN DE RESET ---
+                    // Title and reset button.
                     let labelWrapper = document.createElement('div');
-                    // space-between asegura que el Reset vaya a la derecha y el Label se quede en la izquierda
                     labelWrapper.style = 'margin-bottom: 4px; display: flex; align-items: center; justify-content: space-between; width: 100%;';
 
                     let titleGroup = document.createElement('div');
@@ -2611,7 +2624,7 @@ function initialize_light_plugin() {
 
                     if (data.label) {
                         let labelElement = document.createElement('span');
-                        // Color igualado al del combo_slider
+                        // Match combo_slider label color.
                         labelElement.style = 'font-size: 13px; color: var(--color-subtle_text); display: flex; align-items: center; white-space: nowrap;';
                         labelElement.innerText = (typeof tl !== 'undefined' ? tl(data.label) : data.label);
                         titleGroup.append(labelElement);
@@ -2642,7 +2655,7 @@ function initialize_light_plugin() {
                         resetBtn.className = 'material-icons icon';
                         resetBtn.innerText = 'replay';
                         resetBtn.title = 'Reset Vector';
-                        // Icono replicado exactamente en aspecto y tamaño a tus otros componentes
+                        // Match the icon size and spacing used by the other controls.
                         resetBtn.style = 'font-size: 18px; padding: 2px; color: var(--color-subtle_text); cursor: pointer; display: flex; align-items: center;';
                         resetBtn.onclick = () => {
                             let defaultArr = Array.isArray(data.default) ? data.default : new Array(this.dimensions).fill(0);
@@ -2656,11 +2669,11 @@ function initialize_light_plugin() {
 
                     bar.append(labelWrapper);
 
-                    // --- 2. CONTENEDOR DE INPUTS ---
+                    // Input container.
                     this.inputs_container = document.createElement('div');
                     this.inputs_container.style = has_any_range
-                        ? 'display: flex; flex-direction: column; gap: 4px; width: 100%;' // Apilados verticalmente (combo-style)
-                        : 'display: flex; flex-direction: row; gap: 4px; width: 100%;';   // Distribuidos horizontalmente (numslider nativo)
+                        ? 'display: flex; flex-direction: column; gap: 4px; width: 100%;'
+                        : 'display: flex; flex-direction: row; gap: 4px; width: 100%;';
 
                     bar.append(this.inputs_container);
                     this.inputs = [];
@@ -2680,7 +2693,7 @@ function initialize_light_plugin() {
 
                         let is_range = minVal !== undefined && maxVal !== undefined;
 
-                        // Wrapper de Fila (Usado solo si al menos hay UN slider presente en este Vector)
+                        // Row wrapper, used only when the vector has at least one slider.
                         let rowContainer = null;
                         if (has_any_range) {
                             rowContainer = document.createElement('div');
@@ -2693,7 +2706,7 @@ function initialize_light_plugin() {
                         }
 
                         if (is_range) {
-                            // --- MODO: REPLICA EXACTA DE COMBO_SLIDER ---
+                            // Combo-slider style mode.
                             let sliderInitVal = val;
                             if (!allowLower && sliderInitVal < minVal) sliderInitVal = minVal;
                             if (!allowHigher && sliderInitVal > maxVal) sliderInitVal = maxVal;
@@ -2735,7 +2748,7 @@ function initialize_light_plugin() {
                                 this.inputs_container.append(rowContainer);
                             }
 
-                            // Comportamiento visual de limites de "combo_slider"
+                            // combo_slider-style out-of-range visuals.
                             let updateVisuals = (currentVal) => {
                                 let isOutOfBounds = false;
                                 if (allowLower && currentVal < minVal) isOutOfBounds = true;
@@ -2890,7 +2903,7 @@ function initialize_light_plugin() {
                             numberInput.addEventListener('contextmenu', showContextMenu);
 
                         } else {
-                            // --- MODO: NUMSLIDER MANUAL Y SEGURO ---
+                            // Manual safe NumSlider mode.
                             let numSliderNode = document.createElement('div');
                             numSliderNode.className = 'tool wide widget nslide_tool';
 
@@ -2926,7 +2939,7 @@ function initialize_light_plugin() {
                                 if (isNaN(num)) num = 0;
                                 if (data.integer) num = Math.round(num);
 
-                                // Float seguro para prevenir el error "i.toFixed is not a function"
+                                // Safe float to prevent the "i.toFixed is not a function" error.
                                 let trimmed = typeof trimFloatNumber !== 'undefined' ? trimFloatNumber(num) : num;
                                 this.value[i] = trimmed;
                                 nslideInner.innerText = trimmed;
@@ -3236,7 +3249,7 @@ function initialize_light_plugin() {
                 }
             };
 
-            Blockbench.addCSS(
+            const compactWidgetStyles = Blockbench.addCSS(
                 `.compact_dropdown_select {
                     display: flex !important;
                     align-items: center;
@@ -3256,7 +3269,7 @@ function initialize_light_plugin() {
                     display: flex;
                     align-items: center;
                     justify-content: center;
-                    font-size: 16px; /* Tamaño del icono */
+                    font-size: 16px; /* Icon size. */
                 }
 
                 .compact_dropdown_select .dropdown_arrow {
@@ -3266,6 +3279,7 @@ function initialize_light_plugin() {
                     opacity: 0.6;
                 }`
             );
+            deletables.push(compactWidgetStyles);
 
 
             // Configure three-dimensional textures based on the base64 dictionary
@@ -3668,7 +3682,7 @@ function initialize_light_plugin() {
                 displayPosition(arr, multiplier = 1) {
                     let mesh = this.element.mesh;
                     if (arr && mesh) {
-                        mesh.position.x += arr[0] * multiplier * anim_sign;
+                        mesh.position.x += arr[0] * multiplier * animationSign;
                         mesh.position.y += arr[1] * multiplier;
                         mesh.position.z += arr[2] * multiplier;
                     }
@@ -3716,10 +3730,10 @@ function initialize_light_plugin() {
                     let mesh = this.element.mesh;
                     if (arr && mesh) {
                         let baseIntensity = LightManagerUtils.num(this.element.intensity, 1, 0, 100000);
-                        let final_intensity = Math.max(0, baseIntensity + (arr[0] - baseIntensity) * multiplier);
-                        let base_scale = Math.max(0.1, Math.sqrt(final_intensity));
-                        mesh.scale.setScalar(this.element.selected ? base_scale * 1.2 : base_scale);
-                        this.element.render_intensity = final_intensity;
+                        let finalIntensity = Math.max(0, baseIntensity + (arr[0] - baseIntensity) * multiplier);
+                        let baseScale = Math.max(0.1, Math.sqrt(finalIntensity));
+                        mesh.scale.setScalar(this.element.selected ? baseScale * 1.2 : baseScale);
+                        this.element.render_intensity = finalIntensity;
                     }
                     return this;
                 }
@@ -3835,14 +3849,24 @@ function initialize_light_plugin() {
                 label: 'dialog.preview_options.show_light_area_gizmos', type: 'checkbox',
                 style: 'toggle_switch', value: window.LightManagerAreaGizmos.enabled
             };
-            //ViewOptionsDialog.form.buildForm();
-            let last_viewOptions_OnFormChange = ViewOptionsDialog.onFormChange;
-            ViewOptionsDialog.onFormChange = (result) => {
+            let previousViewOptionsOnFormChange = ViewOptionsDialog.onFormChange;
+            let lightManagerViewOptionsOnFormChange = (result) => {
                 if (result.show_light_area_gizmos !== undefined) {
                     window.LightManagerAreaGizmos.setEnabled(result.show_light_area_gizmos);
                 }
-                last_viewOptions_OnFormChange(result);
+                if (typeof previousViewOptionsOnFormChange === 'function') {
+                    previousViewOptionsOnFormChange(result);
+                }
             };
+            ViewOptionsDialog.onFormChange = lightManagerViewOptionsOnFormChange;
+            deletables.push({
+                delete: () => {
+                    if (ViewOptionsDialog.onFormChange === lightManagerViewOptionsOnFormChange) {
+                        ViewOptionsDialog.onFormChange = previousViewOptionsOnFormChange;
+                    }
+                    delete ViewOptionsDialog.form_config.show_light_area_gizmos;
+                }
+            });
 
             let fitLightBoundsAction = new Action('fit_light_bounds_to_selection', {
                 name: 'Fit Lights to Selection...',
@@ -4451,7 +4475,7 @@ function initialize_light_plugin() {
                 light_shadow_bias_settings_toolbar
             });
 
-            let light_properties_panel = new Panel('light_properties', {
+            let lightPropertiesPanel = new Panel('light_properties', {
                 icon: 'lightbulb',
                 growable: true,
                 resizable: true,
@@ -4496,24 +4520,19 @@ function initialize_light_plugin() {
                 toolbars: [
                     light_quickbuttons_toolbar,
                     light_settings_toolbar,
-
-
-
-
                     light_shadow_clip_settings_toolbar,
-
                     light_shadow_bias_settings_toolbar
                 ]
             });
-            window.light_properties_panel = light_properties_panel;
+            window.light_properties_panel = lightPropertiesPanel;
             window.LIGHT_SETTINGS_GROUP = LIGHT_SETTINGS_GROUP;
 
-            let styles = Blockbench.addCSS(`
+            const lightPanelStyles = Blockbench.addCSS(`
                 #panel_light_properties {
                     overflow-y: auto !important;
                     overflow-x: hidden;
                 }
-                /* Opcional: Estilizar la barra de desplazamiento para que se vea nativa de Blockbench */
+                /* Match the native Blockbench scrollbar style. */
                 #panel_light_properties::-webkit-scrollbar {
                     width: 6px;
                 }
@@ -4523,11 +4542,12 @@ function initialize_light_plugin() {
                 }
 
             `);
+            deletables.push(lightPanelStyles);
 
             let lightPanelSelectionListener = Blockbench.on('update_selection', () => {
                 const light = getSelectedLight();
                 if (light) syncLightSettingsPanel(light);
-                if (light_properties_panel.isVisible() && LightElement.selected.length === 0) {
+                if (lightPropertiesPanel.isVisible() && LightElement.selected.length === 0) {
                     Panels.transform.selectTab();
                     if (Project.mode === 'render') {
                         Panels.material_properties.selectTab(Panels.material_properties);
@@ -4538,6 +4558,10 @@ function initialize_light_plugin() {
                 }
             });
             deletables.push(lightPanelSelectionListener);
+            Object.values(LIGHT_SETTINGS_GROUP).forEach(item => {
+                if (item && typeof item.delete === 'function') deletables.push(item);
+            });
+            deletables.push(lightPropertiesPanel);
 
             window.LIGHT_MANAGER_LOADED = true;
             window.dispatchEvent(new CustomEvent('light_manager_initialized', {
@@ -4548,17 +4572,11 @@ function initialize_light_plugin() {
 
         onunload() {
             window.LightManagerAreaGizmos?.clear();
-            deletables.forEach(item => {
-                if (item && typeof item.delete === 'function') item.delete();
-            });
+            disposeLightManagerResources();
 
             Object.keys(window.three_lights || {}).forEach(uuid => {
                 const light = window.three_lights[uuid];
-                if (!light) return;
-                if (light.parent) light.parent.remove(light);
-                if (light.target && light.target.parent) light.target.parent.remove(light.target);
-                if (light.shadow && light.shadow.map) light.shadow.map.dispose();
-                if (typeof light.dispose === 'function') light.dispose();
+                disposeThreeLight(light);
                 delete window.three_lights[uuid];
             });
 
@@ -4573,17 +4591,26 @@ function initialize_light_plugin() {
                 }
                 delete lightTextures[key];
             });
+            lightTextures = {};
 
             delete OutlinerElement.types.light;
             if (NodePreviewController.controllers && NodePreviewController.controllers.light) {
                 NodePreviewController.controllers.light.delete();
             }
 
+            delete window.LIGHT_MANAGER_LOADED;
+            delete window.ComboSlider;
+            delete window.CompactDropdownSelect;
+            delete window.BarDisplay;
+            delete window.TextInputWidget;
+            delete window.light_properties_panel;
+            delete window.LIGHT_SETTINGS_GROUP;
             delete window.LightElement;
             delete window.LightAnimator;
             delete window.LightManagerAreaGizmos;
             delete window.LightManagerFitTool;
             delete window.update_light_element_callback;
+            if (window.generateIconBase64 === generateIconBase64) delete window.generateIconBase64;
         }
     });
 }
