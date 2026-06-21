@@ -1,6 +1,6 @@
 /**
  * @name Shader Architect
- * @description A standalone Blockbench plugin dedicated to switching Render Modes, 
+ * @description A standalone Blockbench plugin dedicated to switching Render Modes,
  * assigning specific shaders to parts, and providing a full GLSL Shader Material Studio.
  * Features custom JSON format export (.samat), time animations, and per-cube control.
  */
@@ -11,6 +11,7 @@
         if (!name) return false;
         const lower = name.toLowerCase();
         return ['max_light_number', 'map', 'lightside', 'shade', 'emissive', 'lightcolor', 'uambient', 'uambientcolor', 'utime', 'uworldnormalmatrix', 'texture_size'].includes(lower) ||
+            lower.startsWith('usa_ssr') ||
             lower.startsWith('ulight') ||
             lower.startsWith('light_');
     }
@@ -155,8 +156,14 @@
                 if (parenDepth === 0) {
                     normalizedCode += '\n';
                 }
+            } else if (char === ' ') {
+                if (!normalizedCode.endsWith('\n')) {
+                    normalizedCode += char;
+                }
             } else if (char === '\n') {
-                normalizedCode += '\n';
+                if (!normalizedCode.endsWith('\n')) {
+                    normalizedCode += '\n';
+                }
             } else {
                 normalizedCode += char;
             }
@@ -173,26 +180,49 @@
             s = s.replace(/\)\s*\{/g, ') {');
             // Space after commas
             s = s.replace(/,\s*/g, ', ');
+            // Space after semicolons inside for-loop headers
+            s = s.replace(/;\s*/g, '; ');
 
             // Normalize spaces around binary operators
-            const operators = ['\\+=', '-=', '\\*=', '/=', '==', '!=', '<=', '>=', '&&', '\\|\\|', '='];
+            const operators = [
+                { pattern: '\\+=', text: '+=' },
+                { pattern: '-=', text: '-=' },
+                { pattern: '\\*=', text: '*=' },
+                { pattern: '/=', text: '/=' },
+                { pattern: '==', text: '==' },
+                { pattern: '!=', text: '!=' },
+                { pattern: '<=', text: '<=' },
+                { pattern: '>=', text: '>=' },
+                { pattern: '&&', text: '&&' },
+                { pattern: '\\|\\|', text: '||' },
+                { pattern: '=', text: '=' }
+            ];
             operators.forEach(op => {
-                const regex = new RegExp('\\s*' + op + '\\s*', 'g');
-                s = s.replace(regex, ` ${op.replace('\\', '')} `);
+                const regex = new RegExp('\\s*' + op.pattern + '\\s*', 'g');
+                s = s.replace(regex, ` ${op.text} `);
             });
 
             // Adjust comparison operators that might get mangled by the single '=' rule
             s = s.replace(/\s*=\s*=\s*/g, ' == ');
             s = s.replace(/\s*!\s*=\s*/g, ' != ');
             s = s.replace(/\s*\+\s*=\s*/g, ' += ');
-            s = s.replace(/\s*-\s*-\s*/g, ' -= ');
+            s = s.replace(/\s*-\s*=\s*/g, ' -= ');
             s = s.replace(/\s*\*\s*=\s*/g, ' *= ');
             s = s.replace(/\s*\/\s*=\s*/g, ' /= ');
             s = s.replace(/\s*<\s*=\s*/g, ' <= ');
             s = s.replace(/\s*>\s*=\s*/g, ' >= ');
+            s = s.replace(/\s*<\s*(?!=)\s*/g, ' < ');
+            s = s.replace(/\s*>\s*(?!=)\s*/g, ' > ');
 
             // Normalize spaces around math operators (+, -, *, /)
             s = s.replace(/\s*([+\-*/])\s*/g, ' $1 ');
+            s = s.replace(/(^|[=(,\[{]\s*)-\s+/g, '$1-');
+            s = s.replace(/\s*\+\s*=\s*/g, ' += ');
+            s = s.replace(/\s*-\s*=\s*/g, ' -= ');
+            s = s.replace(/\s*\*\s*=\s*/g, ' *= ');
+            s = s.replace(/\s*\/\s*=\s*/g, ' /= ');
+            s = s.replace(/\s*<\s*=\s*/g, ' <= ');
+            s = s.replace(/\s*>\s*=\s*/g, ' >= ');
 
             // Fix double-spacing that might have occurred
             s = s.replace(/\s+/g, ' ');
@@ -201,7 +231,7 @@
             s = s.replace(/\s*\+\s*\+\s*/g, '++');
             s = s.replace(/\s*-\s*-\s*/g, '--');
 
-            return s;
+            return s.trim();
         }
 
         let linesToProcess = normalizedCode.split('\n');
@@ -340,6 +370,8 @@
         'shader_architect.material_panel.create_instance.desc': 'Create a project material instance from a base material and assign it to the selected cubes.',
         'shader_architect.material_panel.delete_instance': 'Delete Material Instance',
         'shader_architect.material_panel.delete_instance.desc': 'Delete the selected material instance from this project and clear it from every cube using it.',
+        'shader_architect.material_panel.show_advanced': 'Advanced controls',
+        'shader_architect.material_panel.show_advanced.desc': 'Show technical material controls for detailed tuning.',
         'shader_architect.material_panel.undo.create_instance': 'Create material instance',
         'shader_architect.material_panel.undo.delete_instance': 'Delete material instance',
         'shader_architect.material_panel.undo.assign_instance': 'Assign material instance',
@@ -374,28 +406,28 @@
         "shader_architect.uniform.LIGHTSIDE.desc": "Side direction representing the main lighting vector",
         "shader_architect.uniform.EMISSIVE": "Emissive Glow",
         "shader_architect.uniform.EMISSIVE.desc": "Treat textures as fully self-illuminated/emissive",
-        "shader_architect.uniform.max_light_number": "Max Lights",
-        "shader_architect.uniform.max_light_number.desc": "Maximum number of active light sources to calculate",
-        "shader_architect.uniform.uAmbient": "Ambient Int",
-        "shader_architect.uniform.uAmbient.desc": "Multiplier for ambient environment lighting intensity",
+        "shader_architect.uniform.max_light_number": "Active Lights",
+        "shader_architect.uniform.max_light_number.desc": "Number of Light Manager lights sampled by this material",
+        "shader_architect.uniform.uAmbient": "Ambient Light",
+        "shader_architect.uniform.uAmbient.desc": "Baseline light level in unlit areas",
         "shader_architect.uniform.uAmbientColor": "Ambient Color",
         "shader_architect.uniform.uAmbientColor.desc": "Color of the background ambient light source",
-        "shader_architect.uniform.uExposure": "Exposure",
-        "shader_architect.uniform.uExposure.desc": "Exposure multiplier for color mapping",
-        "shader_architect.uniform.uToneMapping": "Tone Mapping",
+        "shader_architect.uniform.uExposure": "Brightness",
+        "shader_architect.uniform.uExposure.desc": "Overall brightness after lighting",
+        "shader_architect.uniform.uToneMapping": "Color Mapping",
         "shader_architect.uniform.uToneMapping.desc": "Algorithm for mapping high dynamic range color values",
-        "shader_architect.uniform.uUseToneMapping": "Tone Mapping",
+        "shader_architect.uniform.uUseToneMapping": "Color Mapping",
         "shader_architect.uniform.uUseToneMapping.desc": "Algorithm for mapping high dynamic range color values",
-        "shader_architect.uniform.uStylizedNormalInfluence": "Stylized Normal",
-        "shader_architect.uniform.uStylizedNormalInfluence.desc": "Blend factor between realistic physical normals and stylized light direction normals",
-        "shader_architect.uniform.uLightWrap": "Light Wrap",
-        "shader_architect.uniform.uLightWrap.desc": "Enables light to wrap around curved edges for softer shading",
-        "shader_architect.uniform.uAOEnabled": "AO Enabled",
-        "shader_architect.uniform.uAOEnabled.desc": "Toggle baked Ambient Occlusion calculations",
-        "shader_architect.uniform.uAOStrength": "AO Strength",
-        "shader_architect.uniform.uAOStrength.desc": "Intensity of ambient occlusion shadows",
-        "shader_architect.uniform.uAORadius": "AO Radius",
-        "shader_architect.uniform.uAORadius.desc": "Sampling radius for ambient occlusion detection",
+        "shader_architect.uniform.uStylizedNormalInfluence": "Stylized Shape",
+        "shader_architect.uniform.uStylizedNormalInfluence.desc": "How much Blockbench-style side lighting shapes the material",
+        "shader_architect.uniform.uLightWrap": "Soft Light",
+        "shader_architect.uniform.uLightWrap.desc": "Lets light wrap onto edges for a softer stylized look",
+        "shader_architect.uniform.uAOEnabled": "Contact Shadows",
+        "shader_architect.uniform.uAOEnabled.desc": "Toggle stylized contact shadowing",
+        "shader_architect.uniform.uAOStrength": "Contact Strength",
+        "shader_architect.uniform.uAOStrength.desc": "Intensity of contact shadows",
+        "shader_architect.uniform.uAORadius": "Contact Size",
+        "shader_architect.uniform.uAORadius.desc": "How far contact shadows spread from edges and corners",
         "shader_architect.uniform.uAOPower": "AO Power",
         "shader_architect.uniform.uAOPower.desc": "Exponent curve adjustment for ambient occlusion falloff",
         "shader_architect.uniform.uAOMin": "AO Min",
@@ -486,6 +518,34 @@
         "shader_architect.uniform.uEnvSpecularStrength.desc": "Intensity of specular reflection from the environment environment",
         "shader_architect.uniform.uSpecularIntensity": "Specular Int",
         "shader_architect.uniform.uSpecularIntensity.desc": "General multiplier for direct specular highlight highlights",
+        "shader_architect.uniform.uSSREnabled": "Reflections",
+        "shader_architect.uniform.uSSREnabled.desc": "Enable real screen-space reflections for this material",
+        "shader_architect.uniform.uSSRIntensity": "Reflection Strength",
+        "shader_architect.uniform.uSSRIntensity.desc": "How visible the reflected scene appears on this material",
+        "shader_architect.uniform.uSSRRoughness": "Reflection Softness",
+        "shader_architect.uniform.uSSRRoughness.desc": "How soft and blurry the reflected scene appears",
+        "shader_architect.uniform.uSSRThickness": "SSR Thickness",
+        "shader_architect.uniform.uSSRThickness.desc": "Depth hit tolerance used while raymarching reflections",
+        "shader_architect.uniform.uSSRMaxDistance": "SSR Distance",
+        "shader_architect.uniform.uSSRMaxDistance.desc": "Maximum screen-space ray distance for reflected hits",
+        "shader_architect.uniform.uSSRDistortion": "SSR Distortion",
+        "shader_architect.uniform.uSSRDistortion.desc": "Subtle animated distortion applied to reflected samples",
+        "shader_architect.uniform.uSSRFresnelPower": "SSR Fresnel Pow",
+        "shader_architect.uniform.uSSRFresnelPower.desc": "Fresnel curve sharpness for grazing-angle reflections",
+        "shader_architect.uniform.uSSRFresnelStrength": "SSR Fresnel Str",
+        "shader_architect.uniform.uSSRFresnelStrength.desc": "How much Fresnel affects reflection visibility",
+        "shader_architect.uniform.uSSREdgeFade": "SSR Edge Fade",
+        "shader_architect.uniform.uSSREdgeFade.desc": "Fade width near screen borders",
+        "shader_architect.uniform.uSSRDistanceFade": "SSR Dist Fade",
+        "shader_architect.uniform.uSSRDistanceFade.desc": "Distance ratio where reflected hits start fading out",
+        "shader_architect.uniform.uSSRDepthBias": "SSR Depth Bias",
+        "shader_architect.uniform.uSSRDepthBias.desc": "Extra ray thickness added with distance to stabilize hits",
+        "shader_architect.uniform.uSSRQuality": "SSR Quality",
+        "shader_architect.uniform.uSSRQuality.desc": "Raymarch quality used by screen-space reflections",
+        "shader_architect.uniform.uSSRRenderScale": "SSR Render Scale",
+        "shader_architect.uniform.uSSRRenderScale.desc": "Internal capture resolution scale for screen-space reflections",
+        "shader_architect.uniform.uSSRFrameInterval": "SSR Refresh Rate",
+        "shader_architect.uniform.uSSRFrameInterval.desc": "How often reflections refresh while previewing",
         "shader_architect.uniform.uShadowStrength": "Shadow Strength",
         "shader_architect.uniform.uShadowStrength.desc": "Darkness intensity of cast shadows",
         "shader_architect.uniform.uShadowFloor": "Shadow Floor",
@@ -495,6 +555,12 @@
         "shader_architect.ui.format": "Format GLSL Code (Shift+Alt+F)",
         "shader_architect.ui.validate": "Compile & Link Shader (Ctrl+S)",
         "shader_architect.ui.apply": "Apply live updates to scene",
+        "shader_architect.ui.toggle_shadows": "Toggle material shadow support",
+        "shader_architect.ui.toggle_reflections": "Toggle material screen-space reflection support",
+        "shader_architect.toast.shadows_enabled": "Material shadows enabled",
+        "shader_architect.toast.shadows_disabled": "Material shadows disabled",
+        "shader_architect.toast.reflections_enabled": "Screen-space reflections enabled",
+        "shader_architect.toast.reflections_disabled": "Screen-space reflections disabled",
         "shader_architect.ui.problems": "Problems",
         "shader_architect.ui.no_problems": "No problems detected in shader.",
         "shader_architect.ui.status_ok": "Ready",
@@ -520,6 +586,8 @@
         'shader_architect.material_panel.create_instance.desc': 'Crea una instancia de material del proyecto desde un material base y la asigna a los cubos seleccionados.',
         'shader_architect.material_panel.delete_instance': 'Eliminar instancia de material',
         'shader_architect.material_panel.delete_instance.desc': 'Elimina la instancia de material seleccionada del proyecto y la limpia de todos los cubos que la usan.',
+        'shader_architect.material_panel.show_advanced': 'Controles avanzados',
+        'shader_architect.material_panel.show_advanced.desc': 'Muestra controles tecnicos del material para ajuste detallado.',
         'shader_architect.material_panel.undo.create_instance': 'Crear instancia de material',
         'shader_architect.material_panel.undo.delete_instance': 'Eliminar instancia de material',
         'shader_architect.material_panel.undo.assign_instance': 'Asignar instancia de material',
@@ -544,11 +612,39 @@
         "shader_architect.preset.pixelated_shaded_lightflow": "Luces con Sombra Pixeladas",
 
         "shader_architect.preset.pbr": "Standard PBR",
+        "shader_architect.uniform.uSSREnabled": "Reflejos",
+        "shader_architect.uniform.uSSREnabled.desc": "Activa reflejos reales en espacio de pantalla para este material",
+        "shader_architect.uniform.uSSRIntensity": "Fuerza de reflejo",
+        "shader_architect.uniform.uSSRIntensity.desc": "Que tan visible aparece la escena reflejada sobre el material",
+        "shader_architect.uniform.uSSRRoughness": "Suavidad de reflejo",
+        "shader_architect.uniform.uSSRRoughness.desc": "Que tan suave o borrosa aparece la escena reflejada",
+        "shader_architect.uniform.uExposure": "Brillo",
+        "shader_architect.uniform.uExposure.desc": "Brillo general despues de calcular la luz",
+        "shader_architect.uniform.uStylizedNormalInfluence": "Forma estilizada",
+        "shader_architect.uniform.uStylizedNormalInfluence.desc": "Cuanto la iluminacion lateral estilo Blockbench moldea el material",
+        "shader_architect.uniform.uLightWrap": "Luz suave",
+        "shader_architect.uniform.uLightWrap.desc": "Permite que la luz envuelva bordes para un estilo mas suave",
+        "shader_architect.uniform.uAOEnabled": "Sombras de contacto",
+        "shader_architect.uniform.uAOEnabled.desc": "Activa sombras de contacto estilizadas",
+        "shader_architect.uniform.uAOStrength": "Fuerza de contacto",
+        "shader_architect.uniform.uAOStrength.desc": "Intensidad de las sombras de contacto",
+        "shader_architect.uniform.uAORadius": "Tamano de contacto",
+        "shader_architect.uniform.uAORadius.desc": "Que tanto se extienden las sombras desde bordes y esquinas",
+        "shader_architect.uniform.uShadowStrength": "Fuerza de sombra",
+        "shader_architect.uniform.uShadowStrength.desc": "Intensidad de las sombras proyectadas",
+        "shader_architect.uniform.uShadowFloor": "Piso de sombra",
+        "shader_architect.uniform.uShadowFloor.desc": "Brillo minimo dentro de las sombras",
         "shader_architect.ui.toggle_left": "Alternar Biblioteca de Materiales (Ctrl+B)",
         "shader_architect.ui.toggle_right": "Alternar Barra Lateral de Propiedades",
         "shader_architect.ui.format": "Formatear Código GLSL (Shift+Alt+F)",
         "shader_architect.ui.validate": "Compilar y Vincular Shader (Ctrl+S)",
         "shader_architect.ui.apply": "Aplicar cambios en vivo a la escena",
+        "shader_architect.ui.toggle_shadows": "Alternar soporte de sombras del material",
+        "shader_architect.ui.toggle_reflections": "Alternar soporte de reflejos en espacio de pantalla",
+        "shader_architect.toast.shadows_enabled": "Sombras del material activadas",
+        "shader_architect.toast.shadows_disabled": "Sombras del material desactivadas",
+        "shader_architect.toast.reflections_enabled": "Reflejos en espacio de pantalla activados",
+        "shader_architect.toast.reflections_disabled": "Reflejos en espacio de pantalla desactivados",
         "shader_architect.ui.problems": "Problemas",
         "shader_architect.ui.no_problems": "No se detectaron problemas en el shader.",
         "shader_architect.ui.status_ok": "Listo",
@@ -572,6 +668,258 @@
     const FACE_MATERIAL_INSTANCES_PROP = 'sa_face_material_instance_ids';
     const CUBE_FACE_NAMES = ['north', 'south', 'east', 'west', 'up', 'down'];
     const MATERIAL_SLOT_FACE_ORDER = ['east', 'west', 'up', 'down', 'south', 'north'];
+    const SCREEN_SPACE_REFLECTION_TARGET_MAX_SIZE = 960;
+
+    function cloneUniformValue(value) {
+        if (value && typeof value.clone === 'function') return value.clone();
+        if (Array.isArray(value)) return value.map(v => cloneUniformValue(v));
+        if (value && typeof value === 'object') return Object.assign({}, value);
+        return value;
+    }
+
+    function cloneUniformDefinition(def) {
+        const clone = {};
+        for (const key in def) {
+            if (key === 'value') continue;
+            clone[key] = cloneUniformValue(def[key]);
+        }
+        clone.value = cloneUniformValue(def.value);
+        if (clone.advanced === undefined) clone.advanced = false;
+        return clone;
+    }
+
+    function createScreenSpaceReflectionUniforms(options = {}) {
+        const valueFor = (name, fallback) => {
+            if (options[name] !== undefined) return options[name];
+            const alias = name.replace(/^uSSR/, '');
+            const lowerAlias = alias.charAt(0).toLowerCase() + alias.slice(1);
+            return options[lowerAlias] !== undefined ? options[lowerAlias] : fallback;
+        };
+        const exposeMain = valueFor('uSSRExposeMain', true) !== false;
+        const exposeAdvanced = valueFor('uSSRExposeAdvanced', true) !== false;
+        const exposePerformance = valueFor('uSSRExposePerformance', exposeAdvanced) !== false;
+
+        const uniforms = {
+            uSSREnabled: { type: 'bool', value: !!valueFor('uSSREnabled', false), expose: exposeMain, advanced: false },
+            uSSRIntensity: { type: 'float', value: valueFor('uSSRIntensity', 0.75), expose: exposeMain, advanced: false, min: 0.0, max: 1.0, step: 0.05, allow_higher: true, allow_lower: false },
+            uSSRRoughness: { type: 'float', value: valueFor('uSSRRoughness', 0.18), expose: exposeMain, advanced: false, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
+            uSSRThickness: { type: 'float', value: valueFor('uSSRThickness', 0.12), expose: exposeAdvanced, advanced: true, min: 0.01, max: 4.0, step: 0.01, allow_higher: true, allow_lower: false },
+            uSSRMaxDistance: { type: 'float', value: valueFor('uSSRMaxDistance', 32.0), expose: exposeAdvanced, advanced: true, min: 1.0, max: 256.0, step: 1.0, allow_higher: true, allow_lower: false },
+            uSSRDistortion: { type: 'float', value: valueFor('uSSRDistortion', 0.04), expose: exposeAdvanced, advanced: true, min: 0.0, max: 0.5, step: 0.01, allow_higher: false, allow_lower: false },
+            uSSRFresnelPower: { type: 'float', value: valueFor('uSSRFresnelPower', 1.55), expose: exposeAdvanced, advanced: true, min: 0.1, max: 8.0, step: 0.05, allow_higher: true, allow_lower: false },
+            uSSRFresnelStrength: { type: 'float', value: valueFor('uSSRFresnelStrength', 0.45), expose: exposeAdvanced, advanced: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
+            uSSREdgeFade: { type: 'float', value: valueFor('uSSREdgeFade', 0.08), expose: exposeAdvanced, advanced: true, min: 0.0, max: 0.25, step: 0.01, allow_higher: true, allow_lower: false },
+            uSSRDistanceFade: { type: 'float', value: valueFor('uSSRDistanceFade', 0.45), expose: exposeAdvanced, advanced: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
+            uSSRDepthBias: { type: 'float', value: valueFor('uSSRDepthBias', 0.035), expose: exposeAdvanced, advanced: true, min: 0.0, max: 0.25, step: 0.005, allow_higher: true, allow_lower: false },
+            uSSRQuality: { type: 'float', value: valueFor('uSSRQuality', 0.55), expose: exposePerformance, advanced: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
+            uSSRRenderScale: { type: 'float', value: valueFor('uSSRRenderScale', 0.72), expose: exposePerformance, advanced: true, min: 0.25, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
+            uSSRFrameInterval: { type: 'float', value: valueFor('uSSRFrameInterval', 1.0), expose: exposePerformance, advanced: true, min: 1.0, max: 4.0, step: 1.0, allow_higher: false, allow_lower: false }
+        };
+
+        const cloned = {};
+        for (const key in uniforms) {
+            cloned[key] = cloneUniformDefinition(uniforms[key]);
+        }
+        return cloned;
+    }
+
+    function addScreenSpaceReflectionUniforms(uniforms, options = {}) {
+        const target = uniforms || {};
+        const defaults = createScreenSpaceReflectionUniforms(options);
+        for (const key in defaults) {
+            if (!target[key]) {
+                target[key] = defaults[key];
+            }
+        }
+        return target;
+    }
+
+    function createMaterialLightingUniforms() {
+        return {
+            uLightPos: { type: 'vec3v', value: Array.from({ length: 16 }, () => new THREE.Vector3()), expose: false },
+            uLightDir: { type: 'vec3v', value: Array.from({ length: 16 }, () => new THREE.Vector3(0, -1, 0)), expose: false },
+            uLightIntensity: { type: 'floatv', value: Array(16).fill(0.0), expose: false },
+            uLightDistance: { type: 'floatv', value: Array(16).fill(0.0), expose: false },
+            uLightConeAngle: { type: 'floatv', value: Array(16).fill(0.0), expose: false },
+            uLightPenumbra: { type: 'floatv', value: Array(16).fill(0.0), expose: false },
+            uLightType: { type: 'intv', value: Array(16).fill(0), expose: false },
+            uLightColor: { type: 'vec3v', value: Array.from({ length: 16 }, () => new THREE.Vector3()), expose: false },
+            max_light_number: { type: 'int', value: 0, expose: true, min: 0, max: 16, step: 1, allow_higher: false, allow_lower: false },
+            uLightCastShadow: { type: 'intv', value: Array(16).fill(0), expose: false },
+            uLightShadowIndex: { type: 'intv', value: Array(16).fill(-1), expose: false },
+            uAmbient: { type: 'float', value: 0.3, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: true, allow_lower: false },
+            uAmbientColor: { type: 'vec3', value: new THREE.Vector3(1, 1, 1), expose: true },
+            uWorldNormalMatrix: { type: 'mat3', value: new THREE.Matrix3(), expose: false },
+            uShadowStrength: { type: 'float', value: 1.0, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
+            uShadowFloor: { type: 'float', value: 0.0, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
+            LIGHTCOLOR: { type: 'vec3', value: new THREE.Vector3(1, 1, 1), expose: true },
+            TEXTURE_SIZE: { type: 'vec2', value: new THREE.Vector2(16, 16), expose: false }
+        };
+    }
+
+    function addMaterialLightingUniforms(uniforms) {
+        const target = uniforms || {};
+        const defaults = createMaterialLightingUniforms();
+        for (const key in defaults) {
+            if (!target[key]) {
+                target[key] = cloneUniformDefinition(defaults[key]);
+            }
+        }
+        return target;
+    }
+
+    const SCREEN_SPACE_REFLECTIONS_PARS_FRAGMENT = `
+#define SA_SSR_STEPS 56
+
+uniform sampler2D uSA_SSRScene;
+uniform sampler2D uSA_SSRDepth;
+uniform int uSA_SSRHasDepth;
+uniform vec2 uSA_SSRResolution;
+uniform float uSA_SSRCameraNear;
+uniform float uSA_SSRCameraFar;
+uniform int uSA_SSRCameraIsPerspective;
+uniform mat4 uSA_SSRCameraProjectionMatrix;
+uniform float uSA_SSRTime;
+
+uniform bool uSSREnabled;
+uniform float uSSRIntensity;
+uniform float uSSRRoughness;
+uniform float uSSRThickness;
+uniform float uSSRMaxDistance;
+uniform float uSSRDistortion;
+uniform float uSSRFresnelPower;
+uniform float uSSRFresnelStrength;
+uniform float uSSREdgeFade;
+uniform float uSSRDistanceFade;
+uniform float uSSRDepthBias;
+uniform float uSSRQuality;
+
+varying vec3 vSA_SSRViewPosition;
+varying vec3 vSA_SSRViewNormal;
+varying vec4 vSA_SSRClipPosition;
+
+float saSSRScreenEdgeFade(vec2 uv) {
+    float fadeWidth = max(uSSREdgeFade, 0.0001);
+    vec2 edge = smoothstep(vec2(0.0), vec2(fadeWidth), uv) *
+        smoothstep(vec2(0.0), vec2(fadeWidth), 1.0 - uv);
+    return edge.x * edge.y;
+}
+
+bool saSSROutsideScreen(vec2 uv) {
+    return uv.x <= 0.0 || uv.y <= 0.0 || uv.x >= 1.0 || uv.y >= 1.0;
+}
+
+float saSSRPerspectiveDepthToViewZ(float depth) {
+    return (uSA_SSRCameraNear * uSA_SSRCameraFar) /
+        ((uSA_SSRCameraFar - uSA_SSRCameraNear) * depth - uSA_SSRCameraFar);
+}
+
+float saSSROrthographicDepthToViewZ(float depth) {
+    return depth * (uSA_SSRCameraNear - uSA_SSRCameraFar) - uSA_SSRCameraNear;
+}
+
+float saSSRDepthToViewZ(float depth) {
+    if (uSA_SSRCameraIsPerspective == 1) return saSSRPerspectiveDepthToViewZ(depth);
+    return saSSROrthographicDepthToViewZ(depth);
+}
+
+vec3 saSSRSampleScene(vec2 uv, float roughness) {
+    float radius = 1.0 + clamp(roughness, 0.0, 1.0) * 7.0;
+    vec2 px = radius / max(uSA_SSRResolution, vec2(1.0));
+    vec3 color = texture2D(uSA_SSRScene, uv).rgb * 0.48;
+    color += texture2D(uSA_SSRScene, uv + vec2(px.x, 0.0)).rgb * 0.13;
+    color += texture2D(uSA_SSRScene, uv - vec2(px.x, 0.0)).rgb * 0.13;
+    color += texture2D(uSA_SSRScene, uv + vec2(0.0, px.y)).rgb * 0.13;
+    color += texture2D(uSA_SSRScene, uv - vec2(0.0, px.y)).rgb * 0.13;
+    return color;
+}
+
+vec3 saSSRFallbackReflection(vec4 clipPosition, vec3 rayDir, float roughness, out float hitFade) {
+    vec2 screenUv = (clipPosition.xy / max(clipPosition.w, 0.0001)) * 0.5 + 0.5;
+    vec2 uv = screenUv + rayDir.xy * clamp(uSSRDistortion, 0.0, 0.5) / max(0.35, abs(rayDir.z));
+    hitFade = saSSRScreenEdgeFade(uv);
+    if (saSSROutsideScreen(uv)) hitFade = 0.0;
+    return saSSRSampleScene(uv, roughness);
+}
+
+vec3 saSSRRaymarch(vec3 viewPosition, vec3 rayDir, vec4 clipPosition, float roughness, out float hitFade) {
+    hitFade = 0.0;
+
+    if (uSA_SSRHasDepth != 1) {
+        return saSSRFallbackReflection(clipPosition, rayDir, roughness, hitFade);
+    }
+
+    vec2 hitUv = vec2(0.0);
+    float hitDistance = 0.0;
+    float maxDistance = max(uSSRMaxDistance, 1.0);
+    float startDistance = max(0.025, maxDistance * 0.002);
+    float qualitySteps = mix(12.0, float(SA_SSR_STEPS), clamp(uSSRQuality, 0.0, 1.0));
+
+    for (int i = 0; i < SA_SSR_STEPS; i++) {
+        if (float(i) >= qualitySteps) break;
+
+        float stepRatio = (float(i) + 1.0) / qualitySteps;
+        float rayDistance = mix(startDistance, maxDistance, stepRatio * stepRatio);
+        vec3 rayPosition = viewPosition + rayDir * rayDistance;
+
+        if (rayPosition.z > -uSA_SSRCameraNear) break;
+
+        vec4 rayClip = uSA_SSRCameraProjectionMatrix * vec4(rayPosition, 1.0);
+        if (rayClip.w <= 0.0) break;
+
+        vec2 uv = (rayClip.xy / rayClip.w) * 0.5 + 0.5;
+        if (saSSROutsideScreen(uv)) break;
+
+        float sceneDepth = texture2D(uSA_SSRDepth, uv).x;
+        if (sceneDepth >= 0.9999) continue;
+
+        float sceneViewZ = saSSRDepthToViewZ(sceneDepth);
+        float depthDelta = rayPosition.z - sceneViewZ;
+        float thickness = max(uSSRThickness, 0.001) + rayDistance * max(uSSRDepthBias, 0.0);
+
+        if (depthDelta <= 0.0 && depthDelta > -thickness) {
+            vec2 wave = vec2(
+                sin((uv.y + uSA_SSRTime * 0.09) * 90.0),
+                cos((uv.x - uSA_SSRTime * 0.07) * 70.0)
+            ) * clamp(uSSRDistortion, 0.0, 0.5) * 0.012;
+
+            hitUv = uv + wave;
+            hitDistance = rayDistance;
+
+            float fadeStart = clamp(uSSRDistanceFade, 0.0, 1.0) * maxDistance;
+            hitFade = saSSRScreenEdgeFade(hitUv) *
+                (1.0 - smoothstep(fadeStart, maxDistance, hitDistance));
+            break;
+        }
+    }
+
+    if (hitFade <= 0.0 || saSSROutsideScreen(hitUv)) return vec3(0.0);
+    return saSSRSampleScene(hitUv, roughness);
+}
+
+vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPosition, vec4 clipPosition, float materialRoughness, float materialIntensity) {
+    if (!uSSREnabled || uSSRIntensity <= 0.0 || sourceColor.a <= 0.0) return sourceColor;
+
+    vec3 normal = normalize(viewNormal);
+    if (!gl_FrontFacing) normal *= -1.0;
+
+    vec3 viewIncident = normalize(viewPosition);
+    vec3 rayDir = normalize(reflect(viewIncident, normal));
+    float roughness = clamp(max(uSSRRoughness, materialRoughness), 0.0, 1.0);
+
+    float hitFade = 0.0;
+    vec3 reflected = saSSRRaymarch(viewPosition, rayDir, clipPosition, roughness, hitFade);
+
+    float viewFacing = clamp(1.0 - abs(dot(normal, -viewIncident)), 0.0, 1.0);
+    float fresnel = pow(viewFacing, max(uSSRFresnelPower, 0.001));
+    float reflectAmount = max(uSSRIntensity, 0.0) * max(materialIntensity, 0.0) * hitFade;
+    reflectAmount *= mix(1.0, fresnel, clamp(uSSRFresnelStrength, 0.0, 1.0));
+    reflectAmount *= 1.0 - clamp(roughness * 0.78, 0.0, 0.78);
+
+    sourceColor.rgb = mix(sourceColor.rgb, reflected, clamp(reflectAmount, 0.0, 1.0));
+    return sourceColor;
+}
+`;
     const pluginStyle = /*css*/`
     /* Dialog Layout Restructuring for fixed window with internal scrollbars */
     #sa_material_studio_dialog {
@@ -595,7 +943,7 @@
         flex-direction: column;
         overflow: hidden !important;
     }
-    
+
     .sa-studio-container {
         display: flex;
         flex-direction: column;
@@ -741,8 +1089,8 @@
         white-space: nowrap;
         opacity: 0.7;
     }
-    .prism-editor__textarea::selection, 
-    .prism-editor__pre::selection, 
+    .prism-editor__textarea::selection,
+    .prism-editor__pre::selection,
     .prism-editor__pre *::selection {
         background: color-mix(in srgb, var(--color-accent) 30%, transparent) !important;
     }
@@ -1035,7 +1383,7 @@
     }
     #sa_material_studio_dialog input[type="color"] { padding: 2px; height: 32px; width: 44px; cursor: pointer; border-radius: 4px; }
     #sa_material_studio_dialog button:hover { background: var(--color-accent); color: var(--color-accent_text); cursor: pointer;}
-    
+
     /* Left Panel Buttons */
     .sa-left-btn {
         display: flex;
@@ -1058,7 +1406,7 @@
         color: var(--color-accent_text);
         border-color: transparent;
     }
-    
+
     /* Header Editor styling */
     .sa-editor-header {
         display: flex;
@@ -1083,7 +1431,7 @@
         border-color: var(--color-accent) !important;
         background: var(--color-back) !important;
     }
-    
+
     .sa-icon-btn {
         background: var(--color-button);
         border: 1px solid var(--color-border);
@@ -1101,6 +1449,15 @@
         background: var(--color-accent);
         color: var(--color-accent_text);
         border-color: transparent;
+    }
+    .sa-icon-btn:disabled {
+        opacity: 0.45;
+        cursor: not-allowed;
+    }
+    .sa-icon-btn:disabled:hover {
+        background: var(--color-button);
+        color: var(--color-text);
+        border-color: var(--color-border);
     }
     .sa-icon-btn.delete-btn:hover {
         background: #fc2f40;
@@ -1133,7 +1490,7 @@
     .sa-materiel-list-item.selected i {
         color: var(--color-accent_text);
     }
-    
+
     /* Uniform Cards */
     .sa-uniform-row {
         display: block;
@@ -1169,7 +1526,7 @@
         font-family: var(--font-code, monospace);
         font-weight: normal;
     }
-    
+
     /* Scrollbars */
     #sa_material_studio_dialog ::-webkit-scrollbar {
         width: 8px;
@@ -1218,6 +1575,13 @@
             this.uniforms = props.uniforms || {};
             this.isCustom = props.isCustom !== undefined ? props.isCustom : true;
             this.enableShadows = props.enableShadows !== undefined ? props.enableShadows : false;
+            this.supportsScreenSpaceReflections = props.supportsScreenSpaceReflections !== undefined
+                ? props.supportsScreenSpaceReflections
+                : false;
+
+            if (this.enableShadows) {
+                this.uniforms = addMaterialLightingUniforms(this.uniforms);
+            }
 
             if (!this.uniforms.map) {
                 this.uniforms.map = { type: 'sampler2D', value: null, expose: true, repeat: false };
@@ -1249,6 +1613,8 @@
                 name: this.name,
                 icon: this.icon,
                 isCustom: this.isCustom,
+                enableShadows: this.enableShadows,
+                supportsScreenSpaceReflections: this.supportsScreenSpaceReflections,
                 vertex: this.vertex,
                 fragment: this.fragment,
                 uniforms: serializedUniforms
@@ -1277,6 +1643,8 @@
                 name: data.name,
                 icon: data.icon,
                 isCustom: data.isCustom,
+                enableShadows: data.enableShadows,
+                supportsScreenSpaceReflections: data.supportsScreenSpaceReflections,
                 vertex: data.vertex,
                 fragment: data.fragment,
                 uniforms: parsedUniforms
@@ -1390,6 +1758,7 @@
                 clone[key] = this.cloneUniformValue(def[key]);
             }
             clone.value = this.cloneUniformValue(def.value);
+            if (clone.advanced === undefined) clone.advanced = false;
             return clone;
         },
 
@@ -1399,6 +1768,98 @@
                 cloned[key] = this.cloneUniformDefinition(uniforms[key]);
             }
             return cloned;
+        },
+
+        syncUniformPresentation(targetDef, baseDef) {
+            if (!targetDef || !baseDef) return targetDef;
+            for (const key in baseDef) {
+                if (key === 'value' || key === 'hexValue' || key === 'repeat') continue;
+                targetDef[key] = this.cloneUniformValue(baseDef[key]);
+            }
+            if (baseDef.repeat !== undefined && targetDef.repeat === undefined) {
+                targetDef.repeat = baseDef.repeat;
+            }
+            return targetDef;
+        },
+
+        createScreenSpaceReflectionUniforms(options = {}) {
+            return createScreenSpaceReflectionUniforms(options);
+        },
+
+        getScreenSpaceReflectionFragmentChunk() {
+            return SCREEN_SPACE_REFLECTIONS_PARS_FRAGMENT;
+        },
+
+        addScreenSpaceReflectionUniforms(uniforms, options = {}) {
+            return addScreenSpaceReflectionUniforms(uniforms, options);
+        },
+
+        createMaterialLightingUniforms() {
+            return createMaterialLightingUniforms();
+        },
+
+        addMaterialLightingUniforms(uniforms) {
+            return addMaterialLightingUniforms(uniforms);
+        },
+
+        hasScreenSpaceReflectionSupport(materialOrId) {
+            const material = typeof materialOrId === 'string'
+                ? this.materials[materialOrId]
+                : materialOrId;
+            return !!(
+                material &&
+                (
+                    material.supportsScreenSpaceReflections ||
+                    (material.fragment && material.fragment.indexOf('saApplyScreenSpaceReflection') !== -1)
+                )
+            );
+        },
+
+        enableScreenSpaceReflections(materialOrId, options = {}) {
+            const material = typeof materialOrId === 'string'
+                ? this.materials[materialOrId]
+                : materialOrId;
+            if (!material) return null;
+
+            material.uniforms = this.addScreenSpaceReflectionUniforms(material.uniforms || {}, options);
+            material.supportsScreenSpaceReflections = true;
+
+            if (options.enabled !== undefined && material.uniforms.uSSREnabled) {
+                material.uniforms.uSSREnabled.value = !!options.enabled;
+            }
+
+            if (options.save !== false) {
+                this.revalidateMaterialInstancesForMaterial(material.id, { save: false });
+                this.saveCustomMaterials();
+                this.saveMaterialInstances();
+                ShaderEngine.updateAllCubes('enable_screen_space_reflections');
+            }
+
+            return material;
+        },
+
+        setScreenSpaceReflectionUniform(materialOrInstance, uniformName, value) {
+            if (!uniformName || uniformName.indexOf('uSSR') !== 0) return null;
+
+            const instance = this.getMaterialInstance(materialOrInstance);
+            if (instance) {
+                return this.setMaterialInstanceUniform(instance, uniformName, value);
+            }
+
+            const material = typeof materialOrInstance === 'string'
+                ? this.materials[materialOrInstance]
+                : materialOrInstance;
+            if (!material) return null;
+
+            material.uniforms = this.addScreenSpaceReflectionUniforms(material.uniforms || {});
+            const def = material.uniforms[uniformName];
+            if (!def) return null;
+
+            def.value = this.cloneUniformValue(value);
+            this.saveCustomMaterials();
+            this.revalidateMaterialInstancesForMaterial(material.id, { save: false });
+            ShaderEngine.updateAllUniforms('set_screen_space_reflection_uniform');
+            return def;
         },
 
         serializeUniformValue(value) {
@@ -2086,9 +2547,14 @@
 
             for (const key in baseUniforms) {
                 const currentDef = currentUniforms[key];
-                nextUniforms[key] = this.areUniformsCompatible(baseUniforms[key], currentDef)
-                    ? this.cloneUniformDefinition(currentDef)
-                    : this.cloneUniformDefinition(baseUniforms[key]);
+                if (this.areUniformsCompatible(baseUniforms[key], currentDef)) {
+                    nextUniforms[key] = this.syncUniformPresentation(
+                        this.cloneUniformDefinition(currentDef),
+                        baseUniforms[key]
+                    );
+                } else {
+                    nextUniforms[key] = this.cloneUniformDefinition(baseUniforms[key]);
+                }
             }
 
             instance.uniforms = nextUniforms;
@@ -2127,7 +2593,10 @@
             const uniforms = this.cloneUniformMap(base.uniforms || {});
             for (const key in instance.uniforms || {}) {
                 if (this.areUniformsCompatible(uniforms[key], instance.uniforms[key])) {
-                    uniforms[key] = this.cloneUniformDefinition(instance.uniforms[key]);
+                    uniforms[key] = this.syncUniformPresentation(
+                        this.cloneUniformDefinition(instance.uniforms[key]),
+                        uniforms[key]
+                    );
                 }
             }
             return uniforms;
@@ -2251,6 +2720,7 @@
                 uniforms: this.getMaterialInstanceUniforms(instance),
                 isCustom: false,
                 enableShadows: base.enableShadows,
+                supportsScreenSpaceReflections: base.supportsScreenSpaceReflections,
                 isMaterialInstanceRender: true,
                 materialInstanceId: instance.id,
                 baseMaterialId: base.id,
@@ -2318,50 +2788,50 @@
                 vertex: `
                     //Classic
                     attribute float highlight;
-                    
-                    uniform bool SHADE; 
+
+                    uniform bool SHADE;
                     uniform int LIGHTSIDE;
-                    
-                    varying vec2 vUv; 
-                    varying float light; 
+
+                    varying vec2 vUv;
+                    varying float light;
                     varying float lift;
-                    
+
                     void main() {
                         if (SHADE) {
                             // Use normalMatrix for correct orientation with scaling.
                             vec3 N = normalize(normalMatrix * normal);
-                            
+
                             if (LIGHTSIDE == 1) { float t = N.y; N.y = -N.z; N.z = t; }
                             else if (LIGHTSIDE == 2) { float t = N.y; N.y = N.x; N.x = t; }
                             else if (LIGHTSIDE == 3) { N.y = -N.y; }
                             else if (LIGHTSIDE == 4) { float t = N.y; N.y = N.z; N.z = t; }
                             else if (LIGHTSIDE == 5) { float t = N.y; N.y = -N.x; N.x = t; }
-                            
+
                             float yLight = (1.0 + N.y) * 0.5;
                             light = yLight * 0.5 + N.x * N.x * -0.15 + N.z * N.z * 0.05 + 0.5;
-                        } else { 
-                            light = 1.0; 
+                        } else {
+                            light = 1.0;
                         }
-                        
+
                         lift = (highlight == 2.0) ? 0.22 : (highlight == 1.0) ? 0.1 : 0.0;
-                        vUv = uv; 
-                        
+                        vUv = uv;
+
                         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
                     }
                 `,
                 fragment: `
-                    uniform sampler2D map; 
-                    uniform bool EMISSIVE; 
+                    uniform sampler2D map;
+                    uniform bool EMISSIVE;
                     uniform vec3 LIGHTCOLOR;
-                    
-                    varying vec2 vUv; 
-                    varying float light; 
+
+                    varying vec2 vUv;
+                    varying float light;
                     varying float lift;
-                    
+
                     void main() {
                         vec4 color = texture2D(map, vUv);
                         if(color.a < 0.01) discard;
-                        
+
                         if (!EMISSIVE) {
                             gl_FragColor = vec4(lift + color.rgb * light, color.a);
                             gl_FragColor.rgb *= LIGHTCOLOR;
@@ -2369,9 +2839,9 @@
                             vec3 light_mix = (light * LIGHTCOLOR) + (1.0 - light * LIGHTCOLOR) * (1.0 - color.a);
                             gl_FragColor = vec4(lift + color.rgb * light_mix, 1.0);
                         }
-                        
-                        if (lift > 0.2) { 
-                            gl_FragColor.rg *= vec2(0.6, 0.7); 
+
+                        if (lift > 0.2) {
+                            gl_FragColor.rg *= vec2(0.6, 0.7);
                         }
                     }
                 `,
@@ -2409,6 +2879,9 @@ varying float lift;
 varying vec3 vWorldPos;
 varying vec3 vWorldNormal;
 varying vec3 vViewDir;
+varying vec3 vSA_SSRViewPosition;
+varying vec3 vSA_SSRViewNormal;
+varying vec4 vSA_SSRClipPosition;
 
 vec3 safeNormalizeVertex(vec3 v, vec3 fallback) {
     float lenSq = dot(v, v);
@@ -2469,12 +2942,16 @@ void main() {
     vUv = uv;
     vFaceUv = normalizedFaceUv;
     vViewDir = safeNormalizeVertex(cameraPosition - vWorldPos, vec3(0.0, 0.0, 1.0));
+    vec4 saSSRViewPosition4 = modelViewMatrix * vec4(position, 1.0);
+    vSA_SSRViewPosition = saSSRViewPosition4.xyz;
+    vSA_SSRViewNormal = safeNormalizeVertex(normalMatrix * normal, vec3(0.0, 0.0, 1.0));
+    vSA_SSRClipPosition = projectionMatrix * saSSRViewPosition4;
 
     lift = highlight == 2.0 ? 0.22 :
            highlight == 1.0 ? 0.10 :
            0.0;
 
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    gl_Position = vSA_SSRClipPosition;
 
     #include <shadowmap_vertex>
 }`,
@@ -2482,6 +2959,7 @@ void main() {
 #include <packing>
 #include <lights_pars_begin>
 #include <shadowmap_pars_fragment>
+${SCREEN_SPACE_REFLECTIONS_PARS_FRAGMENT}
 
 uniform sampler2D map;
 uniform vec3 LIGHTCOLOR;
@@ -3141,9 +3619,21 @@ void main() {
 
     color = applyOutputMapping(color);
 
-    gl_FragColor = vec4(color, texel.a);
+    gl_FragColor = saApplyScreenSpaceReflection(
+        vec4(color, texel.a),
+        vSA_SSRViewNormal,
+        vSA_SSRViewPosition,
+        vSA_SSRClipPosition,
+        roughness,
+        max(uEnvSpecularStrength, uSpecularIntensity)
+    );
 }`,
-                uniforms: {
+                uniforms: Object.assign(createScreenSpaceReflectionUniforms({
+                    intensity: 0.82,
+                    roughness: 0.16,
+                    quality: 0.72,
+                    renderScale: 0.85
+                }), {
                     // Base PBR Properties
                     "uBaseColor": { type: "color", value: "#ffffff", hexValue: "#ffffff", expose: true },
                     "uMetallic": { type: "float", value: 0.0, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
@@ -3277,13 +3767,43 @@ void main() {
                     "LIGHTSIDE": { type: "int", value: 0, expose: true, min: 0, max: 5, step: 1, allow_higher: false, allow_lower: false },
                     "LIGHTCOLOR": { type: "vec3", value: new THREE.Vector3(1, 1, 1), expose: true },
                     "TEXTURE_SIZE": { type: "vec2", value: new THREE.Vector2(16, 16), expose: false }
-                },
+                }),
+                supportsScreenSpaceReflections: true,
                 enableShadows: true
             });
+            const lightflowScreenSpaceReflectionDefaults = {
+                intensity: 0.55,
+                roughness: 0.32,
+                thickness: 0.18,
+                maxDistance: 18.0,
+                distortion: 0.018,
+                fresnelPower: 1.25,
+                fresnelStrength: 0.32,
+                edgeFade: 0.1,
+                distanceFade: 0.35,
+                depthBias: 0.06,
+                quality: 0.22,
+                renderScale: 0.55,
+                frameInterval: 2.0
+            };
 
+            const normalizeLightflowUniformOptions = (options = {}) => {
+                if (typeof options === 'boolean') {
+                    return {
+                        shadows: options,
+                        screenSpaceReflections: false
+                    };
+                }
 
+                const config = options || {};
+                return {
+                    shadows: !!(config.shadows || config.withShadowBinding),
+                    screenSpaceReflections: config.screenSpaceReflections === true || config.ssr === true
+                };
+            };
 
-            const createLightflowUniforms = (withShadowBinding = false) => {
+            const createLightflowUniforms = (options = {}) => {
+                const config = normalizeLightflowUniformOptions(options);
                 const uniforms = {
                     "map": {
                         type: "sampler2D",
@@ -3293,7 +3813,8 @@ void main() {
                     "uClampLighting": {
                         type: "bool",
                         value: false,
-                        expose: true
+                        expose: true,
+                        advanced: true
                     },
                     // Light arrays
                     "uLightPos": {
@@ -3386,6 +3907,7 @@ void main() {
                         type: "int",
                         value: 0,
                         expose: true,
+                        advanced: true,
                         min: 0,
                         max: 5,
                         step: 1,
@@ -3443,6 +3965,7 @@ void main() {
                         type: "float",
                         value: 1.5,
                         expose: true,
+                        advanced: true,
                         min: 0.1,
                         max: 5.0,
                         step: 0.1,
@@ -3453,6 +3976,7 @@ void main() {
                         type: "float",
                         value: 0.4,
                         expose: true,
+                        advanced: true,
                         min: 0.0,
                         max: 1.0,
                         step: 0.05,
@@ -3463,6 +3987,7 @@ void main() {
                         type: "float",
                         value: 0.15,
                         expose: true,
+                        advanced: true,
                         min: 0.0,
                         max: 1.0,
                         step: 0.05,
@@ -3473,6 +3998,7 @@ void main() {
                         type: "float",
                         value: 8.0,
                         expose: true,
+                        advanced: true,
                         min: 0.0,
                         max: 16.0,
                         step: 0.5,
@@ -3483,6 +4009,7 @@ void main() {
                         type: "float",
                         value: 1.5,
                         expose: true,
+                        advanced: true,
                         min: 0.0,
                         max: 5.0,
                         step: 0.1,
@@ -3493,6 +4020,7 @@ void main() {
                         type: "float",
                         value: 0.3,
                         expose: true,
+                        advanced: true,
                         min: 0.0,
                         max: 1.0,
                         step: 0.05,
@@ -3536,7 +4064,7 @@ void main() {
                     }
                 };
 
-                if (withShadowBinding) {
+                if (config.shadows) {
                     uniforms["uLightCastShadow"] = {
                         type: "intv",
                         value: Array(16).fill(0),
@@ -3570,6 +4098,10 @@ void main() {
                         allow_higher: false,
                         allow_lower: false
                     };
+                }
+
+                if (config.screenSpaceReflections) {
+                    addScreenSpaceReflectionUniforms(uniforms, lightflowScreenSpaceReflectionDefaults);
                 }
 
                 return uniforms;
@@ -3679,7 +4211,7 @@ uniform float uAOCornerWeight;
 uniform float uAOFaceNormalWeight;
 
 // Checkbox option to clamp lighting
-uniform bool uClampLighting; 
+uniform bool uClampLighting;
 
 varying vec2 vUv;
 varying vec2 vFaceUv;
@@ -3794,11 +4326,11 @@ float computeVoxelAO(vec2 faceUv, vec3 normal) {
     // Edge detection with sharp falloff
     float edgeX = 1.0 - smoothstep(0.0, radius, uv.x) * smoothstep(0.0, radius, 1.0 - uv.x);
     float edgeY = 1.0 - smoothstep(0.0, radius, uv.y) * smoothstep(0.0, radius, 1.0 - uv.y);
-    
+
     // Sharpen edges
     edgeX = pow(edgeX, sharpness * 0.1);
     edgeY = pow(edgeY, sharpness * 0.1);
-    
+
     float edgeAO = max(edgeX, edgeY);
 
     // Corner detection - strongest at corners
@@ -3874,7 +4406,7 @@ vec3 linearTone(vec3 x) {
 
 vec3 applyToneMapping(vec3 color) {
     color = max(color, vec3(0.0));
-    
+
     switch (uToneMapping) {
         case TM_ACES:
             return acesFilm(color * max(uExposure, 0.001));
@@ -3930,7 +4462,7 @@ void main() {
     }
 
     vec3 finalColor = texel.rgb * lighting;
-    
+
     // Apply lift uniform (keep values near 0.0 to prevent washing out dark tones)
     finalColor += vec3(lift);
     finalColor *= LIGHTCOLOR;
@@ -3947,7 +4479,7 @@ void main() {
 
     gl_FragColor = vec4(finalColor, texel.a);
 }`,
-                uniforms: createLightflowUniforms(false)
+                uniforms: createLightflowUniforms()
             });
 
             let shaded_lightflow = new FancyShaderMaterial({
@@ -3971,6 +4503,9 @@ varying vec2 vFaceUv;
 varying float lift;
 varying vec3 vWorldPos;
 varying vec3 vWorldNormal;
+varying vec3 vSA_SSRViewPosition;
+varying vec3 vSA_SSRViewNormal;
+varying vec4 vSA_SSRClipPosition;
 
 vec3 applyLightSide(vec3 n) {
     vec3 N = n;
@@ -4025,12 +4560,16 @@ void main() {
 
     vUv = uv;
     vFaceUv = normalizedFaceUv;
+    vec4 saSSRViewPosition4 = modelViewMatrix * vec4(position, 1.0);
+    vSA_SSRViewPosition = saSSRViewPosition4.xyz;
+    vSA_SSRViewNormal = normalize(normalMatrix * normal);
+    vSA_SSRClipPosition = projectionMatrix * saSSRViewPosition4;
 
     lift = highlight == 2.0 ? 0.22 :
            highlight == 1.0 ? 0.10 :
            0.0;
 
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    gl_Position = vSA_SSRClipPosition;
 
     #include <shadowmap_vertex>
 }`,
@@ -4038,6 +4577,7 @@ void main() {
 #include <packing>
 #include <lights_pars_begin>
 #include <shadowmap_pars_fragment>
+${SCREEN_SPACE_REFLECTIONS_PARS_FRAGMENT}
 
 uniform sampler2D map;
 uniform vec3 LIGHTCOLOR;
@@ -4303,10 +4843,10 @@ float computeVoxelAO(vec2 faceUv, vec3 normal) {
 
     float edgeX = 1.0 - smoothstep(0.0, radius, uv.x) * smoothstep(0.0, radius, 1.0 - uv.x);
     float edgeY = 1.0 - smoothstep(0.0, radius, uv.y) * smoothstep(0.0, radius, 1.0 - uv.y);
-    
+
     edgeX = pow(edgeX, sharpness * 0.1);
     edgeY = pow(edgeY, sharpness * 0.1);
-    
+
     float edgeAO = max(edgeX, edgeY);
 
     float cornerX = smoothstep(0.0, radius, uv.x) * smoothstep(0.0, radius, 1.0 - uv.x);
@@ -4372,7 +4912,7 @@ vec3 linearTone(vec3 x) {
 
 vec3 applyToneMapping(vec3 color) {
     color = max(color, vec3(0.0));
-    
+
     switch (uToneMapping) {
         case TM_ACES:
             return acesFilm(color * max(uExposure, 0.001));
@@ -4453,9 +4993,20 @@ void main() {
     // Converts the processed linear colors back to sRGB for display.
     finalColor = pow(max(finalColor, vec3(0.0)), vec3(1.0 / 2.2));
 
-    gl_FragColor = vec4(finalColor, texel.a);
+    gl_FragColor = saApplyScreenSpaceReflection(
+        vec4(finalColor, texel.a),
+        vSA_SSRViewNormal,
+        vSA_SSRViewPosition,
+        vSA_SSRClipPosition,
+        0.0,
+        1.0
+    );
 }`,
-                uniforms: createLightflowUniforms(true),
+                uniforms: createLightflowUniforms({
+                    shadows: true,
+                    screenSpaceReflections: true
+                }),
+                supportsScreenSpaceReflections: true,
                 enableShadows: true
             });
 
@@ -4468,7 +5019,7 @@ void main() {
                 isCustom: true,
                 vertex: `
                     #include <common>
-                    #include <shadowmap_pars_vertex> 
+                    #include <shadowmap_pars_vertex>
 
                     attribute float highlight;
                     attribute vec2 normalizedFaceUv;
@@ -4476,11 +5027,11 @@ void main() {
                     attribute vec2 globalFaceSize;
                     attribute vec2 uvSize;
 
-                    uniform bool SHADE; 
+                    uniform bool SHADE;
                     uniform int LIGHTSIDE;
 
-                    varying vec2 vUv; 
-                    varying float light; 
+                    varying vec2 vUv;
+                    varying float light;
                     varying float lift;
 
                     varying vec2 vNormalizedFaceUv;
@@ -4499,24 +5050,24 @@ void main() {
                             else if (LIGHTSIDE == 3) { N.y = -N.y; }
                             else if (LIGHTSIDE == 4) { float t = N.y; N.y = N.z; N.z = t; }
                             else if (LIGHTSIDE == 5) { float t = N.y; N.y = -N.x; N.x = t; }
-                            
+
                             float yLight = (1.0 + N.y) * 0.5;
                             light = yLight * 0.5 + N.x * N.x * -0.15 + N.z * N.z * 0.05 + 0.5;
-                        } else { 
-                            light = 1.0; 
+                        } else {
+                            light = 1.0;
                         }
-                        
+
                         lift = (highlight == 2.0) ? 0.22 : (highlight == 1.0) ? 0.1 : 0.0;
-                        vUv = uv; 
-                        
+                        vUv = uv;
+
                         vNormalizedFaceUv = normalizedFaceUv;
                         vfaceSize = faceSize;
                         vGlobalFaceSize = globalFaceSize;
                         vuvSize = uvSize;
-                        
+
                         gl_Position = projectionMatrix * viewMatrix * worldPosition;
 
-                        #include <shadowmap_vertex> 
+                        #include <shadowmap_vertex>
                     }
                 `,
                 fragment: `
@@ -4524,18 +5075,18 @@ void main() {
                     #include <packing>
                     #include <lights_pars_begin>
                     #include <shadowmap_pars_fragment>
-                    
+
                     // 1. Declare uniforms and varyings first.
-                    uniform sampler2D map; 
-                    uniform bool EMISSIVE; 
+                    uniform sampler2D map;
+                    uniform bool EMISSIVE;
                     uniform vec3 LIGHTCOLOR;
                     uniform float AMBIENT_INTENSITY;
                     uniform vec2 TILING;
 
-                    varying vec2 vUv; 
-                    varying float light; 
+                    varying vec2 vUv;
+                    varying float light;
                     varying float lift;
-                    
+
                     varying vec2 vNormalizedFaceUv;
                     varying vec2 vfaceSize;
                     varying vec2 vGlobalFaceSize;
@@ -4544,33 +5095,33 @@ void main() {
                     // 2. Then declare functions that use them.
                     vec4 getShadowCoordAtUV(vec4 currentShadowCoord, vec2 targetUV, vec2 currentUV) {
                         vec2 deltaUV = targetUV - currentUV;
-                        
+
                         vec2 dUV_dx = dFdx(currentUV);
                         vec2 dUV_dy = dFdy(currentUV);
-                        
+
                         vec4 dCoord_dx = dFdx(currentShadowCoord);
                         vec4 dCoord_dy = dFdy(currentShadowCoord);
-                        
+
                         float det = dUV_dx.x * dUV_dy.y - dUV_dx.y * dUV_dy.x;
-                        
+
                         if (abs(det) > 0.00001) {
                             float invDet = 1.0 / det;
-                            
+
                             vec4 dCoord_du = (dCoord_dx * dUV_dy.y - dCoord_dy * dUV_dx.y) * invDet;
                             vec4 dCoord_dv = (dCoord_dy * dUV_dx.x - dCoord_dx * dUV_dy.x) * invDet;
-                            
+
                             return currentShadowCoord + dCoord_du * deltaUV.x + dCoord_dv * deltaUV.y;
                         }
-                        
+
                         return currentShadowCoord;
                     }
 
                     float getShadowAtUV(vec2 targetUV) {
                         float shadow = 1.0;
-                        
+
                         #ifdef USE_SHADOWMAP
-                        vec4 shadowCoord; 
-                        
+                        vec4 shadowCoord;
+
                         #if NUM_DIR_LIGHT_SHADOWS > 0
                             DirectionalLightShadow directionalLight;
                             #pragma unroll_loop_start
@@ -4615,11 +5166,11 @@ void main() {
 
                         // Adjust the UVs used to sample the shadow.
                         // This example samples the current UV coordinates.
-                        vec2 shadowTargetUV = vUv; 
+                        vec2 shadowTargetUV = vUv;
 
                         // Sample the shadow from the calculated UVs.
                         float shadow = getShadowAtUV(shadowTargetUV);
-                        
+
                         float lightEffect = light * mix(AMBIENT_INTENSITY, 1.0, shadow);
 
                         if(!EMISSIVE) {
@@ -4630,8 +5181,8 @@ void main() {
                             gl_FragColor = vec4(lift + color.rgb * light_mix, 1.0);
                         }
 
-                        if(lift > 0.2) { 
-                            gl_FragColor.rg *= vec2(0.6, 0.7); 
+                        if(lift > 0.2) {
+                            gl_FragColor.rg *= vec2(0.6, 0.7);
                         }
                     }
                 `,
@@ -4648,10 +5199,10 @@ void main() {
             });
 
 
-            //Outdated, but keeping for reference
+            // Legacy implementation retained as reference for the pixel-center shadow math.
 
-            let pixelated_shaded_lightflow = new FancyShaderMaterial({
-                id: 'pixelated_shaded_lightflow',
+            let pixelated_shaded_lightflow_legacy = new FancyShaderMaterial({
+                id: 'pixelated_shaded_lightflow_legacy',
                 name: tl('shader_architect.preset.pixelated_shaded_lightflow'),
                 icon: 'gradient',
                 isCustom: false,
@@ -5028,6 +5579,332 @@ void main() {
                 enableShadows: true
             });
 
+            const pixelatedShadedLightflowShadowBlock = `// --- PIXEL-PERFECT SHADOW FUNCTIONS ---
+
+#define SHADOW_DET_EPS 1e-12
+#define SHADOW_QUALITY_EPS 1e-5
+
+#define PROJECTED_SHADOW_COORD_MARGIN 0.05
+#define PROJECTED_SHADOW_MAX_XY_JUMP 0.25
+#define PROJECTED_SHADOW_MAX_Z_JUMP 0.25
+
+#define POINT_SHADOW_MIN_LENGTH 1e-6
+#define POINT_SHADOW_MAX_ABSOLUTE_JUMP 0.75
+#define POINT_SHADOW_MAX_RELATIVE_JUMP 0.35
+
+vec2 getPixelCenterUV(vec2 localUV, vec2 gridSize) {
+    vec2 grid = max(floor(gridSize + 0.5), vec2(1.0));
+    vec2 safeUV = clamp(localUV, vec2(0.0), vec2(0.999999));
+
+    return (floor(safeUV * grid) + 0.5) / grid;
+}
+
+vec4 getRawShadowCoordAtUV(
+    vec4 currentShadowCoord,
+    vec2 targetUV,
+    vec2 currentUV,
+    out bool valid
+) {
+    valid = false;
+
+    vec2 deltaUV = targetUV - currentUV;
+
+    vec2 dUV_dx = dFdx(currentUV);
+    vec2 dUV_dy = dFdy(currentUV);
+
+    vec4 dCoord_dx = dFdx(currentShadowCoord);
+    vec4 dCoord_dy = dFdy(currentShadowCoord);
+
+    float det = dUV_dx.x * dUV_dy.y - dUV_dx.y * dUV_dy.x;
+    float uvArea = length(dUV_dx) * length(dUV_dy);
+    float quality = abs(det) / max(uvArea, SHADOW_DET_EPS);
+
+    if (abs(det) > SHADOW_DET_EPS && quality > SHADOW_QUALITY_EPS) {
+        float invDet = 1.0 / det;
+
+        vec4 dCoord_du =
+            (dCoord_dx * dUV_dy.y - dCoord_dy * dUV_dx.y) * invDet;
+
+        vec4 dCoord_dv =
+            (dCoord_dy * dUV_dx.x - dCoord_dx * dUV_dy.x) * invDet;
+
+        valid = true;
+
+        return currentShadowCoord +
+            dCoord_du * deltaUV.x +
+            dCoord_dv * deltaUV.y;
+    }
+
+    return currentShadowCoord;
+}
+
+vec4 getProjectedShadowCoordAtUV(
+    vec4 currentShadowCoord,
+    vec2 targetUV,
+    vec2 currentUV
+) {
+    bool valid;
+
+    vec4 candidate = getRawShadowCoordAtUV(
+        currentShadowCoord,
+        targetUV,
+        currentUV,
+        valid
+    );
+
+    if (valid) {
+        vec3 currentProjected =
+            currentShadowCoord.xyz / max(currentShadowCoord.w, 1e-8);
+
+        vec3 candidateProjected =
+            candidate.xyz / max(candidate.w, 1e-8);
+
+        bool candidateIsValid =
+            candidate.w > 0.0 &&
+            candidateProjected.x > -PROJECTED_SHADOW_COORD_MARGIN &&
+            candidateProjected.x < 1.0 + PROJECTED_SHADOW_COORD_MARGIN &&
+            candidateProjected.y > -PROJECTED_SHADOW_COORD_MARGIN &&
+            candidateProjected.y < 1.0 + PROJECTED_SHADOW_COORD_MARGIN &&
+            candidateProjected.z > -PROJECTED_SHADOW_COORD_MARGIN &&
+            candidateProjected.z < 1.0 + PROJECTED_SHADOW_COORD_MARGIN;
+
+        bool candidateIsClose =
+            distance(candidateProjected.xy, currentProjected.xy) <
+                PROJECTED_SHADOW_MAX_XY_JUMP &&
+            abs(candidateProjected.z - currentProjected.z) <
+                PROJECTED_SHADOW_MAX_Z_JUMP;
+
+        if (candidateIsValid && candidateIsClose) {
+            return candidate;
+        }
+    }
+
+    return currentShadowCoord;
+}
+
+vec4 getPointShadowCoordAtUV(
+    vec4 currentShadowCoord,
+    vec2 targetUV,
+    vec2 currentUV
+) {
+    bool valid;
+
+    vec4 candidate = getRawShadowCoordAtUV(
+        currentShadowCoord,
+        targetUV,
+        currentUV,
+        valid
+    );
+
+    if (valid) {
+        float currentLength = length(currentShadowCoord.xyz);
+        float candidateLength = length(candidate.xyz);
+
+        float allowedJump = max(
+            POINT_SHADOW_MAX_ABSOLUTE_JUMP,
+            currentLength * POINT_SHADOW_MAX_RELATIVE_JUMP
+        );
+
+        bool candidateIsReasonable =
+            candidateLength > POINT_SHADOW_MIN_LENGTH &&
+            abs(candidateLength - currentLength) < allowedJump;
+
+        if (candidateIsReasonable) {
+            return candidate;
+        }
+    }
+
+    return currentShadowCoord;
+}
+
+float getDirectionalShadowByIndex(int shadowIndex, vec2 targetUV, vec2 currentUV) {
+    float result = 1.0;
+
+    #ifdef USE_SHADOWMAP
+    #if NUM_DIR_LIGHT_SHADOWS > 0
+        DirectionalLightShadow directionalLight;
+
+        #pragma unroll_loop_start
+        for ( int i = 0; i < NUM_DIR_LIGHT_SHADOWS; i ++ ) {
+            directionalLight = directionalLightShadows[ i ];
+
+            if (UNROLLED_LOOP_INDEX == shadowIndex) {
+                result = receiveShadow ? getShadow(
+                    directionalShadowMap[ i ],
+                    directionalLight.shadowMapSize,
+                    directionalLight.shadowBias,
+                    directionalLight.shadowRadius,
+                    getProjectedShadowCoordAtUV(
+                        vDirectionalShadowCoord[ i ],
+                        targetUV,
+                        currentUV
+                    )
+                ) : 1.0;
+            }
+        }
+        #pragma unroll_loop_end
+    #endif
+    #endif
+
+    return result;
+}
+
+float getSpotShadowByIndex(int shadowIndex, vec2 targetUV, vec2 currentUV) {
+    float result = 1.0;
+
+    #ifdef USE_SHADOWMAP
+    #if NUM_SPOT_LIGHT_SHADOWS > 0
+        SpotLightShadow spotLight;
+
+        #pragma unroll_loop_start
+        for ( int i = 0; i < NUM_SPOT_LIGHT_SHADOWS; i ++ ) {
+            spotLight = spotLightShadows[ i ];
+
+            if (UNROLLED_LOOP_INDEX == shadowIndex) {
+                result = receiveShadow ? getShadow(
+                    spotShadowMap[ i ],
+                    spotLight.shadowMapSize,
+                    spotLight.shadowBias,
+                    spotLight.shadowRadius,
+                    getProjectedShadowCoordAtUV(
+                        vSpotShadowCoord[ i ],
+                        targetUV,
+                        currentUV
+                    )
+                ) : 1.0;
+            }
+        }
+        #pragma unroll_loop_end
+    #endif
+    #endif
+
+    return result;
+}
+
+float getPointShadowByIndex(int shadowIndex, vec2 targetUV, vec2 currentUV) {
+    float result = 1.0;
+
+    #ifdef USE_SHADOWMAP
+    #if NUM_POINT_LIGHT_SHADOWS > 0
+        PointLightShadow pointLight;
+
+        #pragma unroll_loop_start
+        for ( int i = 0; i < NUM_POINT_LIGHT_SHADOWS; i ++ ) {
+            pointLight = pointLightShadows[ i ];
+
+            if (UNROLLED_LOOP_INDEX == shadowIndex) {
+                result = receiveShadow ? getPointShadow(
+                    pointShadowMap[ i ],
+                    pointLight.shadowMapSize,
+                    pointLight.shadowBias,
+                    pointLight.shadowRadius,
+                    getPointShadowCoordAtUV(
+                        vPointShadowCoord[ i ],
+                        targetUV,
+                        currentUV
+                    ),
+                    pointLight.shadowCameraNear,
+                    pointLight.shadowCameraFar
+                ) : 1.0;
+            }
+        }
+        #pragma unroll_loop_end
+    #endif
+    #endif
+
+    return result;
+}
+
+vec2 getFaceTexelGridSize() {
+    vec2 textureGrid = abs(vFaceSize * vUvSize);
+    vec2 geometryGrid = abs(vFaceSize);
+    return max(max(textureGrid, geometryGrid), vec2(1.0));
+}
+
+vec2 getPixelatedFaceUV() {
+    return getPixelCenterUV(vFaceUv, getFaceTexelGridSize());
+}
+
+float getCustomLightShadow(int lightIndex) {
+    if (uLightCastShadow[lightIndex] == 0) return 1.0;
+
+    int shadowIndex = uLightShadowIndex[lightIndex];
+    if (shadowIndex < 0) return 1.0;
+
+    vec2 shadowCurrentUV = vFaceUv;
+    vec2 shadowTargetUV = getPixelatedFaceUV();
+
+    int type = uLightType[lightIndex];
+    float shadow = 1.0;
+
+    if (type == SA_LIGHT_DIRECTIONAL) {
+        shadow = getDirectionalShadowByIndex(shadowIndex, shadowTargetUV, shadowCurrentUV);
+    } else if (type == SA_LIGHT_SPOT) {
+        shadow = getSpotShadowByIndex(shadowIndex, shadowTargetUV, shadowCurrentUV);
+    } else {
+        shadow = getPointShadowByIndex(shadowIndex, shadowTargetUV, shadowCurrentUV);
+    }
+
+    shadow = clamp(shadow, 0.0, 1.0);
+    shadow = max(shadow, clamp(uShadowFloor, 0.0, 1.0));
+
+    return mix(1.0, shadow, clamp(uShadowStrength, 0.0, 1.0));
+}
+`;
+
+            const createPixelatedShadedLightflowFragment = () => {
+                let fragment = shaded_lightflow.fragment;
+                const shadowSectionStart = fragment.indexOf('// --- SHADOW FUNCTIONS ---');
+                const aoSectionStart = fragment.indexOf('// --- VOXEL-FRIENDLY AMBIENT OCCLUSION ---');
+
+                if (shadowSectionStart >= 0 && aoSectionStart > shadowSectionStart) {
+                    fragment = fragment.slice(0, shadowSectionStart) +
+                        pixelatedShadedLightflowShadowBlock +
+                        fragment.slice(aoSectionStart);
+                }
+
+                fragment = fragment.replace(
+                    /(varying vec2 vFaceUv;\r?\n)/,
+                    '$1varying vec2 vFaceSize;\nvarying vec2 vUvSize;\n'
+                );
+
+                fragment = fragment.replace(
+                    /    if \(texel\.a < 0\.01\) discard;\r?\n\r?\n    \/\/ --- LINEARIZE INPUT TEXTURE ---/,
+                    '    bool shouldDiscard = texel.a < 0.01;\n\n    // --- LINEARIZE INPUT TEXTURE ---'
+                );
+
+                fragment = fragment.replace(
+                    /(    float ambientOcclusion = computeVoxelAO\(vFaceUv, normal\);\r?\n)/,
+                    '    if (shouldDiscard) discard;\n\n    vec2 pixelFaceUv = getPixelatedFaceUV();\n    float ambientOcclusion = computeVoxelAO(pixelFaceUv, normal);\n'
+                );
+
+                return fragment;
+            };
+
+            let pixelated_shaded_lightflow = new FancyShaderMaterial({
+                id: 'pixelated_shaded_lightflow',
+                name: tl('shader_architect.preset.pixelated_shaded_lightflow'),
+                icon: 'gradient',
+                isCustom: false,
+                vertex: shaded_lightflow.vertex
+                    .replace(
+                        /(attribute vec2 normalizedFaceUv;\r?\n)/,
+                        '$1attribute vec2 faceSize;\nattribute vec2 uvSize;\n'
+                    )
+                    .replace(
+                        /(varying vec2 vFaceUv;\r?\n)/,
+                        '$1varying vec2 vFaceSize;\nvarying vec2 vUvSize;\n'
+                    )
+                    .replace(
+                        /(    vFaceUv = normalizedFaceUv;\r?\n)/,
+                        '$1    vFaceSize = faceSize;\n    vUvSize = uvSize;\n'
+                    ),
+                fragment: createPixelatedShadedLightflowFragment(),
+                uniforms: this.cloneUniformMap(shaded_lightflow.uniforms),
+                supportsScreenSpaceReflections: shaded_lightflow.supportsScreenSpaceReflections,
+                enableShadows: shaded_lightflow.enableShadows
+            });
+
 
             let realview_pbr = new FancyShaderMaterial({
                 id: 'realview_pbr',
@@ -5036,28 +5913,28 @@ void main() {
                 isCustom: false,
                 vertex: `
                                 #include <common>
-                                #include <shadowmap_pars_vertex> 
+                                #include <shadowmap_pars_vertex>
 
-                                attribute float highlight; 
-                                uniform bool SHADE; 
+                                attribute float highlight;
+                                uniform bool SHADE;
                                 uniform int LIGHTSIDE;
-                                
-                                varying vec2 vUv; 
-                                varying float lift; 
-                                varying vec3 vWorldPos; 
+
+                                varying vec2 vUv;
+                                varying float lift;
+                                varying vec3 vWorldPos;
                                 varying vec3 vWorldNormal;
-                                
+
                                 void main() {
-                                    
+
                                     // Normal correction.
                                     vec3 transformedNormal = normalize(normalMatrix * normal);
                                     vec4 worldPosition = modelMatrix * vec4(position, 1.0);
-                                    
+
 
                                     vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
                                     // Mathematical correction for rotation and scale matrices.
                                     vWorldNormal = normalize((modelMatrix * vec4(normal, 0.0)).xyz);
-                                    
+
                                     if (SHADE) {
                                         if (LIGHTSIDE == 1) { float t = vWorldNormal.y; vWorldNormal.y = -vWorldNormal.z; vWorldNormal.z = t; }
                                         else if (LIGHTSIDE == 2) { float t = vWorldNormal.y; vWorldNormal.y = vWorldNormal.x; vWorldNormal.x = t; }
@@ -5065,10 +5942,10 @@ void main() {
                                         else if (LIGHTSIDE == 4) { float t = vWorldNormal.y; vWorldNormal.y = vWorldNormal.z; vWorldNormal.z = t; }
                                         else if (LIGHTSIDE == 5) { float t = vWorldNormal.y; vWorldNormal.y = -vWorldNormal.x; vWorldNormal.x = t; }
                                     }
-                                    
-                                    vUv = uv; 
+
+                                    vUv = uv;
                                     lift = (highlight == 2.0) ? 0.22 : (highlight == 1.0) ? 0.1 : 0.0;
-                                    
+
                                     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 
                                     #include <shadowmap_vertex>
@@ -5081,57 +5958,57 @@ void main() {
                                 #include <shadowmap_pars_fragment>
                                 #include <shadowmask_pars_fragment>
 
-                                uniform sampler2D map; 
+                                uniform sampler2D map;
                                 uniform vec3 LIGHTCOLOR;
-                                
-                                uniform vec3 uLightPos[16]; 
-                                uniform vec3 uLightDir[16]; 
+
+                                uniform vec3 uLightPos[16];
+                                uniform vec3 uLightDir[16];
                                 uniform float uLightIntensity[16];
-                                uniform float uLightDistance[16]; 
-                                uniform float uLightConeAngle[16]; 
+                                uniform float uLightDistance[16];
+                                uniform float uLightConeAngle[16];
                                 uniform float uLightPenumbra[16];
-                                uniform int uLightType[16]; 
-                                uniform vec3 uLightColor[16]; 
+                                uniform int uLightType[16];
+                                uniform vec3 uLightColor[16];
                                 uniform int max_light_number;
-                                uniform float uAmbient; 
+                                uniform float uAmbient;
                                 uniform vec3 uAmbientColor;
-                                
-                                varying vec2 vUv; 
-                                varying float lift; 
-                                varying vec3 vWorldPos; 
+
+                                varying vec2 vUv;
+                                varying float lift;
+                                varying vec3 vWorldPos;
                                 varying vec3 vWorldNormal;
-                                
+
                                 void main() {
                                     vec4 color = texture2D(map, vUv);
                                     if(color.a < 0.01) discard;
-                                    
+
                                     vec3 normal = normalize(vWorldNormal);
                                     vec3 sumLight = vec3(0.0);
-                                    
+
                                     for(int i = 0; i < 16; i++) {
                                         if(i >= max_light_number) break;
                                         if(uLightIntensity[i] <= 0.0) continue;
-                                        
-                                        vec3 lightDir; 
-                                        float attenuation = 1.0; 
+
+                                        vec3 lightDir;
+                                        float attenuation = 1.0;
                                         int type = uLightType[i];
-                                        
-                                        if (type == 1) { 
-                                            lightDir = normalize(-uLightDir[i]); 
+
+                                        if (type == 1) {
+                                            lightDir = normalize(-uLightDir[i]);
                                         } else {
-                                            vec3 lightVec = uLightPos[i] - vWorldPos; 
+                                            vec3 lightVec = uLightPos[i] - vWorldPos;
                                             float dist = length(lightVec);
                                             lightDir = lightVec / dist;
                                             float maxDist = uLightDistance[i];
-                                            
+
                                             if (maxDist > 0.0) {
                                                 if (dist > maxDist) continue;
                                                 float falloff = clamp(1.0 - pow(dist / maxDist, 4.0), 0.0, 1.0);
                                                 attenuation = (falloff * falloff) / (dist * dist + 1.0);
-                                            } else { 
-                                                attenuation = 1.0 / (1.0 + 0.04 * dist + 0.002 * (dist * dist)); 
+                                            } else {
+                                                attenuation = 1.0 / (1.0 + 0.04 * dist + 0.002 * (dist * dist));
                                             }
-                                            
+
                                             if (type == 2) {
                                                 float theta = dot(-lightDir, normalize(uLightDir[i]));
                                                 float outerCutoff = cos(uLightConeAngle[i]);
@@ -5142,23 +6019,23 @@ void main() {
                                         }
                                         sumLight += uLightColor[i] * (max(dot(normal, lightDir), 0.0) * uLightIntensity[i] * attenuation);
                                     }
-                                    
+
                                     // 1. Resolve the raw shadow mask (0.0 = shadow, 1.0 = light).
                                     float shadow = getShadowMask();
-                                    
+
                                     // 2. Ambient light affects all geometry evenly.
                                     vec3 ambientLight = uAmbientColor * uAmbient;
-                                    
+
                                     // 3. Direct light (sumLight) is blocked by the shadow.
                                     vec3 directLight = sumLight * shadow;
-                                    
+
                                     // 4. Combine both contributions.
                                     // Higher direct light intensity increases contrast against the shadowed area.
                                     vec3 finalLight = clamp(ambientLight + directLight, 0.0, 1.0);
-                                    
+
                                     gl_FragColor = vec4(lift + color.rgb * finalLight, color.a);
                                     gl_FragColor.rgb *= LIGHTCOLOR;
-                                    
+
                                     if(lift > 0.2) { gl_FragColor.rg *= vec2(0.6, 0.7); }
                                 }
                             `,
@@ -5184,7 +6061,7 @@ void main() {
             this.materials['lightflow'] = lightflow;
             this.materials['shaded_lightflow'] = shaded_lightflow;
             this.materials['pbr_metallic_roughness'] = pbr_metallic_roughness;
-            //this.materials['pixelated_shaded_lightflow'] = pixelated_shaded_lightflow;
+            this.materials['pixelated_shaded_lightflow'] = pixelated_shaded_lightflow;
             //this.materials['uv_shadow'] = uv_shadow;
             // The new PBR material occupies the former hologram slot.
             // This keeps existing app references working.
@@ -5195,9 +6072,385 @@ void main() {
     // =========================================================================
     // 4. ANIMATION & SHADER ENGINE
     // =========================================================================
+    const ScreenSpaceReflectionManager = {
+        states: new Map(),
+        patchedPreviews: new Map(),
+        fallbackTexture: null,
+        disposed: false,
+
+        init() {
+            this.disposed = false;
+            this.patchAllPreviews();
+        },
+
+        dispose() {
+            this.disposed = true;
+
+            this.patchedPreviews.forEach((state, preview) => {
+                if (preview && preview.render === state.patchedRender) {
+                    preview.render = state.originalRender;
+                }
+            });
+            this.patchedPreviews.clear();
+
+            this.states.forEach((state) => {
+                if (state.captureTarget && typeof state.captureTarget.dispose === 'function') {
+                    state.captureTarget.dispose();
+                }
+                if (state.depthTexture && typeof state.depthTexture.dispose === 'function') {
+                    state.depthTexture.dispose();
+                }
+            });
+            this.states.clear();
+
+            if (this.fallbackTexture && typeof this.fallbackTexture.dispose === 'function') {
+                this.fallbackTexture.dispose();
+            }
+            this.fallbackTexture = null;
+        },
+
+        getFallbackTexture() {
+            if (!this.fallbackTexture) {
+                const data = new Uint8Array([0, 0, 0, 255]);
+                this.fallbackTexture = new THREE.DataTexture(data, 1, 1, THREE.RGBAFormat);
+                this.fallbackTexture.magFilter = THREE.NearestFilter;
+                this.fallbackTexture.minFilter = THREE.NearestFilter;
+                this.fallbackTexture.needsUpdate = true;
+            }
+            return this.fallbackTexture;
+        },
+
+        createDepthTexture() {
+            if (!THREE.DepthTexture) return null;
+
+            try {
+                const depthTexture = new THREE.DepthTexture(1, 1);
+                depthTexture.type = THREE.UnsignedShortType || THREE.UnsignedIntType;
+                depthTexture.format = THREE.DepthFormat;
+                depthTexture.minFilter = THREE.NearestFilter;
+                depthTexture.magFilter = THREE.NearestFilter;
+                depthTexture.generateMipmaps = false;
+                return depthTexture;
+            } catch (error) {
+                console.warn('[Shader Architect] DepthTexture unavailable; SSR will use approximate fallback reflections.', error);
+                return null;
+            }
+        },
+
+        getPreviewState(preview) {
+            if (!preview || !preview.renderer) return null;
+
+            let state = this.states.get(preview);
+            if (state) return state;
+
+            const depthTexture = this.createDepthTexture();
+            const targetOptions = {
+                minFilter: THREE.LinearFilter,
+                magFilter: THREE.LinearFilter,
+                format: THREE.RGBAFormat,
+                depthBuffer: true,
+                stencilBuffer: false
+            };
+
+            if (depthTexture) targetOptions.depthTexture = depthTexture;
+
+            const captureTarget = new THREE.WebGLRenderTarget(1, 1, targetOptions);
+            if (depthTexture && !captureTarget.depthTexture) {
+                captureTarget.depthTexture = depthTexture;
+            }
+            captureTarget.texture.name = 'SA_SSR_ScreenColor';
+            captureTarget.texture.generateMipmaps = false;
+
+            state = {
+                preview,
+                renderer: preview.renderer,
+                captureTarget,
+                depthTexture,
+                width: 1,
+                height: 1,
+                frameIndex: 0,
+                lastCaptureFrame: 0,
+                hasCaptured: false,
+                capturing: false
+            };
+
+            this.states.set(preview, state);
+            return state;
+        },
+
+        patchAllPreviews() {
+            if (this.disposed || !window.Preview || !Array.isArray(Preview.all)) return;
+            Preview.all.forEach(preview => this.patchPreview(preview));
+        },
+
+        patchPreview(preview) {
+            if (!preview || !preview.renderer || this.patchedPreviews.has(preview)) return;
+
+            const originalRender = preview.render;
+            if (typeof originalRender !== 'function') return;
+
+            const manager = this;
+            const patchedRender = function shaderArchitectSSRRender() {
+                const activeMaterials = manager.collectActiveMaterials();
+                if (activeMaterials.length === 0) {
+                    return originalRender.apply(this, arguments);
+                }
+
+                if (this.controls && typeof this.controls.update === 'function') {
+                    this.controls.update();
+                }
+
+                manager.capturePreview(this, activeMaterials);
+                this.renderer.render(Canvas.scene, this.camera);
+            };
+
+            preview.render = patchedRender;
+            this.patchedPreviews.set(preview, {
+                originalRender,
+                patchedRender
+            });
+        },
+
+        getMaterialNumberUniform(material, name, fallback) {
+            const uniform = material && material.uniforms ? material.uniforms[name] : null;
+            const value = uniform ? Number(uniform.value) : NaN;
+            return Number.isFinite(value) ? value : fallback;
+        },
+
+        getRenderScaleForMaterials(materials) {
+            let renderScale = 0.55;
+            (materials || []).forEach(material => {
+                const materialScale = this.getMaterialNumberUniform(material, 'uSSRRenderScale', 0.72);
+                renderScale = Math.max(renderScale, Math.min(Math.max(materialScale, 0.25), 1.0));
+            });
+            return renderScale;
+        },
+
+        getFrameIntervalForMaterials(materials) {
+            let frameInterval = 4;
+            (materials || []).forEach(material => {
+                const materialInterval = Math.round(this.getMaterialNumberUniform(material, 'uSSRFrameInterval', 1.0));
+                frameInterval = Math.min(frameInterval, Math.min(Math.max(materialInterval, 1), 4));
+            });
+            return frameInterval === 4 && (!materials || materials.length === 0) ? 1 : frameInterval;
+        },
+
+        resizeTarget(state, activeMaterials) {
+            const renderer = state.renderer;
+            const preview = state.preview;
+            const canvas = renderer.domElement || preview.canvas;
+            const rect = canvas && canvas.getBoundingClientRect
+                ? canvas.getBoundingClientRect()
+                : { width: preview.width || window.innerWidth || 800, height: preview.height || window.innerHeight || 600 };
+
+            const pixelRatio = Math.min(
+                renderer.getPixelRatio ? renderer.getPixelRatio() : (window.devicePixelRatio || 1),
+                1.0
+            );
+            const renderScale = this.getRenderScaleForMaterials(activeMaterials);
+            const rawWidth = Math.max(2, Math.floor(rect.width * pixelRatio));
+            const rawHeight = Math.max(2, Math.floor(rect.height * pixelRatio));
+            const scale = Math.min(1, SCREEN_SPACE_REFLECTION_TARGET_MAX_SIZE / Math.max(rawWidth, rawHeight));
+            const width = Math.max(2, Math.floor(rawWidth * scale * renderScale));
+            const height = Math.max(2, Math.floor(rawHeight * scale * renderScale));
+
+            if (width === state.width && height === state.height) return false;
+
+            state.width = width;
+            state.height = height;
+            state.captureTarget.setSize(width, height);
+            return true;
+        },
+
+        ensureMaterialUniforms(material) {
+            if (!material || !material.uniforms) return false;
+
+            const fallbackTexture = this.getFallbackTexture();
+            const ensureUniform = (name, valueFactory) => {
+                if (!material.uniforms[name]) {
+                    material.uniforms[name] = { value: valueFactory() };
+                }
+                return material.uniforms[name];
+            };
+
+            ensureUniform('uSA_SSRScene', () => fallbackTexture);
+            ensureUniform('uSA_SSRDepth', () => fallbackTexture);
+            ensureUniform('uSA_SSRHasDepth', () => 0);
+            ensureUniform('uSA_SSRResolution', () => new THREE.Vector2(1, 1));
+            ensureUniform('uSA_SSRCameraNear', () => 0.1);
+            ensureUniform('uSA_SSRCameraFar', () => 1000.0);
+            ensureUniform('uSA_SSRCameraIsPerspective', () => 1);
+            ensureUniform('uSA_SSRCameraProjectionMatrix', () => new THREE.Matrix4());
+            ensureUniform('uSA_SSRTime', () => 0.0);
+            return true;
+        },
+
+        configureMaterial(material, activeShader) {
+            const shaderSupportsSSR = MaterialManager.hasScreenSpaceReflectionSupport(activeShader);
+            if (!shaderSupportsSSR || !material || !material.uniforms) {
+                if (material) material.sa_uses_screen_space_reflections = false;
+                return false;
+            }
+
+            addScreenSpaceReflectionUniforms(material.uniforms);
+            this.ensureMaterialUniforms(material);
+            material.sa_uses_screen_space_reflections = true;
+            return true;
+        },
+
+        updateMaterialUniformsForPreview(material, state, camera) {
+            if (!this.ensureMaterialUniforms(material)) return;
+
+            const uniforms = material.uniforms;
+            uniforms.uSA_SSRScene.value = state.captureTarget.texture || this.getFallbackTexture();
+            uniforms.uSA_SSRDepth.value = state.depthTexture || state.captureTarget.depthTexture || this.getFallbackTexture();
+            uniforms.uSA_SSRHasDepth.value = state.depthTexture || state.captureTarget.depthTexture ? 1 : 0;
+            uniforms.uSA_SSRResolution.value.set(state.width, state.height);
+            uniforms.uSA_SSRCameraNear.value = camera && camera.near ? camera.near : 0.1;
+            uniforms.uSA_SSRCameraFar.value = camera && camera.far ? camera.far : 1000.0;
+            uniforms.uSA_SSRCameraIsPerspective.value = camera && camera.isPerspectiveCamera ? 1 : 0;
+            if (camera && camera.projectionMatrix) {
+                uniforms.uSA_SSRCameraProjectionMatrix.value.copy(camera.projectionMatrix);
+            }
+            uniforms.uSA_SSRTime.value = performance.now() * 0.001;
+            material.uniformsNeedUpdate = true;
+        },
+
+        materialIsActive(material) {
+            if (!material || !material.uniforms || !material.sa_uses_screen_space_reflections) return false;
+            const enabled = material.uniforms.uSSREnabled && material.uniforms.uSSREnabled.value === true;
+            const intensity = material.uniforms.uSSRIntensity ? Number(material.uniforms.uSSRIntensity.value) || 0 : 0;
+            return enabled && intensity > 0;
+        },
+
+        meshUsesActiveSSR(mesh) {
+            if (!mesh || !mesh.material) return false;
+            let active = false;
+            ShaderEngine.forEachMeshMaterial(mesh, (material) => {
+                if (this.materialIsActive(material)) active = true;
+            });
+            return active;
+        },
+
+        hasActiveReflectiveMaterials() {
+            if (this.disposed || !window.Cube || !Array.isArray(Cube.all)) return false;
+            for (const cube of Cube.all) {
+                if (cube && this.meshUsesActiveSSR(cube.mesh)) return true;
+            }
+            return false;
+        },
+
+        collectActiveMaterials() {
+            const materials = [];
+            const seen = new Set();
+            if (!window.Cube || !Array.isArray(Cube.all)) return materials;
+
+            Cube.all.forEach(cube => {
+                if (!cube || !cube.mesh) return;
+                ShaderEngine.forEachMeshMaterial(cube.mesh, (material) => {
+                    if (!this.materialIsActive(material)) return;
+                    const key = material.uuid || material.id || material;
+                    if (seen.has(key)) return;
+                    seen.add(key);
+                    materials.push(material);
+                });
+            });
+
+            return materials;
+        },
+
+        setReflectiveMeshesVisible(visible) {
+            const changed = [];
+            if (!window.Cube || !Array.isArray(Cube.all)) return changed;
+
+            Cube.all.forEach(cube => {
+                const mesh = cube && cube.mesh;
+                if (!mesh || !this.meshUsesActiveSSR(mesh)) return;
+                changed.push({ mesh, visible: mesh.visible });
+                mesh.visible = visible;
+            });
+
+            return changed;
+        },
+
+        restoreMeshVisibility(changed) {
+            changed.forEach(entry => {
+                if (entry.mesh) entry.mesh.visible = entry.visible;
+            });
+        },
+
+        capturePreview(preview, activeMaterials = null) {
+            if (this.disposed || !preview || !preview.renderer || typeof Canvas === 'undefined' || !Canvas.scene) return;
+
+            const state = this.getPreviewState(preview);
+            if (!state || state.capturing) return;
+
+            const materials = Array.isArray(activeMaterials) ? activeMaterials : this.collectActiveMaterials();
+            if (materials.length === 0) return;
+
+            state.frameIndex = (state.frameIndex || 0) + 1;
+            const targetChanged = this.resizeTarget(state, materials);
+            const frameInterval = this.getFrameIntervalForMaterials(materials);
+            const shouldCapture = !state.hasCaptured ||
+                targetChanged ||
+                frameInterval <= 1 ||
+                (state.frameIndex - (state.lastCaptureFrame || 0)) >= frameInterval;
+
+            if (!shouldCapture) {
+                materials.forEach(material => {
+                    this.updateMaterialUniformsForPreview(material, state, preview.camera);
+                });
+                return;
+            }
+
+            state.capturing = true;
+
+            const renderer = state.renderer;
+            const camera = preview.camera;
+            const previousTarget = renderer.getRenderTarget();
+            const previousAutoClear = renderer.autoClear;
+            const hiddenMeshes = this.setReflectiveMeshesVisible(false);
+
+            try {
+                renderer.autoClear = true;
+                renderer.setRenderTarget(state.captureTarget);
+                renderer.clear(true, true, true);
+                renderer.render(Canvas.scene, camera);
+                renderer.setRenderTarget(previousTarget);
+                renderer.autoClear = previousAutoClear;
+                this.restoreMeshVisibility(hiddenMeshes);
+                state.hasCaptured = true;
+                state.lastCaptureFrame = state.frameIndex;
+
+                materials.forEach(material => {
+                    this.updateMaterialUniformsForPreview(material, state, camera);
+                });
+            } catch (error) {
+                renderer.setRenderTarget(previousTarget);
+                renderer.autoClear = previousAutoClear;
+                this.restoreMeshVisibility(hiddenMeshes);
+                console.warn('[Shader Architect] SSR capture failed.', error);
+            } finally {
+                state.capturing = false;
+            }
+        },
+
+        refresh() {
+            this.patchAllPreviews();
+            if (!window.Preview || !Array.isArray(Preview.all)) return;
+            Preview.all.forEach(preview => {
+                if (preview && typeof preview.render === 'function') {
+                    preview.render();
+                }
+            });
+        }
+    };
+
     const ShaderEngine = {
         globalRenderMode: 'classic',
         animationReq: null,
+        pendingSceneUpdateFrame: null,
+        pendingSceneUpdateCauses: null,
         clock: new THREE.Clock(),
 
         startAnimationLoop() {
@@ -5233,6 +6486,7 @@ void main() {
                 });
 
                 self.updateWorldNormalMatrices();
+                ScreenSpaceReflectionManager.patchAllPreviews();
                 self.animationReq = requestAnimationFrame(tick);
             }
             tick();
@@ -5240,6 +6494,7 @@ void main() {
 
         stopAnimationLoop() {
             if (this.animationReq) cancelAnimationFrame(this.animationReq);
+            this.cancelPendingSceneUpdate();
         },
 
         hexToVec3(hex) {
@@ -5256,6 +6511,69 @@ void main() {
             this.getMaterialList(mesh?.material).forEach((mat, index) => {
                 if (mat) callback(mat, index);
             });
+        },
+
+        isSceneUpdateReady() {
+            return !!Project?.parsed && !Blockbench.hasFlag('switching_project');
+        },
+
+        pickSceneUpdateCause(causes = []) {
+            const priority = [
+                'project_update',
+                'texture_apply',
+                'canvas_update_all_faces',
+                'cube_update_faces',
+                'update_selection'
+            ];
+            return priority.find(cause => causes.includes(cause)) || causes[0] || 'batched_update';
+        },
+
+        requestSceneUpdate(cause = 'default') {
+            if (!this.pendingSceneUpdateCauses) {
+                this.pendingSceneUpdateCauses = new Set();
+            }
+            this.pendingSceneUpdateCauses.add(cause);
+
+            if (this.pendingSceneUpdateFrame !== null) return;
+
+            const flush = () => {
+                this.pendingSceneUpdateFrame = null;
+                this.flushPendingSceneUpdate();
+            };
+
+            if (typeof requestAnimationFrame === 'function') {
+                this.pendingSceneUpdateFrame = requestAnimationFrame(flush);
+            } else if (typeof queueMicrotask === 'function') {
+                this.pendingSceneUpdateFrame = 'microtask';
+                queueMicrotask(flush);
+            } else {
+                this.pendingSceneUpdateFrame = 'promise';
+                Promise.resolve().then(flush);
+            }
+        },
+
+        flushPendingSceneUpdate() {
+            const causes = this.pendingSceneUpdateCauses
+                ? Array.from(this.pendingSceneUpdateCauses)
+                : [];
+
+            if (this.pendingSceneUpdateCauses) {
+                this.pendingSceneUpdateCauses.clear();
+            }
+
+            if (!causes.length || !this.isSceneUpdateReady()) return;
+
+            this.updateAllCubes(this.pickSceneUpdateCause(causes), { causes });
+        },
+
+        cancelPendingSceneUpdate() {
+            if (typeof this.pendingSceneUpdateFrame === 'number' && typeof cancelAnimationFrame === 'function') {
+                cancelAnimationFrame(this.pendingSceneUpdateFrame);
+            }
+            this.pendingSceneUpdateFrame = null;
+            if (this.pendingSceneUpdateCauses) {
+                this.pendingSceneUpdateCauses.clear();
+            }
         },
 
         configureTextureWrap(texture, uniformDef, options = {}) {
@@ -5812,6 +7130,8 @@ void main() {
                     };
                 }
 
+                ScreenSpaceReflectionManager.configureMaterial(targetMaterial, activeShader);
+
                 targetMaterial.transparent =
                     sourceMaterial.transparent !== undefined ? sourceMaterial.transparent : true;
 
@@ -5933,7 +7253,11 @@ void main() {
             setupAlphaShadowMaterials(mesh, firstTexture, firstSourceMaterial, shadowShader);
         },
 
-        updateAllCubes(cause = 'default') {
+        updateAllCubes(cause = 'default', options = {}) {
+            if (!options.keepPending) {
+                this.cancelPendingSceneUpdate();
+            }
+
             Cube.all.forEach(cube => {
                 if (cube.mesh) {
                     cube.mesh.castShadow = true;
@@ -5951,9 +7275,11 @@ void main() {
 
             //Dispatch Blockbench event to signal that shaders have been updated
 
-            Blockbench.dispatchEvent('shader_update_complete', {
-                cause
-            });
+            const eventData = { cause };
+            if (options.causes && options.causes.length) {
+                eventData.causes = options.causes;
+            }
+            Blockbench.dispatchEvent('shader_update_complete', eventData);
 
         },
 
@@ -6023,6 +7349,7 @@ void main() {
                             this.configureTextureWrap(activeMap, mapDef);
                         }
 
+                        ScreenSpaceReflectionManager.configureMaterial(mat, renderShader);
                         mat.uniformsNeedUpdate = true;
                     }
                 });
@@ -6407,6 +7734,7 @@ void main() {
                         newUniformName: 'u_myVar',
                         newUniformType: 'float',
                         newUniformExpose: true,
+                        newUniformAdvanced: false,
                         newUniformMin: null,
                         newUniformMax: null,
                         newUniformStep: null,
@@ -6427,6 +7755,7 @@ void main() {
                         // Layout and workspace controls
                         showLeftSidebar: true,
                         showRightSidebar: true,
+                        showAdvancedTweaks: false,
                         problemsCollapsed: false,
                         autocomplete: {
                             show: false,
@@ -6479,6 +7808,10 @@ void main() {
                     isSystemUniform(name) {
                         return isSystemUniform(name);
                     },
+                    isUniformVisibleInQuickTweaks(uni, key) {
+                        if (!uni || !((uni.expose || key === 'map') && !isSystemUniform(key))) return false;
+                        return !uni.advanced || this.showAdvancedTweaks;
+                    },
                     formatNumber(val) {
                         let num = Number(val);
                         return isNaN(num) ? "0.00" : num.toFixed(2);
@@ -6495,6 +7828,60 @@ void main() {
                         this.$nextTick(() => {
                             this.debounceValidate();
                         });
+                    },
+                    toggleMaterialShadows() {
+                        if (!this.activeMat || !this.activeMat.isCustom) return;
+
+                        const enabled = !this.activeMat.enableShadows;
+                        this.$set(
+                            this.activeMat,
+                            'uniforms',
+                            MaterialManager.addMaterialLightingUniforms(this.activeMat.uniforms || {})
+                        );
+                        this.$set(this.activeMat, 'enableShadows', enabled);
+
+                        MaterialManager.register(this.activeMat);
+                        ShaderEngine.updateAllCubes('material_studio_toggle_shadows');
+                        Blockbench.showToastNotification({
+                            text: tl(enabled
+                                ? 'shader_architect.toast.shadows_enabled'
+                                : 'shader_architect.toast.shadows_disabled'),
+                            expire: 1500
+                        });
+                    },
+                    toggleMaterialScreenSpaceReflections() {
+                        if (!this.activeMat || !this.activeMat.isCustom) return;
+
+                        const enabled = !this.activeMat.supportsScreenSpaceReflections;
+                        if (enabled) {
+                            MaterialManager.enableScreenSpaceReflections(this.activeMat, {
+                                enabled: true,
+                                save: false
+                            });
+                        } else {
+                            this.$set(this.activeMat, 'supportsScreenSpaceReflections', false);
+                            if (this.activeMat.uniforms && this.activeMat.uniforms.uSSREnabled) {
+                                this.activeMat.uniforms.uSSREnabled.value = false;
+                            }
+                        }
+
+                        MaterialManager.register(this.activeMat);
+                        ShaderEngine.updateAllCubes('material_studio_toggle_reflections');
+                        Blockbench.showToastNotification({
+                            text: tl(enabled
+                                ? 'shader_architect.toast.reflections_enabled'
+                                : 'shader_architect.toast.reflections_disabled'),
+                            expire: 1500
+                        });
+                    },
+                    hasMaterialShadowsEnabled() {
+                        return !!(this.activeMat && this.activeMat.enableShadows);
+                    },
+                    hasMaterialScreenSpaceReflectionsEnabled() {
+                        return !!(
+                            this.activeMat &&
+                            this.activeMat.supportsScreenSpaceReflections
+                        );
                     },
                     selectMaterial(id) {
                         this.selectedId = id;
@@ -6522,7 +7909,8 @@ void main() {
                             fragment: this.activeMat.fragment,
                             uniforms: MaterialManager.cloneUniformMap(this.activeMat.uniforms),
                             isCustom: true,
-                            enableShadows: this.activeMat.enableShadows
+                            enableShadows: this.activeMat.enableShadows,
+                            supportsScreenSpaceReflections: this.activeMat.supportsScreenSpaceReflections
                         });
                         this.$set(this.materials, m.id, m);
                         MaterialManager.register(m);
@@ -6553,6 +7941,7 @@ void main() {
                         else if (this.newUniformType === 'vec3') def.value = new THREE.Vector3(0, 0, 0);
 
                         def.expose = this.newUniformExpose;
+                        def.advanced = !!this.newUniformAdvanced;
                         if (this.newUniformType === 'float' || this.newUniformType === 'int') {
                             if (this.newUniformMin !== null && this.newUniformMin !== '') def.min = Number(this.newUniformMin);
                             if (this.newUniformMax !== null && this.newUniformMax !== '') def.max = Number(this.newUniformMax);
@@ -7702,6 +9091,8 @@ void main() {
                                     <input v-model="activeMat.icon" type="text" title="Material Icon String" style="width: 70px; padding: 2px 4px; font-size:0.9em;">
                                 </div>
                                 <button class="sa-icon-btn" @click="duplicateActiveMaterial()" :title="tl('shader_architect.ui.tooltip.duplicate')"><i class="material-icons">content_copy</i></button>
+                                <button class="sa-icon-btn" :class="{active: hasMaterialShadowsEnabled()}" @click="toggleMaterialShadows()" :disabled="!activeMat.isCustom" :title="tl('shader_architect.ui.toggle_shadows')"><i class="material-icons">brightness_3</i></button>
+                                <button class="sa-icon-btn" :class="{active: hasMaterialScreenSpaceReflectionsEnabled()}" @click="toggleMaterialScreenSpaceReflections()" :disabled="!activeMat.isCustom" :title="tl('shader_architect.ui.toggle_reflections')"><i class="material-icons">opacity</i></button>
                                 <button class="sa-icon-btn" @click="exportActive()" v-if="activeMat.isCustom" :title="tl('shader_architect.ui.tooltip.export')"><i class="material-icons">save_alt</i></button>
                                 <button class="sa-icon-btn delete-btn" @click="deleteActiveMaterial()" v-if="activeMat.isCustom" :title="tl('shader_architect.ui.tooltip.delete')"><i class="material-icons">delete</i></button>
                             </div>
@@ -7715,14 +9106,14 @@ void main() {
 
                     <!-- Main Workspace Body -->
                     <div class="sa-studio-body">
-                        
+
                         <!-- Left Sidebar: Materials Library -->
                         <div class="sa-studio-sidebar sa-left" :class="{collapsed: !showLeftSidebar}" style="padding: 12px 10px;">
                             <button class="sa-left-btn" @click="createNewMaterial()"><i class="material-icons">add</i> New Material</button>
                             <button class="sa-left-btn" @click="importMaterial()"><i class="material-icons">file_upload</i> Import .samat</button>
                             <div style="font-size: 0.85em; font-weight: bold; opacity: 0.6; text-transform: uppercase; margin: 12px 0 6px 4px; letter-spacing: 0.5px;">Material Library</div>
                             <div style="flex-grow: 1;">
-                                <div v-for="(m, mid) in materials" :key="mid" 
+                                <div v-for="(m, mid) in materials" :key="mid"
                                      class="sa-materiel-list-item" :class="{selected: selectedId === mid}"
                                      @click="selectMaterial(mid)">
                                      <i class="material-icons">{{m.icon}}</i>
@@ -7734,7 +9125,7 @@ void main() {
 
                         <!-- Center Panel: Code Editor -->
                         <div class="sa-studio-main" v-if="activeMat" style="flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden;">
-                            
+
                             <!-- VSCode Style Tab Header Bar -->
                                 <div class="sa-vscode-tabs-row" style="flex-shrink: 0; z-index: 2;">
                                     <button class="sa-vscode-tab" :class="{active: editingMode === 'vertex'}" @click="editingMode = 'vertex'">
@@ -7762,19 +9153,19 @@ void main() {
 
                             <!-- Workspace main content (Editor or Uniforms) -->
                             <div style="flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; min-height: 0;">
-                                
+
                                 <!-- Main Code Editor area -->
                                 <div v-if="editingMode !== 'uniforms'" class="sa-editor-container" style="flex: 1; display: flex; flex-direction: column; min-height: 0; position: relative; width: 100%;">
-                                    
+
                                     <vue-prism-editor
-                                        class="glsl-editor-instance" 
+                                        class="glsl-editor-instance"
                                         v-model="currentShaderCode"
                                         :highlight="highlighter"
                                         language="glsl"
                                         :line-numbers="true"
                                         :readonly="!activeMat.isCustom"
                                     ></vue-prism-editor>
-                                    
+
                                     <!-- Autocomplete Suggestions popup -->
                                     <div v-if="autocomplete.show" class="sa-autocomplete-dropdown" :style="{top: autocomplete.y + 'px', left: autocomplete.x + 'px'}">
                                         <div v-for="(item, idx) in autocomplete.list" :key="getAutocompleteKey(item)"
@@ -7809,7 +9200,7 @@ void main() {
                                         <div v-if="validationErrors.length === 0" style="opacity: 0.5; padding: 8px 12px; font-size:0.95em;">
                                             {{ tl('shader_architect.ui.no_problems') }}
                                         </div>
-                                        <div v-for="(prob, pidx) in validationErrors" :key="pidx" 
+                                        <div v-for="(prob, pidx) in validationErrors" :key="pidx"
                                             class="sa-problem-item error" @click="goToProblemLine(prob)">
                                             <span class="location">
                                                 [{{ prob.type }}<span v-if="prob.line">:L{{ prob.line }}</span>]
@@ -7835,6 +9226,9 @@ void main() {
                                             </select>
                                             <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
                                                 <input type="checkbox" v-model="newUniformExpose" :disabled="!activeMat.isCustom"> Expose
+                                            </label>
+                                            <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
+                                                <input type="checkbox" v-model="newUniformAdvanced" :disabled="!activeMat.isCustom"> Advanced
                                             </label>
                                             <button @click="addUniform()" :disabled="!activeMat.isCustom"><i class="material-icons" style="font-size:1.1em; vertical-align:middle;">add_box</i> Add</button>
                                         </div>
@@ -7884,27 +9278,27 @@ void main() {
 
                                     <h3 style="margin-top:0;">Active Uniforms</h3>
                                     <div v-if="!activeMat.uniforms || Object.keys(activeMat.uniforms).length === 0" style="opacity: 0.5;">No uniforms defined.</div>
-                                    
+
                                     <div v-for="(uni, key) in activeMat.uniforms" :key="key" class="sa-uniform-row">
                                         <div class="sa-uniform-row-header">
                                             <label :title="key">
                                                 <span>{{key}} <span v-if="getUniformLabel(uni, key)" style="opacity: 0.6; font-size: 0.9em; font-weight: normal;">({{getUniformLabel(uni, key)}})</span></span>
                                                 <span class="uni-type">{{uni.type}}</span>
                                             </label>
-                                            
+
                                             <!-- Editor varies by type -->
                                             <input v-if="uni.type==='float'" type="number" step="0.1" v-model.number="uni.value" class="dark_bordered" style="width: 100px;">
                                             <input v-if="uni.type==='int'" type="number" step="1" v-model.number="uni.value" class="dark_bordered" style="width: 100px;">
                                             <input v-if="uni.type==='bool'" type="checkbox" v-model="uni.value">
                                             <input v-if="uni.type==='color'" type="color" v-model="uni.hexValue">
-                                            
+
                                             <div v-if="uni.type==='sampler2D'" style="display: flex; gap: 8px; align-items: center;">
                                                 <label style="display: flex; align-items: center; gap: 4px; font-weight: normal; cursor: pointer; font-size:0.9em;">
                                                     <input type="checkbox" v-model="uni.repeat" @change="applyLive()">
                                                     Repeat (Tiling)
                                                 </label>
                                             </div>
-                                            
+
                                             <div v-if="uni.type==='vec2'" style="display: flex; gap: 5px; align-items: center;">
                                                 X <input type="number" step="0.1" v-model.number="uni.value.x" class="dark_bordered" style="width: 70px;">
                                                 Y <input type="number" step="0.1" v-model.number="uni.value.y" class="dark_bordered" style="width: 70px;">
@@ -7917,7 +9311,7 @@ void main() {
                                             </div>
 
                                             <div v-if="uni.type==='vec2v' || uni.type==='vec3v' || uni.type==='floatv'" style="opacity:0.6; font-style:italic;">[Array Data: {{uni.value.length}} items]</div>
-                                            
+
                                             <div style="flex-grow:1"></div>
                                             <button v-if="key !== 'map'" @click="expandUniform(key)" style="background: transparent; border: none; padding: 2px 4px; cursor: pointer; color: var(--color-text); margin-right: 4px;" title="Edit Metadata">
                                                 <i class="material-icons" :style="{color: expandedUniforms[key] ? 'var(--color-accent)' : ''}" style="font-size: 1.2em;">settings</i>
@@ -7930,6 +9324,9 @@ void main() {
                                             <div style="display: flex; gap: 15px; align-items: center;">
                                                 <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
                                                     <input type="checkbox" v-model="uni.expose" :disabled="!activeMat.isCustom"> Expose to UI
+                                                </label>
+                                                <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
+                                                    <input type="checkbox" v-model="uni.advanced" :disabled="!activeMat.isCustom"> Advanced
                                                 </label>
                                             </div>
                                             <div v-if="uni.type === 'float' || uni.type === 'int'" style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center;">
@@ -7989,7 +9386,7 @@ void main() {
                                             <!-- Translations -->
                                             <div style="display: flex; flex-direction: column; gap: 4px; margin-top: 4px;">
                                                 <label style="font-weight: bold;">Custom Translations:</label>
-                                                
+
                                                 <!-- List existing translations -->
                                                 <div v-for="(transVal, langCode) in uni.translations" :key="langCode" style="display: flex; gap: 5px; align-items: center; margin-bottom: 2px;">
                                                     <span style="font-family: monospace; width: 30px; text-transform: uppercase; opacity: 0.8;">{{langCode}}:</span>
@@ -8026,16 +9423,20 @@ void main() {
                                     <i class="material-icons" style="color:var(--color-accent)">tune</i>
                                     Quick Tweaks
                                 </h3>
-                                
+
                                 <div style="font-size:0.85em; opacity:0.6; margin-bottom:12px;">
                                     Adjust exposed uniforms and properties in real-time to preview in the viewport.
                                 </div>
 
-                                <div v-if="!activeMat.uniforms || Object.keys(activeMat.uniforms).filter(k => (activeMat.uniforms[k].expose || k === 'map') && !isSystemUniform(k)).length === 0" style="opacity: 0.5; font-style:italic;">
+                                <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size:0.9em; font-weight:normal; margin-bottom:12px;">
+                                    <input type="checkbox" v-model="showAdvancedTweaks"> {{ tl('shader_architect.material_panel.show_advanced') }}
+                                </label>
+
+                                <div v-if="!activeMat.uniforms || Object.keys(activeMat.uniforms).filter(k => isUniformVisibleInQuickTweaks(activeMat.uniforms[k], k)).length === 0" style="opacity: 0.5; font-style:italic;">
                                     No exposed properties. Turn on "Expose" in Uniforms tab settings.
                                 </div>
 
-                                <div v-for="(uni, key) in activeMat.uniforms" :key="key" v-if="(uni.expose || key === 'map') && !isSystemUniform(key)" class="sa-uniform-row" style="margin-bottom:10px; padding: 8px;">
+                                <div v-for="(uni, key) in activeMat.uniforms" :key="key" v-if="isUniformVisibleInQuickTweaks(uni, key)" class="sa-uniform-row" style="margin-bottom:10px; padding: 8px;">
                                     <div style="font-weight:bold; font-size:0.9em; margin-bottom:4px; display:flex; justify-content:space-between; align-items:center;">
                                         <span>{{ getUniformLabel(uni, key) || key }}</span>
                                         <span style="opacity:0.4; font-size:0.8em; font-family:monospace;">{{ uni.type }}</span>
@@ -8252,6 +9653,7 @@ void main() {
     let renderModeSelector;
 
     let material_properties;
+    let materialPropertiesShowAdvanced = false;
 
     let cube_material_instance;
     let cube_material_instance_name;
@@ -8342,6 +9744,7 @@ void main() {
             window.MaterialManager = MaterialManager;
             window.FancyShaderMaterial = FancyShaderMaterial;
             window.FancyShaderMaterialInstance = FancyShaderMaterialInstance;
+            window.ScreenSpaceReflectionManager = ScreenSpaceReflectionManager;
             bindShaderArchitectLightCallbacks();
             const saProjectInstancesProp = MaterialManager.registerProjectMaterialInstanceProperty();
             if (saProjectInstancesProp) deletables.push(saProjectInstancesProp);
@@ -8363,6 +9766,7 @@ void main() {
 
             // Init backend
             MaterialManager.init();
+            ScreenSpaceReflectionManager.init();
             initMaterialStudio();
             deletables.push(MaterialStudioDialog);
 
@@ -8613,6 +10017,8 @@ void main() {
             };
 
             const sanitizeSelectedMaterialInstances = (cubes) => {
+                if (!Project.parsed || Blockbench.hasFlag('switching_project')) return;
+
                 let changed = false;
                 cubes.forEach(cube => {
                     const instanceId = getCubeMaterialInstanceId(cube);
@@ -8624,6 +10030,8 @@ void main() {
             };
 
             const updateMaterialInstancePanel = () => {
+                if (!Project.parsed || Blockbench.hasFlag('switching_project')) return;
+
                 const cubes = getSelectedCubes();
                 if (cubes.length === 0) {
                     global_material_instance_text.set(tl('shader_architect.material_panel.global_material'));
@@ -8698,6 +10106,20 @@ void main() {
                                 paragraph: false,
                                 expand: true,
                                 color: 'var(--color-text)'
+                            },
+                            _sa_show_advanced_uniforms: {
+                                type: 'custom_checkbox',
+                                label: tl('shader_architect.material_panel.show_advanced') + ':',
+                                value: materialPropertiesShowAdvanced,
+                                icon_size: '24px',
+                                layout: 'space_between',
+                                icon_on: 'tune',
+                                icon_off: 'tune',
+                                icon_color_on: 'var(--color-accent)',
+                                icon_color_off: 'var(--color-text)',
+                                title: tl('shader_architect.material_panel.show_advanced.desc'),
+                                description: tl('shader_architect.material_panel.show_advanced.desc'),
+                                padding_right: '32px'
                             }
                         };
 
@@ -8713,6 +10135,10 @@ void main() {
                             };
                             if (isSystemUniform(uniName)) continue; // Skip system uniforms
                             const uni = instance.uniforms[uniName];
+                            if (uni.advanced === undefined) {
+                                uni.advanced = !!(baseMat.uniforms[uniName] && baseMat.uniforms[uniName].advanced);
+                            }
+                            if (uni.advanced && !materialPropertiesShowAdvanced) continue;
                             if ((uni.expose || uniName === 'map') && !isSystemUniform(uniName)) {
                                 const currentLang = (typeof Language !== 'undefined' && Language.code) ? Language.code : 'en';
 
@@ -9007,19 +10433,28 @@ void main() {
             });
             deletables.push(create_material_instance, delete_material_instance, cube_material_instance, cube_material_instance_name, global_material_instance_text, material_instance_properties_toolbar);
 
-            let materialPanelRenderListener = Blockbench.on('shader_update_complete', (cause) => {
-                if (cause === 'project_update' || cause === 'select_project' || cause === 'rename_instance' || cause === 'update_form') return;
+            const getEventCause = (event) => event && typeof event === 'object' ? event.cause : event;
+            const isProjectSwitching = () => !Project.parsed || Blockbench.hasFlag('switching_project');
+            const skipMaterialPanelRefreshCauses = new Set(['project_update', 'select_project', 'rename_instance', 'update_form', 'sanitize_instances']);
+
+            let materialPanelRenderListener = Blockbench.on('shader_update_complete', (event) => {
+                if (isProjectSwitching()) return;
+                const cause = getEventCause(event);
+                if (skipMaterialPanelRefreshCauses.has(cause)) return;
                 updateMaterialInstancePanel();
             });
             deletables.push(materialPanelRenderListener);
 
             let materialPanelSelectionListener = Blockbench.on('update_selection', () => {
+                if (isProjectSwitching()) return;
                 updateMaterialInstancePanel();
             });
             deletables.push(materialPanelSelectionListener);
 
-            let materialInstancesListener = Blockbench.on('shader_architect_material_instances_changed', (cause) => {
-                if (cause && cause.cause === 'update_form') return;
+            let materialInstancesListener = Blockbench.on('shader_architect_material_instances_changed', (event) => {
+                if (isProjectSwitching()) return;
+                const cause = getEventCause(event);
+                if (cause === 'update_form' || cause === 'select_project' || cause === 'project_update') return;
                 updateMaterialInstancePanel();
             });
             deletables.push(materialInstancesListener);
@@ -9081,6 +10516,14 @@ void main() {
             });
 
             material_properties.form.on('change', ({ result }) => {
+                if (isProjectSwitching()) return;
+                const advancedToggleKey = '_sa_show_advanced_uniforms';
+                const nextShowAdvanced = result && Object.prototype.hasOwnProperty.call(result, advancedToggleKey)
+                    ? !!result[advancedToggleKey]
+                    : materialPropertiesShowAdvanced;
+                const advancedModeChanged = nextShowAdvanced !== materialPropertiesShowAdvanced;
+                materialPropertiesShowAdvanced = nextShowAdvanced;
+
                 const cubes = getSelectedCubes();
                 if (cubes.length === 0) return;
                 const firstCube = cubes[0];
@@ -9089,7 +10532,9 @@ void main() {
                 const instance = MaterialManager.instances[instanceId];
 
                 for (let key in result) {
-                    if (key.endsWith('_x') || key.endsWith('_y') || key.endsWith('_z')) {
+                    if (key === advancedToggleKey) {
+                        continue;
+                    } else if (key.endsWith('_x') || key.endsWith('_y') || key.endsWith('_z')) {
                         const baseKey = key.slice(0, -2);
                         const component = key.slice(-1);
                         if (instance.uniforms[baseKey]) {
@@ -9147,13 +10592,14 @@ void main() {
                 }
                 MaterialManager.saveMaterialInstances({ cause: 'update_form' });
                 ShaderEngine.updateAllUniforms('update_form');
+                if (advancedModeChanged) updateMaterialInstancePanel();
             });
 
             const materialPanelStyle = Blockbench.addCSS(`
                 #panel_material_properties .form {
                     overflow-y: auto !important;
                     overflow-x: hidden;
-                } 
+                }
                 /* Match the native Blockbench scrollbar style. */
                 #panel_material_properties .form::-webkit-scrollbar {
                     width: 6px;
@@ -9173,26 +10619,30 @@ void main() {
                 registerNativeMethodEvent(Texture.prototype, 'apply', 'texture_apply', { mode: 'after' });
                 let textureApplyEvent = Blockbench.on('texture_apply', () => {
                     if (!Project.parsed) return;
-                    ShaderEngine.updateAllCubes('texture_apply');
+                    if (Blockbench.hasFlag('switching_project')) return;
+                    ShaderEngine.requestSceneUpdate('texture_apply');
                 });
                 deletables.push(textureApplyEvent);
 
                 registerNativeMethodEvent(Canvas, 'updateAllFaces', 'canvas_update_all_faces', { mode: 'after' });
                 let canvasUpdateEvent = Blockbench.on('canvas_update_all_faces', () => {
                     if (!Project.parsed) return;
-                    ShaderEngine.updateAllCubes('canvas_update_all_faces');
+                    if (Blockbench.hasFlag('switching_project')) return;
+                    ShaderEngine.requestSceneUpdate('canvas_update_all_faces');
                 });
                 deletables.push(canvasUpdateEvent);
 
                 let cubeFaceUpdateEvent = Cube.preview_controller.on('update_faces', () => {
                     if (!Project.parsed) return;
                     if (Blockbench.hasFlag('switching_project')) return;
-                    ShaderEngine.updateAllCubes('cube_update_faces');
+                    ShaderEngine.requestSceneUpdate('cube_update_faces');
                 });
                 deletables.push(cubeFaceUpdateEvent);
 
                 // Project event hooks to auto-update
                 let addCubeEvent = Blockbench.on('add_cube', (event) => {
+                    if (!Project.parsed) return;
+                    if (Blockbench.hasFlag('switching_project')) return;
                     if (event.object && event.object.mesh) {
                         let shader = MaterialManager.resolveCubeMaterial(event.object, ShaderEngine.globalRenderMode);
                         ShaderEngine.applyToMesh(event.object, shader || MaterialManager.materials['classic']);
@@ -9210,7 +10660,7 @@ void main() {
                     if (!Project.parsed) return;
                     if (!project) project = MaterialManager.getActiveProject();
                     MaterialManager.syncMaterialInstancesFromProject(project);
-                    ShaderEngine.updateAllCubes('project_update');
+                    ShaderEngine.requestSceneUpdate('project_update');
                 };
 
                 let onParseProjectEvent = Codecs.project.on('parse', () => {
@@ -9239,7 +10689,7 @@ void main() {
                 let updateSelectionEvent = Blockbench.on('update_selection', () => {
                     if (!Project.parsed) return;
                     if (Blockbench.hasFlag('switching_project')) return;
-                    ShaderEngine.updateAllCubes('update_selection');
+                    ShaderEngine.requestSceneUpdate('update_selection');
                 });
 
                 deletables.push(updateSelectionEvent);
@@ -9249,6 +10699,7 @@ void main() {
 
         onunload() {
             ShaderEngine.stopAnimationLoop();
+            ScreenSpaceReflectionManager.dispose();
 
             if (styleEl && styleEl.parentElement) {
                 styleEl.parentElement.removeChild(styleEl);
@@ -9278,6 +10729,7 @@ void main() {
             if (window.MaterialManager === MaterialManager) delete window.MaterialManager;
             if (window.FancyShaderMaterial === FancyShaderMaterial) delete window.FancyShaderMaterial;
             if (window.FancyShaderMaterialInstance === FancyShaderMaterialInstance) delete window.FancyShaderMaterialInstance;
+            if (window.ScreenSpaceReflectionManager === ScreenSpaceReflectionManager) delete window.ScreenSpaceReflectionManager;
 
             styleEl = undefined;
             renderModeSelector = undefined;
