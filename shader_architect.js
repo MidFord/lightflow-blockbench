@@ -2874,7 +2874,7 @@ uniform mat3 uWorldNormalMatrix;
 uniform float uStylizedNormalInfluence;
 
 varying vec2 vUv;
-varying vec2 vFaceUv;
+varying vec2 v_uvSize;
 varying float lift;
 varying vec3 vWorldPos;
 varying vec3 vWorldNormal;
@@ -2940,7 +2940,7 @@ void main() {
     }
 
     vUv = uv;
-    vFaceUv = normalizedFaceUv;
+    v_uvSize = normalizedFaceUv;
     vViewDir = safeNormalizeVertex(cameraPosition - vWorldPos, vec3(0.0, 0.0, 1.0));
     vec4 saSSRViewPosition4 = modelViewMatrix * vec4(position, 1.0);
     vSA_SSRViewPosition = saSSRViewPosition4.xyz;
@@ -3083,7 +3083,7 @@ uniform float uShadowStrength;
 uniform float uShadowFloor;
 
 varying vec2 vUv;
-varying vec2 vFaceUv;
+varying vec2 v_uvSize;
 varying float lift;
 varying vec3 vWorldPos;
 varying vec3 vWorldNormal;
@@ -3580,7 +3580,7 @@ void main() {
         directSheen += radiance * sheenBRDF * NdotL * sheen * (1.0 - metallic) * lightMask;
     }
 
-    float proceduralAO = computeAmbientOcclusion(vFaceUv, N);
+    float proceduralAO = computeAmbientOcclusion(v_uvSize, N);
     float ambientOcclusion = clamp(proceduralAO * aoMapValue, 0.0, 1.0);
     float directAO = mix(1.0, ambientOcclusion, clamp(uAODirectInfluence, 0.0, 1.0));
     float specAO = mix(1.0, ambientOcclusion, clamp(uAODirectInfluence * 0.35, 0.0, 1.0));
@@ -3771,6 +3771,7 @@ void main() {
                 supportsScreenSpaceReflections: true,
                 enableShadows: true
             });
+
             const lightflowScreenSpaceReflectionDefaults = {
                 intensity: 0.55,
                 roughness: 0.32,
@@ -4049,6 +4050,12 @@ void main() {
                         value: new THREE.Vector3(1, 1, 1),
                         expose: true
                     },
+                    "AUTO_TILE": {
+                        type: "bool",
+                        value: false,
+                        expose: true,
+                        advanced: true
+                    },
                     "TILING": {
                         type: "vec2",
                         value: new THREE.Vector2(1, 1),
@@ -4113,18 +4120,25 @@ void main() {
                 icon: 'wb_iridescent',
                 isCustom: false,
                 vertex: `attribute float highlight;
-attribute vec2 normalizedFaceUv;
-
 uniform bool SHADE;
 uniform int LIGHTSIDE;
 uniform mat3 uWorldNormalMatrix;
 uniform float uStylizedNormalInfluence;
 
 varying vec2 vUv;
-varying vec2 vFaceUv;
 varying float lift;
 varying vec3 vWorldPos;
 varying vec3 vWorldNormal;
+
+//attributes
+attribute vec2 normalizedFaceUv;
+attribute vec2 globalFaceSize;
+attribute vec2 uvSize;
+
+//varyings
+varying vec2 v_normalizedFaceUv;
+varying vec2 v_faceSize;
+varying vec2 v_uvSize;
 
 vec3 applyLightSide(vec3 n) {
     vec3 N = n;
@@ -4171,7 +4185,9 @@ void main() {
     }
 
     vUv = uv;
-    vFaceUv = normalizedFaceUv;
+    v_normalizedFaceUv = normalizedFaceUv;
+    v_faceSize = globalFaceSize;
+    v_uvSize = uvSize;
 
     lift = highlight == 2.0 ? 0.22 :
            highlight == 1.0 ? 0.10 :
@@ -4182,6 +4198,8 @@ void main() {
                 fragment: `uniform sampler2D map;
 uniform vec3 LIGHTCOLOR;
 uniform vec2 TILING;
+uniform bool AUTO_TILE;
+uniform vec2 TEXTURE_SIZE;
 
 uniform vec3 uLightPos[16];
 uniform vec3 uLightDir[16];
@@ -4214,7 +4232,9 @@ uniform float uAOFaceNormalWeight;
 uniform bool uClampLighting;
 
 varying vec2 vUv;
-varying vec2 vFaceUv;
+varying vec2 v_normalizedFaceUv;
+varying vec2 v_faceSize;
+varying vec2 v_uvSize;
 varying float lift;
 varying vec3 vWorldPos;
 varying vec3 vWorldNormal;
@@ -4426,7 +4446,11 @@ vec3 applyToneMapping(vec3 color) {
 }
 
 void main() {
-    vec4 texel = texture2D(map, vUv * TILING);
+    vec2 tiling_value = TILING;
+    if (AUTO_TILE) {
+        tiling_value = v_faceSize / TEXTURE_SIZE;
+    }
+    vec4 texel = texture2D(map, vUv * tiling_value);
 
     if (texel.a < 0.01) discard;
 
@@ -4445,7 +4469,7 @@ void main() {
         directLight += computeLightContribution(i, normal, vWorldPos);
     }
 
-    float ambientOcclusion = computeVoxelAO(vFaceUv, normal);
+    float ambientOcclusion = computeVoxelAO(v_uvSize, normal);
 
     vec3 ambientLight = max(uAmbientColor, vec3(0.0)) * max(uAmbient, 0.0);
     ambientLight *= ambientOcclusion;
@@ -4491,7 +4515,6 @@ void main() {
 #include <shadowmap_pars_vertex>
 
 attribute float highlight;
-attribute vec2 normalizedFaceUv;
 
 uniform bool SHADE;
 uniform int LIGHTSIDE;
@@ -4499,13 +4522,22 @@ uniform mat3 uWorldNormalMatrix;
 uniform float uStylizedNormalInfluence;
 
 varying vec2 vUv;
-varying vec2 vFaceUv;
 varying float lift;
 varying vec3 vWorldPos;
 varying vec3 vWorldNormal;
 varying vec3 vSA_SSRViewPosition;
 varying vec3 vSA_SSRViewNormal;
 varying vec4 vSA_SSRClipPosition;
+
+//attributes
+attribute vec2 normalizedFaceUv;
+attribute vec2 globalFaceSize;
+attribute vec2 uvSize;
+
+//varyings
+varying vec2 v_normalizedFaceUv;
+varying vec2 v_faceSize;
+varying vec2 v_uvSize;
 
 vec3 applyLightSide(vec3 n) {
     vec3 N = n;
@@ -4559,7 +4591,9 @@ void main() {
     }
 
     vUv = uv;
-    vFaceUv = normalizedFaceUv;
+    v_normalizedFaceUv = normalizedFaceUv;
+    v_faceSize = globalFaceSize;
+    v_uvSize = uvSize;
     vec4 saSSRViewPosition4 = modelViewMatrix * vec4(position, 1.0);
     vSA_SSRViewPosition = saSSRViewPosition4.xyz;
     vSA_SSRViewNormal = normalize(normalMatrix * normal);
@@ -4582,6 +4616,8 @@ ${SCREEN_SPACE_REFLECTIONS_PARS_FRAGMENT}
 uniform sampler2D map;
 uniform vec3 LIGHTCOLOR;
 uniform vec2 TILING;
+uniform bool AUTO_TILE;
+uniform vec2 TEXTURE_SIZE;
 
 uniform vec3 uLightPos[16];
 uniform vec3 uLightDir[16];
@@ -4621,10 +4657,12 @@ uniform float uShadowStrength;
 uniform float uShadowFloor;
 
 varying vec2 vUv;
-varying vec2 vFaceUv;
 varying float lift;
 varying vec3 vWorldPos;
 varying vec3 vWorldNormal;
+varying vec2 v_normalizedFaceUv;
+varying vec2 v_faceSize;
+varying vec2 v_uvSize;
 
 #define SA_LIGHT_POINT 0
 #define SA_LIGHT_DIRECTIONAL 1
@@ -4932,7 +4970,11 @@ vec3 applyToneMapping(vec3 color) {
 }
 
 void main() {
-    vec4 texel = texture2D(map, vUv * TILING);
+    vec2 tiling_value = TILING;
+    if (AUTO_TILE) {
+        tiling_value = v_faceSize / TEXTURE_SIZE;
+    }
+    vec4 texel = texture2D(map, vUv * tiling_value);
 
     if (texel.a < 0.01) discard;
 
@@ -4958,7 +5000,7 @@ void main() {
         directLight += lightContribution * shadow;
     }
 
-    float ambientOcclusion = computeVoxelAO(vFaceUv, normal);
+    float ambientOcclusion = computeVoxelAO(v_uvSize, normal);
 
     vec3 ambientLight = max(uAmbientColor, vec3(0.0)) * max(uAmbient, 0.0);
     ambientLight *= ambientOcclusion;
@@ -5010,202 +5052,12 @@ void main() {
                 enableShadows: true
             });
 
-            //Experimental
-
-            let uv_shadow = new FancyShaderMaterial({
-                id: 'uv_shadow',
-                name: tl('shader_architect.preset.uv_shadow'),
-                icon: 'flash_auto',
-                isCustom: true,
-                vertex: `
-                    #include <common>
-                    #include <shadowmap_pars_vertex>
-
-                    attribute float highlight;
-                    attribute vec2 normalizedFaceUv;
-                    attribute vec2 faceSize;
-                    attribute vec2 globalFaceSize;
-                    attribute vec2 uvSize;
-
-                    uniform bool SHADE;
-                    uniform int LIGHTSIDE;
-
-                    varying vec2 vUv;
-                    varying float light;
-                    varying float lift;
-
-                    varying vec2 vNormalizedFaceUv;
-                    varying vec2 vfaceSize;
-                    varying vec2 vGlobalFaceSize;
-                    varying vec2 vuvSize;
-
-                    void main() {
-                        vec3 transformedNormal = normalize(normalMatrix * normal);
-                        vec4 worldPosition = modelMatrix * vec4(position, 1.0);
-
-                        if(SHADE) {
-                            vec3 N = transformedNormal;
-                            if (LIGHTSIDE == 1) { float t = N.y; N.y = -N.z; N.z = t; }
-                            else if (LIGHTSIDE == 2) { float t = N.y; N.y = N.x; N.x = t; }
-                            else if (LIGHTSIDE == 3) { N.y = -N.y; }
-                            else if (LIGHTSIDE == 4) { float t = N.y; N.y = N.z; N.z = t; }
-                            else if (LIGHTSIDE == 5) { float t = N.y; N.y = -N.x; N.x = t; }
-
-                            float yLight = (1.0 + N.y) * 0.5;
-                            light = yLight * 0.5 + N.x * N.x * -0.15 + N.z * N.z * 0.05 + 0.5;
-                        } else {
-                            light = 1.0;
-                        }
-
-                        lift = (highlight == 2.0) ? 0.22 : (highlight == 1.0) ? 0.1 : 0.0;
-                        vUv = uv;
-
-                        vNormalizedFaceUv = normalizedFaceUv;
-                        vfaceSize = faceSize;
-                        vGlobalFaceSize = globalFaceSize;
-                        vuvSize = uvSize;
-
-                        gl_Position = projectionMatrix * viewMatrix * worldPosition;
-
-                        #include <shadowmap_vertex>
-                    }
-                `,
-                fragment: `
-                    #include <common>
-                    #include <packing>
-                    #include <lights_pars_begin>
-                    #include <shadowmap_pars_fragment>
-
-                    // 1. Declare uniforms and varyings first.
-                    uniform sampler2D map;
-                    uniform bool EMISSIVE;
-                    uniform vec3 LIGHTCOLOR;
-                    uniform float AMBIENT_INTENSITY;
-                    uniform vec2 TILING;
-
-                    varying vec2 vUv;
-                    varying float light;
-                    varying float lift;
-
-                    varying vec2 vNormalizedFaceUv;
-                    varying vec2 vfaceSize;
-                    varying vec2 vGlobalFaceSize;
-                    varying vec2 vuvSize;
-
-                    // 2. Then declare functions that use them.
-                    vec4 getShadowCoordAtUV(vec4 currentShadowCoord, vec2 targetUV, vec2 currentUV) {
-                        vec2 deltaUV = targetUV - currentUV;
-
-                        vec2 dUV_dx = dFdx(currentUV);
-                        vec2 dUV_dy = dFdy(currentUV);
-
-                        vec4 dCoord_dx = dFdx(currentShadowCoord);
-                        vec4 dCoord_dy = dFdy(currentShadowCoord);
-
-                        float det = dUV_dx.x * dUV_dy.y - dUV_dx.y * dUV_dy.x;
-
-                        if (abs(det) > 0.00001) {
-                            float invDet = 1.0 / det;
-
-                            vec4 dCoord_du = (dCoord_dx * dUV_dy.y - dCoord_dy * dUV_dx.y) * invDet;
-                            vec4 dCoord_dv = (dCoord_dy * dUV_dx.x - dCoord_dx * dUV_dy.x) * invDet;
-
-                            return currentShadowCoord + dCoord_du * deltaUV.x + dCoord_dv * deltaUV.y;
-                        }
-
-                        return currentShadowCoord;
-                    }
-
-                    float getShadowAtUV(vec2 targetUV) {
-                        float shadow = 1.0;
-
-                        #ifdef USE_SHADOWMAP
-                        vec4 shadowCoord;
-
-                        #if NUM_DIR_LIGHT_SHADOWS > 0
-                            DirectionalLightShadow directionalLight;
-                            #pragma unroll_loop_start
-                            for ( int i = 0; i < NUM_DIR_LIGHT_SHADOWS; i ++ ) {
-                                directionalLight = directionalLightShadows[ i ];
-                                shadowCoord = getShadowCoordAtUV(vDirectionalShadowCoord[ i ], targetUV, vUv);
-                                shadow *= receiveShadow ? getShadow( directionalShadowMap[ i ], directionalLight.shadowMapSize, directionalLight.shadowBias, directionalLight.shadowRadius, shadowCoord ) : 1.0;
-                            }
-                            #pragma unroll_loop_end
-                        #endif
-
-                        #if NUM_SPOT_LIGHT_SHADOWS > 0
-                            SpotLightShadow spotLight;
-                            #pragma unroll_loop_start
-                            for ( int i = 0; i < NUM_SPOT_LIGHT_SHADOWS; i ++ ) {
-                                spotLight = spotLightShadows[ i ];
-                                shadowCoord = getShadowCoordAtUV(vSpotShadowCoord[ i ], targetUV, vUv);
-                                shadow *= receiveShadow ? getShadow( spotShadowMap[ i ], spotLight.shadowMapSize, spotLight.shadowBias, spotLight.shadowRadius, shadowCoord ) : 1.0;
-                            }
-                            #pragma unroll_loop_end
-                        #endif
-
-                        #if NUM_POINT_LIGHT_SHADOWS > 0
-                            PointLightShadow pointLight;
-                            #pragma unroll_loop_start
-                            for ( int i = 0; i < NUM_POINT_LIGHT_SHADOWS; i ++ ) {
-                                pointLight = pointLightShadows[ i ];
-                                shadowCoord = getShadowCoordAtUV(vPointShadowCoord[ i ], targetUV, vUv);
-                                shadow *= receiveShadow ? getPointShadow( pointShadowMap[ i ], pointLight.shadowMapSize, pointLight.shadowBias, pointLight.shadowRadius, shadowCoord, pointLight.shadowCameraNear, pointLight.shadowCameraFar ) : 1.0;
-                            }
-                            #pragma unroll_loop_end
-                        #endif
-                        #endif
-
-                        return shadow;
-                    }
-
-                    // 3. Keep main last.
-                    void main() {
-                        vec4 color = texture2D(map, vUv * TILING);
-                        if(color.a < 0.01) discard;
-
-                        // Adjust the UVs used to sample the shadow.
-                        // This example samples the current UV coordinates.
-                        vec2 shadowTargetUV = vUv;
-
-                        // Sample the shadow from the calculated UVs.
-                        float shadow = getShadowAtUV(shadowTargetUV);
-
-                        float lightEffect = light * mix(AMBIENT_INTENSITY, 1.0, shadow);
-
-                        if(!EMISSIVE) {
-                            gl_FragColor = vec4(lift + color.rgb * lightEffect, color.a);
-                            gl_FragColor.rgb *= LIGHTCOLOR;
-                        } else {
-                            vec3 light_mix = (lightEffect * LIGHTCOLOR) + (1.0 - lightEffect * LIGHTCOLOR) * (1.0 - color.a);
-                            gl_FragColor = vec4(lift + color.rgb * light_mix, 1.0);
-                        }
-
-                        if(lift > 0.2) {
-                            gl_FragColor.rg *= vec2(0.6, 0.7);
-                        }
-                    }
-                `,
-                uniforms: {
-                    "LIGHTCOLOR": { type: "vec3", value: new THREE.Vector3(1, 1, 1), expose: true },
-                    "SHADE": { type: "bool", value: true, expose: true },
-                    "LIGHTSIDE": { type: "int", value: 0, expose: true, min: 0, max: 5, step: 1, allow_higher: false, allow_lower: false },
-                    "EMISSIVE": { type: "bool", value: false, expose: true },
-                    "AMBIENT_INTENSITY": { type: "float", value: 0.4, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
-                    "TILING": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true, min: 0.1, max: 10.0, step: 0.1 }
-                    // SHADOW_SNAP, SHADOW_SMOOTH, and RESOLUTION_FACTOR uniforms have been removed.
-                },
-                enableShadows: true
-            });
-
-
-            // Legacy implementation retained as reference for the pixel-center shadow math.
-
-            let pixelated_shaded_lightflow_legacy = new FancyShaderMaterial({
-                id: 'pixelated_shaded_lightflow_legacy',
+            let pixelated_shaded_lightflow = new FancyShaderMaterial({
+                id: 'pixelated_shaded_lightflow',
                 name: tl('shader_architect.preset.pixelated_shaded_lightflow'),
                 icon: 'gradient',
                 isCustom: false,
+
                 vertex: `#include <common>
 #include <shadowmap_pars_vertex>
 
@@ -5217,104 +5069,298 @@ attribute vec2 uvSize;
 
 uniform bool SHADE;
 uniform int LIGHTSIDE;
+uniform mat3 uWorldNormalMatrix;
+uniform float uStylizedNormalInfluence;
 
 varying vec2 vUv;
-varying float light;
-varying float lift;
-
 varying vec2 vNormalizedFaceUv;
 varying vec2 vfaceSize;
 varying vec2 vGlobalFaceSize;
 varying vec2 vuvSize;
 
-void main() {
-    vec3 transformedNormal = normalize(normalMatrix * normal);
-    vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+varying float lift;
+varying vec3 vWorldPos;
+varying vec3 vWorldNormal;
 
-    if (SHADE) {
-        vec3 N = transformedNormal;
+vec3 applyLightSide(vec3 n) {
+    vec3 N = n;
 
-        if (LIGHTSIDE == 1) {
-            float t = N.y;
-            N.y = -N.z;
-            N.z = t;
-        } else if (LIGHTSIDE == 2) {
-            float t = N.y;
-            N.y = N.x;
-            N.x = t;
-        } else if (LIGHTSIDE == 3) {
-            N.y = -N.y;
-        } else if (LIGHTSIDE == 4) {
-            float t = N.y;
-            N.y = N.z;
-            N.z = t;
-        } else if (LIGHTSIDE == 5) {
-            float t = N.y;
-            N.y = -N.x;
-            N.x = t;
-        }
-
-        float yLight = (1.0 + N.y) * 0.5;
-
-        light =
-            yLight * 0.5 +
-            N.x * N.x * -0.15 +
-            N.z * N.z * 0.05 +
-            0.5;
-    } else {
-        light = 1.0;
+    if (LIGHTSIDE == 1) {
+        float t = N.y;
+        N.y = -N.z;
+        N.z = t;
+    } else if (LIGHTSIDE == 2) {
+        float t = N.y;
+        N.y = N.x;
+        N.x = t;
+    } else if (LIGHTSIDE == 3) {
+        N.y = -N.y;
+    } else if (LIGHTSIDE == 4) {
+        float t = N.y;
+        N.y = N.z;
+        N.z = t;
+    } else if (LIGHTSIDE == 5) {
+        float t = N.y;
+        N.y = -N.x;
+        N.x = t;
     }
 
-    lift = highlight == 2.0 ? 0.22 :
-           highlight == 1.0 ? 0.10 :
-           0.0;
+    return normalize(N);
+}
+
+void main() {
+    vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+
+    /*
+        Requerido por shadowmap_vertex de Three.js.
+        No sustituir por vWorldNormal: Three necesita esta variable exacta.
+    */
+    vec3 transformedNormal = normalize(normalMatrix * normal);
+
+    vWorldPos = worldPosition.xyz;
+
+    vec3 physicalNormal = normalize(uWorldNormalMatrix * normal);
+    vec3 stylizedNormal = applyLightSide(physicalNormal);
+
+    if (SHADE) {
+        vWorldNormal = normalize(mix(
+            physicalNormal,
+            stylizedNormal,
+            clamp(uStylizedNormalInfluence, 0.0, 1.0)
+        ));
+    } else {
+        vWorldNormal = physicalNormal;
+    }
 
     vUv = uv;
-
     vNormalizedFaceUv = normalizedFaceUv;
     vfaceSize = faceSize;
     vGlobalFaceSize = globalFaceSize;
     vuvSize = uvSize;
 
-    gl_Position = projectionMatrix * viewMatrix * worldPosition;
+    lift = highlight == 2.0 ? 0.22 :
+           highlight == 1.0 ? 0.10 :
+           0.0;
+
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 
     #include <shadowmap_vertex>
 }`,
+
                 fragment: `#include <common>
 #include <packing>
 #include <lights_pars_begin>
 #include <shadowmap_pars_fragment>
 
 uniform sampler2D map;
-uniform bool EMISSIVE;
 uniform vec3 LIGHTCOLOR;
-uniform float AMBIENT_INTENSITY;
+uniform vec2 TILING;
+uniform bool AUTO_TILE;
+uniform vec2 TEXTURE_SIZE;
+
+/* Lightflow lights */
+uniform vec3 uLightPos[16];
+uniform vec3 uLightDir[16];
+uniform float uLightIntensity[16];
+uniform float uLightDistance[16];
+uniform float uLightConeAngle[16];
+uniform float uLightPenumbra[16];
+uniform int uLightType[16];
+uniform vec3 uLightColor[16];
+uniform int max_light_number;
+
+/* Ambient */
+uniform float uAmbient;
+uniform vec3 uAmbientColor;
+
+/* Artistic controls */
+uniform float uExposure;
+uniform int uToneMapping;
+uniform float uLightWrap;
+uniform bool uClampLighting;
+
+/* Voxel AO */
+uniform bool uAOEnabled;
+uniform float uAOStrength;
+uniform float uAORadius;
+uniform float uAOPower;
+uniform float uAOMin;
+uniform float uAODirectInfluence;
+uniform float uAOEdgeSharpness;
+uniform float uAOCornerWeight;
+uniform float uAOFaceNormalWeight;
+
+/*
+    Controles de sombra de Lightflow.
+    Se aplican DESPUÉS del threshold pixelado.
+*/
+uniform float uShadowStrength;
+uniform float uShadowFloor;
+
+/*
+    Controles del sistema legacy de sombras pixeladas.
+*/
+uniform float shadowPixelResolution;
+uniform float shadowThreshold;
 
 varying vec2 vUv;
-varying float light;
-varying float lift;
-
 varying vec2 vNormalizedFaceUv;
 varying vec2 vfaceSize;
 varying vec2 vGlobalFaceSize;
 varying vec2 vuvSize;
 
+varying float lift;
+varying vec3 vWorldPos;
+varying vec3 vWorldNormal;
+
+#define SA_LIGHT_POINT 0
+#define SA_LIGHT_DIRECTIONAL 1
+#define SA_LIGHT_SPOT 2
+
+#define TM_NONE 0
+#define TM_ACES 1
+#define TM_REINHARD 2
+#define TM_UNCHARTED2 3
+#define TM_HABLE 4
+#define TM_FILMIC 5
+#define TM_LINEAR 6
+
 #define SHADOW_DET_EPS 1e-12
 #define SHADOW_QUALITY_EPS 1e-5
 
-#define PROJECTED_SHADOW_COORD_MARGIN 0.05
-#define PROJECTED_SHADOW_MAX_XY_JUMP 0.25
-#define PROJECTED_SHADOW_MAX_Z_JUMP 0.25
+vec3 safeNormalize(vec3 v, vec3 fallback) {
+    float lenSq = dot(v, v);
 
-#define POINT_SHADOW_MIN_LENGTH 1e-6
-#define POINT_SHADOW_MAX_ABSOLUTE_JUMP 0.75
-#define POINT_SHADOW_MAX_RELATIVE_JUMP 0.35
+    if (lenSq <= 1e-8) {
+        return fallback;
+    }
+
+    return v * inversesqrt(lenSq);
+}
+
+/* ------------------------------------------------------------
+   LIGHTFLOW LIGHTING
+------------------------------------------------------------ */
+
+float computeDiffuse(vec3 normal, vec3 lightDir) {
+    float ndotl = dot(normal, lightDir);
+    float wrapAmount = clamp(uLightWrap, 0.0, 1.0);
+
+    if (wrapAmount > 0.0) {
+        return clamp(
+            (ndotl + wrapAmount) / (1.0 + wrapAmount),
+            0.0,
+            1.0
+        );
+    }
+
+    return max(ndotl, 0.0);
+}
+
+float computeDistanceAttenuation(float dist, float maxDist) {
+    dist = max(dist, 0.0001);
+
+    if (maxDist > 0.0) {
+        if (dist >= maxDist) {
+            return 0.0;
+        }
+
+        float x = clamp(dist / maxDist, 0.0, 1.0);
+        float falloff = clamp(1.0 - pow(x, 4.0), 0.0, 1.0);
+
+        return (falloff * falloff) / max(dist * dist, 1.0);
+    }
+
+    return 1.0 / (1.0 + 0.04 * dist + 0.002 * dist * dist);
+}
+
+float computeSpotAttenuation(int lightIndex, vec3 lightDir) {
+    vec3 spotDirection = safeNormalize(
+        uLightDir[lightIndex],
+        vec3(0.0, -1.0, 0.0)
+    );
+
+    float coneAngle = clamp(
+        uLightConeAngle[lightIndex],
+        0.001,
+        3.14159265
+    );
+
+    float penumbra = clamp(
+        uLightPenumbra[lightIndex],
+        0.0,
+        0.999
+    );
+
+    float theta = dot(-lightDir, spotDirection);
+
+    float outerCutoff = cos(coneAngle);
+    float innerCutoff = cos(coneAngle * (1.0 - penumbra));
+    float epsilon = max(innerCutoff - outerCutoff, 0.0001);
+
+    return clamp(
+        (theta - outerCutoff) / epsilon,
+        0.0,
+        1.0
+    );
+}
+
+vec3 computeLightContribution(
+    int lightIndex,
+    vec3 normal,
+    vec3 worldPos
+) {
+    int type = uLightType[lightIndex];
+
+    vec3 lightDir = vec3(0.0, 1.0, 0.0);
+    float attenuation = 1.0;
+
+    if (type == SA_LIGHT_DIRECTIONAL) {
+        lightDir = safeNormalize(
+            -uLightDir[lightIndex],
+            vec3(0.0, 1.0, 0.0)
+        );
+    } else {
+        vec3 lightVec = uLightPos[lightIndex] - worldPos;
+        float dist = max(length(lightVec), 0.0001);
+
+        lightDir = lightVec / dist;
+        attenuation = computeDistanceAttenuation(
+            dist,
+            uLightDistance[lightIndex]
+        );
+
+        if (type == SA_LIGHT_SPOT) {
+            attenuation *= computeSpotAttenuation(
+                lightIndex,
+                lightDir
+            );
+        }
+    }
+
+    float diffuse = computeDiffuse(normal, lightDir);
+    float intensity = max(uLightIntensity[lightIndex], 0.0);
+
+    return max(uLightColor[lightIndex], vec3(0.0)) *
+        diffuse *
+        intensity *
+        attenuation;
+}
+
+/* ------------------------------------------------------------
+   PIXELATED LEGACY SHADOWS
+   Esta ruta se conserva independiente de uLightShadowIndex.
+   No usar sombras por luz aquí: rompería el comportamiento legacy.
+------------------------------------------------------------ */
 
 vec2 getPixelCenterUV(vec2 localUV, vec2 gridSize) {
     vec2 grid = max(floor(gridSize + 0.5), vec2(1.0));
 
-    // Prevent exact 1.0 UVs from sampling past the last pixel.
-    vec2 safeUV = clamp(localUV, vec2(0.0), vec2(0.999999));
+    vec2 safeUV = clamp(
+        localUV,
+        vec2(0.001),
+        vec2(0.999)
+    );
 
     return (floor(safeUV * grid) + 0.5) / grid;
 }
@@ -5335,19 +5381,34 @@ vec4 getRawShadowCoordAtUV(
     vec4 dCoord_dx = dFdx(currentShadowCoord);
     vec4 dCoord_dy = dFdy(currentShadowCoord);
 
-    float det = dUV_dx.x * dUV_dy.y - dUV_dx.y * dUV_dy.x;
+    float det =
+        dUV_dx.x * dUV_dy.y -
+        dUV_dx.y * dUV_dy.x;
 
-    float uvArea = length(dUV_dx) * length(dUV_dy);
-    float quality = abs(det) / max(uvArea, SHADOW_DET_EPS);
+    float uvArea =
+        length(dUV_dx) *
+        length(dUV_dy);
 
-    if (abs(det) > SHADOW_DET_EPS && quality > SHADOW_QUALITY_EPS) {
+    float quality = abs(det) / max(
+        uvArea,
+        SHADOW_DET_EPS
+    );
+
+    if (
+        abs(det) > SHADOW_DET_EPS &&
+        quality > SHADOW_QUALITY_EPS
+    ) {
         float invDet = 1.0 / det;
 
         vec4 dCoord_du =
-            (dCoord_dx * dUV_dy.y - dCoord_dy * dUV_dx.y) * invDet;
+            (dCoord_dx * dUV_dy.y -
+            dCoord_dy * dUV_dx.y) *
+            invDet;
 
         vec4 dCoord_dv =
-            (dCoord_dy * dUV_dx.x - dCoord_dx * dUV_dy.x) * invDet;
+            (dCoord_dy * dUV_dx.x -
+            dCoord_dx * dUV_dy.x) *
+            invDet;
 
         valid = true;
 
@@ -5359,10 +5420,35 @@ vec4 getRawShadowCoordAtUV(
     return currentShadowCoord;
 }
 
+vec4 snapShadowCoordToTexel(
+    vec4 shadowCoord,
+    vec2 shadowMapSize
+) {
+    /*
+        Protección contra shadow maps aún no inicializados.
+        No modifica nada mientras shadowMapSize sea válido.
+    */
+    vec2 safeShadowMapSize = max(
+        shadowMapSize,
+        vec2(1.0)
+    );
+
+    vec2 texelSize = 1.0 / safeShadowMapSize;
+
+    shadowCoord.xy =
+        floor(shadowCoord.xy / texelSize + 0.5) *
+        texelSize;
+
+    shadowCoord.z -= 0.0005;
+
+    return shadowCoord;
+}
+
 vec4 getProjectedShadowCoordAtUV(
     vec4 currentShadowCoord,
     vec2 targetUV,
-    vec2 currentUV
+    vec2 currentUV,
+    vec2 shadowMapSize
 ) {
     bool valid;
 
@@ -5373,41 +5459,30 @@ vec4 getProjectedShadowCoordAtUV(
         valid
     );
 
-    if (valid) {
-        vec3 currentProjected =
-            currentShadowCoord.xyz / max(currentShadowCoord.w, 1e-8);
+    if (valid && candidate.w > 0.0) {
+        vec3 projCandidate = candidate.xyz / candidate.w;
 
-        vec3 candidateProjected =
-            candidate.xyz / max(candidate.w, 1e-8);
-
-        bool candidateIsValid =
-            candidate.w > 0.0 &&
-            candidateProjected.x > -PROJECTED_SHADOW_COORD_MARGIN &&
-            candidateProjected.x < 1.0 + PROJECTED_SHADOW_COORD_MARGIN &&
-            candidateProjected.y > -PROJECTED_SHADOW_COORD_MARGIN &&
-            candidateProjected.y < 1.0 + PROJECTED_SHADOW_COORD_MARGIN &&
-            candidateProjected.z > -PROJECTED_SHADOW_COORD_MARGIN &&
-            candidateProjected.z < 1.0 + PROJECTED_SHADOW_COORD_MARGIN;
-
-        bool candidateIsClose =
-            distance(candidateProjected.xy, currentProjected.xy) <
-                PROJECTED_SHADOW_MAX_XY_JUMP &&
-            abs(candidateProjected.z - currentProjected.z) <
-                PROJECTED_SHADOW_MAX_Z_JUMP;
-
-        if (candidateIsValid && candidateIsClose) {
-            return candidate;
+        if (
+            projCandidate.x >= 0.0 &&
+            projCandidate.x <= 1.0 &&
+            projCandidate.y >= 0.0 &&
+            projCandidate.y <= 1.0
+        ) {
+            return snapShadowCoordToTexel(
+                candidate,
+                shadowMapSize
+            );
         }
     }
 
-    // Safe fallback: regular shadow.
     return currentShadowCoord;
 }
 
 vec4 getPointShadowCoordAtUV(
     vec4 currentShadowCoord,
     vec2 targetUV,
-    vec2 currentUV
+    vec2 currentUV,
+    vec2 shadowMapSize
 ) {
     bool valid;
 
@@ -5419,115 +5494,141 @@ vec4 getPointShadowCoordAtUV(
     );
 
     if (valid) {
-        float currentLength = length(currentShadowCoord.xyz);
-        float candidateLength = length(candidate.xyz);
+        float currentLen = length(currentShadowCoord.xyz);
+        float candidateLen = length(candidate.xyz);
 
-        float allowedJump = max(
-            POINT_SHADOW_MAX_ABSOLUTE_JUMP,
-            currentLength * POINT_SHADOW_MAX_RELATIVE_JUMP
-        );
-
-        bool candidateIsReasonable =
-            candidateLength > POINT_SHADOW_MIN_LENGTH &&
-            abs(candidateLength - currentLength) < allowedJump;
-
-        if (candidateIsReasonable) {
+        if (
+            candidateLen > 0.1 &&
+            abs(candidateLen - currentLen) < 1.0
+        ) {
             return candidate;
         }
     }
 
-    // Safe fallback: regular shadow.
     return currentShadowCoord;
 }
 
-float getPixelatedShadowAtUV(vec2 targetUV, vec2 currentUV) {
+float getPixelatedShadowAtUV(
+    vec2 targetUV,
+    vec2 currentUV
+) {
     float shadow = 1.0;
 
     #ifdef USE_SHADOWMAP
 
     vec4 shadowCoord;
 
-    // DirectionalLight shadows
     #if NUM_DIR_LIGHT_SHADOWS > 0
-
         DirectionalLightShadow directionalLight;
 
         #pragma unroll_loop_start
         for (int i = 0; i < NUM_DIR_LIGHT_SHADOWS; i++) {
             directionalLight = directionalLightShadows[i];
 
+            vec2 safeShadowMapSize = max(
+                directionalLight.shadowMapSize,
+                vec2(1.0)
+            );
+
             shadowCoord = getProjectedShadowCoordAtUV(
                 vDirectionalShadowCoord[i],
                 targetUV,
-                currentUV
+                currentUV,
+                safeShadowMapSize
             );
 
-            shadow *= receiveShadow ? getShadow(
-                directionalShadowMap[i],
-                directionalLight.shadowMapSize,
-                directionalLight.shadowBias,
-                directionalLight.shadowRadius,
-                shadowCoord
-            ) : 1.0;
+            if (receiveShadow) {
+                float rawShadow = getShadow(
+                    directionalShadowMap[i],
+                    safeShadowMapSize,
+                    directionalLight.shadowBias,
+                    0.0,
+                    shadowCoord
+                );
+
+                shadow *= step(
+                    clamp(shadowThreshold, 0.0, 1.0),
+                    rawShadow
+                );
+            }
         }
         #pragma unroll_loop_end
-
     #endif
 
-    // SpotLight shadows
     #if NUM_SPOT_LIGHT_SHADOWS > 0
-
         SpotLightShadow spotLight;
 
         #pragma unroll_loop_start
         for (int i = 0; i < NUM_SPOT_LIGHT_SHADOWS; i++) {
             spotLight = spotLightShadows[i];
 
+            vec2 safeShadowMapSize = max(
+                spotLight.shadowMapSize,
+                vec2(1.0)
+            );
+
             shadowCoord = getProjectedShadowCoordAtUV(
                 vSpotShadowCoord[i],
                 targetUV,
-                currentUV
+                currentUV,
+                safeShadowMapSize
             );
 
-            shadow *= receiveShadow ? getShadow(
-                spotShadowMap[i],
-                spotLight.shadowMapSize,
-                spotLight.shadowBias,
-                spotLight.shadowRadius,
-                shadowCoord
-            ) : 1.0;
+            if (receiveShadow) {
+                float rawShadow = getShadow(
+                    spotShadowMap[i],
+                    safeShadowMapSize,
+                    spotLight.shadowBias,
+                    0.0,
+                    shadowCoord
+                );
+
+                shadow *= step(
+                    clamp(shadowThreshold, 0.0, 1.0),
+                    rawShadow
+                );
+            }
         }
         #pragma unroll_loop_end
-
     #endif
 
-    // PointLight shadows
     #if NUM_POINT_LIGHT_SHADOWS > 0
-
         PointLightShadow pointLight;
 
         #pragma unroll_loop_start
         for (int i = 0; i < NUM_POINT_LIGHT_SHADOWS; i++) {
             pointLight = pointLightShadows[i];
 
+            vec2 safeShadowMapSize = max(
+                pointLight.shadowMapSize,
+                vec2(1.0)
+            );
+
             shadowCoord = getPointShadowCoordAtUV(
                 vPointShadowCoord[i],
                 targetUV,
-                currentUV
+                currentUV,
+                safeShadowMapSize
             );
 
-            shadow *= receiveShadow ? getPointShadow(
-                pointShadowMap[i],
-                pointLight.shadowMapSize,
-                pointLight.shadowBias,
-                pointLight.shadowRadius,
-                shadowCoord,
-                pointLight.shadowCameraNear,
-                pointLight.shadowCameraFar
-            ) : 1.0;
+            if (receiveShadow) {
+                float rawShadow = getPointShadow(
+                    pointShadowMap[i],
+                    safeShadowMapSize,
+                    pointLight.shadowBias,
+                    0.0,
+                    shadowCoord,
+                    pointLight.shadowCameraNear,
+                    pointLight.shadowCameraFar
+                );
+
+                shadow *= step(
+                    clamp(shadowThreshold, 0.0, 1.0),
+                    rawShadow
+                );
+            }
         }
         #pragma unroll_loop_end
-
     #endif
 
     #endif
@@ -5535,374 +5636,346 @@ float getPixelatedShadowAtUV(vec2 targetUV, vec2 currentUV) {
     return shadow;
 }
 
+/* ------------------------------------------------------------
+   VOXEL AO
+------------------------------------------------------------ */
+
+float computeVoxelAO(vec2 faceUv, vec3 normal) {
+    if (!uAOEnabled) {
+        return 1.0;
+    }
+
+    vec2 uv = clamp(faceUv, vec2(0.0), vec2(1.0));
+
+    float radius = clamp(uAORadius, 0.0001, 0.5);
+    float sharpness = clamp(uAOEdgeSharpness, 1.0, 32.0);
+    float cornerWeight = clamp(uAOCornerWeight, 0.0, 3.0);
+    float faceNormalWeight = clamp(uAOFaceNormalWeight, 0.0, 1.0);
+    float strength = clamp(uAOStrength, 0.0, 1.0);
+
+    float faceNormalAO = 1.0;
+
+    if (faceNormalWeight > 0.0) {
+        float downward = clamp(-normal.y, 0.0, 1.0);
+
+        faceNormalAO =
+            1.0 -
+            downward *
+            faceNormalWeight *
+            0.25;
+    }
+
+    float edgeX =
+        1.0 -
+        smoothstep(0.0, radius, uv.x) *
+        smoothstep(0.0, radius, 1.0 - uv.x);
+
+    float edgeY =
+        1.0 -
+        smoothstep(0.0, radius, uv.y) *
+        smoothstep(0.0, radius, 1.0 - uv.y);
+
+    edgeX = pow(edgeX, sharpness * 0.1);
+    edgeY = pow(edgeY, sharpness * 0.1);
+
+    float edgeAO = max(edgeX, edgeY);
+
+    float cornerX =
+        smoothstep(0.0, radius, uv.x) *
+        smoothstep(0.0, radius, 1.0 - uv.x);
+
+    float cornerY =
+        smoothstep(0.0, radius, uv.y) *
+        smoothstep(0.0, radius, 1.0 - uv.y);
+
+    float cornerAO = cornerX * cornerY * cornerWeight;
+
+    float cavity = clamp(
+        edgeAO + cornerAO,
+        0.0,
+        1.0
+    );
+
+    float ao = 1.0 - cavity * strength;
+    ao *= faceNormalAO;
+
+    ao = pow(
+        clamp(ao, 0.0, 1.0),
+        max(uAOPower, 0.001)
+    );
+
+    return clamp(
+        ao,
+        clamp(uAOMin, 0.0, 1.0),
+        1.0
+    );
+}
+
+/* ------------------------------------------------------------
+   TONE MAPPING
+------------------------------------------------------------ */
+
+vec3 acesFilm(vec3 x) {
+    float a = 2.51;
+    float b = 0.03;
+    float c = 2.43;
+    float d = 0.59;
+    float e = 0.14;
+
+    return clamp(
+        (x * (a * x + b)) /
+        (x * (c * x + d) + e),
+        0.0,
+        1.0
+    );
+}
+
+vec3 reinhard(vec3 x) {
+    return x / (x + vec3(1.0));
+}
+
+vec3 uncharted2(vec3 x) {
+    float A = 0.15;
+    float B = 0.50;
+    float C = 0.10;
+    float D = 0.20;
+    float E = 0.02;
+    float F = 0.30;
+
+    return (
+        (x * (A * x + C * B) + D * E) /
+        (x * (A * x + B) + D * F)
+    ) - E / F;
+}
+
+vec3 hable(vec3 x) {
+    float A = 0.22;
+    float B = 0.30;
+    float C = 0.10;
+    float D = 0.20;
+    float E = 0.01;
+    float F = 0.30;
+
+    return (
+        (x * (A * x + C * B) + D * E) /
+        (x * (A * x + B) + D * F)
+    ) - E / F;
+}
+
+vec3 filmic(vec3 x) {
+    float exposure = max(uExposure, 0.001);
+
+    x *= exposure;
+    x = max(vec3(0.0), x - 0.004);
+
+    return (
+        x * (6.2 * x + 0.5)
+    ) / (
+        x * (6.2 * x + 1.7) + 0.06
+    );
+}
+
+vec3 linearTone(vec3 x) {
+    return clamp(
+        x * max(uExposure, 0.001),
+        0.0,
+        1.0
+    );
+}
+
+vec3 applyToneMapping(vec3 color) {
+    color = max(color, vec3(0.0));
+
+    switch (uToneMapping) {
+        case TM_ACES:
+            return acesFilm(color * max(uExposure, 0.001));
+
+        case TM_REINHARD:
+            return reinhard(color * max(uExposure, 0.001));
+
+        case TM_UNCHARTED2:
+            return uncharted2(color * max(uExposure, 0.001));
+
+        case TM_HABLE:
+            return hable(color * max(uExposure, 0.001));
+
+        case TM_FILMIC:
+            return filmic(color);
+
+        case TM_LINEAR:
+            return linearTone(color);
+
+        default:
+            return clamp(color, 0.0, 1.0);
+    }
+}
+
 void main() {
-    vec4 color = texture2D(map, vUv);
+    vec2 tiling_value = TILING;
+    if (AUTO_TILE) {
+        tiling_value = vfaceSize / TEXTURE_SIZE;
+    }
+    vec4 texel = texture2D(map, vUv * tiling_value);
 
     /*
-        Important:
-        Calculate the shadow before discard because getPixelatedShadowAtUV()
-        uses dFdx/dFdy. Derivatives are more stable before discarding fragments.
+        Esta parte mantiene exactamente el flujo visual de tu shader legacy:
+        UV de cara -> centro de píxel -> shadow map extrapolado y snap.
     */
-
     vec2 shadowCurrentUV = vNormalizedFaceUv;
-    vec2 shadowTargetUV = getPixelCenterUV(shadowCurrentUV, vfaceSize);
 
-    float shadow = getPixelatedShadowAtUV(shadowTargetUV, shadowCurrentUV);
-
-    if (color.a < 0.01) discard;
-
-    float lightEffect = light * mix(AMBIENT_INTENSITY, 1.0, shadow);
-
-    if (!EMISSIVE) {
-        gl_FragColor = vec4(lift + color.rgb * lightEffect, color.a);
-        gl_FragColor.rgb *= LIGHTCOLOR;
-    } else {
-        vec3 light_mix =
-            (lightEffect * LIGHTCOLOR) +
-            (1.0 - lightEffect * LIGHTCOLOR) * (1.0 - color.a);
-
-        gl_FragColor = vec4(lift + color.rgb * light_mix, 1.0);
-    }
-
-    if (lift > 0.2) {
-        gl_FragColor.rg *= vec2(0.6, 0.7);
-    }
-}`,
-                uniforms: {
-                    "LIGHTCOLOR": { type: "vec3", value: new THREE.Vector3(1, 1, 1), expose: true },
-                    "SHADE": { type: "bool", value: true, expose: true },
-                    "LIGHTSIDE": { type: "int", value: 0, expose: true, min: 0, max: 5, step: 1, allow_higher: false, allow_lower: false },
-                    "EMISSIVE": { type: "bool", value: false, expose: true },
-                    "AMBIENT_INTENSITY": { type: "float", value: 0.4, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false }
-                    // SHADOW_SNAP, SHADOW_SMOOTH, and RESOLUTION_FACTOR uniforms have been removed.
-                },
-                enableShadows: true
-            });
-
-            const pixelatedShadedLightflowShadowBlock = `// --- PIXEL-PERFECT SHADOW FUNCTIONS ---
-
-#define SHADOW_DET_EPS 1e-12
-#define SHADOW_QUALITY_EPS 1e-5
-
-#define PROJECTED_SHADOW_COORD_MARGIN 0.05
-#define PROJECTED_SHADOW_MAX_XY_JUMP 0.25
-#define PROJECTED_SHADOW_MAX_Z_JUMP 0.25
-
-#define POINT_SHADOW_MIN_LENGTH 1e-6
-#define POINT_SHADOW_MAX_ABSOLUTE_JUMP 0.75
-#define POINT_SHADOW_MAX_RELATIVE_JUMP 0.35
-
-vec2 getPixelCenterUV(vec2 localUV, vec2 gridSize) {
-    vec2 grid = max(floor(gridSize + 0.5), vec2(1.0));
-    vec2 safeUV = clamp(localUV, vec2(0.0), vec2(0.999999));
-
-    return (floor(safeUV * grid) + 0.5) / grid;
-}
-
-vec4 getRawShadowCoordAtUV(
-    vec4 currentShadowCoord,
-    vec2 targetUV,
-    vec2 currentUV,
-    out bool valid
-) {
-    valid = false;
-
-    vec2 deltaUV = targetUV - currentUV;
-
-    vec2 dUV_dx = dFdx(currentUV);
-    vec2 dUV_dy = dFdy(currentUV);
-
-    vec4 dCoord_dx = dFdx(currentShadowCoord);
-    vec4 dCoord_dy = dFdy(currentShadowCoord);
-
-    float det = dUV_dx.x * dUV_dy.y - dUV_dx.y * dUV_dy.x;
-    float uvArea = length(dUV_dx) * length(dUV_dy);
-    float quality = abs(det) / max(uvArea, SHADOW_DET_EPS);
-
-    if (abs(det) > SHADOW_DET_EPS && quality > SHADOW_QUALITY_EPS) {
-        float invDet = 1.0 / det;
-
-        vec4 dCoord_du =
-            (dCoord_dx * dUV_dy.y - dCoord_dy * dUV_dx.y) * invDet;
-
-        vec4 dCoord_dv =
-            (dCoord_dy * dUV_dx.x - dCoord_dx * dUV_dy.x) * invDet;
-
-        valid = true;
-
-        return currentShadowCoord +
-            dCoord_du * deltaUV.x +
-            dCoord_dv * deltaUV.y;
-    }
-
-    return currentShadowCoord;
-}
-
-vec4 getProjectedShadowCoordAtUV(
-    vec4 currentShadowCoord,
-    vec2 targetUV,
-    vec2 currentUV
-) {
-    bool valid;
-
-    vec4 candidate = getRawShadowCoordAtUV(
-        currentShadowCoord,
-        targetUV,
-        currentUV,
-        valid
+    vec2 shadowTargetUV = getPixelCenterUV(
+        shadowCurrentUV,
+        vfaceSize * shadowPixelResolution
     );
 
-    if (valid) {
-        vec3 currentProjected =
-            currentShadowCoord.xyz / max(currentShadowCoord.w, 1e-8);
+    /*
+        Debe ejecutarse antes del discard.
+        dFdx/dFdy necesita derivadas válidas incluso con transparencia.
+    */
+    float rawPixelatedShadow = getPixelatedShadowAtUV(
+        shadowTargetUV,
+        shadowCurrentUV
+    );
 
-        vec3 candidateProjected =
-            candidate.xyz / max(candidate.w, 1e-8);
+    /*
+        Valores por defecto:
+        uShadowStrength = 1.0
+        uShadowFloor = 0.0
 
-        bool candidateIsValid =
-            candidate.w > 0.0 &&
-            candidateProjected.x > -PROJECTED_SHADOW_COORD_MARGIN &&
-            candidateProjected.x < 1.0 + PROJECTED_SHADOW_COORD_MARGIN &&
-            candidateProjected.y > -PROJECTED_SHADOW_COORD_MARGIN &&
-            candidateProjected.y < 1.0 + PROJECTED_SHADOW_COORD_MARGIN &&
-            candidateProjected.z > -PROJECTED_SHADOW_COORD_MARGIN &&
-            candidateProjected.z < 1.0 + PROJECTED_SHADOW_COORD_MARGIN;
+        Con esos valores se conserva el resultado binario legacy.
+    */
+    float pixelatedShadow = max(
+        rawPixelatedShadow,
+        clamp(uShadowFloor, 0.0, 1.0)
+    );
 
-        bool candidateIsClose =
-            distance(candidateProjected.xy, currentProjected.xy) <
-                PROJECTED_SHADOW_MAX_XY_JUMP &&
-            abs(candidateProjected.z - currentProjected.z) <
-                PROJECTED_SHADOW_MAX_Z_JUMP;
+    pixelatedShadow = mix(
+        1.0,
+        pixelatedShadow,
+        clamp(uShadowStrength, 0.0, 1.0)
+    );
 
-        if (candidateIsValid && candidateIsClose) {
-            return candidate;
+    if (texel.a < 0.01) {
+        discard;
+    }
+
+    /*
+        Lightflow trabaja en lineal.
+    */
+    texel.rgb = pow(
+        max(texel.rgb, vec3(0.0)),
+        vec3(2.2)
+    );
+
+    vec3 normal = safeNormalize(
+        vWorldNormal,
+        vec3(0.0, 1.0, 0.0)
+    );
+
+    vec3 directLight = vec3(0.0);
+
+    for (int i = 0; i < 16; i++) {
+        if (i >= max_light_number) {
+            break;
         }
+
+        if (uLightIntensity[i] <= 0.0) {
+            continue;
+        }
+
+        directLight += computeLightContribution(
+            i,
+            normal,
+            vWorldPos
+        );
     }
 
-    return currentShadowCoord;
-}
-
-vec4 getPointShadowCoordAtUV(
-    vec4 currentShadowCoord,
-    vec2 targetUV,
-    vec2 currentUV
-) {
-    bool valid;
-
-    vec4 candidate = getRawShadowCoordAtUV(
-        currentShadowCoord,
-        targetUV,
-        currentUV,
-        valid
+    float ambientOcclusion = computeVoxelAO(
+        vNormalizedFaceUv,
+        normal
     );
 
-    if (valid) {
-        float currentLength = length(currentShadowCoord.xyz);
-        float candidateLength = length(candidate.xyz);
+    vec3 ambientLight =
+        max(uAmbientColor, vec3(0.0)) *
+        max(uAmbient, 0.0);
 
-        float allowedJump = max(
-            POINT_SHADOW_MAX_ABSOLUTE_JUMP,
-            currentLength * POINT_SHADOW_MAX_RELATIVE_JUMP
+    ambientLight *= ambientOcclusion;
+
+    float directAO = mix(
+        1.0,
+        ambientOcclusion,
+        clamp(uAODirectInfluence, 0.0, 1.0)
+    );
+
+    /*
+        La sombra pixelada solo oscurece iluminación directa.
+        El ambient/AO sigue visible dentro de las sombras.
+    */
+    vec3 lighting =
+        ambientLight +
+        directLight *
+        pixelatedShadow *
+        directAO;
+
+    if (uClampLighting) {
+        float maxChannel = max(
+            lighting.r,
+            max(lighting.g, lighting.b)
         );
 
-        bool candidateIsReasonable =
-            candidateLength > POINT_SHADOW_MIN_LENGTH &&
-            abs(candidateLength - currentLength) < allowedJump;
-
-        if (candidateIsReasonable) {
-            return candidate;
+        if (maxChannel > 1.0) {
+            lighting /= maxChannel;
         }
     }
 
-    return currentShadowCoord;
-}
+    vec3 finalColor = texel.rgb * lighting;
 
-float getDirectionalShadowByIndex(int shadowIndex, vec2 targetUV, vec2 currentUV) {
-    float result = 1.0;
+    finalColor += vec3(lift);
+    finalColor *= LIGHTCOLOR;
 
-    #ifdef USE_SHADOWMAP
-    #if NUM_DIR_LIGHT_SHADOWS > 0
-        DirectionalLightShadow directionalLight;
-
-        #pragma unroll_loop_start
-        for ( int i = 0; i < NUM_DIR_LIGHT_SHADOWS; i ++ ) {
-            directionalLight = directionalLightShadows[ i ];
-
-            if (UNROLLED_LOOP_INDEX == shadowIndex) {
-                result = receiveShadow ? getShadow(
-                    directionalShadowMap[ i ],
-                    directionalLight.shadowMapSize,
-                    directionalLight.shadowBias,
-                    directionalLight.shadowRadius,
-                    getProjectedShadowCoordAtUV(
-                        vDirectionalShadowCoord[ i ],
-                        targetUV,
-                        currentUV
-                    )
-                ) : 1.0;
-            }
-        }
-        #pragma unroll_loop_end
-    #endif
-    #endif
-
-    return result;
-}
-
-float getSpotShadowByIndex(int shadowIndex, vec2 targetUV, vec2 currentUV) {
-    float result = 1.0;
-
-    #ifdef USE_SHADOWMAP
-    #if NUM_SPOT_LIGHT_SHADOWS > 0
-        SpotLightShadow spotLight;
-
-        #pragma unroll_loop_start
-        for ( int i = 0; i < NUM_SPOT_LIGHT_SHADOWS; i ++ ) {
-            spotLight = spotLightShadows[ i ];
-
-            if (UNROLLED_LOOP_INDEX == shadowIndex) {
-                result = receiveShadow ? getShadow(
-                    spotShadowMap[ i ],
-                    spotLight.shadowMapSize,
-                    spotLight.shadowBias,
-                    spotLight.shadowRadius,
-                    getProjectedShadowCoordAtUV(
-                        vSpotShadowCoord[ i ],
-                        targetUV,
-                        currentUV
-                    )
-                ) : 1.0;
-            }
-        }
-        #pragma unroll_loop_end
-    #endif
-    #endif
-
-    return result;
-}
-
-float getPointShadowByIndex(int shadowIndex, vec2 targetUV, vec2 currentUV) {
-    float result = 1.0;
-
-    #ifdef USE_SHADOWMAP
-    #if NUM_POINT_LIGHT_SHADOWS > 0
-        PointLightShadow pointLight;
-
-        #pragma unroll_loop_start
-        for ( int i = 0; i < NUM_POINT_LIGHT_SHADOWS; i ++ ) {
-            pointLight = pointLightShadows[ i ];
-
-            if (UNROLLED_LOOP_INDEX == shadowIndex) {
-                result = receiveShadow ? getPointShadow(
-                    pointShadowMap[ i ],
-                    pointLight.shadowMapSize,
-                    pointLight.shadowBias,
-                    pointLight.shadowRadius,
-                    getPointShadowCoordAtUV(
-                        vPointShadowCoord[ i ],
-                        targetUV,
-                        currentUV
-                    ),
-                    pointLight.shadowCameraNear,
-                    pointLight.shadowCameraFar
-                ) : 1.0;
-            }
-        }
-        #pragma unroll_loop_end
-    #endif
-    #endif
-
-    return result;
-}
-
-vec2 getFaceTexelGridSize() {
-    vec2 textureGrid = abs(vFaceSize * vUvSize);
-    vec2 geometryGrid = abs(vFaceSize);
-    return max(max(textureGrid, geometryGrid), vec2(1.0));
-}
-
-vec2 getPixelatedFaceUV() {
-    return getPixelCenterUV(vFaceUv, getFaceTexelGridSize());
-}
-
-float getCustomLightShadow(int lightIndex) {
-    if (uLightCastShadow[lightIndex] == 0) return 1.0;
-
-    int shadowIndex = uLightShadowIndex[lightIndex];
-    if (shadowIndex < 0) return 1.0;
-
-    vec2 shadowCurrentUV = vFaceUv;
-    vec2 shadowTargetUV = getPixelatedFaceUV();
-
-    int type = uLightType[lightIndex];
-    float shadow = 1.0;
-
-    if (type == SA_LIGHT_DIRECTIONAL) {
-        shadow = getDirectionalShadowByIndex(shadowIndex, shadowTargetUV, shadowCurrentUV);
-    } else if (type == SA_LIGHT_SPOT) {
-        shadow = getSpotShadowByIndex(shadowIndex, shadowTargetUV, shadowCurrentUV);
-    } else {
-        shadow = getPointShadowByIndex(shadowIndex, shadowTargetUV, shadowCurrentUV);
+    if (lift > 0.2) {
+        finalColor.rg *= vec2(0.6, 0.7);
     }
 
-    shadow = clamp(shadow, 0.0, 1.0);
-    shadow = max(shadow, clamp(uShadowFloor, 0.0, 1.0));
+    finalColor = applyToneMapping(finalColor);
 
-    return mix(1.0, shadow, clamp(uShadowStrength, 0.0, 1.0));
-}
-`;
+    finalColor = pow(
+        max(finalColor, vec3(0.0)),
+        vec3(1.0 / 2.2)
+    );
 
-            const createPixelatedShadedLightflowFragment = () => {
-                let fragment = shaded_lightflow.fragment;
-                const shadowSectionStart = fragment.indexOf('// --- SHADOW FUNCTIONS ---');
-                const aoSectionStart = fragment.indexOf('// --- VOXEL-FRIENDLY AMBIENT OCCLUSION ---');
+    gl_FragColor = vec4(finalColor, texel.a);
+}`,
 
-                if (shadowSectionStart >= 0 && aoSectionStart > shadowSectionStart) {
-                    fragment = fragment.slice(0, shadowSectionStart) +
-                        pixelatedShadedLightflowShadowBlock +
-                        fragment.slice(aoSectionStart);
-                }
+                uniforms: {
+                    ...createLightflowUniforms({
+                        shadows: true
+                    }),
 
-                fragment = fragment.replace(
-                    /(varying vec2 vFaceUv;\r?\n)/,
-                    '$1varying vec2 vFaceSize;\nvarying vec2 vUvSize;\n'
-                );
+                    "shadowPixelResolution": {
+                        type: "float",
+                        value: 1.0,
+                        expose: true,
+                        min: 1.0,
+                        max: 16.0,
+                        step: 0.05,
+                        allow_higher: true,
+                        allow_lower: false
+                    },
 
-                fragment = fragment.replace(
-                    /    if \(texel\.a < 0\.01\) discard;\r?\n\r?\n    \/\/ --- LINEARIZE INPUT TEXTURE ---/,
-                    '    bool shouldDiscard = texel.a < 0.01;\n\n    // --- LINEARIZE INPUT TEXTURE ---'
-                );
+                    "shadowThreshold": {
+                        type: "float",
+                        value: 0.75,
+                        expose: true,
+                        min: 0.0,
+                        max: 1.0,
+                        step: 0.05,
+                        allow_higher: false,
+                        allow_lower: false
+                    }
+                },
 
-                fragment = fragment.replace(
-                    /(    float ambientOcclusion = computeVoxelAO\(vFaceUv, normal\);\r?\n)/,
-                    '    if (shouldDiscard) discard;\n\n    vec2 pixelFaceUv = getPixelatedFaceUV();\n    float ambientOcclusion = computeVoxelAO(pixelFaceUv, normal);\n'
-                );
-
-                return fragment;
-            };
-
-            let pixelated_shaded_lightflow = new FancyShaderMaterial({
-                id: 'pixelated_shaded_lightflow',
-                name: tl('shader_architect.preset.pixelated_shaded_lightflow'),
-                icon: 'gradient',
-                isCustom: false,
-                vertex: shaded_lightflow.vertex
-                    .replace(
-                        /(attribute vec2 normalizedFaceUv;\r?\n)/,
-                        '$1attribute vec2 faceSize;\nattribute vec2 uvSize;\n'
-                    )
-                    .replace(
-                        /(varying vec2 vFaceUv;\r?\n)/,
-                        '$1varying vec2 vFaceSize;\nvarying vec2 vUvSize;\n'
-                    )
-                    .replace(
-                        /(    vFaceUv = normalizedFaceUv;\r?\n)/,
-                        '$1    vFaceSize = faceSize;\n    vUvSize = uvSize;\n'
-                    ),
-                fragment: createPixelatedShadedLightflowFragment(),
-                uniforms: this.cloneUniformMap(shaded_lightflow.uniforms),
-                supportsScreenSpaceReflections: shaded_lightflow.supportsScreenSpaceReflections,
-                enableShadows: shaded_lightflow.enableShadows
+                enableShadows: true
             });
 
 
