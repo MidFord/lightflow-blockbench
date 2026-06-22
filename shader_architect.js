@@ -354,12 +354,21 @@
 
         'shader_architect.material_panel.no_selected': 'Select a single cube or multiple cubes to edit their material instance properties.',
         'shader_architect.material_panel.no_instance': 'Create a material instance to override the global material on this cube.',
+        'shader_architect.material_panel.no_face_instance': 'Assign a material instance to this face to override the element material.',
         'shader_architect.material_panel.multiple_instances': 'Multiple material instances have been selected. All selected cubes must have the same material instance properties.',
         'shader_architect.material_panel.properties': 'Material Instance Properties',
 
         'shader_architect.material_panel.title': 'Material Instance',
         'shader_architect.material_panel.global_material': 'Global Material',
+        'shader_architect.material_panel.element_material': 'Element Material',
         'shader_architect.material_panel.mixed_instances': '(Mixed Instances)',
+        'shader_architect.material_panel.face_scope.element': 'Element',
+        'shader_architect.material_panel.face_scope.north': 'North Face',
+        'shader_architect.material_panel.face_scope.south': 'South Face',
+        'shader_architect.material_panel.face_scope.east': 'East Face',
+        'shader_architect.material_panel.face_scope.west': 'West Face',
+        'shader_architect.material_panel.face_scope.up': 'Up Face',
+        'shader_architect.material_panel.face_scope.down': 'Down Face',
         'shader_architect.material_panel.base_material': 'Base Material',
         'shader_architect.material_panel.base_material.desc': 'Select the FancyShaderMaterial that provides the shader code and uniform defaults for this instance.',
         'shader_architect.material_panel.instance': 'Material Instance',
@@ -376,6 +385,8 @@
         'shader_architect.material_panel.undo.delete_instance': 'Delete material instance',
         'shader_architect.material_panel.undo.assign_instance': 'Assign material instance',
         'shader_architect.material_panel.undo.clear_instance': 'Use global material',
+        'shader_architect.material_panel.undo.assign_face_instance': 'Assign face material instance',
+        'shader_architect.material_panel.undo.clear_face_instance': 'Use element material',
         'shader_architect.material_panel.undo.rename_instance': 'Rename material instance',
         "menu.shader_architect": "Shader Architect",
         "action.sa_global_mode": "World Render Mode",
@@ -573,9 +584,22 @@
     Language.addTranslations('es', {
         'panel.global_renderer_properties': 'MUNDO',
         'panel.material_properties': 'MATERIAL',
+        'shader_architect.material_panel.no_selected': 'Selecciona uno o varios cubos para editar sus instancias de material.',
+        'shader_architect.material_panel.no_instance': 'Crea una instancia de material para sobrescribir el material global en este cubo.',
+        'shader_architect.material_panel.no_face_instance': 'Asigna una instancia de material a esta cara para sobrescribir el material del elemento.',
+        'shader_architect.material_panel.multiple_instances': 'Hay varias instancias de material seleccionadas. Todos los cubos seleccionados deben compartir la misma instancia.',
+        'shader_architect.material_panel.properties': 'Propiedades de instancia de material',
         'shader_architect.material_panel.title': 'Instancia de material',
         'shader_architect.material_panel.global_material': 'Material global',
+        'shader_architect.material_panel.element_material': 'Material del elemento',
         'shader_architect.material_panel.mixed_instances': '(Instancias diferentes)',
+        'shader_architect.material_panel.face_scope.element': 'Elemento',
+        'shader_architect.material_panel.face_scope.north': 'Cara norte',
+        'shader_architect.material_panel.face_scope.south': 'Cara sur',
+        'shader_architect.material_panel.face_scope.east': 'Cara este',
+        'shader_architect.material_panel.face_scope.west': 'Cara oeste',
+        'shader_architect.material_panel.face_scope.up': 'Cara superior',
+        'shader_architect.material_panel.face_scope.down': 'Cara inferior',
         'shader_architect.material_panel.base_material': 'Material base',
         'shader_architect.material_panel.base_material.desc': 'Elige el FancyShaderMaterial que aporta el shader y los uniforms por defecto de esta instancia.',
         'shader_architect.material_panel.instance': 'Instancia de material',
@@ -592,6 +616,8 @@
         'shader_architect.material_panel.undo.delete_instance': 'Eliminar instancia de material',
         'shader_architect.material_panel.undo.assign_instance': 'Asignar instancia de material',
         'shader_architect.material_panel.undo.clear_instance': 'Usar material global',
+        'shader_architect.material_panel.undo.assign_face_instance': 'Asignar instancia de material a cara',
+        'shader_architect.material_panel.undo.clear_face_instance': 'Usar material del elemento',
         'shader_architect.material_panel.undo.rename_instance': 'Renombrar instancia de material',
         "menu.shader_architect": "Shader Architect",
         "action.sa_global_mode": "Modo de Render",
@@ -2678,19 +2704,21 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
             return this.resetMaterialInstanceUniforms(instanceOrId);
         },
 
-        assignMaterialInstanceToCube(cube, instanceOrId) {
+        assignMaterialInstanceToCube(cube, instanceOrId, options = {}) {
             const instance = this.getMaterialInstance(instanceOrId);
             if (!cube || !instance) return false;
 
             cube.sa_material_instance_id = instance.id;
             cube.sa_material_id = instance.baseMaterialId;
-            ShaderEngine.applyToMesh(cube, this.getRenderMaterialForInstance(instance));
-            ShaderEngine.updateLightUniforms();
+            if (options.apply !== false) {
+                ShaderEngine.applyToMesh(cube, this.getRenderMaterialForInstance(instance));
+                ShaderEngine.updateLightUniforms();
+            }
             return true;
         },
 
-        assignInstanceToCube(cube, instanceOrId) {
-            return this.assignMaterialInstanceToCube(cube, instanceOrId);
+        assignInstanceToCube(cube, instanceOrId, options = {}) {
+            return this.assignMaterialInstanceToCube(cube, instanceOrId, options);
         },
 
         clearMaterialInstanceFromCube(cube) {
@@ -4054,7 +4082,7 @@ void main() {
                         type: "bool",
                         value: false,
                         expose: true,
-                        advanced: true
+                        advanced: false
                     },
                     "TILING": {
                         type: "vec2",
@@ -6256,6 +6284,33 @@ void main() {
             Preview.all.forEach(preview => this.patchPreview(preview));
         },
 
+        preparePreviewForRender(preview) {
+            if (typeof window.LightManagerPrepareRender === 'function') {
+                window.LightManagerPrepareRender(preview);
+            } else if (preview?.renderer?.shadowMap) {
+                preview.renderer.shadowMap.enabled = true;
+                if (THREE.PCFSoftShadowMap !== undefined) {
+                    preview.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+                }
+                preview.renderer.shadowMap.needsUpdate = true;
+            }
+
+            ShaderEngine.updateWorldNormalMatrices();
+        },
+
+        invalidateShadowMaps(preview) {
+            if (preview?.renderer?.shadowMap) {
+                preview.renderer.shadowMap.needsUpdate = true;
+            }
+
+            Object.keys(window.three_lights || {}).forEach(uuid => {
+                const light = window.three_lights[uuid];
+                if (light && light.shadow) {
+                    light.shadow.needsUpdate = true;
+                }
+            });
+        },
+
         patchPreview(preview) {
             if (!preview || !preview.renderer || this.patchedPreviews.has(preview)) return;
 
@@ -6264,6 +6319,8 @@ void main() {
 
             const manager = this;
             const patchedRender = function shaderArchitectSSRRender() {
+                manager.preparePreviewForRender(this);
+
                 const activeMaterials = manager.collectActiveMaterials();
                 if (activeMaterials.length === 0) {
                     return originalRender.apply(this, arguments);
@@ -6274,6 +6331,7 @@ void main() {
                 }
 
                 manager.capturePreview(this, activeMaterials);
+                manager.invalidateShadowMaps(this);
                 this.renderer.render(Canvas.scene, this.camera);
             };
 
@@ -6492,6 +6550,7 @@ void main() {
                 renderer.setRenderTarget(previousTarget);
                 renderer.autoClear = previousAutoClear;
                 this.restoreMeshVisibility(hiddenMeshes);
+                this.invalidateShadowMaps(preview);
                 state.hasCaptured = true;
                 state.lastCaptureFrame = state.frameIndex;
 
@@ -6502,6 +6561,7 @@ void main() {
                 renderer.setRenderTarget(previousTarget);
                 renderer.autoClear = previousAutoClear;
                 this.restoreMeshVisibility(hiddenMeshes);
+                this.invalidateShadowMaps(preview);
                 console.warn('[Shader Architect] SSR capture failed.', error);
             } finally {
                 state.capturing = false;
@@ -7089,8 +7149,8 @@ void main() {
 
             const setupAlphaShadowMaterials = (mesh, texture, sourceMaterial, shader) => {
                 if (!shader.enableShadows || !texture) {
-                    mesh.customDepthMaterial = null;
-                    mesh.customDistanceMaterial = null;
+                    delete mesh.customDepthMaterial;
+                    delete mesh.customDistanceMaterial;
                     return;
                 }
 
@@ -7692,6 +7752,49 @@ void main() {
                 return mat.uniforms[name];
             };
 
+            const toVector3 = (value, fallbackFactory) => {
+                if (value && typeof value.copy === 'function') return value;
+
+                const fallback = fallbackFactory();
+                if (value && value.x !== undefined) {
+                    fallback.set(
+                        Number(value.x) || 0,
+                        Number(value.y) || 0,
+                        Number(value.z) || 0
+                    );
+                } else if (Array.isArray(value)) {
+                    fallback.set(
+                        Number(value[0]) || 0,
+                        Number(value[1]) || 0,
+                        Number(value[2]) || 0
+                    );
+                }
+                return fallback;
+            };
+
+            const ensureVectorArrayUniform = (mat, name, fallbackFactory) => {
+                const uniform = ensureUniform(mat, name, () => []);
+                if (!Array.isArray(uniform.value)) uniform.value = [];
+
+                for (let i = 0; i < MAX_LIGHTS; i++) {
+                    uniform.value[i] = toVector3(uniform.value[i], fallbackFactory);
+                }
+
+                return uniform;
+            };
+
+            const ensureNumberArrayUniform = (mat, name, fallbackValue = 0) => {
+                const uniform = ensureUniform(mat, name, () => []);
+                if (!Array.isArray(uniform.value)) uniform.value = [];
+
+                for (let i = 0; i < MAX_LIGHTS; i++) {
+                    const value = Number(uniform.value[i] ?? fallbackValue);
+                    uniform.value[i] = Number.isFinite(value) ? value : fallbackValue;
+                }
+
+                return uniform;
+            };
+
             const processedMaterials = new Set();
 
             Cube.all.forEach(cube => {
@@ -7740,8 +7843,16 @@ void main() {
 
                     if (!mat.uniforms.max_light_number || !mat.uniforms.uLightPos) return;
 
-                    ensureUniform(mat, "uLightCastShadow", () => Array(16).fill(0));
-                    ensureUniform(mat, "uLightShadowIndex", () => Array(16).fill(-1));
+                    ensureVectorArrayUniform(mat, "uLightPos", () => new THREE.Vector3());
+                    ensureVectorArrayUniform(mat, "uLightDir", () => new THREE.Vector3(0, -1, 0));
+                    ensureVectorArrayUniform(mat, "uLightColor", () => new THREE.Vector3());
+                    ensureNumberArrayUniform(mat, "uLightIntensity", 0);
+                    ensureNumberArrayUniform(mat, "uLightDistance", 0);
+                    ensureNumberArrayUniform(mat, "uLightConeAngle", 0);
+                    ensureNumberArrayUniform(mat, "uLightType", 0);
+                    ensureNumberArrayUniform(mat, "uLightPenumbra", 0);
+                    ensureNumberArrayUniform(mat, "uLightCastShadow", 0);
+                    ensureNumberArrayUniform(mat, "uLightShadowIndex", -1);
 
                     mat.uniforms.max_light_number.value = activeLightCount;
 
@@ -9730,6 +9841,7 @@ void main() {
 
     let cube_material_instance;
     let cube_material_instance_name;
+    let cube_face_material_instance;
     let material_instance_properties_toolbar;
     let create_material_instance;
     let delete_material_instance;
@@ -10042,31 +10154,66 @@ void main() {
             const getSelectedCubes = () => Cube.selected.length > 0 ? Cube.selected.slice() : [];
             const cubeSelectedCondition = () => Cube.selected.length > 0;
             const areMultipleSelected = () => Cube.selected.length > 1;
-            const getCubeMaterialInstanceId = cube => cube && cube.sa_material_instance_id ? cube.sa_material_instance_id : '';
-            const allSelectedHaveSameMaterialInstance = () => {
+            const ELEMENT_MATERIAL_SCOPE = 'element';
+            const getActiveMaterialScope = () => {
+                let scope = cube_face_material_instance && typeof cube_face_material_instance.get === 'function'
+                    ? cube_face_material_instance.get()
+                    : ELEMENT_MATERIAL_SCOPE;
+
+                if (Array.isArray(scope)) {
+                    scope = scope[scope.length - 1] || ELEMENT_MATERIAL_SCOPE;
+                }
+
+                if (scope === ELEMENT_MATERIAL_SCOPE) return ELEMENT_MATERIAL_SCOPE;
+                return MaterialManager.normalizeCubeFaceName(scope) || ELEMENT_MATERIAL_SCOPE;
+            };
+            const isFaceMaterialScope = scope => !!scope && scope !== ELEMENT_MATERIAL_SCOPE;
+            const getCubeMaterialInstanceId = (cube, scope = ELEMENT_MATERIAL_SCOPE) => {
+                if (!cube) return '';
+                const activeScope = scope === ELEMENT_MATERIAL_SCOPE
+                    ? ELEMENT_MATERIAL_SCOPE
+                    : MaterialManager.normalizeCubeFaceName(scope);
+
+                if (isFaceMaterialScope(activeScope)) {
+                    return MaterialManager.getCubeFaceMaterialInstanceId(cube, activeScope);
+                }
+
+                return cube.sa_material_instance_id ? cube.sa_material_instance_id : '';
+            };
+            const allSelectedHaveSameMaterialInstance = (scope = getActiveMaterialScope()) => {
                 const cubes = getSelectedCubes();
                 if (cubes.length === 0) return false;
-                const firstId = getCubeMaterialInstanceId(cubes[0]);
-                return cubes.every(c => getCubeMaterialInstanceId(c) === firstId);
+                const firstId = getCubeMaterialInstanceId(cubes[0], scope);
+                return cubes.every(c => getCubeMaterialInstanceId(c, scope) === firstId);
             };
 
-            const cubeHasMaterialInstance = () => {
+            const cubeHasMaterialInstance = (scope = getActiveMaterialScope()) => {
                 const cubes = getSelectedCubes();
                 if (cubes.length === 0) return false;
                 if (areMultipleSelected()) {
-                    const instanceId = getCubeMaterialInstanceId(cubes[0]);
-                    return allSelectedHaveSameMaterialInstance() && !!instanceId && !!MaterialManager.instances[instanceId];
+                    const instanceId = getCubeMaterialInstanceId(cubes[0], scope);
+                    return allSelectedHaveSameMaterialInstance(scope) && !!instanceId && !!MaterialManager.instances[instanceId];
                 }
                 const cube = getSelectedCube();
                 if (!cube) return false;
-                const instanceId = getCubeMaterialInstanceId(cube);
+                const instanceId = getCubeMaterialInstanceId(cube, scope);
                 return !!instanceId && !!MaterialManager.instances[instanceId];
             };
 
-            const getSharedSelectedMaterialInstanceId = () => {
+            const getSharedSelectedMaterialInstanceId = (scope = getActiveMaterialScope()) => {
                 const cubes = getSelectedCubes();
-                if (cubes.length === 0 || !allSelectedHaveSameMaterialInstance()) return '';
-                return getCubeMaterialInstanceId(cubes[0]);
+                if (cubes.length === 0 || !allSelectedHaveSameMaterialInstance(scope)) return '';
+                return getCubeMaterialInstanceId(cubes[0], scope);
+            };
+
+            const getCubesUsingMaterialInstanceId = (instanceId) => {
+                if (!instanceId) return [];
+                return Cube.all.filter(cube => {
+                    if (!cube) return false;
+                    if (cube.sa_material_instance_id === instanceId) return true;
+                    const faceOverrides = MaterialManager.getCubeFaceMaterialInstanceOverrides(cube);
+                    return Object.keys(faceOverrides).some(faceName => faceOverrides[faceName] === instanceId);
+                });
             };
 
             const getMaterialInstanceUndoAspects = (cubes = []) => {
@@ -10098,6 +10245,13 @@ void main() {
                     if (instanceId && !MaterialManager.instances[instanceId]) {
                         changed = MaterialManager.clearMissingMaterialInstanceFromCube(cube, instanceId) || changed;
                     }
+                    const faceOverrides = MaterialManager.getCubeFaceMaterialInstanceOverrides(cube);
+                    Object.keys(faceOverrides).forEach(faceName => {
+                        const faceInstanceId = faceOverrides[faceName];
+                        if (faceInstanceId && !MaterialManager.instances[faceInstanceId]) {
+                            changed = MaterialManager.clearMissingMaterialInstanceFromCubeFace(cube, faceName, faceInstanceId) || changed;
+                        }
+                    });
                 });
                 if (changed) ShaderEngine.updateAllCubes('sanitize_instances');
             };
@@ -10123,10 +10277,14 @@ void main() {
                 }
 
                 sanitizeSelectedMaterialInstances(cubes);
-                global_material_instance_text.set(MaterialManager.materials[ShaderEngine.globalRenderMode] ? MaterialManager.materials[ShaderEngine.globalRenderMode].name : tl('shader_architect.material_panel.global_material'));
+                const activeScope = getActiveMaterialScope();
+                const isFaceScope = isFaceMaterialScope(activeScope);
+                global_material_instance_text.set(isFaceScope
+                    ? tl('shader_architect.material_panel.element_material')
+                    : (MaterialManager.materials[ShaderEngine.globalRenderMode] ? MaterialManager.materials[ShaderEngine.globalRenderMode].name : tl('shader_architect.material_panel.global_material')));
 
                 const isMultiple = areMultipleSelected();
-                const sameMaterialInstance = allSelectedHaveSameMaterialInstance();
+                const sameMaterialInstance = allSelectedHaveSameMaterialInstance(activeScope);
 
                 let material_instances_options = {};
 
@@ -10135,7 +10293,9 @@ void main() {
                     material_instances_options['__mixed__'] = { name: 'shader_architect.material_panel.mixed_instances', icon: 'bubble_chart' };
                 }
 
-                material_instances_options['global'] = { name: 'shader_architect.material_panel.global_material', icon: 'globe' };
+                material_instances_options['global'] = isFaceScope
+                    ? { name: 'shader_architect.material_panel.element_material', icon: 'view_in_ar' }
+                    : { name: 'shader_architect.material_panel.global_material', icon: 'globe' };
                 for (let id in MaterialManager.instances) {
                     let inst = MaterialManager.instances[id];
                     material_instances_options[id] = { name: inst.name, icon: inst.icon };
@@ -10159,7 +10319,7 @@ void main() {
                 } else {
                     // Single cube, or multiple cubes that share the same material instance.
                     const firstCube = cubes[0];
-                    const instanceId = getCubeMaterialInstanceId(firstCube);
+                    const instanceId = getCubeMaterialInstanceId(firstCube, activeScope);
                     cube_material_instance.setOptions(material_instances_options);
                     cube_material_instance.update();
                     setBarControl(cube_material_instance, instanceId ? instanceId : 'global');
@@ -10186,8 +10346,8 @@ void main() {
                                 value: materialPropertiesShowAdvanced,
                                 icon_size: '24px',
                                 layout: 'space_between',
-                                icon_on: 'tune',
-                                icon_off: 'tune',
+                                icon_on: 'font_download',
+                                icon_off: 'font_download_off',
                                 icon_color_on: 'var(--color-accent)',
                                 icon_color_off: 'var(--color-text)',
                                 title: tl('shader_architect.material_panel.show_advanced.desc'),
@@ -10350,7 +10510,7 @@ void main() {
                         material_properties.form.form_config = {
                             no_instance: {
                                 type: 'bar_display',
-                                value: tl('shader_architect.material_panel.no_instance'),
+                                value: tl(isFaceScope ? 'shader_architect.material_panel.no_face_instance' : 'shader_architect.material_panel.no_instance'),
                                 icon: 'lock',
                                 paragraph: false,
                                 expand: true,
@@ -10368,7 +10528,7 @@ void main() {
                 icon: 'info',
                 text: tl('shader_architect.material_panel.global_material'),
                 expand: true,
-                condition: () => { return !cubeHasMaterialInstance(); }
+                condition: () => { return !cubeHasMaterialInstance(getActiveMaterialScope()); }
             });
 
             create_material_instance = new Action('sa_create_material_instance', {
@@ -10395,13 +10555,28 @@ void main() {
                         onConfirm: function (formResult) {
                             const cubes = getSelectedCubes();
                             if (cubes.length === 0) return;
+                            const activeScope = getActiveMaterialScope();
+                            const isFaceScope = isFaceMaterialScope(activeScope);
 
                             runMaterialInstanceUndo('shader_architect.material_panel.undo.create_instance', cubes, () => {
-                                const materialInstance = MaterialManager.createInstance(formResult.material_base.replace('sa_', ''), { name: formResult.name });
+                                const selectedBase = typeof formResult.material_base === 'string'
+                                    ? formResult.material_base
+                                    : 'sa_' + ShaderEngine.globalRenderMode;
+                                const baseMaterialId = selectedBase.indexOf('sa_') === 0
+                                    ? selectedBase.slice(3)
+                                    : selectedBase;
+                                const materialInstance = MaterialManager.createInstance(baseMaterialId, { name: formResult.name });
+                                if (!materialInstance) return;
+
                                 cubes.forEach(cube => {
-                                    MaterialManager.assignInstanceToCube(cube, materialInstance);
+                                    if (isFaceScope) {
+                                        MaterialManager.assignInstanceToCubeFace(cube, activeScope, materialInstance, { apply: false });
+                                    } else {
+                                        MaterialManager.assignInstanceToCube(cube, materialInstance, { apply: false });
+                                    }
                                 });
                             });
+                            ShaderEngine.updateAllCubes('create_material_instance');
                             updateMaterialInstancePanel();
                             dialog.hide()
                         }
@@ -10415,13 +10590,14 @@ void main() {
                 description: 'shader_architect.material_panel.delete_instance.desc',
                 icon: 'delete',
                 category: 'render',
-                condition: cubeHasMaterialInstance,
+                condition: () => cubeHasMaterialInstance(getActiveMaterialScope()),
                 click() {
                     const cubes = getSelectedCubes();
                     if (cubes.length === 0) return;
-                    const instanceId = getSharedSelectedMaterialInstanceId();
+                    const activeScope = getActiveMaterialScope();
+                    const instanceId = getSharedSelectedMaterialInstanceId(activeScope);
                     if (!instanceId || !MaterialManager.instances[instanceId]) return;
-                    const affectedCubes = Cube.all.filter(cube => getCubeMaterialInstanceId(cube) === instanceId);
+                    const affectedCubes = getCubesUsingMaterialInstanceId(instanceId);
 
                     runMaterialInstanceUndo('shader_architect.material_panel.undo.delete_instance', affectedCubes, () => {
                         MaterialManager.deleteInstance(instanceId);
@@ -10443,17 +10619,27 @@ void main() {
                     const cubes = getSelectedCubes();
                     if (cubes.length === 0) return;
 
+                    const activeScope = getActiveMaterialScope();
+                    const isFaceScope = isFaceMaterialScope(activeScope);
                     const nextInstanceId = this.value;
                     const labelKey = nextInstanceId === 'global'
-                        ? 'shader_architect.material_panel.undo.clear_instance'
-                        : 'shader_architect.material_panel.undo.assign_instance';
+                        ? (isFaceScope ? 'shader_architect.material_panel.undo.clear_face_instance' : 'shader_architect.material_panel.undo.clear_instance')
+                        : (isFaceScope ? 'shader_architect.material_panel.undo.assign_face_instance' : 'shader_architect.material_panel.undo.assign_instance');
 
                     runMaterialInstanceUndo(labelKey, cubes, () => {
                         cubes.forEach(cube => {
                             if (nextInstanceId === 'global') {
-                                MaterialManager.clearCubeMaterialAssignment(cube);
+                                if (isFaceScope) {
+                                    MaterialManager.clearMaterialInstanceFromCubeFace(cube, activeScope, { apply: false });
+                                } else {
+                                    MaterialManager.clearCubeMaterialAssignment(cube);
+                                }
                             } else {
-                                MaterialManager.assignInstanceToCube(cube, nextInstanceId);
+                                if (isFaceScope) {
+                                    MaterialManager.assignInstanceToCubeFace(cube, activeScope, nextInstanceId, { apply: false });
+                                } else {
+                                    MaterialManager.assignInstanceToCube(cube, nextInstanceId, { apply: false });
+                                }
                             }
                         });
                     });
@@ -10463,6 +10649,74 @@ void main() {
                 }
             });
 
+            cube_face_material_instance = new HorizontalSelectWidget('sa_cube_face_material_instance', {
+                expand: true, // Will fill the horizontal space of the toolbar
+                bg_color: 'var(--color-back)', // Custom background color
+                divider_color: 'var(--color-border)', // Custom color for the '|' dividers
+                allow_empty: false, // Prevents deselecting the last active item
+                value: 'element',
+
+                options: {
+                    element: {
+                        //name: 'Element',
+                        icon: 'view_in_ar',
+                        color: 'var(--color-light)',
+                        description: 'shader_architect.material_panel.face_scope.element'
+                    },
+                    north: {
+                        name: 'N',
+                        //icon: 'north',
+                        color: 'var(--color-axis-x)',
+                        description: 'shader_architect.material_panel.face_scope.north'
+                    },
+                    south: {
+                        name: 'S',
+                        //icon: 'south',
+                        color: 'var(--color-axis-z)',
+                        description: 'shader_architect.material_panel.face_scope.south'
+                    },
+                    east: {
+                        name: 'E',
+                        //icon: 'east',
+                        color: 'var(--color-axis-y)',
+                        description: 'shader_architect.material_panel.face_scope.east'
+                    },
+                    west: {
+                        name: 'W',
+                        //icon: 'west',
+                        color: 'var(--color-axis-v)',
+                        description: 'shader_architect.material_panel.face_scope.west'
+                    },
+                    up: {
+                        //name: 'U',
+                        icon: 'arrow_circle_up',
+                        color: 'var(--color-axis-w)',
+                        description: 'shader_architect.material_panel.face_scope.up'
+                    },
+                    down: {
+                        //name: 'D',
+                        icon: 'arrow_circle_down',
+                        color: 'var(--color-axis-u)',
+                        description: 'shader_architect.material_panel.face_scope.down'
+                    }
+                },
+
+                onSelect: function (value) {
+                    const nextScope = Array.isArray(value)
+                        ? (value[value.length - 1] || ELEMENT_MATERIAL_SCOPE)
+                        : (value || ELEMENT_MATERIAL_SCOPE);
+                    const normalizedScope = nextScope === ELEMENT_MATERIAL_SCOPE
+                        ? ELEMENT_MATERIAL_SCOPE
+                        : (MaterialManager.normalizeCubeFaceName(nextScope) || ELEMENT_MATERIAL_SCOPE);
+
+                    if (value !== normalizedScope || Array.isArray(value)) {
+                        this.set(normalizedScope);
+                    }
+                    updateMaterialInstancePanel();
+                }
+            });
+            cube_face_material_instance.set(ELEMENT_MATERIAL_SCOPE);
+
             cube_material_instance_name = new TextInputWidget('sa_material_instance_name', {
                 name: 'shader_architect.material_panel.instance_name',
                 placeholder: tl('shader_architect.material_panel.instance_name'),
@@ -10471,15 +10725,17 @@ void main() {
                 condition: () => {
                     const cubes = getSelectedCubes();
                     if (cubes.length === 0) return false;
-                    if (areMultipleSelected() && !allSelectedHaveSameMaterialInstance()) return false;
-                    return cubeHasMaterialInstance();
+                    const activeScope = getActiveMaterialScope();
+                    if (areMultipleSelected() && !allSelectedHaveSameMaterialInstance(activeScope)) return false;
+                    return cubeHasMaterialInstance(activeScope);
                 },
 
                 onFinishEdit: (text, event) => {
                     const cubes = getSelectedCubes();
                     if (cubes.length === 0) return;
                     const firstCube = cubes[0];
-                    const instanceId = getCubeMaterialInstanceId(firstCube);
+                    const activeScope = getActiveMaterialScope();
+                    const instanceId = getCubeMaterialInstanceId(firstCube, activeScope);
                     const instance = MaterialManager.instances[instanceId];
                     if (instance && instance.name !== text) {
                         runMaterialInstanceUndo('shader_architect.material_panel.undo.rename_instance', [], () => {
@@ -10497,6 +10753,8 @@ void main() {
                 label: true,
                 condition: cubeSelectedCondition,
                 children: [
+                    'sa_cube_face_material_instance',
+                    '#',
                     'sa_cube_material_instance',
                     'sa_current_global_material',
                     'sa_material_instance_name',
@@ -10504,7 +10762,7 @@ void main() {
                     'sa_delete_material_instance'
                 ]
             });
-            deletables.push(create_material_instance, delete_material_instance, cube_material_instance, cube_material_instance_name, global_material_instance_text, material_instance_properties_toolbar);
+            deletables.push(create_material_instance, delete_material_instance, cube_material_instance, cube_face_material_instance, cube_material_instance_name, global_material_instance_text, material_instance_properties_toolbar);
 
             const getEventCause = (event) => event && typeof event === 'object' ? event.cause : event;
             const isProjectSwitching = () => !Project.parsed || Blockbench.hasFlag('switching_project');
@@ -10520,6 +10778,7 @@ void main() {
 
             let materialPanelSelectionListener = Blockbench.on('update_selection', () => {
                 if (isProjectSwitching()) return;
+                cube_face_material_instance.set(ELEMENT_MATERIAL_SCOPE);
                 updateMaterialInstancePanel();
             });
             deletables.push(materialPanelSelectionListener);
@@ -10600,7 +10859,8 @@ void main() {
                 const cubes = getSelectedCubes();
                 if (cubes.length === 0) return;
                 const firstCube = cubes[0];
-                const instanceId = getCubeMaterialInstanceId(firstCube);
+                const activeScope = getActiveMaterialScope();
+                const instanceId = getCubeMaterialInstanceId(firstCube, activeScope);
                 if (!instanceId || !MaterialManager.instances[instanceId]) return;
                 const instance = MaterialManager.instances[instanceId];
 
@@ -10809,6 +11069,7 @@ void main() {
             material_properties = undefined;
             cube_material_instance = undefined;
             cube_material_instance_name = undefined;
+            cube_face_material_instance = undefined;
             material_instance_properties_toolbar = undefined;
             create_material_instance = undefined;
             delete_material_instance = undefined;

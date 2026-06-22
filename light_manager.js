@@ -300,6 +300,95 @@ const LightManagerUtils = {
 
 window.three_lights = window.three_lights || {};
 
+function configureLightManagerRendererShadows(renderer) {
+    if (!renderer || !renderer.shadowMap) return false;
+
+    let changed = false;
+    if (renderer.shadowMap.enabled !== true) {
+        renderer.shadowMap.enabled = true;
+        changed = true;
+    }
+
+    const shadowType = THREE.PCFSoftShadowMap || THREE.PCFShadowMap || renderer.shadowMap.type;
+    if (shadowType !== undefined && renderer.shadowMap.type !== shadowType) {
+        renderer.shadowMap.type = shadowType;
+        changed = true;
+    }
+
+    if (renderer.shadowMap.autoUpdate === false) {
+        renderer.shadowMap.needsUpdate = true;
+    }
+
+    return changed;
+}
+
+function forEachLightManagerPreview(callback) {
+    const previews = new Set();
+
+    if (window.Preview && Array.isArray(Preview.all)) {
+        Preview.all.forEach(preview => {
+            if (preview) previews.add(preview);
+        });
+    }
+
+    [window.main_preview, window.MediaPreview, window.Screencam?.NoAAPreview].forEach(preview => {
+        if (preview) previews.add(preview);
+    });
+
+    previews.forEach(callback);
+}
+
+function configureLightManagerRenderers() {
+    forEachLightManagerPreview(preview => {
+        configureLightManagerRendererShadows(preview.renderer);
+    });
+}
+
+function configureLightManagerSceneShadowMeshes() {
+    const elements = Array.isArray(window.Outliner?.elements) ? window.Outliner.elements : [];
+
+    elements.forEach(element => {
+        if (!element || element.type === 'light' || (window.LightElement && element instanceof window.LightElement)) return;
+
+        const mesh = element.mesh;
+        if (!mesh || typeof mesh.traverse !== 'function') return;
+
+        mesh.traverse(object => {
+            if (!object || object.isLight || object.isCamera) return;
+            if (object.isMesh) {
+                object.castShadow = true;
+                object.receiveShadow = true;
+            }
+        });
+    });
+}
+
+function invalidateLightManagerShadowMaps() {
+    Object.keys(window.three_lights || {}).forEach(uuid => {
+        const light = window.three_lights[uuid];
+        if (light && light.shadow) {
+            light.shadow.needsUpdate = true;
+        }
+    });
+
+    forEachLightManagerPreview(preview => {
+        if (preview?.renderer?.shadowMap) {
+            preview.renderer.shadowMap.needsUpdate = true;
+        }
+    });
+}
+
+window.LightManagerPrepareRender = function LightManagerPrepareRender(preview) {
+    if (preview?.renderer) {
+        configureLightManagerRendererShadows(preview.renderer);
+    } else {
+        configureLightManagerRenderers();
+    }
+
+    configureLightManagerSceneShadowMeshes();
+    invalidateLightManagerShadowMaps();
+};
+
 function registerLightManagerCanvasGizmo(object) {
     if (!object || !window.Canvas || !Array.isArray(Canvas.gizmos)) return;
     if (!Canvas.gizmos.includes(object)) Canvas.gizmos.push(object);
@@ -937,17 +1026,14 @@ if (typeof window.on_light_element_updated !== 'function') {
 window.update_light_element_callback = () => {
     if (!window.scene) return;
 
+    configureLightManagerRenderers();
+    configureLightManagerSceneShadowMeshes();
+
     // Ensure the main group exists in the scene
     if (!window.three_lights_group) {
         window.three_lights_group = new THREE.Group();
         window.three_lights_group.name = "light_manager_group";
         window.scene.add(window.three_lights_group);
-    }
-
-    // Enable shadows in renderer
-    if (window.main_preview && window.main_preview.renderer && !window.main_preview.renderer.shadowMap.enabled) {
-        window.main_preview.renderer.shadowMap.enabled = true;
-        window.main_preview.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     }
 
     // Keep track of active UUIDs to remove deleted lights
@@ -1080,6 +1166,7 @@ window.update_light_element_callback = () => {
     }
 
     window.LightManagerAreaGizmos?.updateAll();
+    invalidateLightManagerShadowMaps();
     window.on_light_element_updated?.();
 };
 
@@ -1970,6 +2057,254 @@ function initialize_light_plugin() {
             }
 
             window.TextInputWidget = TextInputWidget;
+
+            class HorizontalSelectWidget extends Widget {
+                constructor(id, data) {
+                    if (typeof id === 'object') {
+                        data = id;
+                        id = data.id;
+                    }
+                    super(id, data);
+
+                    this.type = 'horizontal_select';
+
+                    // Settings
+                    this.options = data.options || {};
+                    this.selected = []; // Internally we always use an array to support multi-select
+                    this.expand = !!data.expand;
+                    this.bg_color = data.bg_color || 'var(--color-back)';
+                    this.divider_color = data.divider_color || 'var(--color-border)';
+                    this.allow_empty = data.allow_empty !== undefined ? data.allow_empty : true;
+
+                    // Callbacks
+                    this.onSelect = data.onSelect;
+                    this.onChange = data.onChange;
+
+                    // Ensure default selection
+                    if (data.value !== undefined) {
+                        this.selected = Array.isArray(data.value) ? [...data.value] : [data.value];
+                    } else if (!this.allow_empty && Object.keys(this.options).length > 0) {
+                        this.selected = [Object.keys(this.options)[0]];
+                    }
+
+                    // Main Container Node
+                    this.node = document.createElement('div');
+                    this.node.className = 'tool widget horizontal_select_widget';
+                    this.node.setAttribute('toolbar_item', this.id);
+
+                    // Container Styles
+                    this.node.style.backgroundColor = this.bg_color;
+                    this.node.style.border = `1px solid ${this.divider_color}`;
+
+                    if (this.expand) {
+                        this.node.style.flex = '1 1 auto';
+                        this.node.style.width = '100%';
+                    } else {
+                        this.node.style.flex = '0 0 auto';
+                        this.node.style.display = 'inline-flex';
+                    }
+
+                    this.nodes = [this.node];
+                    this.button_nodes = {}; // Store references to individual buttons
+
+                    this.buildDOM();
+                    this.updateSelectionVisuals();
+                }
+
+                /**
+                 * Builds the buttons and dividers inside the main container
+                 */
+                buildDOM() {
+                    this.node.innerHTML = '';
+                    this.button_nodes = {};
+
+                    let keys = Object.keys(this.options);
+
+                    keys.forEach((key, index) => {
+                        let opt = this.options[key];
+
+                        // Create Button Wrapper
+                        let btn = document.createElement('div');
+                        btn.className = 'horizontal_select_btn';
+                        btn.setAttribute('data-key', key);
+
+                        if (this.expand) {
+                            btn.style.flex = '1 1 0';
+                        }
+
+                        // Divider logic
+                        if (index < keys.length - 1) {
+                            btn.style.borderRight = `1px solid ${this.divider_color}`;
+                        }
+
+                        // Disable State
+                        if (opt.disabled) {
+                            btn.classList.add('disabled');
+                        }
+
+                        // Custom Colors (Only applied when NOT selected, CSS handles the selected state)
+                        if (opt.color) {
+                            btn.style.color = opt.color;
+                        }
+
+                        // Icon Element
+                        let hasIcon = !!opt.icon;
+                        let hasName = !!opt.name;
+
+                        if (!hasName) btn.classList.add('icon_only');
+
+                        if (hasIcon) {
+                            let iconElement = Blockbench.getIconNode(opt.icon);
+                            iconElement.classList.add('horizontal_select_icon');
+                            btn.appendChild(iconElement);
+                        }
+
+                        // Text Label Element
+                        if (hasName) {
+                            let labelElement = document.createElement('span');
+                            labelElement.className = 'horizontal_select_label';
+                            labelElement.innerText = tl(opt.name); // Using tl() for Blockbench localization
+                            btn.appendChild(labelElement);
+                        }
+
+                        // Tooltip
+                        if (opt.description || hasName) {
+                            btn.title = opt.description ? tl(opt.description) : tl(opt.name);
+                        }
+
+                        // Click Event Listener
+                        btn.addEventListener('click', (event) => {
+                            if (this.options[key].disabled) return;
+                            this.handleInteraction(key, event);
+                        });
+
+                        this.button_nodes[key] = btn;
+                        this.node.appendChild(btn);
+                    });
+                }
+
+                /**
+                 * Handles user clicks, taking Ctrl/Shift modifiers into account
+                 */
+                handleInteraction(key, event) {
+                    let isMulti = event.ctrlKey || event.shiftKey;
+
+                    if (isMulti) {
+                        // Toggle selection
+                        if (this.selected.includes(key)) {
+                            if (this.allow_empty || this.selected.length > 1) {
+                                this.selected = this.selected.filter(k => k !== key);
+                            }
+                        } else {
+                            this.selected.push(key);
+                        }
+                    } else {
+                        // Single select: If clicking the only selected item, optionally allow deselect
+                        if (this.selected.length === 1 && this.selected[0] === key) {
+                            if (this.allow_empty) {
+                                this.selected = [];
+                            }
+                        } else {
+                            this.selected = [key];
+                        }
+                    }
+
+                    this.updateSelectionVisuals();
+
+                    let returnValue = this.get();
+                    if (this.onSelect) this.onSelect(returnValue, event);
+                    if (this.onChange) this.onChange(returnValue, event);
+                    this.dispatchEvent('change', { value: returnValue, event });
+                }
+
+                /**
+                 * Updates the CSS classes for selected buttons
+                 */
+                updateSelectionVisuals() {
+                    for (let key in this.button_nodes) {
+                        let btn = this.button_nodes[key];
+                        if (this.selected.includes(key)) {
+                            btn.classList.add('selected');
+                            btn.style.color = ''; // Remove custom color so accent stands out
+                        } else {
+                            btn.classList.remove('selected');
+                            if (this.options[key].color) {
+                                btn.style.color = this.options[key].color; // Restore custom color
+                            }
+                        }
+                    }
+                }
+
+                /**
+                 * Set the selected options programmatically
+                 * @param {string|Array<string>} value - Key or array of keys to select
+                 */
+                set(value) {
+                    if (!value && this.allow_empty) {
+                        this.selected = [];
+                    } else {
+                        this.selected = Array.isArray(value) ? [...value] : [value];
+                        // Filter out non-existent keys
+                        this.selected = this.selected.filter(k => this.options[k]);
+                    }
+                    this.updateSelectionVisuals();
+                    return this;
+                }
+
+                /**
+                 * Returns the selected key(s). 
+                 * Returns a string if only one item is selected, or an Array if multiple are selected.
+                 */
+                get() {
+                    if (this.selected.length === 0) return null;
+                    if (this.selected.length === 1) return this.selected[0];
+                    return [...this.selected];
+                }
+
+                /**
+                 * Enable or disable a specific option
+                 * @param {string} key - Option key
+                 * @param {boolean} disabled - True to disable, false to enable
+                 */
+                setDisabled(key, disabled = true) {
+                    if (this.options[key]) {
+                        this.options[key].disabled = disabled;
+                        if (this.button_nodes[key]) {
+                            if (disabled) {
+                                this.button_nodes[key].classList.add('disabled');
+                                // Remove from selection if disabled
+                                if (this.selected.includes(key)) {
+                                    this.selected = this.selected.filter(k => k !== key);
+                                    this.updateSelectionVisuals();
+                                }
+                            } else {
+                                this.button_nodes[key].classList.remove('disabled');
+                            }
+                        }
+                    }
+                    return this;
+                }
+
+                /**
+                 * Replaces all options and rebuilds the widget
+                 */
+                setOptions(newOptions) {
+                    this.options = newOptions || {};
+                    this.selected = this.selected.filter(k => this.options[k]);
+                    this.buildDOM();
+                    this.updateSelectionVisuals();
+                    return this;
+                }
+
+                update() {
+                    let condition_met = Condition(this.condition);
+                    this.node.style.display = condition_met ? (this.expand ? 'flex' : 'inline-flex') : 'none';
+                    this.dispatchEvent('update', {});
+                    return this;
+                }
+            }
+
+            window.HorizontalSelectWidget = HorizontalSelectWidget;
 
             // MARK: Combo Slider
             FormElement.types.combo_slider = class FormElementComboSlider extends FormElement {
@@ -3249,6 +3584,11 @@ function initialize_light_plugin() {
                 }
             };
 
+
+
+
+            window.HorizontalSelectWidget = HorizontalSelectWidget;
+
             const compactWidgetStyles = Blockbench.addCSS(
                 `.compact_dropdown_select {
                     display: flex !important;
@@ -3277,7 +3617,54 @@ function initialize_light_plugin() {
                     margin-left: 4px;
                     color: var(--color-text);
                     opacity: 0.6;
-                }`
+                }
+                    
+                .horizontal_select_widget {
+                    display: flex;
+                    align-items: stretch;
+                    border-radius: 2px;
+                    overflow: hidden;
+                    box-sizing: border-box;
+                    height: 30px; /* Standard Blockbench toolbar height */
+                    user-select: none;
+                }
+                .horizontal_select_btn {
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    padding: 0 10px;
+                    cursor: pointer;
+                    transition: background 0.15s ease, color 0.15s ease;
+                    color: var(--color-text);
+                    background: transparent;
+                    min-width: 32px;
+                }
+                .horizontal_select_btn:hover:not(.disabled) {
+                    background: var(--color-button);
+                }
+                .horizontal_select_btn.selected {
+                    background: var(--color-accent);
+                    color: var(--color-light) !important; /* Overrides custom colors when selected for readability */
+                }
+                .horizontal_select_btn.disabled {
+                    opacity: 0.4;
+                    cursor: not-allowed;
+                    filter: grayscale(100%);
+                }
+                .horizontal_select_icon {
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    font-size: 1.1em;
+                }
+                .horizontal_select_btn:not(.icon_only) .horizontal_select_icon {
+                    margin-right: 6px;
+                }
+                .horizontal_select_label {
+                    font-size: 13px;
+                    white-space: nowrap;
+                }
+            `
             );
             deletables.push(compactWidgetStyles);
 
@@ -4564,6 +4951,7 @@ function initialize_light_plugin() {
             deletables.push(lightPropertiesPanel);
 
             window.LIGHT_MANAGER_LOADED = true;
+            window.LightManagerPrepareRender?.();
             window.dispatchEvent(new CustomEvent('light_manager_initialized', {
                 detail: 'Light Manager plugin has been initialized and is ready to use.'
             }));
@@ -4609,6 +4997,7 @@ function initialize_light_plugin() {
             delete window.LightAnimator;
             delete window.LightManagerAreaGizmos;
             delete window.LightManagerFitTool;
+            delete window.LightManagerPrepareRender;
             delete window.update_light_element_callback;
             if (window.generateIconBase64 === generateIconBase64) delete window.generateIconBase64;
         }
