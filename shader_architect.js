@@ -419,6 +419,30 @@
         "shader_architect.uniform.EMISSIVE.desc": "Treat textures as fully self-illuminated/emissive",
         "shader_architect.uniform.max_light_number": "Active Lights",
         "shader_architect.uniform.max_light_number.desc": "Number of Light Manager lights sampled by this material",
+        "shader_architect.uniform.uLightPos": "Light Positions",
+        "shader_architect.uniform.uLightPos.desc": "World positions for Light Manager lights",
+        "shader_architect.uniform.uLightDir": "Light Directions",
+        "shader_architect.uniform.uLightDir.desc": "Direction vectors for directional and spot lights",
+        "shader_architect.uniform.uLightIntensity": "Light Intensity",
+        "shader_architect.uniform.uLightIntensity.desc": "Per-light intensity values from Light Manager",
+        "shader_architect.uniform.uLightDistance": "Light Distance",
+        "shader_architect.uniform.uLightDistance.desc": "Per-light distance falloff values",
+        "shader_architect.uniform.uLightConeAngle": "Light Cone",
+        "shader_architect.uniform.uLightConeAngle.desc": "Spot light cone angle values",
+        "shader_architect.uniform.uLightPenumbra": "Light Penumbra",
+        "shader_architect.uniform.uLightPenumbra.desc": "Spot light edge softness values",
+        "shader_architect.uniform.uLightType": "Light Types",
+        "shader_architect.uniform.uLightType.desc": "Light type IDs for point, spot, and directional lights",
+        "shader_architect.uniform.uLightColor": "Light Colors",
+        "shader_architect.uniform.uLightColor.desc": "Per-light color values from Light Manager",
+        "shader_architect.uniform.uLightCastShadow": "Shadow Casters",
+        "shader_architect.uniform.uLightCastShadow.desc": "Per-light shadow casting flags",
+        "shader_architect.uniform.uLightShadowIndex": "Shadow Indices",
+        "shader_architect.uniform.uLightShadowIndex.desc": "Per-light shadow map indices",
+        "shader_architect.uniform.uWorldNormalMatrix": "World Normal Matrix",
+        "shader_architect.uniform.uWorldNormalMatrix.desc": "Normal transform matrix updated from each rendered cube",
+        "shader_architect.uniform.uTime": "Time",
+        "shader_architect.uniform.uTime.desc": "Animated time value updated every preview frame",
         "shader_architect.uniform.uAmbient": "Ambient Light",
         "shader_architect.uniform.uAmbient.desc": "Baseline light level in unlit areas",
         "shader_architect.uniform.uAmbientColor": "Ambient Color",
@@ -650,6 +674,30 @@
         "shader_architect.uniform.uStylizedNormalInfluence.desc": "Cuanto la iluminacion lateral estilo Blockbench moldea el material",
         "shader_architect.uniform.uLightWrap": "Luz suave",
         "shader_architect.uniform.uLightWrap.desc": "Permite que la luz envuelva bordes para un estilo mas suave",
+        "shader_architect.uniform.uLightPos": "Posiciones de luz",
+        "shader_architect.uniform.uLightPos.desc": "Posiciones mundiales de las luces de Light Manager",
+        "shader_architect.uniform.uLightDir": "Direcciones de luz",
+        "shader_architect.uniform.uLightDir.desc": "Vectores de direccion para luces direccionales y spot",
+        "shader_architect.uniform.uLightIntensity": "Intensidad de luz",
+        "shader_architect.uniform.uLightIntensity.desc": "Valores de intensidad por luz desde Light Manager",
+        "shader_architect.uniform.uLightDistance": "Distancia de luz",
+        "shader_architect.uniform.uLightDistance.desc": "Valores de caida por distancia para cada luz",
+        "shader_architect.uniform.uLightConeAngle": "Cono de luz",
+        "shader_architect.uniform.uLightConeAngle.desc": "Angulos de cono para luces spot",
+        "shader_architect.uniform.uLightPenumbra": "Penumbra de luz",
+        "shader_architect.uniform.uLightPenumbra.desc": "Suavidad del borde para luces spot",
+        "shader_architect.uniform.uLightType": "Tipos de luz",
+        "shader_architect.uniform.uLightType.desc": "IDs de tipo para luces point, spot y direccionales",
+        "shader_architect.uniform.uLightColor": "Colores de luz",
+        "shader_architect.uniform.uLightColor.desc": "Valores de color por luz desde Light Manager",
+        "shader_architect.uniform.uLightCastShadow": "Sombras por luz",
+        "shader_architect.uniform.uLightCastShadow.desc": "Flags de sombras proyectadas por cada luz",
+        "shader_architect.uniform.uLightShadowIndex": "Indices de sombra",
+        "shader_architect.uniform.uLightShadowIndex.desc": "Indices de shadow map por luz",
+        "shader_architect.uniform.uWorldNormalMatrix": "Matriz normal mundial",
+        "shader_architect.uniform.uWorldNormalMatrix.desc": "Matriz de normales actualizada desde cada cubo renderizado",
+        "shader_architect.uniform.uTime": "Tiempo",
+        "shader_architect.uniform.uTime.desc": "Valor de tiempo animado actualizado en cada frame del preview",
         "shader_architect.uniform.uAOEnabled": "Sombras de contacto",
         "shader_architect.uniform.uAOEnabled.desc": "Activa sombras de contacto estilizadas",
         "shader_architect.uniform.uAOStrength": "Fuerza de contacto",
@@ -781,6 +829,31 @@
             LIGHTCOLOR: { type: 'vec3', value: new THREE.Vector3(1, 1, 1), expose: true },
             TEXTURE_SIZE: { type: 'vec2', value: new THREE.Vector2(16, 16), expose: false }
         };
+    }
+
+    function createNativeMaterialUniforms() {
+        return Object.assign(createMaterialLightingUniforms(), {
+            SHADE: { type: 'bool', value: true, expose: true },
+            LIGHTSIDE: { type: 'int', value: 0, expose: true, min: 0, max: 5, step: 1, allow_higher: false, allow_lower: false },
+            EMISSIVE: { type: 'bool', value: false, expose: true },
+            uTime: { type: 'float', value: 0.0, expose: false },
+            uClampLighting: { type: 'bool', value: false, expose: true, advanced: true },
+            uExposure: { type: 'float', value: 1.0, expose: true, min: 0.0, max: 5.0, step: 0.1, allow_higher: true, allow_lower: false },
+            uToneMapping: { type: 'int', value: 0, expose: true, advanced: true, min: 0, max: 5, step: 1, allow_higher: false, allow_lower: false },
+            uStylizedNormalInfluence: { type: 'float', value: 0.0, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
+            uLightWrap: { type: 'float', value: 0.0, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
+            uAOEnabled: { type: 'bool', value: true, expose: true },
+            uAOStrength: { type: 'float', value: 0.5, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
+            uAORadius: { type: 'float', value: 0.12, expose: true, min: 0.0, max: 2.0, step: 0.01, allow_higher: true, allow_lower: false },
+            uAOPower: { type: 'float', value: 1.5, expose: true, advanced: true, min: 0.1, max: 5.0, step: 0.1, allow_higher: true, allow_lower: false },
+            uAOMin: { type: 'float', value: 0.4, expose: true, advanced: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
+            uAODirectInfluence: { type: 'float', value: 0.15, expose: true, advanced: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
+            uAOEdgeSharpness: { type: 'float', value: 8.0, expose: true, advanced: true, min: 0.0, max: 16.0, step: 0.5, allow_higher: true, allow_lower: false },
+            uAOCornerWeight: { type: 'float', value: 1.5, expose: true, advanced: true, min: 0.0, max: 5.0, step: 0.1, allow_higher: true, allow_lower: false },
+            uAOFaceNormalWeight: { type: 'float', value: 0.3, expose: true, advanced: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
+            AUTO_TILE: { type: 'bool', value: false, expose: true },
+            TILING: { type: 'vec2', value: new THREE.Vector2(1, 1), expose: true, min: 0.1, max: 10.0, step: 0.1 }
+        });
     }
 
     function addMaterialLightingUniforms(uniforms) {
@@ -1826,6 +1899,18 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
 
         addMaterialLightingUniforms(uniforms) {
             return addMaterialLightingUniforms(uniforms);
+        },
+
+        createNativeMaterialUniforms() {
+            return createNativeMaterialUniforms();
+        },
+
+        getNativeMaterialUniformOptions() {
+            const uniforms = createNativeMaterialUniforms();
+            return Object.keys(uniforms).map(name => ({
+                name,
+                type: uniforms[name].type || 'uniform'
+            }));
         },
 
         hasScreenSpaceReflectionSupport(materialOrId) {
@@ -6006,6 +6091,1567 @@ void main() {
                 enableShadows: true
             });
 
+            let minecraft_promotional_bevel = new FancyShaderMaterial({
+                id: 'minecraft_promotional_bevel',
+                name: 'Minecraft Promotional Bevel',
+                icon: 'auto_awesome',
+                isCustom: false,
+                enableShadows: true,
+
+                vertex: `#include <common>
+#include <shadowmap_pars_vertex>
+
+attribute float highlight;
+attribute vec2 normalizedFaceUv;
+attribute vec2 faceSize;
+attribute vec2 uvSize;
+
+uniform bool SHADE;
+uniform int LIGHTSIDE;
+uniform mat3 uWorldNormalMatrix;
+
+varying vec2 vMapUv;
+varying float vLightingFactor;
+varying float vHighlightLift;
+
+varying vec2 vElementLocalUv;
+varying vec2 vElementSize;
+varying vec2 vElementUvSize;
+
+varying vec3 vWorldPos;
+varying vec3 vWorldNormal;
+
+vec3 safeNormalize(vec3 value, vec3 fallbackValue) {
+    float lengthSquared = dot(value, value);
+
+    if (lengthSquared <= 0.000001) {
+        return fallbackValue;
+    }
+
+    return value * inversesqrt(lengthSquared);
+}
+
+vec3 applyLightSide(vec3 normalValue) {
+    vec3 result = normalValue;
+
+    if (LIGHTSIDE == 1) {
+        float previousY = result.y;
+        result.y = -result.z;
+        result.z = previousY;
+    } else if (LIGHTSIDE == 2) {
+        float previousY = result.y;
+        result.y = result.x;
+        result.x = previousY;
+    } else if (LIGHTSIDE == 3) {
+        result.y = -result.y;
+    } else if (LIGHTSIDE == 4) {
+        float previousY = result.y;
+        result.y = result.z;
+        result.z = previousY;
+    } else if (LIGHTSIDE == 5) {
+        float previousY = result.y;
+        result.y = -result.x;
+        result.x = previousY;
+    }
+
+    return safeNormalize(result, vec3(0.0, 1.0, 0.0));
+}
+
+void main() {
+    vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+
+    /*
+        Required by Three.js shadowmap_vertex.
+    */
+    vec3 transformedNormal = normalize(normalMatrix * normal);
+
+    vWorldPos = worldPosition.xyz;
+
+    vWorldNormal = safeNormalize(
+        uWorldNormalMatrix * normal,
+        vec3(0.0, 1.0, 0.0)
+    );
+
+    vMapUv = uv;
+
+    vElementLocalUv = normalizedFaceUv;
+    vElementSize = faceSize;
+    vElementUvSize = uvSize;
+
+    if (SHADE) {
+        vec3 legacyLightingNormal = applyLightSide(vWorldNormal);
+
+        float verticalLight =
+            (1.0 + legacyLightingNormal.y) * 0.5;
+
+        vLightingFactor =
+            verticalLight * 0.5 +
+            legacyLightingNormal.x *
+            legacyLightingNormal.x * -0.15 +
+            legacyLightingNormal.z *
+            legacyLightingNormal.z * 0.05 +
+            0.5;
+    } else {
+        vLightingFactor = 1.0;
+    }
+
+    vHighlightLift =
+        highlight == 2.0 ? 0.22 :
+        highlight == 1.0 ? 0.10 :
+        0.0;
+
+    gl_Position =
+        projectionMatrix *
+        modelViewMatrix *
+        vec4(position, 1.0);
+
+    #include <shadowmap_vertex>
+}`,
+
+                fragment: `#include <common>
+
+uniform sampler2D map;
+
+uniform bool EMISSIVE;
+uniform vec3 LIGHTCOLOR;
+uniform vec2 TEXTURE_SIZE;
+
+/* Light Manager / Lightflow arrays. */
+uniform vec3 uLightPos[16];
+uniform vec3 uLightDir[16];
+uniform vec3 uLightColor[16];
+
+uniform float uLightIntensity[16];
+uniform float uLightDistance[16];
+uniform float uLightConeAngle[16];
+uniform float uLightPenumbra[16];
+
+uniform int uLightType[16];
+uniform int max_light_number;
+
+/* Outline controls. */
+uniform bool OUTLINE_ELEMENT_ENABLED;
+uniform bool OUTLINE_ALPHA_ENABLED;
+uniform bool OUTLINE_ALPHA_CLAMP_TO_ELEMENT;
+uniform bool OUTLINE_ALPHA_DIAGONAL_ONLY;
+
+uniform float OUTLINE_WIDTH;
+uniform float OUTLINE_FADE;
+uniform float OUTLINE_INTENSITY;
+
+uniform int OUTLINE_MODE;
+uniform vec3 OUTLINE_COLOR;
+uniform bool OUTLINE_AFFECTED_BY_LIGHT;
+
+/* Promotional bevel controls. */
+uniform bool BEVEL_ENABLED;
+
+uniform float BEVEL_WIDTH;
+uniform float BEVEL_SOFTNESS;
+uniform float BEVEL_SLOPE;
+uniform float BEVEL_CORNER_FADE;
+
+uniform float BEVEL_HIGHLIGHT;
+uniform float BEVEL_SHADOW;
+uniform float BEVEL_SHADOW_SATURATION;
+uniform float BEVEL_LIGHT_STRENGTH;
+
+uniform vec3 EDGE_FALLBACK_LIGHT_DIRECTION;
+
+varying vec2 vMapUv;
+varying float vLightingFactor;
+varying float vHighlightLift;
+
+varying vec2 vElementLocalUv;
+varying vec2 vElementSize;
+varying vec2 vElementUvSize;
+
+varying vec3 vWorldPos;
+varying vec3 vWorldNormal;
+
+#define SA_LIGHT_POINT 0
+#define SA_LIGHT_DIRECTIONAL 1
+#define SA_LIGHT_SPOT 2
+
+vec3 safeNormalize(vec3 value, vec3 fallbackValue) {
+    float lengthSquared = dot(value, value);
+
+    if (lengthSquared <= 0.000001) {
+        return fallbackValue;
+    }
+
+    return value * inversesqrt(lengthSquared);
+}
+
+vec3 rgbToHsv(vec3 rgb) {
+    vec4 K = vec4(
+        0.0,
+        -1.0 / 3.0,
+        2.0 / 3.0,
+        -1.0
+    );
+
+    vec4 p = mix(
+        vec4(rgb.bg, K.wz),
+        vec4(rgb.gb, K.xy),
+        step(rgb.b, rgb.g)
+    );
+
+    vec4 q = mix(
+        vec4(p.xyw, rgb.r),
+        vec4(rgb.r, p.yzx),
+        step(p.x, rgb.r)
+    );
+
+    float delta = q.x - min(q.w, q.y);
+    float epsilon = 1.0e-10;
+
+    return vec3(
+        abs(q.z + (q.w - q.y) / (6.0 * delta + epsilon)),
+        delta / (q.x + epsilon),
+        q.x
+    );
+}
+
+vec3 hsvToRgb(vec3 hsv) {
+    vec4 K = vec4(
+        1.0,
+        2.0 / 3.0,
+        1.0 / 3.0,
+        3.0
+    );
+
+    vec3 p = abs(
+        fract(hsv.xxx + K.xyz) * 6.0 -
+        K.www
+    );
+
+    return hsv.z * mix(
+        K.xxx,
+        clamp(p - K.xxx, 0.0, 1.0),
+        hsv.y
+    );
+}
+
+/*
+    Local element UV -> actual atlas UV mapping.
+
+    This is evaluated before discard. That matters because dFdx/dFdy can
+    become unstable around alpha-tested fragments when called after discard.
+*/
+mat2 getElementToMapUvJacobian() {
+    vec2 localDx = dFdx(vElementLocalUv);
+    vec2 localDy = dFdy(vElementLocalUv);
+
+    vec2 mapDx = dFdx(vMapUv);
+    vec2 mapDy = dFdy(vMapUv);
+
+    float determinant =
+        localDx.x * localDy.y -
+        localDx.y * localDy.x;
+
+    if (abs(determinant) <= 0.000001) {
+        return mat2(0.0);
+    }
+
+    float inverseDeterminant = 1.0 / determinant;
+
+    vec2 mapPerLocalX =
+        (mapDx * localDy.y - mapDy * localDx.y) *
+        inverseDeterminant;
+
+    vec2 mapPerLocalY =
+        (mapDy * localDx.x - mapDx * localDy.x) *
+        inverseDeterminant;
+
+    return mat2(mapPerLocalX, mapPerLocalY);
+}
+
+/*
+    Reconstructs the face U/V axes in world space.
+
+    It also runs before discard, for stable bevels around alpha cutouts.
+*/
+void getFaceTangentFrame(
+    vec3 normalValue,
+    out vec3 tangentU,
+    out vec3 tangentV
+) {
+    vec3 worldDx = dFdx(vWorldPos);
+    vec3 worldDy = dFdy(vWorldPos);
+
+    vec2 localDx = dFdx(vElementLocalUv);
+    vec2 localDy = dFdy(vElementLocalUv);
+
+    float determinant =
+        localDx.x * localDy.y -
+        localDx.y * localDy.x;
+
+    vec3 fallbackTangentU;
+
+    if (abs(normalValue.y) < 0.98) {
+        fallbackTangentU = safeNormalize(
+            cross(vec3(0.0, 1.0, 0.0), normalValue),
+            vec3(1.0, 0.0, 0.0)
+        );
+    } else {
+        fallbackTangentU = safeNormalize(
+            cross(vec3(1.0, 0.0, 0.0), normalValue),
+            vec3(0.0, 0.0, 1.0)
+        );
+    }
+
+    if (abs(determinant) > 0.000001) {
+        float inverseDeterminant = 1.0 / determinant;
+
+        tangentU =
+            (worldDx * localDy.y - worldDy * localDx.y) *
+            inverseDeterminant;
+
+        tangentV =
+            (worldDy * localDx.x - worldDx * localDy.x) *
+            inverseDeterminant;
+    } else {
+        tangentU = fallbackTangentU;
+        tangentV = cross(normalValue, tangentU);
+    }
+
+    tangentU = safeNormalize(
+        tangentU,
+        fallbackTangentU
+    );
+
+    tangentV -= tangentU * dot(tangentU, tangentV);
+
+    tangentV = safeNormalize(
+        tangentV,
+        safeNormalize(
+            cross(normalValue, tangentU),
+            vec3(0.0, 0.0, 1.0)
+        )
+    );
+}
+
+vec4 getFaceEdgeBands(
+    vec2 localUv,
+    vec2 elementSize,
+    float widthFraction,
+    float softness
+) {
+    vec2 safeElementSize = max(
+        abs(elementSize),
+        vec2(0.0001)
+    );
+
+    vec2 elementPosition =
+        clamp(localUv, vec2(0.0), vec2(1.0)) *
+        safeElementSize;
+
+    float shortestSide = min(
+        safeElementSize.x,
+        safeElementSize.y
+    );
+
+    float bevelWidth =
+        clamp(widthFraction, 0.0, 0.45) *
+        shortestSide;
+
+    if (bevelWidth <= 0.00001) {
+        return vec4(0.0);
+    }
+
+    float feather = max(
+        bevelWidth * max(softness, 0.0),
+        0.00001
+    );
+
+    float leftBand = 1.0 - smoothstep(
+        bevelWidth,
+        bevelWidth + feather,
+        elementPosition.x
+    );
+
+    float rightBand = 1.0 - smoothstep(
+        bevelWidth,
+        bevelWidth + feather,
+        safeElementSize.x - elementPosition.x
+    );
+
+    float bottomBand = 1.0 - smoothstep(
+        bevelWidth,
+        bevelWidth + feather,
+        elementPosition.y
+    );
+
+    float topBand = 1.0 - smoothstep(
+        bevelWidth,
+        bevelWidth + feather,
+        safeElementSize.y - elementPosition.y
+    );
+
+    return clamp(
+        vec4(
+            leftBand,
+            rightBand,
+            bottomBand,
+            topBand
+        ),
+        0.0,
+        1.0
+    );
+}
+
+float getDistanceAttenuation(
+    float distanceToLight,
+    float lightRange
+) {
+    distanceToLight = max(distanceToLight, 0.0001);
+
+    if (lightRange > 0.0) {
+        if (distanceToLight >= lightRange) {
+            return 0.0;
+        }
+
+        float normalizedDistance = clamp(
+            distanceToLight / lightRange,
+            0.0,
+            1.0
+        );
+
+        float falloff =
+            1.0 -
+            normalizedDistance *
+            normalizedDistance;
+
+        return falloff * falloff;
+    }
+
+    return 1.0 / (
+        1.0 +
+        0.04 * distanceToLight +
+        0.002 * distanceToLight * distanceToLight
+    );
+}
+
+float getSpotAttenuation(
+    int lightIndex,
+    vec3 surfaceToLightDirection
+) {
+    vec3 lightToSpotTargetDirection = safeNormalize(
+        uLightDir[lightIndex],
+        vec3(0.0, -1.0, 0.0)
+    );
+
+    float outerAngle = clamp(
+        uLightConeAngle[lightIndex],
+        0.001,
+        3.14159265
+    );
+
+    float penumbra = clamp(
+        uLightPenumbra[lightIndex],
+        0.0,
+        0.999
+    );
+
+    float outerCutoff = cos(outerAngle);
+    float innerCutoff = cos(
+        outerAngle * (1.0 - penumbra)
+    );
+
+    float theta = dot(
+        surfaceToLightDirection,
+        -lightToSpotTargetDirection
+    );
+
+    float denominator = max(
+        innerCutoff - outerCutoff,
+        0.0001
+    );
+
+    return clamp(
+        (theta - outerCutoff) / denominator,
+        0.0,
+        1.0
+    );
+}
+
+/*
+    This selects a directional artistic light for the bevel.
+    It does not replace your future Lightflow lighting calculation.
+*/
+void getStylizedKeyLight(
+    vec3 normalValue,
+    out vec3 keyDirection,
+    out vec3 keyColor,
+    out float keyAmount
+) {
+    vec3 weightedDirection = vec3(0.0);
+    vec3 weightedColor = vec3(0.0);
+
+    float totalEnergy = 0.0;
+    float activeLightCount = 0.0;
+
+    for (int i = 0; i < 16; i++) {
+        if (i >= max_light_number) {
+            break;
+        }
+
+        float intensity = max(
+            uLightIntensity[i],
+            0.0
+        );
+
+        if (intensity <= 0.00001) {
+            continue;
+        }
+
+        int lightType = uLightType[i];
+
+        vec3 currentDirection;
+        float attenuation = 1.0;
+
+        if (lightType == SA_LIGHT_DIRECTIONAL) {
+            currentDirection = safeNormalize(
+                -uLightDir[i],
+                vec3(0.0, 1.0, 0.0)
+            );
+        } else {
+            vec3 toLight =
+                uLightPos[i] -
+                vWorldPos;
+
+            float distanceToLight = max(
+                length(toLight),
+                0.0001
+            );
+
+            currentDirection =
+                toLight /
+                distanceToLight;
+
+            attenuation = getDistanceAttenuation(
+                distanceToLight,
+                uLightDistance[i]
+            );
+
+            if (lightType == SA_LIGHT_SPOT) {
+                attenuation *= getSpotAttenuation(
+                    i,
+                    currentDirection
+                );
+            }
+        }
+
+        float faceResponse = max(
+            dot(normalValue, currentDirection),
+            0.0
+        );
+
+        float energy =
+            intensity *
+            attenuation *
+            (0.16 + faceResponse * 0.84);
+
+        weightedDirection +=
+            currentDirection *
+            energy;
+
+        weightedColor +=
+            max(uLightColor[i], vec3(0.0)) *
+            energy;
+
+        totalEnergy += energy;
+        activeLightCount += 1.0;
+    }
+
+    vec3 fallbackDirection = safeNormalize(
+        EDGE_FALLBACK_LIGHT_DIRECTION,
+        vec3(-0.45, 0.80, 0.35)
+    );
+
+    if (
+        activeLightCount <= 0.0 ||
+        totalEnergy <= 0.00001
+    ) {
+        keyDirection = fallbackDirection;
+        keyColor = vec3(1.0);
+        keyAmount = 1.0;
+        return;
+    }
+
+    keyDirection = safeNormalize(
+        weightedDirection,
+        fallbackDirection
+    );
+
+    keyColor =
+        weightedColor /
+        max(totalEnergy, 0.0001);
+
+    keyAmount = clamp(
+        1.0 - exp(-totalEnergy),
+        0.0,
+        1.0
+    );
+}
+
+float getGradientRange(
+    float distanceToEdge,
+    float outlineWidth
+) {
+    if (outlineWidth <= 0.00001) {
+        return 0.0;
+    }
+
+    return clamp(
+        1.0 - distanceToEdge / outlineWidth,
+        0.0,
+        1.0
+    );
+}
+
+float getElementOutlineMask(
+    float outlineWidth,
+    vec2 elementLocalUv,
+    vec2 elementSize
+) {
+    vec2 safeElementSize = max(
+        abs(elementSize),
+        vec2(0.0001)
+    );
+
+    vec2 elementPosition =
+        clamp(
+            elementLocalUv,
+            vec2(0.0),
+            vec2(1.0)
+        ) *
+        safeElementSize;
+
+    float leftEdge = getGradientRange(
+        elementPosition.x,
+        outlineWidth
+    );
+
+    float rightEdge = getGradientRange(
+        safeElementSize.x - elementPosition.x,
+        outlineWidth
+    );
+
+    float bottomEdge = getGradientRange(
+        elementPosition.y,
+        outlineWidth
+    );
+
+    float topEdge = getGradientRange(
+        safeElementSize.y - elementPosition.y,
+        outlineWidth
+    );
+
+    /*
+        max prevents the corners from accumulating twice.
+    */
+    return max(
+        max(leftEdge, rightEdge),
+        max(bottomEdge, topEdge)
+    );
+}
+
+float sampleAlphaInsideElement(
+    vec2 textureUv,
+    vec2 elementLocalUv,
+    vec2 localOffset,
+    vec2 textureUvOffset,
+    float sourceAlpha,
+    bool clampToElement
+) {
+    if (clampToElement) {
+        vec2 targetLocalUv =
+            elementLocalUv +
+            localOffset;
+
+        if (
+            targetLocalUv.x < 0.0 ||
+            targetLocalUv.y < 0.0 ||
+            targetLocalUv.x > 1.0 ||
+            targetLocalUv.y > 1.0
+        ) {
+            return sourceAlpha;
+        }
+    }
+
+    vec2 targetTextureUv =
+        textureUv +
+        textureUvOffset;
+
+    if (
+        targetTextureUv.x < 0.0 ||
+        targetTextureUv.y < 0.0 ||
+        targetTextureUv.x > 1.0 ||
+        targetTextureUv.y > 1.0
+    ) {
+        return 0.0;
+    }
+
+    return texture2D(
+        map,
+        targetTextureUv
+    ).a;
+}
+
+vec2 getLegacyAlphaFallbackOffset(
+    vec2 elementUvSize,
+    float outlineWidth
+) {
+    vec2 safeTextureSize = max(
+        TEXTURE_SIZE,
+        vec2(1.0)
+    );
+
+    return max(
+        abs(elementUvSize) *
+        outlineWidth /
+        safeTextureSize,
+        vec2(0.00001)
+    );
+}
+
+float getAlphaOutlineMask(
+    float sourceAlpha,
+    mat2 elementToMapUv,
+    float outlineWidth
+) {
+    if (
+        !OUTLINE_ALPHA_ENABLED ||
+        outlineWidth <= 0.0
+    ) {
+        return 0.0;
+    }
+
+    vec2 safeElementSize = max(
+        abs(vElementSize),
+        vec2(0.0001)
+    );
+
+    vec2 localStep =
+        vec2(outlineWidth) /
+        safeElementSize;
+
+    float jacobianMagnitude =
+        length(elementToMapUv[0]) +
+        length(elementToMapUv[1]);
+
+    bool hasValidJacobian =
+        jacobianMagnitude > 0.000001;
+
+    bool clampToElement =
+        OUTLINE_ALPHA_CLAMP_TO_ELEMENT &&
+        hasValidJacobian;
+
+    vec2 localTopRight =
+        vec2(localStep.x, localStep.y);
+
+    vec2 localBottomRight =
+        vec2(localStep.x, -localStep.y);
+
+    vec2 localTopLeft =
+        vec2(-localStep.x, localStep.y);
+
+    vec2 localBottomLeft =
+        vec2(-localStep.x, -localStep.y);
+
+    vec2 fallbackStep = getLegacyAlphaFallbackOffset(
+        vElementUvSize,
+        outlineWidth
+    );
+
+    vec2 mapTopRight = hasValidJacobian
+        ? elementToMapUv * localTopRight
+        : vec2(fallbackStep.x, fallbackStep.y);
+
+    vec2 mapBottomRight = hasValidJacobian
+        ? elementToMapUv * localBottomRight
+        : vec2(fallbackStep.x, -fallbackStep.y);
+
+    vec2 mapTopLeft = hasValidJacobian
+        ? elementToMapUv * localTopLeft
+        : vec2(-fallbackStep.x, fallbackStep.y);
+
+    vec2 mapBottomLeft = hasValidJacobian
+        ? elementToMapUv * localBottomLeft
+        : vec2(-fallbackStep.x, -fallbackStep.y);
+
+    float alphaTopRight = sampleAlphaInsideElement(
+        vMapUv,
+        vElementLocalUv,
+        localTopRight,
+        mapTopRight,
+        sourceAlpha,
+        clampToElement
+    );
+
+    float alphaBottomRight = sampleAlphaInsideElement(
+        vMapUv,
+        vElementLocalUv,
+        localBottomRight,
+        mapBottomRight,
+        sourceAlpha,
+        clampToElement
+    );
+
+    float alphaTopLeft = sampleAlphaInsideElement(
+        vMapUv,
+        vElementLocalUv,
+        localTopLeft,
+        mapTopLeft,
+        sourceAlpha,
+        clampToElement
+    );
+
+    float alphaBottomLeft = sampleAlphaInsideElement(
+        vMapUv,
+        vElementLocalUv,
+        localBottomLeft,
+        mapBottomLeft,
+        sourceAlpha,
+        clampToElement
+    );
+
+    float smallestNeighborAlpha = min(
+        min(alphaTopRight, alphaBottomRight),
+        min(alphaTopLeft, alphaBottomLeft)
+    );
+
+    /*
+        false = also samples cardinal directions.
+        true = exact legacy diagonal-only approach.
+    */
+    if (!OUTLINE_ALPHA_DIAGONAL_ONLY) {
+        vec2 localRight =
+            vec2(localStep.x, 0.0);
+
+        vec2 localLeft =
+            vec2(-localStep.x, 0.0);
+
+        vec2 localTop =
+            vec2(0.0, localStep.y);
+
+        vec2 localBottom =
+            vec2(0.0, -localStep.y);
+
+        vec2 mapRight = hasValidJacobian
+            ? elementToMapUv * localRight
+            : vec2(fallbackStep.x, 0.0);
+
+        vec2 mapLeft = hasValidJacobian
+            ? elementToMapUv * localLeft
+            : vec2(-fallbackStep.x, 0.0);
+
+        vec2 mapTop = hasValidJacobian
+            ? elementToMapUv * localTop
+            : vec2(0.0, fallbackStep.y);
+
+        vec2 mapBottom = hasValidJacobian
+            ? elementToMapUv * localBottom
+            : vec2(0.0, -fallbackStep.y);
+
+        float alphaRight = sampleAlphaInsideElement(
+            vMapUv,
+            vElementLocalUv,
+            localRight,
+            mapRight,
+            sourceAlpha,
+            clampToElement
+        );
+
+        float alphaLeft = sampleAlphaInsideElement(
+            vMapUv,
+            vElementLocalUv,
+            localLeft,
+            mapLeft,
+            sourceAlpha,
+            clampToElement
+        );
+
+        float alphaTop = sampleAlphaInsideElement(
+            vMapUv,
+            vElementLocalUv,
+            localTop,
+            mapTop,
+            sourceAlpha,
+            clampToElement
+        );
+
+        float alphaBottom = sampleAlphaInsideElement(
+            vMapUv,
+            vElementLocalUv,
+            localBottom,
+            mapBottom,
+            sourceAlpha,
+            clampToElement
+        );
+
+        smallestNeighborAlpha = min(
+            smallestNeighborAlpha,
+            min(
+                min(alphaRight, alphaLeft),
+                min(alphaTop, alphaBottom)
+            )
+        );
+    }
+
+    /*
+        Equivalent to:
+        max(sourceAlpha - neighborAlpha)
+    */
+    return clamp(
+        sourceAlpha - smallestNeighborAlpha,
+        0.0,
+        1.0
+    );
+}
+
+vec3 applyOutline(
+    vec3 sourceColor,
+    float sourceAlpha,
+    mat2 elementToMapUv
+) {
+    if (
+        OUTLINE_WIDTH <= 0.0 ||
+        OUTLINE_INTENSITY <= 0.0 ||
+        (
+            !OUTLINE_ELEMENT_ENABLED &&
+            !OUTLINE_ALPHA_ENABLED
+        )
+    ) {
+        return sourceColor;
+    }
+
+    float elementOutlineMask = 0.0;
+    float alphaOutlineMask = 0.0;
+
+    if (OUTLINE_ELEMENT_ENABLED) {
+        elementOutlineMask = getElementOutlineMask(
+            OUTLINE_WIDTH,
+            vElementLocalUv,
+            vElementSize
+        );
+    }
+
+    if (OUTLINE_ALPHA_ENABLED) {
+        alphaOutlineMask = getAlphaOutlineMask(
+            sourceAlpha,
+            elementToMapUv,
+            OUTLINE_WIDTH
+        );
+    }
+
+    /*
+        Preserves your original logic:
+        hard-cut affects only the element outline.
+    */
+    if (OUTLINE_FADE <= 0.0) {
+        elementOutlineMask =
+            ceil(elementOutlineMask);
+    } else {
+        float fadeLimit = clamp(
+            OUTLINE_FADE,
+            0.001,
+            1.0
+        );
+
+        elementOutlineMask = smoothstep(
+            0.0,
+            fadeLimit,
+            elementOutlineMask
+        );
+
+        alphaOutlineMask = smoothstep(
+            0.0,
+            fadeLimit,
+            alphaOutlineMask
+        );
+    }
+
+    float outlineMask = max(
+        elementOutlineMask,
+        alphaOutlineMask
+    );
+
+    if (outlineMask <= 0.0) {
+        return sourceColor;
+    }
+
+    float appliedIntensity = clamp(
+        outlineMask *
+        OUTLINE_INTENSITY,
+        0.0,
+        1.0
+    );
+
+    if (
+        OUTLINE_AFFECTED_BY_LIGHT &&
+        !EMISSIVE
+    ) {
+        appliedIntensity *= clamp(
+            vLightingFactor,
+            0.0,
+            1.5
+        );
+    }
+
+    if (
+        OUTLINE_MODE == 0 ||
+        OUTLINE_MODE == 1
+    ) {
+        vec3 hsv = rgbToHsv(
+            clamp(
+                sourceColor,
+                vec3(0.0),
+                vec3(1.0)
+            )
+        );
+
+        if (OUTLINE_MODE == 0) {
+            hsv.z += appliedIntensity;
+        } else {
+            hsv.z -= appliedIntensity;
+        }
+
+        hsv.z = clamp(
+            hsv.z,
+            0.0,
+            1.0
+        );
+
+        return hsvToRgb(hsv);
+    }
+
+    if (OUTLINE_MODE == 2) {
+        vec3 outlineColor = OUTLINE_COLOR;
+
+        if (
+            OUTLINE_AFFECTED_BY_LIGHT &&
+            !EMISSIVE
+        ) {
+            outlineColor *=
+                LIGHTCOLOR *
+                vLightingFactor;
+        }
+
+        return mix(
+            sourceColor,
+            outlineColor,
+            appliedIntensity
+        );
+    }
+
+    return sourceColor;
+}
+
+vec3 applyStylizedBevel(
+    vec3 sourceColor,
+    vec3 normalValue,
+    vec3 tangentU,
+    vec3 tangentV
+) {
+    if (
+        !BEVEL_ENABLED ||
+        BEVEL_WIDTH <= 0.0 ||
+        (
+            BEVEL_HIGHLIGHT <= 0.0 &&
+            BEVEL_SHADOW <= 0.0
+        )
+    ) {
+        return sourceColor;
+    }
+
+    vec4 edgeBands = getFaceEdgeBands(
+        vElementLocalUv,
+        vElementSize,
+        BEVEL_WIDTH,
+        BEVEL_SOFTNESS
+    );
+
+    vec3 keyDirection;
+    vec3 keyColor;
+    float keyAmount;
+
+    getStylizedKeyLight(
+        normalValue,
+        keyDirection,
+        keyColor,
+        keyAmount
+    );
+
+    // 1. Calculamos cómo reacciona a la luz CADA borde de forma absoluta.
+    // Esto soluciona que las caras muy oscuras o muy iluminadas conecten todas sus líneas.
+    float slope = clamp(BEVEL_SLOPE, 0.0, 2.0);
+    
+    float lightL = dot(safeNormalize(normalValue - tangentU * slope, normalValue), keyDirection);
+    float lightR = dot(safeNormalize(normalValue + tangentU * slope, normalValue), keyDirection);
+    float lightB = dot(safeNormalize(normalValue - tangentV * slope, normalValue), keyDirection);
+    float lightT = dot(safeNormalize(normalValue + tangentV * slope, normalValue), keyDirection);
+
+    // 2. Clasificamos cada borde: ¿Es iluminación (positivo) o es sombra (negativo)?
+    // Usamos 0.05 como punto medio estimado entre el inicio de luz y sombra.
+    float typeL = sign(lightL - 0.05);
+    float typeR = sign(lightR - 0.05);
+    float typeB = sign(lightB - 0.05);
+    float typeT = sign(lightT - 0.05);
+
+    // 3. Comprobamos las esquinas. Si dos bordes son del mismo tipo (ej: sombra y sombra), 
+    // su multiplicación dará positivo y se conectarán sin degradado.
+    float matchTL = step(0.0, typeT * typeL); 
+    float matchTR = step(0.0, typeT * typeR);
+    float matchBL = step(0.0, typeB * typeL);
+    float matchBR = step(0.0, typeB * typeR);
+
+    // 4. Crear las máscaras de degradado para las esquinas
+    float maskLeft   = smoothstep(0.0, BEVEL_CORNER_FADE, vElementLocalUv.x);
+    float maskRight  = 1.0 - smoothstep(1.0 - BEVEL_CORNER_FADE, 1.0, vElementLocalUv.x);
+    float maskBottom = smoothstep(0.0, BEVEL_CORNER_FADE, vElementLocalUv.y);
+    float maskTop    = 1.0 - smoothstep(1.0 - BEVEL_CORNER_FADE, 1.0, vElementLocalUv.y);
+
+    // 5. Aplicar degradado SOLO si NO coinciden (cuando el match es 0.0)
+    edgeBands.x *= mix(maskBottom, 1.0, matchBL) * mix(maskTop, 1.0, matchTL); // Izquierda
+    edgeBands.y *= mix(maskBottom, 1.0, matchBR) * mix(maskTop, 1.0, matchTR); // Derecha
+    edgeBands.z *= mix(maskLeft, 1.0, matchBL) * mix(maskRight, 1.0, matchBR); // Abajo
+    edgeBands.w *= mix(maskLeft, 1.0, matchTL) * mix(maskRight, 1.0, matchTR); // Arriba
+
+    // 6. Máscara general y optimización (descartar si no hay bevel)
+    float bevelMask = max(max(edgeBands.x, edgeBands.y), max(edgeBands.z, edgeBands.w));
+
+    if (bevelMask <= 0.00001) {
+        return sourceColor;
+    }
+    
+    /*
+        A single bevel normal avoids additive square artifacts in corners.
+        CORRECCIÓN: Usar max y step para crear un corte diagonal limpio en las esquinas.
+    */
+    float strengthU = max(edgeBands.x, edgeBands.y);
+    float strengthV = max(edgeBands.z, edgeBands.w);
+
+    // Si el borde horizontal es más fuerte, usamos U. Si el vertical es más fuerte, usamos V.
+    float useU = step(strengthV, strengthU);
+    float useV = 1.0 - useU;
+
+    vec3 bevelDirection =
+        tangentU * (edgeBands.y - edgeBands.x) * useU +
+        tangentV * (edgeBands.w - edgeBands.z) * useV;
+
+    vec3 bevelNormal = safeNormalize(
+        normalValue +
+        bevelDirection *
+        clamp(BEVEL_SLOPE, 0.0, 2.0),
+        normalValue
+    );
+
+    float bevelLight = dot(
+        bevelNormal,
+        keyDirection
+    );
+
+    float highlightMask =
+        bevelMask *
+        smoothstep(
+            0.0,
+            0.72,
+            bevelLight
+        );
+
+    float shadowMask =
+        bevelMask *
+        (
+            1.0 -
+            smoothstep(
+                -0.65,
+                0.12,
+                bevelLight
+            )
+        );
+
+    highlightMask = clamp(
+        highlightMask *
+        keyAmount *
+        max(BEVEL_LIGHT_STRENGTH, 0.0),
+        0.0,
+        1.0
+    );
+
+    shadowMask = clamp(
+        shadowMask *
+        mix(0.35, 1.0, keyAmount),
+        0.0,
+        1.0
+    );
+
+    vec3 hsv = rgbToHsv(
+        clamp(
+            sourceColor,
+            vec3(0.0),
+            vec3(1.0)
+        )
+    );
+
+    hsv.z *=
+        1.0 -
+        shadowMask *
+        clamp(BEVEL_SHADOW, 0.0, 1.0);
+
+    hsv.z +=
+        highlightMask *
+        max(BEVEL_HIGHLIGHT, 0.0);
+
+    hsv.y +=
+        shadowMask *
+        max(BEVEL_SHADOW_SATURATION, 0.0) *
+        (1.0 - hsv.y);
+
+    hsv.y -= highlightMask * 0.08;
+
+    hsv.y = clamp(
+        hsv.y,
+        0.0,
+        1.0
+    );
+
+    hsv.z = clamp(
+        hsv.z,
+        0.0,
+        1.0
+    );
+
+    vec3 result = hsvToRgb(hsv);
+
+    float largestLightChannel = max(
+        keyColor.r,
+        max(keyColor.g, keyColor.b)
+    );
+
+    vec3 normalizedLightColor =
+        keyColor /
+        max(largestLightChannel, 0.0001);
+
+    result *= mix(
+        vec3(1.0),
+        normalizedLightColor,
+        highlightMask * 0.18
+    );
+
+    return clamp(
+        result,
+        vec3(0.0),
+        vec3(1.0)
+    );
+}
+
+void main() {
+    /*
+        Evaluate all derivatives before discard.
+    */
+    mat2 elementToMapUv =
+        getElementToMapUvJacobian();
+
+    vec3 surfaceNormal = safeNormalize(
+        vWorldNormal,
+        vec3(0.0, 1.0, 0.0)
+    );
+
+    vec3 faceTangentU;
+    vec3 faceTangentV;
+
+    getFaceTangentFrame(
+        surfaceNormal,
+        faceTangentU,
+        faceTangentV
+    );
+
+    vec4 sampledColor = texture2D(
+        map,
+        vMapUv
+    );
+
+    if (sampledColor.a < 0.01) {
+        discard;
+    }
+
+    vec3 finalColor;
+    float finalAlpha = sampledColor.a;
+
+    if (!EMISSIVE) {
+        finalColor =
+            vHighlightLift +
+            sampledColor.rgb *
+            vLightingFactor;
+
+        finalColor *= LIGHTCOLOR;
+    } else {
+        vec3 emissiveLightMix =
+            (vLightingFactor * LIGHTCOLOR) +
+            (
+                1.0 -
+                vLightingFactor * LIGHTCOLOR
+            ) *
+            (
+                1.0 -
+                sampledColor.a
+            );
+
+        finalColor =
+            vHighlightLift +
+            sampledColor.rgb *
+            emissiveLightMix;
+
+        finalAlpha = 1.0;
+    }
+
+    if (!EMISSIVE) {
+        finalColor = applyStylizedBevel(
+            finalColor,
+            surfaceNormal,
+            faceTangentU,
+            faceTangentV
+        );
+    }
+
+    finalColor = applyOutline(
+        finalColor,
+        sampledColor.a,
+        elementToMapUv
+    );
+
+    if (vHighlightLift > 0.2) {
+        finalColor.rg *= vec2(0.6, 0.7);
+    }
+
+    gl_FragColor = vec4(
+        clamp(
+            finalColor,
+            vec3(0.0),
+            vec3(1.0)
+        ),
+        finalAlpha
+    );
+}`,
+
+                uniforms: {
+                    ...createLightflowUniforms({
+                        shadows: true
+                    }),
+
+                    EMISSIVE: {
+                        type: 'bool',
+                        value: false,
+                        expose: true
+                    },
+
+                    /*
+                        Both start disabled to test the bevel without outline artifacts.
+                    */
+                    OUTLINE_ELEMENT_ENABLED: {
+                        type: 'bool',
+                        value: false,
+                        expose: true
+                    },
+
+                    OUTLINE_ALPHA_ENABLED: {
+                        type: 'bool',
+                        value: false,
+                        expose: true
+                    },
+
+                    OUTLINE_ALPHA_CLAMP_TO_ELEMENT: {
+                        type: 'bool',
+                        value: true,
+                        expose: true,
+                        advanced: true
+                    },
+
+                    /*
+                        true = original diagonal-only behavior.
+                        false = diagonals plus horizontal/vertical neighbors.
+                    */
+                    OUTLINE_ALPHA_DIAGONAL_ONLY: {
+                        type: 'bool',
+                        value: true,
+                        expose: true,
+                        advanced: true
+                    },
+
+                    OUTLINE_WIDTH: {
+                        type: 'float',
+                        value: 0.20,
+                        expose: true,
+                        min: 0.0,
+                        max: 4.0,
+                        step: 0.01,
+                        allow_higher: true,
+                        allow_lower: false
+                    },
+
+                    OUTLINE_FADE: {
+                        type: 'float',
+                        value: 0.0,
+                        expose: true,
+                        min: 0.0,
+                        max: 1.0,
+                        step: 0.05,
+                        allow_higher: false,
+                        allow_lower: false
+                    },
+
+                    OUTLINE_INTENSITY: {
+                        type: 'float',
+                        value: 0.14,
+                        expose: true,
+                        min: 0.0,
+                        max: 1.0,
+                        step: 0.01,
+                        allow_higher: false,
+                        allow_lower: false
+                    },
+
+                    /*
+                        0 = Brighten
+                        1 = Darken
+                        2 = Solid color
+                    */
+                    OUTLINE_MODE: {
+                        type: 'int',
+                        value: 1,
+                        expose: true,
+                        min: 0,
+                        max: 2,
+                        step: 1,
+                        allow_higher: false,
+                        allow_lower: false
+                    },
+
+                    OUTLINE_COLOR: {
+                        type: 'vec3',
+                        value: new THREE.Vector3(
+                            0.08,
+                            0.05,
+                            0.04
+                        ),
+                        expose: true
+                    },
+
+                    OUTLINE_AFFECTED_BY_LIGHT: {
+                        type: 'bool',
+                        value: true,
+                        expose: true
+                    },
+
+                    BEVEL_ENABLED: {
+                        type: 'bool',
+                        value: true,
+                        expose: true
+                    },
+
+                    BEVEL_WIDTH: {
+                        type: 'float',
+                        value: 0.015,
+                        expose: true,
+                        min: 0.0,
+                        max: 0.30,
+                        step: 0.005,
+                        allow_higher: false,
+                        allow_lower: false
+                    },
+
+                    BEVEL_SOFTNESS: {
+                        type: 'float',
+                        value: 0.0,
+                        expose: true,
+                        min: 0.0,
+                        max: 2.0,
+                        step: 0.05,
+                        allow_higher: true,
+                        allow_lower: false
+                    },
+
+                    BEVEL_SLOPE: {
+                        type: 'float',
+                        value: 0.78,
+                        expose: true,
+                        min: 0.0,
+                        max: 2.0,
+                        step: 0.05,
+                        allow_higher: true,
+                        allow_lower: false
+                    },
+
+                    BEVEL_CORNER_FADE: {
+                        type: 'float',
+                        value: 0.5, // Por defecto se comerá el 15% de cada punta (dejando el 70% central)
+                        expose: true,
+                        min: 0.0,
+                        max: 0.5,
+                        step: 0.01,
+                        allow_higher: false,
+                        allow_lower: false
+                    },
+
+                    BEVEL_HIGHLIGHT: {
+                        type: 'float',
+                        value: 0.35,
+                        expose: true,
+                        min: 0.0,
+                        max: 1.0,
+                        step: 0.01,
+                        allow_higher: false,
+                        allow_lower: false
+                    },
+
+                    BEVEL_SHADOW: {
+                        type: 'float',
+                        value: 0.35,
+                        expose: true,
+                        min: 0.0,
+                        max: 1.0,
+                        step: 0.01,
+                        allow_higher: false,
+                        allow_lower: false
+                    },
+
+                    BEVEL_SHADOW_SATURATION: {
+                        type: 'float',
+                        value: 1.0,
+                        expose: true,
+                        min: 0.0,
+                        max: 1.0,
+                        step: 0.01,
+                        allow_higher: false,
+                        allow_lower: false
+                    },
+
+                    BEVEL_LIGHT_STRENGTH: {
+                        type: 'float',
+                        value: 3.0,
+                        expose: true,
+                        min: 0.0,
+                        max: 3.0,
+                        step: 0.05,
+                        allow_higher: true,
+                        allow_lower: false
+                    },
+
+                    EDGE_FALLBACK_LIGHT_DIRECTION: {
+                        type: 'vec3',
+                        value: new THREE.Vector3(
+                            -0.45,
+                            0.80,
+                            0.35
+                        ),
+                        expose: true
+                    }
+                }
+            });
+
 
             let realview_pbr = new FancyShaderMaterial({
                 id: 'realview_pbr',
@@ -6163,6 +7809,7 @@ void main() {
             this.materials['shaded_lightflow'] = shaded_lightflow;
             this.materials['pbr_metallic_roughness'] = pbr_metallic_roughness;
             this.materials['pixelated_shaded_lightflow'] = pixelated_shaded_lightflow;
+            this.materials['minecraft_promotional_bevel'] = minecraft_promotional_bevel;
             //this.materials['uv_shadow'] = uv_shadow;
             // The new PBR material occupies the former hologram slot.
             // This keeps existing app references working.
@@ -6177,6 +7824,7 @@ void main() {
         states: new Map(),
         patchedPreviews: new Map(),
         fallbackTexture: null,
+        lastPreviewPatchCount: -1,
         disposed: false,
 
         init() {
@@ -6193,6 +7841,7 @@ void main() {
                 }
             });
             this.patchedPreviews.clear();
+            this.lastPreviewPatchCount = -1;
 
             this.states.forEach((state) => {
                 if (state.captureTarget && typeof state.captureTarget.dispose === 'function') {
@@ -6279,8 +7928,10 @@ void main() {
             return state;
         },
 
-        patchAllPreviews() {
+        patchAllPreviews(force = false) {
             if (this.disposed || !window.Preview || !Array.isArray(Preview.all)) return;
+            if (!force && Preview.all.length === this.lastPreviewPatchCount && Preview.all.every(preview => this.patchedPreviews.has(preview))) return;
+            this.lastPreviewPatchCount = Preview.all.length;
             Preview.all.forEach(preview => this.patchPreview(preview));
         },
 
@@ -6299,6 +7950,14 @@ void main() {
         },
 
         invalidateShadowMaps(preview) {
+            if (typeof window.LightManagerMarkShadowsDirty === 'function') {
+                window.LightManagerMarkShadowsDirty();
+                if (typeof window.LightManagerPrepareRender === 'function') {
+                    window.LightManagerPrepareRender(preview);
+                }
+                return;
+            }
+
             if (preview?.renderer?.shadowMap) {
                 preview.renderer.shadowMap.needsUpdate = true;
             }
@@ -6331,7 +7990,6 @@ void main() {
                 }
 
                 manager.capturePreview(this, activeMaterials);
-                manager.invalidateShadowMaps(this);
                 this.renderer.render(Canvas.scene, this.camera);
             };
 
@@ -7841,40 +9499,50 @@ void main() {
                         }
                     }
 
-                    if (!mat.uniforms.max_light_number || !mat.uniforms.uLightPos) return;
+                    let lightUniformsUpdated = false;
 
-                    ensureVectorArrayUniform(mat, "uLightPos", () => new THREE.Vector3());
-                    ensureVectorArrayUniform(mat, "uLightDir", () => new THREE.Vector3(0, -1, 0));
-                    ensureVectorArrayUniform(mat, "uLightColor", () => new THREE.Vector3());
-                    ensureNumberArrayUniform(mat, "uLightIntensity", 0);
-                    ensureNumberArrayUniform(mat, "uLightDistance", 0);
-                    ensureNumberArrayUniform(mat, "uLightConeAngle", 0);
-                    ensureNumberArrayUniform(mat, "uLightType", 0);
-                    ensureNumberArrayUniform(mat, "uLightPenumbra", 0);
-                    ensureNumberArrayUniform(mat, "uLightCastShadow", 0);
-                    ensureNumberArrayUniform(mat, "uLightShadowIndex", -1);
-
-                    mat.uniforms.max_light_number.value = activeLightCount;
-
-                    for (let i = 0; i < MAX_LIGHTS; i++) {
-                        mat.uniforms.uLightPos.value[i].copy(posArray[i]);
-                        mat.uniforms.uLightDir.value[i].copy(dirArray[i]);
-                        mat.uniforms.uLightColor.value[i].copy(colArray[i]);
-
-                        mat.uniforms.uLightIntensity.value[i] = intArray[i];
-                        mat.uniforms.uLightDistance.value[i] = distanceArray[i];
-                        mat.uniforms.uLightConeAngle.value[i] = coneAngleArray[i];
-                        mat.uniforms.uLightType.value[i] = lightTypeArray[i];
-
-                        if (mat.uniforms.uLightPenumbra) {
-                            mat.uniforms.uLightPenumbra.value[i] = penumbraArray[i];
-                        }
-
-                        mat.uniforms.uLightCastShadow.value[i] = castShadowArray[i];
-                        mat.uniforms.uLightShadowIndex.value[i] = shadowIndexArray[i];
+                    if (mat.uniforms.max_light_number) {
+                        mat.uniforms.max_light_number.value = activeLightCount;
+                        lightUniformsUpdated = true;
                     }
 
-                    mat.uniformsNeedUpdate = true;
+                    const vectorUniforms = [
+                        ['uLightPos', posArray, () => new THREE.Vector3()],
+                        ['uLightDir', dirArray, () => new THREE.Vector3(0, -1, 0)],
+                        ['uLightColor', colArray, () => new THREE.Vector3()]
+                    ];
+
+                    vectorUniforms.forEach(([name, sourceArray, fallbackFactory]) => {
+                        if (!mat.uniforms[name]) return;
+                        const uniform = ensureVectorArrayUniform(mat, name, fallbackFactory);
+                        for (let i = 0; i < MAX_LIGHTS; i++) {
+                            uniform.value[i].copy(sourceArray[i]);
+                        }
+                        lightUniformsUpdated = true;
+                    });
+
+                    const numberUniforms = [
+                        ['uLightIntensity', intArray, 0],
+                        ['uLightDistance', distanceArray, 0],
+                        ['uLightConeAngle', coneAngleArray, 0],
+                        ['uLightType', lightTypeArray, 0],
+                        ['uLightPenumbra', penumbraArray, 0],
+                        ['uLightCastShadow', castShadowArray, 0],
+                        ['uLightShadowIndex', shadowIndexArray, -1]
+                    ];
+
+                    numberUniforms.forEach(([name, sourceArray, fallbackValue]) => {
+                        if (!mat.uniforms[name]) return;
+                        const uniform = ensureNumberArrayUniform(mat, name, fallbackValue);
+                        for (let i = 0; i < MAX_LIGHTS; i++) {
+                            uniform.value[i] = sourceArray[i];
+                        }
+                        lightUniformsUpdated = true;
+                    });
+
+                    if (lightUniformsUpdated) {
+                        mat.uniformsNeedUpdate = true;
+                    }
                 });
             });
 
@@ -7924,6 +9592,7 @@ void main() {
                         newUniformStep: null,
                         newUniformAllowHigher: true,
                         newUniformAllowLower: true,
+                        selectedNativeUniformName: 'uLightPos',
                         // Per-channel range for vec2 / vec3
                         newUniformChannels: {
                             x: { min: null, max: null, step: null, allow_higher: true, allow_lower: true, enabled: false },
@@ -7968,6 +9637,12 @@ void main() {
                             if (this.editingMode === 'vertex') this.activeMat.vertex = value;
                             else this.activeMat.fragment = value;
                         }
+                    },
+                    nativeUniformOptions() {
+                        return MaterialManager.getNativeMaterialUniformOptions();
+                    },
+                    selectedNativeUniformOption() {
+                        return this.nativeUniformOptions.find(option => option.name === this.selectedNativeUniformName) || null;
                     }
                 },
                 watch: {
@@ -8153,6 +9828,21 @@ void main() {
                         }
 
                         this.$set(this.activeMat.uniforms, safeVar, def);
+                    },
+                    addNativeUniform() {
+                        if (!this.activeMat || !this.activeMat.isCustom || !this.selectedNativeUniformName) return;
+                        if (!this.activeMat.uniforms) this.$set(this.activeMat, 'uniforms', {});
+                        if (this.activeMat.uniforms[this.selectedNativeUniformName]) return;
+
+                        const defaults = MaterialManager.createNativeMaterialUniforms();
+                        const def = defaults[this.selectedNativeUniformName];
+                        if (!def) return;
+
+                        this.$set(
+                            this.activeMat.uniforms,
+                            this.selectedNativeUniformName,
+                            MaterialManager.cloneUniformDefinition(def)
+                        );
                     },
                     removeUniform(key) {
                         this.$delete(this.activeMat.uniforms, key);
@@ -8381,7 +10071,7 @@ void main() {
                     },
                     getUniformLabel(uni, key) {
                         const currentLang = (typeof Language !== 'undefined' && Language.code) ? Language.code : 'en';
-                        if (uni.translations && uni.translations[currentLang]) {
+                        if (uni && uni.translations && uni.translations[currentLang]) {
                             return uni.translations[currentLang];
                         }
                         const tlKey = 'shader_architect.uniform.' + key;
@@ -8389,7 +10079,7 @@ void main() {
                         if (globalTl !== tlKey) {
                             return globalTl;
                         }
-                        if (uni.translations && uni.translations['en']) {
+                        if (uni && uni.translations && uni.translations['en']) {
                             return uni.translations['en'];
                         }
                         return '';
@@ -9416,6 +11106,20 @@ void main() {
                                             </label>
                                             <button @click="addUniform()" :disabled="!activeMat.isCustom"><i class="material-icons" style="font-size:1.1em; vertical-align:middle;">add_box</i> Add</button>
                                         </div>
+                                        <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px;">
+                                            <span style="opacity: 0.75;">Native:</span>
+                                            <select v-model="selectedNativeUniformName" :disabled="!activeMat.isCustom">
+                                                <option v-for="option in nativeUniformOptions" :key="option.name" :value="option.name" :disabled="activeMat.uniforms && activeMat.uniforms[option.name]">
+                                                    {{ option.name }} ({{ option.type }}){{ activeMat.uniforms && activeMat.uniforms[option.name] ? ' - added' : '' }}
+                                                </option>
+                                            </select>
+                                            <span v-if="selectedNativeUniformOption" style="opacity: 0.65; font-size: 0.9em;">
+                                                {{ getUniformLabel(null, selectedNativeUniformOption.name) || selectedNativeUniformOption.type }}
+                                            </span>
+                                            <button @click="addNativeUniform()" :disabled="!activeMat.isCustom || (activeMat.uniforms && activeMat.uniforms[selectedNativeUniformName])">
+                                                <i class="material-icons" style="font-size:1.1em; vertical-align:middle;">playlist_add</i> Add Native
+                                            </button>
+                                        </div>
                                         <div v-if="(newUniformType === 'float' || newUniformType === 'int') && activeMat.isCustom" style="display: flex; gap: 12px; align-items: center; margin-top: 8px; flex-wrap: wrap;">
                                             <label style="display: flex; align-items: center; gap: 4px;">
                                                 Min: <input type="number" placeholder="None" v-model.number="newUniformMin" class="dark_bordered" style="width: 70px; padding: 2px 4px;">
@@ -9495,6 +11199,7 @@ void main() {
                                             </div>
 
                                             <div v-if="uni.type==='vec2v' || uni.type==='vec3v' || uni.type==='floatv'" style="opacity:0.6; font-style:italic;">[Array Data: {{uni.value.length}} items]</div>
+                                            <div v-if="uni.type==='intv'" style="opacity:0.6; font-style:italic;">[Array Data: {{uni.value.length}} items]</div>
 
                                             <div style="flex-grow:1"></div>
                                             <button v-if="key !== 'map'" @click="expandUniform(key)" style="background: transparent; border: none; padding: 2px 4px; cursor: pointer; color: var(--color-text); margin-right: 4px;" title="Edit Metadata">

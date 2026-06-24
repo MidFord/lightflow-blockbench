@@ -62,6 +62,189 @@ const LIGHT_MANAGER_SHADOW_RESOLUTIONS = [256, 512, 1024, 2048, 4096];
 const DEFAULT_SHADOW_BIAS = -0.0005;
 const DEFAULT_SHADOW_NORMAL_BIAS = 0.02;
 
+const LIGHT_MANAGER_BAR_ITEM_IDS = [
+    'add_light',
+    'add_spot_light',
+    'add_directional_light',
+    'edit_light_properties',
+    'fit_light_bounds_to_selection',
+    'toggle_light_area_gizmos',
+    'light_type_select',
+    'light_color_picker',
+    'light_temperature_slider',
+    'cast_shadows',
+    'light_shadow_resolution_select',
+    'light_intensity_slider',
+    'light_distance_slider',
+    'light_cone_angle_slider',
+    'light_cone_penumbra_slider',
+    'light_shadow_near_sliderbox',
+    'light_shadow_far_sliderbox',
+    'light_shadow_bounds_slider',
+    'light_shadow_bias_sliderbox',
+    'light_shadow_normal_bias_sliderbox'
+];
+
+const LIGHT_MANAGER_TOOLBAR_IDS = [
+    'light_quickbuttons',
+    'light_settings',
+    'light_shadow_clip_settings',
+    'light_shadow_bias_settings'
+];
+
+function deleteLightManagerRegistryItem(registry, id) {
+    if (!registry || !id) return;
+
+    const item = registry[id];
+    if (item && typeof item.delete === 'function') {
+        try {
+            item.delete();
+        } catch (error) {
+            console.warn(`[Light Manager] Failed to delete stale registry item "${id}".`, error);
+        }
+    }
+
+    if (registry[id] === item) {
+        delete registry[id];
+    }
+}
+
+function cleanupLightManagerRegistries() {
+    const barItems = typeof BarItems !== 'undefined' ? BarItems : window.BarItems;
+    const toolbars = typeof Toolbars !== 'undefined' ? Toolbars : window.Toolbars;
+
+    LIGHT_MANAGER_BAR_ITEM_IDS.forEach(id => deleteLightManagerRegistryItem(barItems, id));
+    LIGHT_MANAGER_TOOLBAR_IDS.forEach(id => deleteLightManagerRegistryItem(toolbars, id));
+}
+
+const LIGHT_MANAGER_SHADOW_STATE = {
+    dirty: true,
+    sceneDirty: true,
+    shadowSignature: null,
+    dirtyRenderers: new Set(),
+    configuredRenderers: new Set(),
+    previousRendererShadowSettings: new WeakMap()
+};
+
+function resetLightManagerShadowState() {
+    LIGHT_MANAGER_SHADOW_STATE.dirty = true;
+    LIGHT_MANAGER_SHADOW_STATE.sceneDirty = true;
+    LIGHT_MANAGER_SHADOW_STATE.shadowSignature = null;
+    LIGHT_MANAGER_SHADOW_STATE.dirtyRenderers = new Set();
+    LIGHT_MANAGER_SHADOW_STATE.configuredRenderers = new Set();
+    LIGHT_MANAGER_SHADOW_STATE.previousRendererShadowSettings = new WeakMap();
+}
+
+function markLightManagerShadowsDirty(options = {}) {
+    LIGHT_MANAGER_SHADOW_STATE.dirty = true;
+    LIGHT_MANAGER_SHADOW_STATE.dirtyRenderers.clear();
+    if (options.scene) LIGHT_MANAGER_SHADOW_STATE.sceneDirty = true;
+}
+
+function lightManagerHasActiveShadowLights() {
+    if (window.LightElement && Array.isArray(LightElement.all)) {
+        return LightElement.all.some(element => {
+            return element && element.visibility !== false && element.has_shadow !== false;
+        });
+    }
+
+    return Object.values(window.three_lights || {}).some(light => {
+        return light && light.visible !== false && light.castShadow !== false;
+    });
+}
+
+function lightManagerShadowValue(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return 0;
+    return Math.round(numeric * 1000) / 1000;
+}
+
+function lightManagerShadowVector(values = []) {
+    return [
+        lightManagerShadowValue(values[0]),
+        lightManagerShadowValue(values[1]),
+        lightManagerShadowValue(values[2])
+    ].join(',');
+}
+
+function getLightManagerShadowSignature() {
+    const elements = window.LightElement && Array.isArray(LightElement.all) ? LightElement.all : [];
+    return elements
+        .map(element => {
+            if (!element) return null;
+
+            const mesh = element.mesh;
+            const position = new THREE.Vector3();
+            const quaternion = new THREE.Quaternion();
+
+            if (mesh) {
+                mesh.updateMatrixWorld?.(true);
+                mesh.getWorldPosition(position);
+                mesh.getWorldQuaternion(quaternion);
+            } else {
+                position.fromArray(Array.isArray(element.position) ? element.position : [0, 0, 0]);
+                const rotation = Array.isArray(element.render_rotation) ? element.render_rotation : element.rotation;
+                if (Array.isArray(rotation)) {
+                    const euler = new THREE.Euler(
+                        THREE.MathUtils.degToRad(rotation[0] || 0),
+                        THREE.MathUtils.degToRad(rotation[1] || 0),
+                        THREE.MathUtils.degToRad(rotation[2] || 0)
+                    );
+                    quaternion.setFromEuler(euler);
+                }
+            }
+
+            return [
+                element.uuid || element.name || '',
+                element.visibility !== false ? 1 : 0,
+                element.has_shadow !== false ? 1 : 0,
+                element.light_type || 'point',
+                lightManagerShadowVector(position.toArray()),
+                [
+                    lightManagerShadowValue(quaternion.x),
+                    lightManagerShadowValue(quaternion.y),
+                    lightManagerShadowValue(quaternion.z),
+                    lightManagerShadowValue(quaternion.w)
+                ].join(','),
+                lightManagerShadowValue(element.distance),
+                lightManagerShadowValue(element.angle),
+                lightManagerShadowValue(element.penumbra),
+                lightManagerShadowValue(element.shadow_resolution),
+                lightManagerShadowValue(element.shadow_bias),
+                lightManagerShadowValue(element.shadow_normal_bias),
+                lightManagerShadowValue(element.shadow_near),
+                lightManagerShadowValue(element.shadow_far),
+                lightManagerShadowValue(element.shadow_bounds)
+            ].join('|');
+        })
+        .filter(Boolean)
+        .sort()
+        .join(';');
+}
+
+function rememberLightManagerRendererShadowSettings(renderer) {
+    if (!renderer || !renderer.shadowMap || LIGHT_MANAGER_SHADOW_STATE.configuredRenderers.has(renderer)) return;
+
+    LIGHT_MANAGER_SHADOW_STATE.configuredRenderers.add(renderer);
+    LIGHT_MANAGER_SHADOW_STATE.previousRendererShadowSettings.set(renderer, {
+        enabled: renderer.shadowMap.enabled,
+        type: renderer.shadowMap.type,
+        autoUpdate: renderer.shadowMap.autoUpdate
+    });
+}
+
+function restoreLightManagerRendererShadowSettings() {
+    LIGHT_MANAGER_SHADOW_STATE.configuredRenderers.forEach(renderer => {
+        const previous = LIGHT_MANAGER_SHADOW_STATE.previousRendererShadowSettings.get(renderer);
+        if (!renderer || !renderer.shadowMap || !previous) return;
+
+        renderer.shadowMap.enabled = previous.enabled;
+        renderer.shadowMap.type = previous.type;
+        renderer.shadowMap.autoUpdate = previous.autoUpdate;
+        renderer.shadowMap.needsUpdate = true;
+    });
+}
+
 const LIGHT_MANAGER_PROFILES = {
     keep: null,
     point_fill: {
@@ -304,8 +487,20 @@ function configureLightManagerRendererShadows(renderer) {
     if (!renderer || !renderer.shadowMap) return false;
 
     let changed = false;
-    if (renderer.shadowMap.enabled !== true) {
-        renderer.shadowMap.enabled = true;
+    const hasShadowLights = lightManagerHasActiveShadowLights();
+    if (renderer.shadowMap.enabled !== hasShadowLights) {
+        rememberLightManagerRendererShadowSettings(renderer);
+        renderer.shadowMap.enabled = hasShadowLights;
+        changed = true;
+    }
+
+    if (!hasShadowLights) {
+        if (changed) markLightManagerShadowsDirty();
+        return changed;
+    }
+
+    if (!LIGHT_MANAGER_SHADOW_STATE.configuredRenderers.has(renderer)) {
+        rememberLightManagerRendererShadowSettings(renderer);
         changed = true;
     }
 
@@ -315,8 +510,14 @@ function configureLightManagerRendererShadows(renderer) {
         changed = true;
     }
 
-    if (renderer.shadowMap.autoUpdate === false) {
+    if (renderer.shadowMap.autoUpdate !== false) {
+        renderer.shadowMap.autoUpdate = false;
+        changed = true;
+    }
+
+    if (changed) {
         renderer.shadowMap.needsUpdate = true;
+        markLightManagerShadowsDirty();
     }
 
     return changed;
@@ -339,12 +540,28 @@ function forEachLightManagerPreview(callback) {
 }
 
 function configureLightManagerRenderers() {
+    let changed = false;
     forEachLightManagerPreview(preview => {
-        configureLightManagerRendererShadows(preview.renderer);
+        if (configureLightManagerRendererShadows(preview.renderer)) changed = true;
+    });
+    return changed;
+}
+
+function prepareLightManagerDirtyRenderers() {
+    if (LIGHT_MANAGER_SHADOW_STATE.dirtyRenderers.size > 0) return;
+
+    forEachLightManagerPreview(preview => {
+        if (preview?.renderer?.shadowMap) {
+            LIGHT_MANAGER_SHADOW_STATE.dirtyRenderers.add(preview.renderer);
+        }
     });
 }
 
-function configureLightManagerSceneShadowMeshes() {
+function configureLightManagerSceneShadowMeshes(force = false) {
+    if (!force && !LIGHT_MANAGER_SHADOW_STATE.sceneDirty) return false;
+    if (!lightManagerHasActiveShadowLights()) return false;
+
+    let changed = false;
     const elements = Array.isArray(window.Outliner?.elements) ? window.Outliner.elements : [];
 
     elements.forEach(element => {
@@ -356,37 +573,97 @@ function configureLightManagerSceneShadowMeshes() {
         mesh.traverse(object => {
             if (!object || object.isLight || object.isCamera) return;
             if (object.isMesh) {
-                object.castShadow = true;
-                object.receiveShadow = true;
+                if (object.castShadow !== true) {
+                    object.castShadow = true;
+                    changed = true;
+                }
+                if (object.receiveShadow !== true) {
+                    object.receiveShadow = true;
+                    changed = true;
+                }
             }
         });
     });
+
+    LIGHT_MANAGER_SHADOW_STATE.sceneDirty = false;
+    if (changed) markLightManagerShadowsDirty();
+    return changed;
 }
 
-function invalidateLightManagerShadowMaps() {
-    Object.keys(window.three_lights || {}).forEach(uuid => {
-        const light = window.three_lights[uuid];
-        if (light && light.shadow) {
-            light.shadow.needsUpdate = true;
-        }
-    });
+function invalidateLightManagerShadowMaps(options = {}) {
+    if (typeof options === 'boolean') options = { force: options };
+    const force = !!options.force;
+    const preview = options.preview || null;
 
-    forEachLightManagerPreview(preview => {
-        if (preview?.renderer?.shadowMap) {
-            preview.renderer.shadowMap.needsUpdate = true;
+    if (!force && !LIGHT_MANAGER_SHADOW_STATE.dirty) return false;
+
+    if (!lightManagerHasActiveShadowLights()) {
+        LIGHT_MANAGER_SHADOW_STATE.dirty = false;
+        LIGHT_MANAGER_SHADOW_STATE.dirtyRenderers.clear();
+        return false;
+    }
+
+    if (preview?.renderer?.shadowMap) {
+        prepareLightManagerDirtyRenderers();
+        if (!force && !LIGHT_MANAGER_SHADOW_STATE.dirtyRenderers.has(preview.renderer)) {
+            return false;
         }
-    });
+
+        Object.keys(window.three_lights || {}).forEach(uuid => {
+            const light = window.three_lights[uuid];
+            if (light && light.shadow) {
+                light.shadow.needsUpdate = true;
+            }
+        });
+
+        preview.renderer.shadowMap.needsUpdate = true;
+        LIGHT_MANAGER_SHADOW_STATE.dirtyRenderers.delete(preview.renderer);
+        if (LIGHT_MANAGER_SHADOW_STATE.dirtyRenderers.size === 0) {
+            LIGHT_MANAGER_SHADOW_STATE.dirty = false;
+        }
+    } else {
+        Object.keys(window.three_lights || {}).forEach(uuid => {
+            const light = window.three_lights[uuid];
+            if (light && light.shadow) {
+                light.shadow.needsUpdate = true;
+            }
+        });
+
+        forEachLightManagerPreview(candidate => {
+            if (candidate?.renderer?.shadowMap) {
+                candidate.renderer.shadowMap.needsUpdate = true;
+            }
+        });
+        LIGHT_MANAGER_SHADOW_STATE.dirtyRenderers.clear();
+        LIGHT_MANAGER_SHADOW_STATE.dirty = false;
+    }
+
+    return true;
 }
 
-window.LightManagerPrepareRender = function LightManagerPrepareRender(preview) {
+function syncLightManagerShadowSignature() {
+    const nextSignature = getLightManagerShadowSignature();
+    if (LIGHT_MANAGER_SHADOW_STATE.shadowSignature !== nextSignature) {
+        LIGHT_MANAGER_SHADOW_STATE.shadowSignature = nextSignature;
+        markLightManagerShadowsDirty();
+        return true;
+    }
+    return false;
+}
+
+window.LightManagerMarkShadowsDirty = markLightManagerShadowsDirty;
+
+window.LightManagerPrepareRender = function LightManagerPrepareRender(preview, options = {}) {
+    const force = !!options.force;
+
     if (preview?.renderer) {
         configureLightManagerRendererShadows(preview.renderer);
     } else {
         configureLightManagerRenderers();
     }
 
-    configureLightManagerSceneShadowMeshes();
-    invalidateLightManagerShadowMaps();
+    configureLightManagerSceneShadowMeshes(force);
+    invalidateLightManagerShadowMaps({ force, preview });
 };
 
 function registerLightManagerCanvasGizmo(object) {
@@ -1166,6 +1443,7 @@ window.update_light_element_callback = () => {
     }
 
     window.LightManagerAreaGizmos?.updateAll();
+    syncLightManagerShadowSignature();
     invalidateLightManagerShadowMaps();
     window.on_light_element_updated?.();
 };
@@ -1264,8 +1542,33 @@ function initialize_light_plugin() {
 
     let deletables = [];
     let lightTextures = {}; // THREE.Texture instances will be loaded here
+    let originalAnimatorPreview = null;
 
     const animationSign = Blockbench.isNewerThan('4.99') ? 1 : -1;
+
+    function markLightManagerAnimationFrameShadowsDirty() {
+        if (!lightManagerHasActiveShadowLights()) return;
+        markLightManagerShadowsDirty();
+    }
+
+    function patchLightManagerAnimatorPreview() {
+        if (!window.Animator || typeof Animator.preview !== 'function') return;
+        if (originalAnimatorPreview) return;
+
+        originalAnimatorPreview = Animator.preview;
+        Animator.preview = function lightManagerAnimatorPreviewPatch() {
+            const result = originalAnimatorPreview.apply(this, arguments);
+            markLightManagerAnimationFrameShadowsDirty();
+            return result;
+        };
+    }
+
+    function restoreLightManagerAnimatorPreview() {
+        if (originalAnimatorPreview && window.Animator && Animator.preview !== originalAnimatorPreview) {
+            Animator.preview = originalAnimatorPreview;
+        }
+        originalAnimatorPreview = null;
+    }
 
     function disposeLightManagerResources() {
         const resources = deletables.slice();
@@ -1293,6 +1596,12 @@ function initialize_light_plugin() {
 
         onload() {
             disposeLightManagerResources();
+            cleanupLightManagerRegistries();
+            restoreLightManagerRendererShadowSettings();
+            restoreLightManagerAnimatorPreview();
+            resetLightManagerShadowState();
+            window.LightManagerMarkShadowsDirty = markLightManagerShadowsDirty;
+            patchLightManagerAnimatorPreview();
 
             class ComboSlider extends Widget {
                 constructor(id, data) {
@@ -4931,6 +5240,47 @@ function initialize_light_plugin() {
             `);
             deletables.push(lightPanelStyles);
 
+            const syncLightManagerShadows = (options = {}) => {
+                markLightManagerShadowsDirty(options);
+                configureLightManagerRenderers();
+                configureLightManagerSceneShadowMeshes();
+                invalidateLightManagerShadowMaps();
+            };
+
+            const viewUpdateShadowListener = Blockbench.on('update_view', (options = {}) => {
+                const elementAspects = options.element_aspects || {};
+                const groupAspects = options.group_aspects || {};
+                const elements = Array.isArray(options.elements) ? options.elements : [];
+                const groups = Array.isArray(options.groups) ? options.groups : [];
+                const touchesElements = elements.length > 0 && (
+                    !options.element_aspects ||
+                    elementAspects.transform ||
+                    elementAspects.geometry ||
+                    elementAspects.faces ||
+                    elementAspects.visibility
+                );
+                const touchesGroups = groups.length > 0 && (
+                    !options.group_aspects ||
+                    groupAspects.transform ||
+                    groupAspects.visibility
+                );
+
+                if (!touchesElements && !touchesGroups) return;
+
+                const sceneChanged = touchesGroups || elements.some(element => {
+                    return element && element.type !== 'light' && !(window.LightElement && element instanceof window.LightElement);
+                });
+                syncLightManagerShadows({ scene: sceneChanged });
+            });
+            deletables.push(viewUpdateShadowListener);
+
+            ['finish_edit', 'undo', 'redo', 'load_undo_save', 'select_project'].forEach(eventName => {
+                const listener = Blockbench.on(eventName, () => {
+                    syncLightManagerShadows({ scene: true });
+                });
+                deletables.push(listener);
+            });
+
             let lightPanelSelectionListener = Blockbench.on('update_selection', () => {
                 const light = getSelectedLight();
                 if (light) syncLightSettingsPanel(light);
@@ -4961,6 +5311,7 @@ function initialize_light_plugin() {
         onunload() {
             window.LightManagerAreaGizmos?.clear();
             disposeLightManagerResources();
+            cleanupLightManagerRegistries();
 
             Object.keys(window.three_lights || {}).forEach(uuid => {
                 const light = window.three_lights[uuid];
@@ -4998,7 +5349,11 @@ function initialize_light_plugin() {
             delete window.LightManagerAreaGizmos;
             delete window.LightManagerFitTool;
             delete window.LightManagerPrepareRender;
+            delete window.LightManagerMarkShadowsDirty;
             delete window.update_light_element_callback;
+            restoreLightManagerAnimatorPreview();
+            restoreLightManagerRendererShadowSettings();
+            resetLightManagerShadowState();
             if (window.generateIconBase64 === generateIconBase64) delete window.generateIconBase64;
         }
     });
