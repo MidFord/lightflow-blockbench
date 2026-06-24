@@ -126,6 +126,19 @@ const LIGHT_MANAGER_SHADOW_STATE = {
     previousRendererShadowSettings: new WeakMap()
 };
 
+const LIGHT_MANAGER_UPDATE_STATE = {
+    frame: null,
+    running: false,
+    rerun: false,
+    options: null
+};
+
+const LIGHT_MANAGER_DEFAULT_UPDATE_OPTIONS = {
+    shadows: true,
+    scene: true,
+    gizmos: true
+};
+
 function resetLightManagerShadowState() {
     LIGHT_MANAGER_SHADOW_STATE.dirty = true;
     LIGHT_MANAGER_SHADOW_STATE.sceneDirty = true;
@@ -665,6 +678,37 @@ window.LightManagerPrepareRender = function LightManagerPrepareRender(preview, o
     configureLightManagerSceneShadowMeshes(force);
     invalidateLightManagerShadowMaps({ force, preview });
 };
+
+function cancelLightManagerElementUpdate() {
+    if (
+        typeof LIGHT_MANAGER_UPDATE_STATE.frame === 'number' &&
+        typeof cancelAnimationFrame === 'function'
+    ) {
+        cancelAnimationFrame(LIGHT_MANAGER_UPDATE_STATE.frame);
+    }
+
+    LIGHT_MANAGER_UPDATE_STATE.frame = null;
+    LIGHT_MANAGER_UPDATE_STATE.rerun = false;
+    LIGHT_MANAGER_UPDATE_STATE.options = null;
+}
+
+function normalizeLightManagerUpdateOptions(options = {}) {
+    return {
+        shadows: options.shadows !== false,
+        scene: options.scene !== false,
+        gizmos: options.gizmos !== false
+    };
+}
+
+function mergeLightManagerUpdateOptions(previous, next) {
+    if (!previous) return next;
+
+    return {
+        shadows: previous.shadows || next.shadows,
+        scene: previous.scene || next.scene,
+        gizmos: previous.gizmos || next.gizmos
+    };
+}
 
 function registerLightManagerCanvasGizmo(object) {
     if (!object || !window.Canvas || !Array.isArray(Canvas.gizmos)) return;
@@ -1300,11 +1344,18 @@ if (typeof window.on_light_element_updated !== 'function') {
     window.on_light_element_updated = () => { };
 }
 
-window.update_light_element_callback = () => {
+function runLightManagerElementUpdate(options = LIGHT_MANAGER_DEFAULT_UPDATE_OPTIONS) {
     if (!window.scene) return;
 
-    configureLightManagerRenderers();
-    configureLightManagerSceneShadowMeshes();
+    const updateOptions = normalizeLightManagerUpdateOptions(options);
+
+    if (updateOptions.shadows) {
+        configureLightManagerRenderers();
+    }
+
+    if (updateOptions.scene) {
+        configureLightManagerSceneShadowMeshes();
+    }
 
     // Ensure the main group exists in the scene
     if (!window.three_lights_group) {
@@ -1357,7 +1408,7 @@ window.update_light_element_callback = () => {
             light.castShadow = element.has_shadow !== false;
 
             // Sync dynamic shadow properties
-            if (light.shadow) {
+            if (updateOptions.shadows && light.shadow) {
                 let currentResolution = light.shadow.mapSize.width;
                 let targetResolution = LightManagerUtils.shadowResolution(element.shadow_resolution);
                 if (currentResolution !== targetResolution) {
@@ -1442,10 +1493,72 @@ window.update_light_element_callback = () => {
         }
     }
 
-    window.LightManagerAreaGizmos?.updateAll();
-    syncLightManagerShadowSignature();
-    invalidateLightManagerShadowMaps();
-    window.on_light_element_updated?.();
+    if (updateOptions.gizmos) {
+        window.LightManagerAreaGizmos?.updateAll();
+    }
+
+    if (updateOptions.shadows) {
+        syncLightManagerShadowSignature();
+        invalidateLightManagerShadowMaps();
+    }
+
+    window.on_light_element_updated?.(updateOptions);
+}
+
+function flushLightManagerElementUpdate() {
+    LIGHT_MANAGER_UPDATE_STATE.frame = null;
+    const options = LIGHT_MANAGER_UPDATE_STATE.options || LIGHT_MANAGER_DEFAULT_UPDATE_OPTIONS;
+    LIGHT_MANAGER_UPDATE_STATE.options = null;
+
+    if (LIGHT_MANAGER_UPDATE_STATE.running) {
+        LIGHT_MANAGER_UPDATE_STATE.rerun = true;
+        LIGHT_MANAGER_UPDATE_STATE.options = mergeLightManagerUpdateOptions(
+            LIGHT_MANAGER_UPDATE_STATE.options,
+            options
+        );
+        return;
+    }
+
+    LIGHT_MANAGER_UPDATE_STATE.running = true;
+    try {
+        runLightManagerElementUpdate(options);
+    } finally {
+        LIGHT_MANAGER_UPDATE_STATE.running = false;
+    }
+
+    if (LIGHT_MANAGER_UPDATE_STATE.rerun) {
+        const rerunOptions = LIGHT_MANAGER_UPDATE_STATE.options || LIGHT_MANAGER_DEFAULT_UPDATE_OPTIONS;
+        LIGHT_MANAGER_UPDATE_STATE.options = null;
+        LIGHT_MANAGER_UPDATE_STATE.rerun = false;
+        window.update_light_element_callback?.(rerunOptions);
+    }
+}
+
+window.update_light_element_callback = (options = {}) => {
+    const updateOptions = normalizeLightManagerUpdateOptions(options);
+
+    if (options && options.immediate) {
+        cancelLightManagerElementUpdate();
+        runLightManagerElementUpdate(updateOptions);
+        return;
+    }
+
+    LIGHT_MANAGER_UPDATE_STATE.options = mergeLightManagerUpdateOptions(
+        LIGHT_MANAGER_UPDATE_STATE.options,
+        updateOptions
+    );
+
+    if (LIGHT_MANAGER_UPDATE_STATE.frame !== null) return;
+
+    if (typeof requestAnimationFrame === 'function') {
+        LIGHT_MANAGER_UPDATE_STATE.frame = requestAnimationFrame(flushLightManagerElementUpdate);
+    } else if (typeof queueMicrotask === 'function') {
+        LIGHT_MANAGER_UPDATE_STATE.frame = 'microtask';
+        queueMicrotask(flushLightManagerElementUpdate);
+    } else {
+        LIGHT_MANAGER_UPDATE_STATE.frame = 'promise';
+        Promise.resolve().then(flushLightManagerElementUpdate);
+    }
 };
 
 /** Converts a Kelvin color temperature to a tinycolor instance.
@@ -2614,6 +2727,371 @@ function initialize_light_plugin() {
             }
 
             window.HorizontalSelectWidget = HorizontalSelectWidget;
+
+            // 1. Estilos CSS ultra-optimizados para encajar en el ancho fijo del Spectrum
+            const advancedColorPickerStyles = Blockbench.addCSS(`
+    .advanced_color_ui {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 8px;
+        background: var(--color-back);
+        border-top: 1px solid var(--color-border);
+        border-bottom: 1px solid var(--color-border);
+        margin-bottom: 4px;
+    }
+    .ac_mode_btn {
+        flex: 0 0 auto;
+        width: 36px;
+        height: 24px;
+        background: var(--color-button);
+        border: 1px solid var(--color-border);
+        color: var(--color-text);
+        border-radius: 2px;
+        font-size: 10px;
+        font-weight: bold;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        user-select: none;
+        transition: background 0.1s;
+    }
+    .ac_mode_btn:hover {
+        background: var(--color-accent);
+        color: var(--color-light);
+        border-color: var(--color-accent);
+    }
+    .ac_inputs {
+        display: flex;
+        flex: 1 1 auto;
+        gap: 4px;
+        min-width: 0;
+    }
+    /* Re-estilizar inputs para que entren 4 en una fila */
+    .ac_inputs input {
+        flex: 1 1 0;
+        width: 100%;
+        min-width: 10px; /* Evita que colapsen */
+        height: 24px;
+        text-align: center;
+        padding: 0;
+        font-size: 12px;
+        box-sizing: border-box;
+    }
+    /* Ocultar las flechitas feas de los inputs numéricos */
+    .ac_inputs input[type=number]::-webkit-inner-spin-button,
+    .ac_inputs input[type=number]::-webkit-outer-spin-button {
+        -webkit-appearance: none;
+        margin: 0;
+    }
+    /* Ocultar el contenedor de texto nativo de spectrum */
+    .sp-picker-container .sp-input-container {
+        display: none !important;
+    }
+`);
+            deletables.push(advancedColorPickerStyles);
+
+
+            // 2. MARK: Widget AdvancedColorPicker
+            class AdvancedColorPicker extends Widget {
+                constructor(id, data) {
+                    if (typeof id === 'object') {
+                        data = id;
+                        id = data.id;
+                    }
+                    super(id, data);
+                    const scope = this;
+
+                    this.type = 'advanced_color_picker';
+                    this.icon = data.icon || 'color_lens';
+                    this.value = tinycolor(data.value || '#ffffff');
+
+                    this.onChange = data.onChange;
+                    this.onMove = data.onMove;
+
+                    this.node = Interface.createElement('div', { class: 'tool widget', toolbar_item: this.id }, [
+                        Interface.createElement('input', { class: 'f_left', type: 'text' })
+                    ]);
+
+                    this.addLabel();
+                    this.jq = $(this.node).find('input');
+
+                    this.jq.spectrum({
+                        preferredFormat: "hex",
+                        color: this.value.toHex8String(),
+                        showAlpha: true,
+                        showInput: true,
+                        maxSelectionSize: 128,
+                        // Corrección vital: igual que el nativo, por defecto oculto
+                        showPalette: data.palette === true,
+                        palette: data.palette ? [] : undefined,
+                        resetText: tl('generic.reset'),
+                        cancelText: tl('dialog.cancel'),
+                        chooseText: tl('dialog.confirm'),
+
+                        show: function () {
+                            open_interface = scope;
+                            scope.injectAdvancedUI();
+                        },
+                        hide: function () {
+                            open_interface = false;
+                        },
+                        change: function (c) {
+                            scope.change(c);
+                        },
+                        move: function (c) {
+                            scope.handleMove(c, false);
+                        }
+                    });
+                }
+
+                injectAdvancedUI() {
+                    let spContainer = this.jq.spectrum("container");
+                    let pickerContainer = spContainer.find(".sp-picker-container");
+
+                    if (pickerContainer.find(".advanced_color_ui").length > 0) {
+                        this.updateAdvancedUI(this.value);
+                        return;
+                    }
+
+                    const scope = this;
+                    this.formats = ['HEX', 'RGB', 'HSL', 'HSV'];
+                    this.currentFormatIndex = 0;
+
+                    // UI Base
+                    this.ui_wrapper = $('<div class="advanced_color_ui"></div>');
+
+                    // Botón Cíclico
+                    this.modeBtn = $('<div class="ac_mode_btn" title="Change Format">HEX</div>');
+
+                    // Contenedor de inputs
+                    this.inputsContainer = $('<div class="ac_inputs"></div>');
+
+                    this.ui_wrapper.append(this.modeBtn).append(this.inputsContainer);
+
+                    this.inputs = {};
+
+                    this.buildInputLayout = (format) => {
+                        this.inputsContainer.empty();
+                        this.inputs = {};
+
+                        // Helper para crear inputs con estilos nativos
+                        const createInput = (id, placeholder, type = "number") => {
+                            let inp = $(`<input type="${type}" class="dark_bordered focusable_input" placeholder="${placeholder}" title="${placeholder}" ${type === 'number' ? 'step="any"' : ''}>`);
+
+                            inp.on('input', () => scope.handleCustomInput());
+                            inp.on('keydown', (e) => e.stopPropagation());
+
+                            this.inputs[id] = inp;
+                            this.inputsContainer.append(inp);
+                        };
+
+                        if (format === 'HEX') {
+                            createInput('hex', '#HEX', 'text');
+                        } else if (format === 'RGB') {
+                            createInput('r', 'R'); createInput('g', 'G'); createInput('b', 'B'); createInput('a', 'A');
+                        } else if (format === 'HSL') {
+                            createInput('h', 'H'); createInput('s', 'S%'); createInput('l', 'L%'); createInput('a', 'A');
+                        } else if (format === 'HSV') {
+                            createInput('h', 'H'); createInput('s', 'S%'); createInput('v', 'V%'); createInput('a', 'A');
+                        }
+                        this.updateAdvancedUI(this.value);
+                    };
+
+                    // Lógica de cambio de formato al hacer click en el botón
+                    this.modeBtn.on('click', () => {
+                        this.currentFormatIndex = (this.currentFormatIndex + 1) % this.formats.length;
+                        let newFormat = this.formats[this.currentFormatIndex];
+                        this.modeBtn.text(newFormat);
+                        this.buildInputLayout(newFormat);
+                    });
+
+                    // Setup inicial
+                    this.buildInputLayout(this.formats[this.currentFormatIndex]);
+
+                    // Inyectar en el popup
+                    pickerContainer.find(".sp-input-container").after(this.ui_wrapper);
+                }
+
+                handleCustomInput() {
+                    let newColor = tinycolor();
+                    let format = this.formats[this.currentFormatIndex];
+
+                    if (format === 'HEX') {
+                        newColor = tinycolor(this.inputs['hex'].val());
+                    } else if (format === 'RGB') {
+                        newColor = tinycolor({
+                            r: parseFloat(this.inputs['r'].val()) || 0,
+                            g: parseFloat(this.inputs['g'].val()) || 0,
+                            b: parseFloat(this.inputs['b'].val()) || 0,
+                            a: parseFloat(this.inputs['a'].val() ?? 1)
+                        });
+                    } else if (format === 'HSL') {
+                        newColor = tinycolor({
+                            h: parseFloat(this.inputs['h'].val()) || 0,
+                            s: (parseFloat(this.inputs['s'].val()) || 0) / 100,
+                            l: (parseFloat(this.inputs['l'].val()) || 0) / 100,
+                            a: parseFloat(this.inputs['a'].val() ?? 1)
+                        });
+                    } else if (format === 'HSV') {
+                        newColor = tinycolor({
+                            h: parseFloat(this.inputs['h'].val()) || 0,
+                            s: (parseFloat(this.inputs['s'].val()) || 0) / 100,
+                            v: (parseFloat(this.inputs['v'].val()) || 0) / 100,
+                            a: parseFloat(this.inputs['a'].val() ?? 1)
+                        });
+                    }
+
+                    if (newColor.isValid()) {
+                        this.jq.spectrum("set", newColor);
+                        this.handleMove(newColor, true);
+                    }
+                }
+
+                updateAdvancedUI(color) {
+                    if (!this.inputs || Object.keys(this.inputs).length === 0) return;
+
+                    let c = tinycolor(color);
+                    let format = this.formats[this.currentFormatIndex];
+
+                    if (format === 'HEX') {
+                        this.inputs['hex'].val(c.getAlpha() < 1 ? c.toHex8String() : c.toHexString());
+                    } else if (format === 'RGB') {
+                        let rgb = c.toRgb();
+                        this.inputs['r'].val(Math.round(rgb.r));
+                        this.inputs['g'].val(Math.round(rgb.g));
+                        this.inputs['b'].val(Math.round(rgb.b));
+                        this.inputs['a'].val(Math.round(rgb.a * 100) / 100);
+                    } else if (format === 'HSL') {
+                        let hsl = c.toHsl();
+                        this.inputs['h'].val(Math.round(hsl.h));
+                        this.inputs['s'].val(Math.round(hsl.s * 100));
+                        this.inputs['l'].val(Math.round(hsl.l * 100));
+                        this.inputs['a'].val(Math.round(hsl.a * 100) / 100);
+                    } else if (format === 'HSV') {
+                        let hsv = c.toHsv();
+                        this.inputs['h'].val(Math.round(hsv.h));
+                        this.inputs['s'].val(Math.round(hsv.s * 100));
+                        this.inputs['v'].val(Math.round(hsv.v * 100));
+                        this.inputs['a'].val(Math.round(hsv.a * 100) / 100);
+                    }
+                }
+
+                handleMove(color, fromCustomInput = false) {
+                    this.value = tinycolor(color);
+                    if (!fromCustomInput) {
+                        this.updateAdvancedUI(this.value);
+                    }
+                    if (this.onMove) {
+                        this.onMove(this.value);
+                    }
+                    this.dispatchEvent('modify_color', { color: this.value });
+                }
+
+                change(color) {
+                    this.value = tinycolor(color);
+                    if (this.onChange) {
+                        this.onChange(this.value);
+                    }
+                    this.dispatchEvent('change', { color: this.value });
+                }
+
+                set(color) {
+                    this.value = tinycolor(color);
+                    this.jq.spectrum('set', this.value.toHex8String());
+                    this.updateAdvancedUI(this.value);
+                    return this;
+                }
+
+                get() {
+                    this.value = this.jq.spectrum('get');
+                    return this.value;
+                }
+            }
+
+            window.AdvancedColorPicker = AdvancedColorPicker;
+
+
+            // 3. MARK: FormElement AdvancedColor
+            FormElement.types.advanced_color = class FormElementAdvancedColor extends FormElement {
+
+                get uses_wide_inputs() { return true; }
+
+                setup() {
+                    let tempDesc = this.options.description;
+                    this.options.description = null;
+                    super.setup();
+                    this.options.description = tempDesc;
+                }
+
+                build(bar) {
+                    this.bar = bar;
+
+                    bar.classList.add('full_width_dialog_bar');
+                    bar.style.padding = '0';
+                    bar.style.background = 'transparent';
+                    bar.style.display = 'flex';
+                    bar.style.alignItems = 'center';
+                    bar.style.gap = '8px';
+
+                    let data = this.options;
+
+                    if (data.label) {
+                        let labelWrapper = document.createElement('div');
+                        labelWrapper.style = 'display: flex; align-items: center; gap: 4px; flex-shrink: 0; min-width: 80px;';
+
+                        let labelElement = document.createElement('span');
+                        labelElement.style = 'font-size: 13px; color: var(--color-subtle_text); white-space: nowrap;';
+                        labelElement.innerText = tl(data.label);
+                        labelWrapper.append(labelElement);
+
+                        if (data.description) {
+                            let infoIcon = document.createElement('i');
+                            infoIcon.className = 'fa fa-question dialog_form_description';
+                            infoIcon.style = 'font-size: 14px; cursor: help; margin: 0; color: var(--color-subtle_text);';
+                            infoIcon.title = tl(data.description);
+                            labelWrapper.append(infoIcon);
+                        }
+                        bar.append(labelWrapper);
+                    }
+
+                    if (this.options.colorpicker) this.colorpicker = this.options.colorpicker;
+
+                    if (!this.colorpicker) {
+                        this.colorpicker = new AdvancedColorPicker('cp_' + this.id + '_' + guid(), {
+                            name: data.label ? tl(data.label) : '',
+                            value: data.value !== undefined ? data.value : (data.default || '#ffffff'),
+                            palette: data.palette === true, // Corregido: Respeta la configuración original
+                            private: true, // Corregido: Previene colisiones de IDs y memory leaks
+                            onMove: (tinycolor) => {
+                                this.change();
+                            },
+                            onChange: (tinycolor) => {
+                                this.change();
+                            }
+                        });
+                    }
+
+                    this.colorpicker.node.style.flex = '1 1 auto';
+                    this.colorpicker.node.style.width = '100%';
+                    this.colorpicker.node.style.margin = '0';
+
+                    bar.append(this.colorpicker.getNode());
+                }
+
+                getValue() {
+                    return this.colorpicker ? this.colorpicker.get() : tinycolor('#ffffff');
+                }
+
+                setValue(value) {
+                    if (this.colorpicker) this.colorpicker.set(value);
+                }
+
+                getDefault() {
+                    return tinycolor('#ffffff');
+                }
+            };
 
             // MARK: Combo Slider
             FormElement.types.combo_slider = class FormElementComboSlider extends FormElement {
@@ -4779,6 +5257,26 @@ function initialize_light_plugin() {
                 }
             };
 
+            const getLightPanelUpdateOptions = (property) => {
+                if (['color', 'temperature', 'intensity'].includes(property)) {
+                    return {
+                        shadows: false,
+                        scene: false,
+                        gizmos: false
+                    };
+                }
+
+                if (['distance'].includes(property)) {
+                    return {
+                        shadows: false,
+                        scene: false,
+                        gizmos: true
+                    };
+                }
+
+                return {};
+            };
+
             const syncLightSettingsPanel = (light) => {
                 if (!light) return;
                 syncingLightSettings = true;
@@ -4838,8 +5336,13 @@ function initialize_light_plugin() {
 
                 light.updateLightIcon();
                 LightElement.preview_controller?.updateSelection(light);
-                window.update_light_element_callback?.();
-                syncLightSettingsPanel(light);
+                window.update_light_element_callback?.(getLightPanelUpdateOptions(property));
+
+                if (!['color', 'temperature', 'intensity'].includes(property)) {
+                    syncLightSettingsPanel(light);
+                } else {
+                    updateConditionalLightToolbars();
+                }
 
                 if (directUndo) Undo.finishEdit(undoLabel);
                 return true;
@@ -4859,7 +5362,7 @@ function initialize_light_plugin() {
                 }
             });
 
-            light_color_picker = new ColorPicker({
+            light_color_picker = new AdvancedColorPicker({
                 id: 'light_color_picker',
                 name: tl('property.light_color'),
                 label: false,
@@ -4867,6 +5370,10 @@ function initialize_light_plugin() {
                 condition: singleLightCondition,
                 onBefore: () => beginLightEdit('Change light color'),
                 onChange: function (color) {
+                    let newColor = tinycolor(color);
+                    applyLightPanelValue('color', [newColor._r, newColor._g, newColor._b], 'Change light color');
+                },
+                onMove: function (color) {
                     let newColor = tinycolor(color);
                     applyLightPanelValue('color', [newColor._r, newColor._g, newColor._b], 'Change light color');
                 },
@@ -5309,6 +5816,7 @@ function initialize_light_plugin() {
         },
 
         onunload() {
+            cancelLightManagerElementUpdate();
             window.LightManagerAreaGizmos?.clear();
             disposeLightManagerResources();
             cleanupLightManagerRegistries();

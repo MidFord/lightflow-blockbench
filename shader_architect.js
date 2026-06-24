@@ -435,6 +435,12 @@
         "shader_architect.uniform.uLightType.desc": "Light type IDs for point, spot, and directional lights",
         "shader_architect.uniform.uLightColor": "Light Colors",
         "shader_architect.uniform.uLightColor.desc": "Per-light color values from Light Manager",
+        "shader_architect.uniform.BEVEL_LIGHT_COLOR_STRENGTH": "Bevel Light Color",
+        "shader_architect.uniform.BEVEL_LIGHT_COLOR_STRENGTH.desc": "Boost how strongly Light Manager colors tint promotional bevel highlights",
+        "shader_architect.uniform.PROMO_RIM_COLOR_MODE": "Rim Color Mode",
+        "shader_architect.uniform.PROMO_RIM_COLOR_MODE.desc": "0 fixed color, 1 mix with lights, 2 use light color",
+        "shader_architect.uniform.PROMO_RIM_LIGHT_COLOR_INFLUENCE": "Rim Light Color",
+        "shader_architect.uniform.PROMO_RIM_LIGHT_COLOR_INFLUENCE.desc": "How much Light Manager color affects the promotional silhouette rim",
         "shader_architect.uniform.uLightCastShadow": "Shadow Casters",
         "shader_architect.uniform.uLightCastShadow.desc": "Per-light shadow casting flags",
         "shader_architect.uniform.uLightShadowIndex": "Shadow Indices",
@@ -690,6 +696,12 @@
         "shader_architect.uniform.uLightType.desc": "IDs de tipo para luces point, spot y direccionales",
         "shader_architect.uniform.uLightColor": "Colores de luz",
         "shader_architect.uniform.uLightColor.desc": "Valores de color por luz desde Light Manager",
+        "shader_architect.uniform.BEVEL_LIGHT_COLOR_STRENGTH": "Color de luz en bevel",
+        "shader_architect.uniform.BEVEL_LIGHT_COLOR_STRENGTH.desc": "Refuerza cuanto los colores de Light Manager tintan los highlights del bevel promocional",
+        "shader_architect.uniform.PROMO_RIM_COLOR_MODE": "Modo de color de silueta",
+        "shader_architect.uniform.PROMO_RIM_COLOR_MODE.desc": "0 color fijo, 1 mezcla con luces, 2 usa color de luces",
+        "shader_architect.uniform.PROMO_RIM_LIGHT_COLOR_INFLUENCE": "Color de luz en silueta",
+        "shader_architect.uniform.PROMO_RIM_LIGHT_COLOR_INFLUENCE.desc": "Cuanto afecta el color de Light Manager a la silueta promocional",
         "shader_architect.uniform.uLightCastShadow": "Sombras por luz",
         "shader_architect.uniform.uLightCastShadow.desc": "Flags de sombras proyectadas por cada luz",
         "shader_architect.uniform.uLightShadowIndex": "Indices de sombra",
@@ -762,6 +774,56 @@
         return clone;
     }
 
+    function isColorUniformDefinition(def) {
+        return !!def && (def.is_color === true || def.type === 'color');
+    }
+
+    function vectorToColorHex(value, fallback = '#ffffff') {
+        if (typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value)) {
+            return value;
+        }
+        if (value && value.isColor && typeof value.getHexString === 'function') {
+            return '#' + value.getHexString();
+        }
+        if (!value || value.x === undefined || value.y === undefined || value.z === undefined) {
+            return fallback;
+        }
+        const channelToHex = (channel) => {
+            const normalized = Math.max(0, Math.min(1, Number(channel) || 0));
+            return Math.round(normalized * 255).toString(16).padStart(2, '0');
+        };
+        return '#' + channelToHex(value.x) + channelToHex(value.y) + channelToHex(value.z);
+    }
+
+    function colorHexToVector(hex, targetValue, dimensions = 3) {
+        const color = new THREE.Color(hex || '#ffffff');
+        if (dimensions === 4) {
+            const alpha = targetValue && Number.isFinite(Number(targetValue.w))
+                ? Number(targetValue.w)
+                : 1.0;
+            return new THREE.Vector4(color.r, color.g, color.b, alpha);
+        }
+        return new THREE.Vector3(color.r, color.g, color.b);
+    }
+
+    function getUniformColorHex(def, fallback = '#ffffff') {
+        if (!def) return fallback;
+        if (def.hexValue) return def.hexValue;
+        return vectorToColorHex(def.value, fallback);
+    }
+
+    function syncColorUniformValue(def, hex) {
+        if (!def) return def;
+        const nextHex = hex || getUniformColorHex(def);
+        def.hexValue = nextHex;
+        if (def.type === 'vec4') {
+            def.value = colorHexToVector(nextHex, def.value, 4);
+        } else {
+            def.value = colorHexToVector(nextHex, def.value, 3);
+        }
+        return def;
+    }
+
     function createScreenSpaceReflectionUniforms(options = {}) {
         const valueFor = (name, fallback) => {
             if (options[name] !== undefined) return options[name];
@@ -822,11 +884,11 @@
             uLightCastShadow: { type: 'intv', value: Array(16).fill(0), expose: false },
             uLightShadowIndex: { type: 'intv', value: Array(16).fill(-1), expose: false },
             uAmbient: { type: 'float', value: 0.3, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: true, allow_lower: false },
-            uAmbientColor: { type: 'vec3', value: new THREE.Vector3(1, 1, 1), expose: true },
+            uAmbientColor: { type: 'vec3', value: new THREE.Vector3(1, 1, 1), hexValue: '#ffffff', expose: true, is_color: true },
             uWorldNormalMatrix: { type: 'mat3', value: new THREE.Matrix3(), expose: false },
             uShadowStrength: { type: 'float', value: 1.0, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
             uShadowFloor: { type: 'float', value: 0.0, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
-            LIGHTCOLOR: { type: 'vec3', value: new THREE.Vector3(1, 1, 1), expose: true },
+            LIGHTCOLOR: { type: 'vec3', value: new THREE.Vector3(1, 1, 1), hexValue: '#ffffff', expose: true, is_color: true },
             TEXTURE_SIZE: { type: 'vec2', value: new THREE.Vector2(16, 16), expose: false }
         };
     }
@@ -1698,9 +1760,13 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
             for (let key in this.uniforms) {
                 let u = this.uniforms[key];
                 let val = u.value;
-                if (val instanceof THREE.Vector3) val = { x: val.x, y: val.y, z: val.z };
+                if (isColorUniformDefinition(u)) {
+                    syncColorUniformValue(u, u.hexValue || vectorToColorHex(u.value));
+                    val = u.type === 'color' ? u.hexValue : u.value;
+                }
+                if (val instanceof THREE.Vector4) val = { x: val.x, y: val.y, z: val.z, w: val.w };
+                else if (val instanceof THREE.Vector3) val = { x: val.x, y: val.y, z: val.z };
                 else if (val instanceof THREE.Vector2) val = { x: val.x, y: val.y };
-                else if (u.type === 'color') val = u.hexValue; // Custom hex handler
 
                 serializedUniforms[key] = MaterialManager.cloneUniformDefinition(u);
                 serializedUniforms[key].value = val;
@@ -1731,6 +1797,9 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
 
                     if (type === 'color' && parsedDef.hexValue === undefined && typeof def.value === 'string') {
                         parsedDef.hexValue = def.value;
+                    }
+                    if (isColorUniformDefinition(parsedDef)) {
+                        syncColorUniformValue(parsedDef, parsedDef.hexValue || (typeof def.value === 'string' ? def.value : undefined));
                     }
 
                     parsedUniforms[key] = parsedDef;
@@ -1881,6 +1950,18 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
             return targetDef;
         },
 
+        isColorUniformDefinition(def) {
+            return isColorUniformDefinition(def);
+        },
+
+        getUniformColorHex(def, fallback = '#ffffff') {
+            return getUniformColorHex(def, fallback);
+        },
+
+        syncColorUniformValue(def, hex) {
+            return syncColorUniformValue(def, hex);
+        },
+
         createScreenSpaceReflectionUniforms(options = {}) {
             return createScreenSpaceReflectionUniforms(options);
         },
@@ -1974,6 +2055,9 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
         },
 
         serializeUniformValue(value) {
+            if (value && value.x !== undefined && value.y !== undefined && value.z !== undefined && value.w !== undefined) {
+                return { x: value.x, y: value.y, z: value.z, w: value.w };
+            }
             if (value && value.x !== undefined && value.y !== undefined && value.z !== undefined) {
                 return { x: value.x, y: value.y, z: value.z };
             }
@@ -1995,6 +2079,9 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
             const serialized = {};
             for (const key in uniforms || {}) {
                 const def = uniforms[key];
+                if (isColorUniformDefinition(def)) {
+                    syncColorUniformValue(def, def.hexValue || vectorToColorHex(def.value));
+                }
                 serialized[key] = this.cloneUniformDefinition(def);
                 serialized[key].value = this.serializeUniformValue(def.value);
             }
@@ -2008,6 +2095,9 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
                 if (type !== 'mat3' && type !== 'mat4') {
                     return value.map(v => this.deserializeUniformValue(itemType, v));
                 }
+            }
+            if ((type === 'vec4') && value && value.x !== undefined) {
+                return new THREE.Vector4(value.x, value.y, value.z, value.w !== undefined ? value.w : 1.0);
             }
             if ((type === 'vec3' || type === 'vec3v' || type === 'color') && value && value.x !== undefined) {
                 return new THREE.Vector3(value.x, value.y, value.z);
@@ -2047,6 +2137,9 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
                 parsed[key].value = this.deserializeUniformValue(type, def.value);
                 if (type === 'color' && parsed[key].hexValue === undefined && typeof def.value === 'string') {
                     parsed[key].hexValue = def.value;
+                }
+                if (isColorUniformDefinition(parsed[key])) {
+                    syncColorUniformValue(parsed[key], parsed[key].hexValue || (typeof def.value === 'string' ? def.value : undefined));
                 }
             }
             return parsed;
@@ -2731,11 +2824,11 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
             } else {
                 nextDef = this.cloneUniformDefinition(baseDef);
                 nextDef.value = this.cloneUniformValue(value);
-                if (nextDef.type === 'color') {
+                if (this.isColorUniformDefinition(nextDef)) {
                     if (typeof value === 'string') {
-                        nextDef.hexValue = value;
+                        this.syncColorUniformValue(nextDef, value);
                     } else {
-                        delete nextDef.hexValue;
+                        this.syncColorUniformValue(nextDef, nextDef.hexValue || vectorToColorHex(value));
                     }
                 }
             }
@@ -2959,7 +3052,7 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
                     }
                 `,
                 uniforms: {
-                    "LIGHTCOLOR": { type: "vec3", value: new THREE.Vector3(1, 1, 1), expose: true },
+                    "LIGHTCOLOR": { type: "vec3", value: new THREE.Vector3(1, 1, 1), hexValue: "#ffffff", expose: true, is_color: true },
                     "SHADE": { type: "bool", value: true, expose: true },
                     "LIGHTSIDE": { type: "int", value: 0, expose: true, min: 0, max: 5, step: 1, allow_higher: false, allow_lower: false },
                     "EMISSIVE": { type: "bool", value: false, expose: true }
@@ -3748,7 +3841,7 @@ void main() {
                     renderScale: 0.85
                 }), {
                     // Base PBR Properties
-                    "uBaseColor": { type: "color", value: "#ffffff", hexValue: "#ffffff", expose: true },
+                    "uBaseColor": { type: "vec3", value: new THREE.Vector3(1, 1, 1), hexValue: "#ffffff", expose: true, is_color: true },
                     "uMetallic": { type: "float", value: 0.0, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
                     "uRoughness": { type: "float", value: 0.5, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
                     "uAO": { type: "float", value: 1.0, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
@@ -3763,13 +3856,13 @@ void main() {
 
                     // Sheen
                     "uSheen": { type: "float", value: 0.0, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
-                    "uSheenColor": { type: "color", value: "#ffffff", hexValue: "#ffffff", expose: true },
+                    "uSheenColor": { type: "vec3", value: new THREE.Vector3(1, 1, 1), hexValue: "#ffffff", expose: true, is_color: true },
                     "uSheenRoughness": { type: "float", value: 0.5, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
 
                     // Transmission
                     "uTransmission": { type: "float", value: 0.0, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
                     "uThickness": { type: "float", value: 1.0, expose: true, min: 0.0, max: 10.0, step: 0.1, allow_higher: true, allow_lower: false },
-                    "uAttenuationColor": { type: "color", value: "#ffffff", hexValue: "#ffffff", expose: true },
+                    "uAttenuationColor": { type: "vec3", value: new THREE.Vector3(1, 1, 1), hexValue: "#ffffff", expose: true, is_color: true },
                     "uAttenuationDistance": { type: "float", value: 1.0, expose: true, min: 0.0, max: 10.0, step: 0.1, allow_higher: true, allow_lower: false },
                     "uIOR": { type: "float", value: 1.5, expose: true, min: 1.0, max: 3.0, step: 0.01, allow_higher: true, allow_lower: false },
 
@@ -3780,7 +3873,7 @@ void main() {
                     "uIridescenceThicknessMax": { type: "float", value: 400.0, expose: true, min: 0.0, max: 1000.0, step: 10.0, allow_higher: true, allow_lower: false },
 
                     // Emission
-                    "uEmissiveColor": { type: "color", value: "#000000", hexValue: "#000000", expose: true },
+                    "uEmissiveColor": { type: "vec3", value: new THREE.Vector3(0, 0, 0), hexValue: "#000000", expose: true, is_color: true },
                     "uEmissiveStrength": { type: "float", value: 0.0, expose: true, min: 0.0, max: 10.0, step: 0.1, allow_higher: true, allow_lower: false },
 
                     // Texture enable flags. Set these to true only when a real texture exists.
@@ -3852,7 +3945,7 @@ void main() {
 
                     // Ambient
                     "uAmbient": { type: "float", value: 0.3, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: true, allow_lower: false },
-                    "uAmbientColor": { type: "vec3", value: new THREE.Vector3(1, 1, 1), expose: true },
+                    "uAmbientColor": { type: "vec3", value: new THREE.Vector3(1, 1, 1), hexValue: "#ffffff", expose: true, is_color: true },
 
                     // Normal correction
                     "uWorldNormalMatrix": { type: "mat3", value: new THREE.Matrix3(), expose: false },
@@ -3878,7 +3971,7 @@ void main() {
                     // Blockbench-style controls
                     "SHADE": { type: "bool", value: true, expose: true },
                     "LIGHTSIDE": { type: "int", value: 0, expose: true, min: 0, max: 5, step: 1, allow_higher: false, allow_lower: false },
-                    "LIGHTCOLOR": { type: "vec3", value: new THREE.Vector3(1, 1, 1), expose: true },
+                    "LIGHTCOLOR": { type: "vec3", value: new THREE.Vector3(1, 1, 1), hexValue: "#ffffff", expose: true, is_color: true },
                     "TEXTURE_SIZE": { type: "vec2", value: new THREE.Vector2(16, 16), expose: false }
                 }),
                 supportsScreenSpaceReflections: true,
@@ -3996,7 +4089,9 @@ void main() {
                     "uAmbientColor": {
                         type: "vec3",
                         value: new THREE.Vector3(1, 1, 1),
-                        expose: true
+                        hexValue: "#ffffff",
+                        expose: true,
+                        is_color: true
                     },
 
                     // Normal correction
@@ -4161,7 +4256,9 @@ void main() {
                     "LIGHTCOLOR": {
                         type: "vec3",
                         value: new THREE.Vector3(1, 1, 1),
-                        expose: true
+                        hexValue: "#ffffff",
+                        expose: true,
+                        is_color: true
                     },
                     "AUTO_TILE": {
                         type: "bool",
@@ -6091,6 +6188,7 @@ void main() {
                 enableShadows: true
             });
 
+
             let minecraft_promotional_bevel = new FancyShaderMaterial({
                 id: 'minecraft_promotional_bevel',
                 name: 'Minecraft Promotional Bevel',
@@ -6110,28 +6208,31 @@ uniform bool SHADE;
 uniform int LIGHTSIDE;
 uniform mat3 uWorldNormalMatrix;
 
-varying vec2 vMapUv;
-varying float vLightingFactor;
-varying float vHighlightLift;
+varying vec2 vPromoMapUv;
+varying vec2 vPromoElementUv;
+varying vec2 vPromoElementSize;
+varying vec2 vPromoElementUvSize;
 
-varying vec2 vElementLocalUv;
-varying vec2 vElementSize;
-varying vec2 vElementUvSize;
+varying vec3 vPromoWorldPosition;
+varying vec3 vPromoWorldNormal;
 
-varying vec3 vWorldPos;
-varying vec3 vWorldNormal;
+varying float vPromoClassicLight;
+varying float vPromoHighlightLift;
 
-vec3 safeNormalize(vec3 value, vec3 fallbackValue) {
-    float lengthSquared = dot(value, value);
+vec3 promoSafeNormalize(
+    vec3 value,
+    vec3 fallbackValue
+) {
+    float valueLengthSquared = dot(value, value);
 
-    if (lengthSquared <= 0.000001) {
+    if (valueLengthSquared <= 0.000001) {
         return fallbackValue;
     }
 
-    return value * inversesqrt(lengthSquared);
+    return value * inversesqrt(valueLengthSquared);
 }
 
-vec3 applyLightSide(vec3 normalValue) {
+vec3 promoApplyLightSide(vec3 normalValue) {
     vec3 result = normalValue;
 
     if (LIGHTSIDE == 1) {
@@ -6154,48 +6255,55 @@ vec3 applyLightSide(vec3 normalValue) {
         result.x = previousY;
     }
 
-    return safeNormalize(result, vec3(0.0, 1.0, 0.0));
+    return promoSafeNormalize(
+        result,
+        vec3(0.0, 1.0, 0.0)
+    );
 }
 
 void main() {
-    vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+    vec4 worldPosition =
+        modelMatrix *
+        vec4(position, 1.0);
 
     /*
-        Required by Three.js shadowmap_vertex.
+        shadowmap_vertex expects this normal declaration.
     */
-    vec3 transformedNormal = normalize(normalMatrix * normal);
+    vec3 transformedNormal =
+        normalize(normalMatrix * normal);
 
-    vWorldPos = worldPosition.xyz;
+    vPromoWorldPosition = worldPosition.xyz;
 
-    vWorldNormal = safeNormalize(
+    vPromoWorldNormal = promoSafeNormalize(
         uWorldNormalMatrix * normal,
         vec3(0.0, 1.0, 0.0)
     );
 
-    vMapUv = uv;
-
-    vElementLocalUv = normalizedFaceUv;
-    vElementSize = faceSize;
-    vElementUvSize = uvSize;
+    vPromoMapUv = uv;
+    vPromoElementUv = normalizedFaceUv;
+    vPromoElementSize = faceSize;
+    vPromoElementUvSize = uvSize;
 
     if (SHADE) {
-        vec3 legacyLightingNormal = applyLightSide(vWorldNormal);
+        vec3 lightingNormal = promoApplyLightSide(
+            vPromoWorldNormal
+        );
 
         float verticalLight =
-            (1.0 + legacyLightingNormal.y) * 0.5;
+            (1.0 + lightingNormal.y) * 0.5;
 
-        vLightingFactor =
+        vPromoClassicLight =
             verticalLight * 0.5 +
-            legacyLightingNormal.x *
-            legacyLightingNormal.x * -0.15 +
-            legacyLightingNormal.z *
-            legacyLightingNormal.z * 0.05 +
+            lightingNormal.x *
+            lightingNormal.x * -0.15 +
+            lightingNormal.z *
+            lightingNormal.z * 0.05 +
             0.5;
     } else {
-        vLightingFactor = 1.0;
+        vPromoClassicLight = 1.0;
     }
 
-    vHighlightLift =
+    vPromoHighlightLift =
         highlight == 2.0 ? 0.22 :
         highlight == 1.0 ? 0.10 :
         0.0;
@@ -6216,7 +6324,6 @@ uniform bool EMISSIVE;
 uniform vec3 LIGHTCOLOR;
 uniform vec2 TEXTURE_SIZE;
 
-/* Light Manager / Lightflow arrays. */
 uniform vec3 uLightPos[16];
 uniform vec3 uLightDir[16];
 uniform vec3 uLightColor[16];
@@ -6229,7 +6336,10 @@ uniform float uLightPenumbra[16];
 uniform int uLightType[16];
 uniform int max_light_number;
 
-/* Outline controls. */
+/*
+    Local per-element outline controls.
+    These only shade already visible fragments. They never draw outside a cube.
+*/
 uniform bool OUTLINE_ELEMENT_ENABLED;
 uniform bool OUTLINE_ALPHA_ENABLED;
 uniform bool OUTLINE_ALPHA_CLAMP_TO_ELEMENT;
@@ -6243,9 +6353,10 @@ uniform int OUTLINE_MODE;
 uniform vec3 OUTLINE_COLOR;
 uniform bool OUTLINE_AFFECTED_BY_LIGHT;
 
-/* Promotional bevel controls. */
+/*
+    Per-face promotional bevel controls.
+*/
 uniform bool BEVEL_ENABLED;
-
 uniform float BEVEL_WIDTH;
 uniform float BEVEL_SOFTNESS;
 uniform float BEVEL_SLOPE;
@@ -6255,35 +6366,58 @@ uniform float BEVEL_HIGHLIGHT;
 uniform float BEVEL_SHADOW;
 uniform float BEVEL_SHADOW_SATURATION;
 uniform float BEVEL_LIGHT_STRENGTH;
+uniform float BEVEL_HIGHLIGHT_COLOR_INFLUENCE;
+uniform float BEVEL_LIGHT_COLOR_STRENGTH;
 
 uniform vec3 EDGE_FALLBACK_LIGHT_DIRECTION;
 
-varying vec2 vMapUv;
-varying float vLightingFactor;
-varying float vHighlightLift;
+/*
+    Read by MinecraftPromotionalSilhouetteManager.
+    The manager renders a global, union silhouette of every cube with the same
+    PROMO_RIM_GROUP. It is intentionally not sampled in this fragment shader.
+*/
+uniform bool PROMO_RIM_ENABLED;
+uniform float PROMO_RIM_WIDTH;
+uniform float PROMO_RIM_INTENSITY;
+uniform vec3 PROMO_RIM_COLOR;
+uniform int PROMO_RIM_COLOR_MODE;
+uniform float PROMO_RIM_LIGHT_COLOR_INFLUENCE;
+uniform vec2 PROMO_RIM_DIRECTION;
+uniform float PROMO_RIM_DIRECTIONALITY;
+uniform float PROMO_RIM_DIRECTION_SOFTNESS;
+uniform int PROMO_RIM_GROUP;
+uniform bool PROMO_RIM_OCCLUSION_ENABLED;
+uniform float PROMO_RIM_DEPTH_EPSILON;
 
-varying vec2 vElementLocalUv;
-varying vec2 vElementSize;
-varying vec2 vElementUvSize;
+varying vec2 vPromoMapUv;
+varying vec2 vPromoElementUv;
+varying vec2 vPromoElementSize;
+varying vec2 vPromoElementUvSize;
 
-varying vec3 vWorldPos;
-varying vec3 vWorldNormal;
+varying vec3 vPromoWorldPosition;
+varying vec3 vPromoWorldNormal;
 
-#define SA_LIGHT_POINT 0
-#define SA_LIGHT_DIRECTIONAL 1
-#define SA_LIGHT_SPOT 2
+varying float vPromoClassicLight;
+varying float vPromoHighlightLift;
 
-vec3 safeNormalize(vec3 value, vec3 fallbackValue) {
-    float lengthSquared = dot(value, value);
+#define SA_PROMO_POINT_LIGHT 0
+#define SA_PROMO_DIRECTIONAL_LIGHT 1
+#define SA_PROMO_SPOT_LIGHT 2
 
-    if (lengthSquared <= 0.000001) {
+vec3 promoSafeNormalize(
+    vec3 value,
+    vec3 fallbackValue
+) {
+    float valueLengthSquared = dot(value, value);
+
+    if (valueLengthSquared <= 0.000001) {
         return fallbackValue;
     }
 
-    return value * inversesqrt(lengthSquared);
+    return value * inversesqrt(valueLengthSquared);
 }
 
-vec3 rgbToHsv(vec3 rgb) {
+vec3 promoRgbToHsv(vec3 rgb) {
     vec4 K = vec4(
         0.0,
         -1.0 / 3.0,
@@ -6304,7 +6438,7 @@ vec3 rgbToHsv(vec3 rgb) {
     );
 
     float delta = q.x - min(q.w, q.y);
-    float epsilon = 1.0e-10;
+    float epsilon = 0.0000001;
 
     return vec3(
         abs(q.z + (q.w - q.y) / (6.0 * delta + epsilon)),
@@ -6313,7 +6447,7 @@ vec3 rgbToHsv(vec3 rgb) {
     );
 }
 
-vec3 hsvToRgb(vec3 hsv) {
+vec3 promoHsvToRgb(vec3 hsv) {
     vec4 K = vec4(
         1.0,
         2.0 / 3.0,
@@ -6334,17 +6468,15 @@ vec3 hsvToRgb(vec3 hsv) {
 }
 
 /*
-    Local element UV -> actual atlas UV mapping.
-
-    This is evaluated before discard. That matters because dFdx/dFdy can
-    become unstable around alpha-tested fragments when called after discard.
+    Derives the local-UV -> atlas-UV transform before any discard.
+    It prevents alpha-outline samples from jumping to arbitrary atlas pixels.
 */
-mat2 getElementToMapUvJacobian() {
-    vec2 localDx = dFdx(vElementLocalUv);
-    vec2 localDy = dFdy(vElementLocalUv);
+mat2 promoGetElementToMapJacobian() {
+    vec2 localDx = dFdx(vPromoElementUv);
+    vec2 localDy = dFdy(vPromoElementUv);
 
-    vec2 mapDx = dFdx(vMapUv);
-    vec2 mapDy = dFdy(vMapUv);
+    vec2 mapDx = dFdx(vPromoMapUv);
+    vec2 mapDy = dFdy(vPromoMapUv);
 
     float determinant =
         localDx.x * localDy.y -
@@ -6364,24 +6496,26 @@ mat2 getElementToMapUvJacobian() {
         (mapDy * localDx.x - mapDx * localDy.x) *
         inverseDeterminant;
 
-    return mat2(mapPerLocalX, mapPerLocalY);
+    return mat2(
+        mapPerLocalX,
+        mapPerLocalY
+    );
 }
 
 /*
-    Reconstructs the face U/V axes in world space.
-
-    It also runs before discard, for stable bevels around alpha cutouts.
+    Reconstructs a stable world-space tangent frame for the current cube face.
+    It is based on the element-local face UV, not the atlas UV.
 */
-void getFaceTangentFrame(
+void promoGetFaceFrame(
     vec3 normalValue,
     out vec3 tangentU,
     out vec3 tangentV
 ) {
-    vec3 worldDx = dFdx(vWorldPos);
-    vec3 worldDy = dFdy(vWorldPos);
+    vec3 worldDx = dFdx(vPromoWorldPosition);
+    vec3 worldDy = dFdy(vPromoWorldPosition);
 
-    vec2 localDx = dFdx(vElementLocalUv);
-    vec2 localDy = dFdy(vElementLocalUv);
+    vec2 localDx = dFdx(vPromoElementUv);
+    vec2 localDy = dFdy(vPromoElementUv);
 
     float determinant =
         localDx.x * localDy.y -
@@ -6390,12 +6524,12 @@ void getFaceTangentFrame(
     vec3 fallbackTangentU;
 
     if (abs(normalValue.y) < 0.98) {
-        fallbackTangentU = safeNormalize(
+        fallbackTangentU = promoSafeNormalize(
             cross(vec3(0.0, 1.0, 0.0), normalValue),
             vec3(1.0, 0.0, 0.0)
         );
     } else {
-        fallbackTangentU = safeNormalize(
+        fallbackTangentU = promoSafeNormalize(
             cross(vec3(1.0, 0.0, 0.0), normalValue),
             vec3(0.0, 0.0, 1.0)
         );
@@ -6416,92 +6550,44 @@ void getFaceTangentFrame(
         tangentV = cross(normalValue, tangentU);
     }
 
-    tangentU = safeNormalize(
+    tangentU = promoSafeNormalize(
         tangentU,
         fallbackTangentU
     );
 
     tangentV -= tangentU * dot(tangentU, tangentV);
 
-    tangentV = safeNormalize(
+    tangentV = promoSafeNormalize(
         tangentV,
-        safeNormalize(
+        promoSafeNormalize(
             cross(normalValue, tangentU),
             vec3(0.0, 0.0, 1.0)
         )
     );
 }
 
-vec4 getFaceEdgeBands(
+vec4 promoGetEdgeBands(
     vec2 localUv,
     vec2 elementSize,
-    float widthFraction,
+    float absoluteWidth,
     float softness
 ) {
-    vec2 safeElementSize = max(
-        abs(elementSize),
-        vec2(0.0001)
-    );
+    vec2 safeSize = max(abs(elementSize), vec2(0.0001));
+    vec2 localPosition = clamp(localUv, vec2(0.0), vec2(1.0)) * safeSize;
 
-    vec2 elementPosition =
-        clamp(localUv, vec2(0.0), vec2(1.0)) *
-        safeElementSize;
+    // AHORA EL GROSOR ES GLOBAL. 1.0 equivale exactamente a 1 píxel de Minecraft.
+    float bevelWidth = max(absoluteWidth, 0.00001);
+    float feather = max(bevelWidth * max(softness, 0.0), 0.00001);
 
-    float shortestSide = min(
-        safeElementSize.x,
-        safeElementSize.y
-    );
+    float leftBand = 1.0 - smoothstep(bevelWidth, bevelWidth + feather, localPosition.x);
+    float rightBand = 1.0 - smoothstep(bevelWidth, bevelWidth + feather, safeSize.x - localPosition.x);
+    float bottomBand = 1.0 - smoothstep(bevelWidth, bevelWidth + feather, localPosition.y);
+    float topBand = 1.0 - smoothstep(bevelWidth, bevelWidth + feather, safeSize.y - localPosition.y);
 
-    float bevelWidth =
-        clamp(widthFraction, 0.0, 0.45) *
-        shortestSide;
-
-    if (bevelWidth <= 0.00001) {
-        return vec4(0.0);
-    }
-
-    float feather = max(
-        bevelWidth * max(softness, 0.0),
-        0.00001
-    );
-
-    float leftBand = 1.0 - smoothstep(
-        bevelWidth,
-        bevelWidth + feather,
-        elementPosition.x
-    );
-
-    float rightBand = 1.0 - smoothstep(
-        bevelWidth,
-        bevelWidth + feather,
-        safeElementSize.x - elementPosition.x
-    );
-
-    float bottomBand = 1.0 - smoothstep(
-        bevelWidth,
-        bevelWidth + feather,
-        elementPosition.y
-    );
-
-    float topBand = 1.0 - smoothstep(
-        bevelWidth,
-        bevelWidth + feather,
-        safeElementSize.y - elementPosition.y
-    );
-
-    return clamp(
-        vec4(
-            leftBand,
-            rightBand,
-            bottomBand,
-            topBand
-        ),
-        0.0,
-        1.0
-    );
+    return clamp(vec4(leftBand, rightBand, bottomBand, topBand), 0.0, 1.0);
 }
 
-float getDistanceAttenuation(
+float promoDistanceAttenuation(
     float distanceToLight,
     float lightRange
 ) {
@@ -6533,11 +6619,11 @@ float getDistanceAttenuation(
     );
 }
 
-float getSpotAttenuation(
+float promoSpotAttenuation(
     int lightIndex,
     vec3 surfaceToLightDirection
 ) {
-    vec3 lightToSpotTargetDirection = safeNormalize(
+    vec3 spotDirection = promoSafeNormalize(
         uLightDir[lightIndex],
         vec3(0.0, -1.0, 0.0)
     );
@@ -6561,44 +6647,37 @@ float getSpotAttenuation(
 
     float theta = dot(
         surfaceToLightDirection,
-        -lightToSpotTargetDirection
-    );
-
-    float denominator = max(
-        innerCutoff - outerCutoff,
-        0.0001
+        -spotDirection
     );
 
     return clamp(
-        (theta - outerCutoff) / denominator,
+        (theta - outerCutoff) /
+        max(innerCutoff - outerCutoff, 0.0001),
         0.0,
         1.0
     );
 }
 
 /*
-    This selects a directional artistic light for the bevel.
-    It does not replace your future Lightflow lighting calculation.
+    Collects an artistic directional key from Light Manager. It is only used
+    for bevel orientation; it does not replace Lightflow's future lighting.
 */
-void getStylizedKeyLight(
-    vec3 normalValue,
+void promoGetKeyLight(
     out vec3 keyDirection,
     out vec3 keyColor,
-    out float keyAmount
+    out float keyEnergy
 ) {
     vec3 weightedDirection = vec3(0.0);
     vec3 weightedColor = vec3(0.0);
+    float totalWeight = 0.0;
 
-    float totalEnergy = 0.0;
-    float activeLightCount = 0.0;
-
-    for (int i = 0; i < 16; i++) {
-        if (i >= max_light_number) {
+    for (int index = 0; index < 16; index++) {
+        if (index >= max_light_number) {
             break;
         }
 
         float intensity = max(
-            uLightIntensity[i],
+            uLightIntensity[index],
             0.0
         );
 
@@ -6606,20 +6685,20 @@ void getStylizedKeyLight(
             continue;
         }
 
-        int lightType = uLightType[i];
+        int lightType = uLightType[index];
 
         vec3 currentDirection;
         float attenuation = 1.0;
 
-        if (lightType == SA_LIGHT_DIRECTIONAL) {
-            currentDirection = safeNormalize(
-                -uLightDir[i],
-                vec3(0.0, 1.0, 0.0)
+        if (lightType == SA_PROMO_DIRECTIONAL_LIGHT) {
+            currentDirection = promoSafeNormalize(
+                -uLightDir[index],
+                vec3(-0.45, 0.80, 0.35)
             );
         } else {
             vec3 toLight =
-                uLightPos[i] -
-                vWorldPos;
+                uLightPos[index] -
+                vPromoWorldPosition;
 
             float distanceToLight = max(
                 length(toLight),
@@ -6630,527 +6709,81 @@ void getStylizedKeyLight(
                 toLight /
                 distanceToLight;
 
-            attenuation = getDistanceAttenuation(
+            attenuation = promoDistanceAttenuation(
                 distanceToLight,
-                uLightDistance[i]
+                uLightDistance[index]
             );
 
-            if (lightType == SA_LIGHT_SPOT) {
-                attenuation *= getSpotAttenuation(
-                    i,
+            if (lightType == SA_PROMO_SPOT_LIGHT) {
+                attenuation *= promoSpotAttenuation(
+                    index,
                     currentDirection
                 );
             }
         }
 
-        float faceResponse = max(
-            dot(normalValue, currentDirection),
-            0.0
-        );
-
-        float energy =
+        float weight =
             intensity *
-            attenuation *
-            (0.16 + faceResponse * 0.84);
+            attenuation;
+
+        if (weight <= 0.00001) {
+            continue;
+        }
 
         weightedDirection +=
             currentDirection *
-            energy;
+            weight;
 
         weightedColor +=
-            max(uLightColor[i], vec3(0.0)) *
-            energy;
+            max(uLightColor[index], vec3(0.0)) *
+            weight;
 
-        totalEnergy += energy;
-        activeLightCount += 1.0;
+        totalWeight += weight;
     }
 
-    vec3 fallbackDirection = safeNormalize(
+    vec3 fallbackDirection = promoSafeNormalize(
         EDGE_FALLBACK_LIGHT_DIRECTION,
         vec3(-0.45, 0.80, 0.35)
     );
 
-    if (
-        activeLightCount <= 0.0 ||
-        totalEnergy <= 0.00001
-    ) {
+    if (totalWeight <= 0.00001) {
         keyDirection = fallbackDirection;
         keyColor = vec3(1.0);
-        keyAmount = 1.0;
+        keyEnergy = 1.0;
         return;
     }
 
-    keyDirection = safeNormalize(
+    keyDirection = promoSafeNormalize(
         weightedDirection,
         fallbackDirection
     );
 
     keyColor =
         weightedColor /
-        max(totalEnergy, 0.0001);
+        max(totalWeight, 0.0001);
 
-    keyAmount = clamp(
-        1.0 - exp(-totalEnergy),
+    keyEnergy = clamp(
+        1.0 - exp(-totalWeight),
         0.0,
         1.0
     );
 }
 
-float getGradientRange(
-    float distanceToEdge,
-    float outlineWidth
+float promoCornerTaper(
+    float coordinate,
+    float cornerFade
 ) {
-    if (outlineWidth <= 0.00001) {
-        return 0.0;
+    if (cornerFade <= 0.00001) {
+        return 1.0;
     }
 
-    return clamp(
-        1.0 - distanceToEdge / outlineWidth,
-        0.0,
-        1.0
+    return min(
+        smoothstep(0.0, cornerFade, coordinate),
+        smoothstep(0.0, cornerFade, 1.0 - coordinate)
     );
 }
 
-float getElementOutlineMask(
-    float outlineWidth,
-    vec2 elementLocalUv,
-    vec2 elementSize
-) {
-    vec2 safeElementSize = max(
-        abs(elementSize),
-        vec2(0.0001)
-    );
-
-    vec2 elementPosition =
-        clamp(
-            elementLocalUv,
-            vec2(0.0),
-            vec2(1.0)
-        ) *
-        safeElementSize;
-
-    float leftEdge = getGradientRange(
-        elementPosition.x,
-        outlineWidth
-    );
-
-    float rightEdge = getGradientRange(
-        safeElementSize.x - elementPosition.x,
-        outlineWidth
-    );
-
-    float bottomEdge = getGradientRange(
-        elementPosition.y,
-        outlineWidth
-    );
-
-    float topEdge = getGradientRange(
-        safeElementSize.y - elementPosition.y,
-        outlineWidth
-    );
-
-    /*
-        max prevents the corners from accumulating twice.
-    */
-    return max(
-        max(leftEdge, rightEdge),
-        max(bottomEdge, topEdge)
-    );
-}
-
-float sampleAlphaInsideElement(
-    vec2 textureUv,
-    vec2 elementLocalUv,
-    vec2 localOffset,
-    vec2 textureUvOffset,
-    float sourceAlpha,
-    bool clampToElement
-) {
-    if (clampToElement) {
-        vec2 targetLocalUv =
-            elementLocalUv +
-            localOffset;
-
-        if (
-            targetLocalUv.x < 0.0 ||
-            targetLocalUv.y < 0.0 ||
-            targetLocalUv.x > 1.0 ||
-            targetLocalUv.y > 1.0
-        ) {
-            return sourceAlpha;
-        }
-    }
-
-    vec2 targetTextureUv =
-        textureUv +
-        textureUvOffset;
-
-    if (
-        targetTextureUv.x < 0.0 ||
-        targetTextureUv.y < 0.0 ||
-        targetTextureUv.x > 1.0 ||
-        targetTextureUv.y > 1.0
-    ) {
-        return 0.0;
-    }
-
-    return texture2D(
-        map,
-        targetTextureUv
-    ).a;
-}
-
-vec2 getLegacyAlphaFallbackOffset(
-    vec2 elementUvSize,
-    float outlineWidth
-) {
-    vec2 safeTextureSize = max(
-        TEXTURE_SIZE,
-        vec2(1.0)
-    );
-
-    return max(
-        abs(elementUvSize) *
-        outlineWidth /
-        safeTextureSize,
-        vec2(0.00001)
-    );
-}
-
-float getAlphaOutlineMask(
-    float sourceAlpha,
-    mat2 elementToMapUv,
-    float outlineWidth
-) {
-    if (
-        !OUTLINE_ALPHA_ENABLED ||
-        outlineWidth <= 0.0
-    ) {
-        return 0.0;
-    }
-
-    vec2 safeElementSize = max(
-        abs(vElementSize),
-        vec2(0.0001)
-    );
-
-    vec2 localStep =
-        vec2(outlineWidth) /
-        safeElementSize;
-
-    float jacobianMagnitude =
-        length(elementToMapUv[0]) +
-        length(elementToMapUv[1]);
-
-    bool hasValidJacobian =
-        jacobianMagnitude > 0.000001;
-
-    bool clampToElement =
-        OUTLINE_ALPHA_CLAMP_TO_ELEMENT &&
-        hasValidJacobian;
-
-    vec2 localTopRight =
-        vec2(localStep.x, localStep.y);
-
-    vec2 localBottomRight =
-        vec2(localStep.x, -localStep.y);
-
-    vec2 localTopLeft =
-        vec2(-localStep.x, localStep.y);
-
-    vec2 localBottomLeft =
-        vec2(-localStep.x, -localStep.y);
-
-    vec2 fallbackStep = getLegacyAlphaFallbackOffset(
-        vElementUvSize,
-        outlineWidth
-    );
-
-    vec2 mapTopRight = hasValidJacobian
-        ? elementToMapUv * localTopRight
-        : vec2(fallbackStep.x, fallbackStep.y);
-
-    vec2 mapBottomRight = hasValidJacobian
-        ? elementToMapUv * localBottomRight
-        : vec2(fallbackStep.x, -fallbackStep.y);
-
-    vec2 mapTopLeft = hasValidJacobian
-        ? elementToMapUv * localTopLeft
-        : vec2(-fallbackStep.x, fallbackStep.y);
-
-    vec2 mapBottomLeft = hasValidJacobian
-        ? elementToMapUv * localBottomLeft
-        : vec2(-fallbackStep.x, -fallbackStep.y);
-
-    float alphaTopRight = sampleAlphaInsideElement(
-        vMapUv,
-        vElementLocalUv,
-        localTopRight,
-        mapTopRight,
-        sourceAlpha,
-        clampToElement
-    );
-
-    float alphaBottomRight = sampleAlphaInsideElement(
-        vMapUv,
-        vElementLocalUv,
-        localBottomRight,
-        mapBottomRight,
-        sourceAlpha,
-        clampToElement
-    );
-
-    float alphaTopLeft = sampleAlphaInsideElement(
-        vMapUv,
-        vElementLocalUv,
-        localTopLeft,
-        mapTopLeft,
-        sourceAlpha,
-        clampToElement
-    );
-
-    float alphaBottomLeft = sampleAlphaInsideElement(
-        vMapUv,
-        vElementLocalUv,
-        localBottomLeft,
-        mapBottomLeft,
-        sourceAlpha,
-        clampToElement
-    );
-
-    float smallestNeighborAlpha = min(
-        min(alphaTopRight, alphaBottomRight),
-        min(alphaTopLeft, alphaBottomLeft)
-    );
-
-    /*
-        false = also samples cardinal directions.
-        true = exact legacy diagonal-only approach.
-    */
-    if (!OUTLINE_ALPHA_DIAGONAL_ONLY) {
-        vec2 localRight =
-            vec2(localStep.x, 0.0);
-
-        vec2 localLeft =
-            vec2(-localStep.x, 0.0);
-
-        vec2 localTop =
-            vec2(0.0, localStep.y);
-
-        vec2 localBottom =
-            vec2(0.0, -localStep.y);
-
-        vec2 mapRight = hasValidJacobian
-            ? elementToMapUv * localRight
-            : vec2(fallbackStep.x, 0.0);
-
-        vec2 mapLeft = hasValidJacobian
-            ? elementToMapUv * localLeft
-            : vec2(-fallbackStep.x, 0.0);
-
-        vec2 mapTop = hasValidJacobian
-            ? elementToMapUv * localTop
-            : vec2(0.0, fallbackStep.y);
-
-        vec2 mapBottom = hasValidJacobian
-            ? elementToMapUv * localBottom
-            : vec2(0.0, -fallbackStep.y);
-
-        float alphaRight = sampleAlphaInsideElement(
-            vMapUv,
-            vElementLocalUv,
-            localRight,
-            mapRight,
-            sourceAlpha,
-            clampToElement
-        );
-
-        float alphaLeft = sampleAlphaInsideElement(
-            vMapUv,
-            vElementLocalUv,
-            localLeft,
-            mapLeft,
-            sourceAlpha,
-            clampToElement
-        );
-
-        float alphaTop = sampleAlphaInsideElement(
-            vMapUv,
-            vElementLocalUv,
-            localTop,
-            mapTop,
-            sourceAlpha,
-            clampToElement
-        );
-
-        float alphaBottom = sampleAlphaInsideElement(
-            vMapUv,
-            vElementLocalUv,
-            localBottom,
-            mapBottom,
-            sourceAlpha,
-            clampToElement
-        );
-
-        smallestNeighborAlpha = min(
-            smallestNeighborAlpha,
-            min(
-                min(alphaRight, alphaLeft),
-                min(alphaTop, alphaBottom)
-            )
-        );
-    }
-
-    /*
-        Equivalent to:
-        max(sourceAlpha - neighborAlpha)
-    */
-    return clamp(
-        sourceAlpha - smallestNeighborAlpha,
-        0.0,
-        1.0
-    );
-}
-
-vec3 applyOutline(
-    vec3 sourceColor,
-    float sourceAlpha,
-    mat2 elementToMapUv
-) {
-    if (
-        OUTLINE_WIDTH <= 0.0 ||
-        OUTLINE_INTENSITY <= 0.0 ||
-        (
-            !OUTLINE_ELEMENT_ENABLED &&
-            !OUTLINE_ALPHA_ENABLED
-        )
-    ) {
-        return sourceColor;
-    }
-
-    float elementOutlineMask = 0.0;
-    float alphaOutlineMask = 0.0;
-
-    if (OUTLINE_ELEMENT_ENABLED) {
-        elementOutlineMask = getElementOutlineMask(
-            OUTLINE_WIDTH,
-            vElementLocalUv,
-            vElementSize
-        );
-    }
-
-    if (OUTLINE_ALPHA_ENABLED) {
-        alphaOutlineMask = getAlphaOutlineMask(
-            sourceAlpha,
-            elementToMapUv,
-            OUTLINE_WIDTH
-        );
-    }
-
-    /*
-        Preserves your original logic:
-        hard-cut affects only the element outline.
-    */
-    if (OUTLINE_FADE <= 0.0) {
-        elementOutlineMask =
-            ceil(elementOutlineMask);
-    } else {
-        float fadeLimit = clamp(
-            OUTLINE_FADE,
-            0.001,
-            1.0
-        );
-
-        elementOutlineMask = smoothstep(
-            0.0,
-            fadeLimit,
-            elementOutlineMask
-        );
-
-        alphaOutlineMask = smoothstep(
-            0.0,
-            fadeLimit,
-            alphaOutlineMask
-        );
-    }
-
-    float outlineMask = max(
-        elementOutlineMask,
-        alphaOutlineMask
-    );
-
-    if (outlineMask <= 0.0) {
-        return sourceColor;
-    }
-
-    float appliedIntensity = clamp(
-        outlineMask *
-        OUTLINE_INTENSITY,
-        0.0,
-        1.0
-    );
-
-    if (
-        OUTLINE_AFFECTED_BY_LIGHT &&
-        !EMISSIVE
-    ) {
-        appliedIntensity *= clamp(
-            vLightingFactor,
-            0.0,
-            1.5
-        );
-    }
-
-    if (
-        OUTLINE_MODE == 0 ||
-        OUTLINE_MODE == 1
-    ) {
-        vec3 hsv = rgbToHsv(
-            clamp(
-                sourceColor,
-                vec3(0.0),
-                vec3(1.0)
-            )
-        );
-
-        if (OUTLINE_MODE == 0) {
-            hsv.z += appliedIntensity;
-        } else {
-            hsv.z -= appliedIntensity;
-        }
-
-        hsv.z = clamp(
-            hsv.z,
-            0.0,
-            1.0
-        );
-
-        return hsvToRgb(hsv);
-    }
-
-    if (OUTLINE_MODE == 2) {
-        vec3 outlineColor = OUTLINE_COLOR;
-
-        if (
-            OUTLINE_AFFECTED_BY_LIGHT &&
-            !EMISSIVE
-        ) {
-            outlineColor *=
-                LIGHTCOLOR *
-                vLightingFactor;
-        }
-
-        return mix(
-            sourceColor,
-            outlineColor,
-            appliedIntensity
-        );
-    }
-
-    return sourceColor;
-}
-
-vec3 applyStylizedBevel(
+vec3 promoApplyBevel(
     vec3 sourceColor,
     vec3 normalValue,
     vec3 tangentU,
@@ -7167,37 +6800,33 @@ vec3 applyStylizedBevel(
         return sourceColor;
     }
 
-    vec4 edgeBands = getFaceEdgeBands(
-        vElementLocalUv,
-        vElementSize,
+    vec4 edgeBands = promoGetEdgeBands(
+        vPromoElementUv,
+        vPromoElementSize,
         BEVEL_WIDTH,
         BEVEL_SOFTNESS
     );
 
     vec3 keyDirection;
     vec3 keyColor;
-    float keyAmount;
+    float keyEnergy;
 
-    getStylizedKeyLight(
-        normalValue,
+    promoGetKeyLight(
         keyDirection,
         keyColor,
-        keyAmount
+        keyEnergy
     );
 
-    // --- ENFOQUE HÍBRIDO 3D/2D: NORMALES FÍSICAS + MÁSCARAS PLANAS ---
+// --- ENFOQUE HÍBRIDO 3D/2D RESTAURADO (Adaptado a tus nuevas variables Promo) ---
 
-    // 1. Calculamos la normal 3D inclinada de cada uno de los 4 bordes.
-    // Al sumar la normal de la cara, arreglamos el problema de las caras traseras y laterales.
+    // 1. Calculamos la normal 3D inclinada
     float slope = clamp(BEVEL_SLOPE, 0.0, 2.0);
-    vec3 nL = safeNormalize(normalValue - tangentU * slope, normalValue);
-    vec3 nR = safeNormalize(normalValue + tangentU * slope, normalValue);
-    vec3 nB = safeNormalize(normalValue - tangentV * slope, normalValue);
-    vec3 nT = safeNormalize(normalValue + tangentV * slope, normalValue);
+    vec3 nL = promoSafeNormalize(normalValue - tangentU * slope, normalValue);
+    vec3 nR = promoSafeNormalize(normalValue + tangentU * slope, normalValue);
+    vec3 nB = promoSafeNormalize(normalValue - tangentV * slope, normalValue);
+    vec3 nT = promoSafeNormalize(normalValue + tangentV * slope, normalValue);
 
-    // 2. ¿La luz golpea el borde? 
-    // CORRECCIÓN: smoothstep crea una transición suave. 
-    // Evita tajos duros cuando una luz de punto cruza por en medio de la cara o roza una esquina.
+    // 2. ¿La luz golpea el borde? (suavizado para evitar cortes por luces de punto)
     float typeL = smoothstep(-0.05, 0.05, dot(nL, keyDirection));
     float typeR = smoothstep(-0.05, 0.05, dot(nR, keyDirection));
     float typeB = smoothstep(-0.05, 0.05, dot(nB, keyDirection));
@@ -7209,16 +6838,17 @@ vec3 applyStylizedBevel(
     float bandB = edgeBands.z;
     float bandT = edgeBands.w;
 
-    // 4. LÓGICA DEL FADE (UV Normalizado 0.0 a 1.0)
-    // Ahora BEVEL_CORNER_FADE dicta exactamente qué porcentaje de la cara abarca el degradado.
-    // Si lo pones en 0.2, consumirá el 20% de cada esquina, dejando el 60% central sólido.
-    float fadeLimit = max(BEVEL_CORNER_FADE, 0.0001);
-    
-    // Máscaras de distancia (0 en la esquina, 1 cuando se alejan de la esquina hacia el centro)
-    float gapL = smoothstep(0.0, fadeLimit, vElementLocalUv.x);
-    float gapR = 1.0 - smoothstep(1.0 - fadeLimit, 1.0, vElementLocalUv.x);
-    float gapB = smoothstep(0.0, fadeLimit, vElementLocalUv.y);
-    float gapT = 1.0 - smoothstep(1.0 - fadeLimit, 1.0, vElementLocalUv.y);
+    // 4. LÓGICA DEL FADE (UV Normalizado de 0.0 a 1.0)
+    // BEVEL_CORNER_FADE ahora representa el porcentaje total de la cara.
+    // 0.5 siempre abarcará hasta el centro exacto de la cara,
+    // sin importar si mide 4x12 u 8x8.
+    float fadeLimit = clamp(BEVEL_CORNER_FADE, 0.0, 1.0);
+
+    // Usamos directamente vPromoElementUv (que va de 0.0 a 1.0)
+    float gapL = smoothstep(0.0, fadeLimit, vPromoElementUv.x);
+    float gapR = 1.0 - smoothstep(1.0 - fadeLimit, 1.0, vPromoElementUv.x);
+    float gapB = smoothstep(0.0, fadeLimit, vPromoElementUv.y);
+    float gapT = 1.0 - smoothstep(1.0 - fadeLimit, 1.0, vPromoElementUv.y);
 
     // 5. Aplicamos el Fade a las líneas SOLO si chocan con un tipo opuesto en la esquina.
     float matchTL = 1.0 - abs(typeT - typeL);
@@ -7226,98 +6856,363 @@ vec3 applyStylizedBevel(
     float matchBL = 1.0 - abs(typeB - typeL);
     float matchBR = 1.0 - abs(typeB - typeR);
 
-    // Si coinciden (match = 1.0), el mix anula el hueco. Si son distintos (match = 0.0), aplica el fade.
     float bL = bandL * mix(gapT, 1.0, matchTL) * mix(gapB, 1.0, matchBL);
     float bR = bandR * mix(gapT, 1.0, matchTR) * mix(gapB, 1.0, matchBR);
     float bB = bandB * mix(gapL, 1.0, matchBL) * mix(gapR, 1.0, matchBR);
     float bT = bandT * mix(gapL, 1.0, matchTL) * mix(gapR, 1.0, matchTR);
 
-    // 6. Construimos las máscaras finales fusionando con max() para evitar costuras
+    // 6. Construimos las máscaras finales fusionando con max()
     float hMask = max(max(bL * typeL, bR * typeR), max(bB * typeB, bT * typeT));
     float sMask = max(max(bL * (1.0 - typeL), bR * (1.0 - typeR)), max(bB * (1.0 - typeB), bT * (1.0 - typeT)));
 
-    // 7. Aplicamos intensidad
-    float highlightMask = clamp(hMask * keyAmount * max(BEVEL_LIGHT_STRENGTH, 0.0), 0.0, 1.0);
-    float shadowMask    = clamp(sMask * mix(0.35, 1.0, keyAmount), 0.0, 1.0);
+    // 7. Aplicamos intensidad (Usando tu variable keyEnergy)
+    float highlightMask = clamp(hMask * keyEnergy * max(BEVEL_LIGHT_STRENGTH, 0.0), 0.0, 1.0);
+    float shadowMask    = clamp(sMask * mix(0.35, 1.0, keyEnergy), 0.0, 1.0);
 
-    // --- FIN DEL NUEVO ENFOQUE ---
+    // --- Aplicamos el color y el HSV (Incluyendo tu nueva lógica de Color Influence) ---
 
-    vec3 hsv = rgbToHsv(
-        clamp(
-            sourceColor,
-            vec3(0.0),
-            vec3(1.0)
-        )
+    vec3 result = sourceColor;
+
+    vec3 normalizedKeyColor =
+        keyColor /
+        max(
+            max(keyColor.r, max(keyColor.g, keyColor.b)),
+            0.0001
+        );
+
+    float lightColorAmount = clamp(
+        BEVEL_HIGHLIGHT_COLOR_INFLUENCE *
+        max(BEVEL_LIGHT_COLOR_STRENGTH, 0.0),
+        0.0,
+        1.0
     );
 
-    hsv.z *=
-        1.0 -
-        shadowMask *
-        clamp(BEVEL_SHADOW, 0.0, 1.0);
+    vec3 highlightColor = mix(
+        vec3(1.0),
+        normalizedKeyColor,
+        lightColorAmount
+    );
 
-    hsv.z +=
+    float lightColorBoost = max(
+        BEVEL_LIGHT_COLOR_STRENGTH - 1.0,
+        0.0
+    );
+
+    highlightColor *=
+        1.0 +
+        normalizedKeyColor *
+        lightColorBoost *
+        clamp(BEVEL_HIGHLIGHT_COLOR_INFLUENCE, 0.0, 1.0);
+
+    result +=
+        highlightColor *
         highlightMask *
         max(BEVEL_HIGHLIGHT, 0.0);
 
+    vec3 hsv = promoRgbToHsv(
+        clamp(result, vec3(0.0), vec3(1.0))
+    );
+
+    hsv.z *= 1.0 -
+        shadowMask *
+        clamp(BEVEL_SHADOW, 0.0, 1.0);
+
     hsv.y +=
         shadowMask *
-        max(BEVEL_SHADOW_SATURATION, 0.0) *
+        clamp(BEVEL_SHADOW_SATURATION, 0.0, 1.0) *
         (1.0 - hsv.y);
 
-    hsv.y -= highlightMask * 0.08;
+    hsv.y = clamp(hsv.y, 0.0, 1.0);
+    hsv.z = clamp(hsv.z, 0.0, 1.0);
 
-    hsv.y = clamp(
-        hsv.y,
-        0.0,
-        1.0
+    return promoHsvToRgb(hsv);
+}
+
+float promoGetElementOutlineMask() {
+    vec2 safeSize = max(
+        abs(vPromoElementSize),
+        vec2(0.0001)
     );
 
-    hsv.z = clamp(
-        hsv.z,
-        0.0,
-        1.0
+    vec2 localPosition =
+        clamp(vPromoElementUv, vec2(0.0), vec2(1.0)) *
+        safeSize;
+
+    float width = max(OUTLINE_WIDTH, 0.0);
+
+    if (width <= 0.00001) {
+        return 0.0;
+    }
+
+    float leftMask = 1.0 - smoothstep(
+        width,
+        width + 0.0001,
+        localPosition.x
     );
 
-    vec3 result = hsvToRgb(hsv);
-
-    float largestLightChannel = max(
-        keyColor.r,
-        max(keyColor.g, keyColor.b)
+    float rightMask = 1.0 - smoothstep(
+        width,
+        width + 0.0001,
+        safeSize.x - localPosition.x
     );
 
-    vec3 normalizedLightColor =
-        keyColor /
-        max(largestLightChannel, 0.0001);
-
-    result *= mix(
-        vec3(1.0),
-        normalizedLightColor,
-        highlightMask * 0.18
+    float bottomMask = 1.0 - smoothstep(
+        width,
+        width + 0.0001,
+        localPosition.y
     );
+
+    float topMask = 1.0 - smoothstep(
+        width,
+        width + 0.0001,
+        safeSize.y - localPosition.y
+    );
+
+    return max(
+        max(leftMask, rightMask),
+        max(bottomMask, topMask)
+    );
+}
+
+float promoSampleNeighborAlpha(
+    vec2 localOffset,
+    vec2 mapOffset,
+    float sourceAlpha,
+    bool clampToElement
+) {
+    if (clampToElement) {
+        vec2 localSample =
+            vPromoElementUv +
+            localOffset;
+
+        if (
+            localSample.x < 0.0 ||
+            localSample.y < 0.0 ||
+            localSample.x > 1.0 ||
+            localSample.y > 1.0
+        ) {
+            return sourceAlpha;
+        }
+    }
+
+    vec2 mapSample =
+        vPromoMapUv +
+        mapOffset;
+
+    if (
+        mapSample.x < 0.0 ||
+        mapSample.y < 0.0 ||
+        mapSample.x > 1.0 ||
+        mapSample.y > 1.0
+    ) {
+        return 0.0;
+    }
+
+    return texture2D(map, mapSample).a;
+}
+
+float promoGetAlphaOutlineMask(
+    float sourceAlpha,
+    mat2 elementToMapJacobian
+) {
+    if (
+        !OUTLINE_ALPHA_ENABLED ||
+        OUTLINE_WIDTH <= 0.0
+    ) {
+        return 0.0;
+    }
+
+    vec2 safeSize = max(
+        abs(vPromoElementSize),
+        vec2(0.0001)
+    );
+
+    vec2 localStep =
+        vec2(OUTLINE_WIDTH) /
+        safeSize;
+
+    bool validJacobian =
+        length(elementToMapJacobian[0]) +
+        length(elementToMapJacobian[1]) >
+        0.000001;
+
+    bool clampToElement =
+        OUTLINE_ALPHA_CLAMP_TO_ELEMENT &&
+        validJacobian;
+
+    vec2 fallbackMapStep = max(
+        abs(vPromoElementUvSize) *
+        OUTLINE_WIDTH /
+        max(TEXTURE_SIZE, vec2(1.0)),
+        vec2(0.00001)
+    );
+
+    float nearestNeighborAlpha = 1.0;
+
+    for (int y = -1; y <= 1; y++) {
+        for (int x = -1; x <= 1; x++) {
+            if (x == 0 && y == 0) {
+                continue;
+            }
+
+            if (
+                OUTLINE_ALPHA_DIAGONAL_ONLY &&
+                abs(x) + abs(y) != 2
+            ) {
+                continue;
+            }
+
+            vec2 localOffset =
+                vec2(float(x), float(y)) *
+                localStep;
+
+            vec2 mapOffset = validJacobian
+                ? elementToMapJacobian * localOffset
+                : vec2(
+                    float(x) * fallbackMapStep.x,
+                    float(y) * fallbackMapStep.y
+                );
+
+            nearestNeighborAlpha = min(
+                nearestNeighborAlpha,
+                promoSampleNeighborAlpha(
+                    localOffset,
+                    mapOffset,
+                    sourceAlpha,
+                    clampToElement
+                )
+            );
+        }
+    }
 
     return clamp(
-        result,
-        vec3(0.0),
-        vec3(1.0)
+        sourceAlpha - nearestNeighborAlpha,
+        0.0,
+        1.0
+    );
+}
+
+vec3 promoApplyOutline(
+    vec3 sourceColor,
+    float sourceAlpha,
+    mat2 elementToMapJacobian
+) {
+    if (
+        OUTLINE_WIDTH <= 0.0 ||
+        OUTLINE_INTENSITY <= 0.0 ||
+        (
+            !OUTLINE_ELEMENT_ENABLED &&
+            !OUTLINE_ALPHA_ENABLED
+        )
+    ) {
+        return sourceColor;
+    }
+
+    float elementMask =
+        OUTLINE_ELEMENT_ENABLED
+            ? promoGetElementOutlineMask()
+            : 0.0;
+
+    float alphaMask = promoGetAlphaOutlineMask(
+        sourceAlpha,
+        elementToMapJacobian
+    );
+
+    if (OUTLINE_FADE <= 0.0) {
+        elementMask = ceil(elementMask);
+    } else {
+        float fade = clamp(
+            OUTLINE_FADE,
+            0.001,
+            1.0
+        );
+
+        elementMask = smoothstep(
+            0.0,
+            fade,
+            elementMask
+        );
+
+        alphaMask = smoothstep(
+            0.0,
+            fade,
+            alphaMask
+        );
+    }
+
+    float outlineMask = max(
+        elementMask,
+        alphaMask
+    );
+
+    if (outlineMask <= 0.0) {
+        return sourceColor;
+    }
+
+    float intensity = clamp(
+        outlineMask *
+        OUTLINE_INTENSITY,
+        0.0,
+        1.0
+    );
+
+    if (
+        OUTLINE_AFFECTED_BY_LIGHT &&
+        !EMISSIVE
+    ) {
+        intensity *= clamp(
+            vPromoClassicLight,
+            0.0,
+            1.5
+        );
+    }
+
+    if (OUTLINE_MODE == 0) {
+        return clamp(
+            sourceColor + vec3(intensity),
+            vec3(0.0),
+            vec3(1.0)
+        );
+    }
+
+    if (OUTLINE_MODE == 1) {
+        return sourceColor * (1.0 - intensity);
+    }
+
+    vec3 outlineColor = OUTLINE_COLOR;
+
+    if (
+        OUTLINE_AFFECTED_BY_LIGHT &&
+        !EMISSIVE
+    ) {
+        outlineColor *=
+            LIGHTCOLOR *
+            vPromoClassicLight;
+    }
+
+    return mix(
+        sourceColor,
+        outlineColor,
+        intensity
     );
 }
 
 void main() {
     /*
-        Evaluate all derivatives before discard.
+        All dFdx/dFdy-dependent values must be resolved before alpha discard.
     */
-    mat2 elementToMapUv =
-        getElementToMapUvJacobian();
+    mat2 elementToMapJacobian =
+        promoGetElementToMapJacobian();
 
-    vec3 surfaceNormal = safeNormalize(
-        vWorldNormal,
+    vec3 surfaceNormal = promoSafeNormalize(
+        vPromoWorldNormal,
         vec3(0.0, 1.0, 0.0)
     );
 
     vec3 faceTangentU;
     vec3 faceTangentV;
 
-    getFaceTangentFrame(
+    promoGetFaceFrame(
         surfaceNormal,
         faceTangentU,
         faceTangentV
@@ -7325,7 +7220,7 @@ void main() {
 
     vec4 sampledColor = texture2D(
         map,
-        vMapUv
+        vPromoMapUv
     );
 
     if (sampledColor.a < 0.01) {
@@ -7335,19 +7230,12 @@ void main() {
     vec3 finalColor;
     float finalAlpha = sampledColor.a;
 
-    if (!EMISSIVE) {
-        finalColor =
-            vHighlightLift +
-            sampledColor.rgb *
-            vLightingFactor;
-
-        finalColor *= LIGHTCOLOR;
-    } else {
-        vec3 emissiveLightMix =
-            (vLightingFactor * LIGHTCOLOR) +
+    if (EMISSIVE) {
+        vec3 emissiveMix =
+            (vPromoClassicLight * LIGHTCOLOR) +
             (
                 1.0 -
-                vLightingFactor * LIGHTCOLOR
+                vPromoClassicLight * LIGHTCOLOR
             ) *
             (
                 1.0 -
@@ -7355,15 +7243,20 @@ void main() {
             );
 
         finalColor =
-            vHighlightLift +
+            vPromoHighlightLift +
             sampledColor.rgb *
-            emissiveLightMix;
+            emissiveMix;
 
         finalAlpha = 1.0;
-    }
+    } else {
+        finalColor =
+            vPromoHighlightLift +
+            sampledColor.rgb *
+            vPromoClassicLight;
 
-    if (!EMISSIVE) {
-        finalColor = applyStylizedBevel(
+        finalColor *= LIGHTCOLOR;
+
+        finalColor = promoApplyBevel(
             finalColor,
             surfaceNormal,
             faceTangentU,
@@ -7371,13 +7264,13 @@ void main() {
         );
     }
 
-    finalColor = applyOutline(
+    finalColor = promoApplyOutline(
         finalColor,
         sampledColor.a,
-        elementToMapUv
+        elementToMapJacobian
     );
 
-    if (vHighlightLift > 0.2) {
+    if (vPromoHighlightLift > 0.2) {
         finalColor.rg *= vec2(0.6, 0.7);
     }
 
@@ -7402,9 +7295,6 @@ void main() {
                         expose: true
                     },
 
-                    /*
-                        Both start disabled to test the bevel without outline artifacts.
-                    */
                     OUTLINE_ELEMENT_ENABLED: {
                         type: 'bool',
                         value: false,
@@ -7424,20 +7314,16 @@ void main() {
                         advanced: true
                     },
 
-                    /*
-                        true = original diagonal-only behavior.
-                        false = diagonals plus horizontal/vertical neighbors.
-                    */
                     OUTLINE_ALPHA_DIAGONAL_ONLY: {
                         type: 'bool',
-                        value: true,
+                        value: false,
                         expose: true,
                         advanced: true
                     },
 
                     OUTLINE_WIDTH: {
                         type: 'float',
-                        value: 0.20,
+                        value: 0.18,
                         expose: true,
                         min: 0.0,
                         max: 4.0,
@@ -7469,9 +7355,7 @@ void main() {
                     },
 
                     /*
-                        0 = Brighten
-                        1 = Darken
-                        2 = Solid color
+                        0 = brighten, 1 = darken, 2 = replace with color.
                     */
                     OUTLINE_MODE: {
                         type: 'int',
@@ -7506,14 +7390,18 @@ void main() {
                         expose: true
                     },
 
+                    /*
+                        Fraction of the shortest face side. 0.055 matches the
+                        thick painted bevels in the current promotional art.
+                    */
                     BEVEL_WIDTH: {
                         type: 'float',
-                        value: 0.015,
+                        value: 0.12, // Grosor por defecto correcto (fino y global)
                         expose: true,
                         min: 0.0,
-                        max: 0.30,
-                        step: 0.005,
-                        allow_higher: false,
+                        max: 1.0,  // Rango máximo más lógico
+                        step: 0.01,
+                        allow_higher: true,
                         allow_lower: false
                     },
 
@@ -7541,10 +7429,10 @@ void main() {
 
                     BEVEL_CORNER_FADE: {
                         type: 'float',
-                        value: 0.5, // Por defecto se comerá el 15% de cada punta (dejando el 70% central)
+                        value: 0.15, // Por defecto se comerá el 15% de cada punta
                         expose: true,
                         min: 0.0,
-                        max: 0.5,
+                        max: 1.0,    // 1.0 = todo el lado de la cara, 0.5 = mitad de la cara
                         step: 0.01,
                         allow_higher: false,
                         allow_lower: false
@@ -7594,6 +7482,28 @@ void main() {
                         allow_lower: false
                     },
 
+                    BEVEL_HIGHLIGHT_COLOR_INFLUENCE: {
+                        type: 'float',
+                        value: 0.45,
+                        expose: true,
+                        min: 0.0,
+                        max: 1.0,
+                        step: 0.01,
+                        allow_higher: false,
+                        allow_lower: false
+                    },
+
+                    BEVEL_LIGHT_COLOR_STRENGTH: {
+                        type: 'float',
+                        value: 1.0,
+                        expose: true,
+                        min: 0.0,
+                        max: 4.0,
+                        step: 0.05,
+                        allow_higher: true,
+                        allow_lower: false
+                    },
+
                     EDGE_FALLBACK_LIGHT_DIRECTION: {
                         type: 'vec3',
                         value: new THREE.Vector3(
@@ -7602,10 +7512,160 @@ void main() {
                             0.35
                         ),
                         expose: true
+                    },
+
+                    /*
+                        Global union-silhouette rim. This is the blue-circled
+                        effect from the reference art, not a per-cube bevel.
+                    */
+                    PROMO_RIM_ENABLED: {
+                        type: 'bool',
+                        value: true,
+                        expose: true
+                    },
+
+                    /*
+                        Width in viewport pixels, limited to 12 by the manager.
+                    */
+                    PROMO_RIM_WIDTH: {
+                        type: 'float',
+                        value: 2.25,
+                        expose: true,
+                        min: 0.0,
+                        max: 12.0,
+                        step: 0.25,
+                        allow_higher: false,
+                        allow_lower: false
+                    },
+
+                    PROMO_RIM_INTENSITY: {
+                        type: 'float',
+                        value: 0.95,
+                        expose: true,
+                        min: 0.0,
+                        max: 1.0,
+                        step: 0.01,
+                        allow_higher: false,
+                        allow_lower: false
+                    },
+
+                    PROMO_RIM_COLOR: {
+                        type: 'vec3',
+                        value: new THREE.Vector3(
+                            1.0,
+                            0.76,
+                            0.24
+                        ),
+                        hexValue: '#ffc23d',
+                        is_color: true,
+                        expose: true
+                    },
+
+                    /*
+                        0 = fixed PROMO_RIM_COLOR.
+                        1 = mix PROMO_RIM_COLOR with Light Manager color.
+                        2 = use Light Manager color directly.
+                    */
+                    PROMO_RIM_COLOR_MODE: {
+                        type: 'int',
+                        value: 0,
+                        expose: true,
+                        min: 0,
+                        max: 2,
+                        step: 1,
+                        allow_higher: false,
+                        allow_lower: false
+                    },
+
+                    PROMO_RIM_LIGHT_COLOR_INFLUENCE: {
+                        type: 'float',
+                        value: 1.0,
+                        expose: true,
+                        min: 0.0,
+                        max: 1.0,
+                        step: 0.01,
+                        allow_higher: false,
+                        allow_lower: false
+                    },
+
+                    /*
+                        Screen-space direction toward the artistic key light.
+                        +X = right, +Y = up. The default matches the reference:
+                        a gold rim along the upper/right silhouette.
+                    */
+                    PROMO_RIM_DIRECTION: {
+                        type: 'vec2',
+                        value: new THREE.Vector2(
+                            0.70,
+                            0.65
+                        ),
+                        expose: true
+                    },
+
+                    /*
+                        0.0 = continuous outline.
+                        1.0 = only contour sections facing PROMO_RIM_DIRECTION.
+                    */
+                    PROMO_RIM_DIRECTIONALITY: {
+                        type: 'float',
+                        value: 0.72,
+                        expose: true,
+                        min: 0.0,
+                        max: 1.0,
+                        step: 0.01,
+                        allow_higher: false,
+                        allow_lower: false
+                    },
+
+                    /*
+                        Larger values make the directional transition wider.
+                    */
+                    PROMO_RIM_DIRECTION_SOFTNESS: {
+                        type: 'float',
+                        value: 0.32,
+                        expose: true,
+                        min: 0.01,
+                        max: 1.0,
+                        step: 0.01,
+                        allow_higher: false,
+                        allow_lower: false
+                    },
+
+                    /*
+                        Cubes with the same group form one continuous silhouette.
+                        Use distinct groups for separate characters.
+                    */
+                    PROMO_RIM_GROUP: {
+                        type: 'int',
+                        value: 0,
+                        expose: true,
+                        min: 0,
+                        max: 99,
+                        step: 1,
+                        allow_higher: false,
+                        allow_lower: false
+                    },
+
+                    PROMO_RIM_OCCLUSION_ENABLED: {
+                        type: 'bool',
+                        value: true,
+                        expose: true,
+                        advanced: true
+                    },
+
+                    PROMO_RIM_DEPTH_EPSILON: {
+                        type: 'float',
+                        value: 0.00075,
+                        expose: true,
+                        advanced: true,
+                        min: 0.0,
+                        max: 0.02,
+                        step: 0.00005,
+                        allow_higher: true,
+                        allow_lower: false
                     }
                 }
             });
-
 
             let realview_pbr = new FancyShaderMaterial({
                 id: 'realview_pbr',
@@ -7751,8 +7811,8 @@ void main() {
                     "uLightColor": { type: "vec3v", value: Array.from({ length: 16 }, () => new THREE.Vector3()), expose: false },
                     "max_light_number": { type: "int", value: 0, expose: true, min: 0, max: 16, step: 1, allow_higher: false, allow_lower: false },
                     "uAmbient": { type: "float", value: 0.3, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: true, allow_lower: false }, // Controls how dark shadows can become.
-                    "uAmbientColor": { type: "vec3", value: new THREE.Vector3(1, 1, 1), expose: true },
-                    "LIGHTCOLOR": { type: "vec3", value: new THREE.Vector3(1, 1, 1), expose: true },
+                    "uAmbientColor": { type: "vec3", value: new THREE.Vector3(1, 1, 1), hexValue: "#ffffff", expose: true, is_color: true },
+                    "LIGHTCOLOR": { type: "vec3", value: new THREE.Vector3(1, 1, 1), hexValue: "#ffffff", expose: true, is_color: true },
                     "TEXTURE_SIZE": { type: "vec2", value: new THREE.Vector2(16, 16), expose: false }
                 },
                 enableShadows: true
@@ -8191,11 +8251,1682 @@ void main() {
         }
     };
 
+
+    /*
+     * -------------------------------------------------------------------------
+     * Minecraft Promotional Silhouette Manager
+     * -------------------------------------------------------------------------
+     * A fragment shader on an individual cube cannot shade pixels outside that
+     * cube. The golden promotional rim is therefore rendered as a true,
+     * screen-space union silhouette:
+     *
+     * 1. Render every eligible promotional cube into one mask per rim group.
+     * 2. Dilate that mask horizontally and vertically.
+     * 3. Composite only (dilatedMask - originalMask) after the scene render.
+     *
+     * The depth channel carried through the dilation chain suppresses the rim
+     * behind foreground, non-promotional geometry. This is what prevents the
+     * outline from leaking over a TNT block or another object in front.
+     */
+    const MinecraftPromotionalSilhouetteManager = {
+        states: new Map(),
+        patchedPreviews: new Map(),
+        maskMaterialCache: new WeakMap(),
+        maskMaterials: new Set(),
+        fullscreenGeometry: null,
+        fullscreenCamera: null,
+        discardMaterial: null,
+        sceneDepthMaterial: null,
+        fallbackTexture: null,
+        cachedGroups: null,
+        groupsDirty: true,
+        lastPreviewPatchCount: -1,
+        disposed: false,
+
+        MAX_RIM_RADIUS: 12.0,
+        MAX_TARGET_SIZE: 2048,
+
+        init() {
+            this.disposed = false;
+            this.ensureSharedResources();
+            this.patchAllPreviews(true);
+        },
+
+        dispose() {
+            this.disposed = true;
+
+            this.patchedPreviews.forEach((record, preview) => {
+                if (preview && preview.render === record.patchedRender) {
+                    preview.render = record.originalRender;
+                }
+            });
+
+            this.patchedPreviews.clear();
+            this.lastPreviewPatchCount = -1;
+
+            this.states.forEach(state => this.disposeState(state));
+            this.states.clear();
+
+            this.maskMaterials.forEach(material => {
+                if (material && typeof material.dispose === 'function') {
+                    material.dispose();
+                }
+            });
+            this.maskMaterials.clear();
+            this.maskMaterialCache = new WeakMap();
+            this.cachedGroups = null;
+            this.groupsDirty = true;
+
+            if (this.discardMaterial && typeof this.discardMaterial.dispose === 'function') {
+                this.discardMaterial.dispose();
+            }
+            this.discardMaterial = null;
+
+            if (this.sceneDepthMaterial && typeof this.sceneDepthMaterial.dispose === 'function') {
+                this.sceneDepthMaterial.dispose();
+            }
+            this.sceneDepthMaterial = null;
+
+            if (this.fullscreenGeometry && typeof this.fullscreenGeometry.dispose === 'function') {
+                this.fullscreenGeometry.dispose();
+            }
+            this.fullscreenGeometry = null;
+            this.fullscreenCamera = null;
+
+            if (this.fallbackTexture && typeof this.fallbackTexture.dispose === 'function') {
+                this.fallbackTexture.dispose();
+            }
+            this.fallbackTexture = null;
+        },
+
+        invalidateGroups() {
+            this.cachedGroups = null;
+            this.groupsDirty = true;
+            this.states.forEach(state => {
+                state.silhouetteValid = false;
+            });
+        },
+
+        ensureSharedResources() {
+            if (!this.fullscreenGeometry) {
+                this.fullscreenGeometry = new THREE.PlaneGeometry(2.0, 2.0);
+            }
+
+            if (!this.fullscreenCamera) {
+                this.fullscreenCamera = new THREE.OrthographicCamera(
+                    -1.0,
+                    1.0,
+                    1.0,
+                    -1.0,
+                    0.0,
+                    1.0
+                );
+            }
+
+            if (!this.discardMaterial) {
+                this.discardMaterial = new THREE.ShaderMaterial({
+                    vertexShader: `
+                        void main() {
+                            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                        }
+                    `,
+                    fragmentShader: `
+                        void main() {
+                            discard;
+                        }
+                    `,
+                    depthTest: false,
+                    depthWrite: false,
+                    colorWrite: false,
+                    transparent: false
+                });
+                this.discardMaterial.name = 'SA_PromoSilhouetteDiscard';
+            }
+
+            if (!this.sceneDepthMaterial) {
+                this.sceneDepthMaterial = new THREE.MeshDepthMaterial({
+                    depthPacking: THREE.RGBADepthPacking,
+                    side: THREE.DoubleSide
+                });
+                this.sceneDepthMaterial.name = 'SA_PromoSceneDepth';
+            }
+        },
+
+        getFallbackTexture() {
+            if (!this.fallbackTexture) {
+                const pixel = new Uint8Array([255, 255, 255, 255]);
+
+                this.fallbackTexture = new THREE.DataTexture(
+                    pixel,
+                    1,
+                    1,
+                    THREE.RGBAFormat
+                );
+
+                this.fallbackTexture.minFilter = THREE.NearestFilter;
+                this.fallbackTexture.magFilter = THREE.NearestFilter;
+                this.fallbackTexture.generateMipmaps = false;
+                this.fallbackTexture.needsUpdate = true;
+            }
+
+            return this.fallbackTexture;
+        },
+
+        createDepthTexture() {
+            if (!THREE.DepthTexture) {
+                return null;
+            }
+
+            try {
+                const depthTexture = new THREE.DepthTexture(1, 1);
+                depthTexture.type = THREE.UnsignedShortType;
+                depthTexture.format = THREE.DepthFormat;
+                depthTexture.minFilter = THREE.NearestFilter;
+                depthTexture.magFilter = THREE.NearestFilter;
+                depthTexture.generateMipmaps = false;
+                return depthTexture;
+            } catch (error) {
+                console.warn(
+                    '[Shader Architect] Promotional silhouette depth texture unavailable.',
+                    error
+                );
+                return null;
+            }
+        },
+
+        getIntermediateTargetType() {
+            return THREE.HalfFloatType !== undefined
+                ? THREE.HalfFloatType
+                : THREE.UnsignedByteType;
+        },
+
+        createRenderTarget(name, withDepthTexture = false) {
+            const options = {
+                minFilter: THREE.NearestFilter,
+                magFilter: THREE.NearestFilter,
+                format: THREE.RGBAFormat,
+                type: this.getIntermediateTargetType(),
+                depthBuffer: !!withDepthTexture,
+                stencilBuffer: false
+            };
+
+            const target = new THREE.WebGLRenderTarget(1, 1, options);
+            target.texture.name = name;
+            target.texture.generateMipmaps = false;
+
+            if (withDepthTexture) {
+                const depthTexture = this.createDepthTexture();
+
+                if (depthTexture) {
+                    target.depthTexture = depthTexture;
+                }
+            }
+
+            return target;
+        },
+
+        createFullscreenMaterial(fragmentShader, uniforms) {
+            return new THREE.ShaderMaterial({
+                uniforms,
+                vertexShader: `
+                    varying vec2 vPromoUv;
+
+                    void main() {
+                        vPromoUv = uv;
+                        gl_Position = vec4(position.xy, 0.0, 1.0);
+                    }
+                `,
+                fragmentShader,
+                depthTest: false,
+                depthWrite: false,
+                transparent: false,
+                blending: THREE.NoBlending
+            });
+        },
+
+        createState(preview) {
+            this.ensureSharedResources();
+
+            const maskTarget = this.createRenderTarget(
+                'SA_PromoSilhouetteMask',
+                false
+            );
+
+            const horizontalTarget = this.createRenderTarget(
+                'SA_PromoSilhouetteDilateHorizontal',
+                false
+            );
+
+            const verticalTarget = this.createRenderTarget(
+                'SA_PromoSilhouetteDilateVertical',
+                false
+            );
+
+            const sceneDepthTarget = this.createRenderTarget(
+                'SA_PromoSilhouetteSceneDepth',
+                true
+            );
+
+            const dilationFragment = `
+                #define SA_PROMO_RIM_MAX_RADIUS 12
+
+                uniform sampler2D uSource;
+                uniform vec2 uTexelSize;
+                uniform vec2 uDirection;
+                uniform float uRadius;
+
+                varying vec2 vPromoUv;
+
+                void main() {
+                    float expandedMask = 0.0;
+                    float nearestDepth = 1.0;
+
+                    for (int offset = -SA_PROMO_RIM_MAX_RADIUS; offset <= SA_PROMO_RIM_MAX_RADIUS; offset++) {
+                        float sampleOffset = float(offset);
+
+                        if (abs(sampleOffset) > uRadius + 0.001) {
+                            continue;
+                        }
+
+                        vec2 sampleUv =
+                            vPromoUv +
+                            uDirection *
+                            uTexelSize *
+                            sampleOffset;
+
+                        vec4 sampleValue = texture2D(
+                            uSource,
+                            sampleUv
+                        );
+
+                        if (sampleValue.r > 0.001) {
+                            expandedMask = max(
+                                expandedMask,
+                                sampleValue.r
+                            );
+
+                            nearestDepth = min(
+                                nearestDepth,
+                                sampleValue.g
+                            );
+                        }
+                    }
+
+                    gl_FragColor = vec4(
+                        expandedMask,
+                        nearestDepth,
+                        0.0,
+                        1.0
+                    );
+                }
+            `;
+
+            const horizontalMaterial = this.createFullscreenMaterial(
+                dilationFragment,
+                {
+                    uSource: { value: maskTarget.texture },
+                    uTexelSize: { value: new THREE.Vector2(1.0, 1.0) },
+                    uDirection: { value: new THREE.Vector2(1.0, 0.0) },
+                    uRadius: { value: 1.0 }
+                }
+            );
+            horizontalMaterial.name = 'SA_PromoSilhouetteDilateHorizontal';
+
+            const verticalMaterial = this.createFullscreenMaterial(
+                dilationFragment,
+                {
+                    uSource: { value: horizontalTarget.texture },
+                    uTexelSize: { value: new THREE.Vector2(1.0, 1.0) },
+                    uDirection: { value: new THREE.Vector2(0.0, 1.0) },
+                    uRadius: { value: 1.0 }
+                }
+            );
+            verticalMaterial.name = 'SA_PromoSilhouetteDilateVertical';
+
+            const overlayMaterial = new THREE.ShaderMaterial({
+                uniforms: {
+                    uOriginalMask: { value: maskTarget.texture },
+                    uExpandedMask: { value: verticalTarget.texture },
+                    uSceneDepth: {
+                        value: sceneDepthTarget.depthTexture || this.getFallbackTexture()
+                    },
+                    uRimColor: { value: new THREE.Vector3(1.0, 0.78, 0.26) },
+                    uRimIntensity: { value: 1.0 },
+                    uRimRadius: { value: 1.0 },
+                    uTexelSize: { value: new THREE.Vector2(1.0, 1.0) },
+                    uRimDirection: { value: new THREE.Vector2(0.70, 0.65) },
+                    uDirectionality: { value: 0.72 },
+                    uDirectionSoftness: { value: 0.32 },
+                    uDepthEpsilon: { value: 0.00075 },
+                    uHasSceneDepth: {
+                        value: sceneDepthTarget.depthTexture ? 1 : 0
+                    },
+                    uUseOcclusion: { value: 1 }
+                },
+                vertexShader: `
+                    varying vec2 vPromoUv;
+
+                    void main() {
+                        vPromoUv = uv;
+                        gl_Position = vec4(position.xy, 0.0, 1.0);
+                    }
+                `,
+                fragmentShader: `
+                    uniform sampler2D uOriginalMask;
+                    uniform sampler2D uExpandedMask;
+                    uniform sampler2D uSceneDepth;
+
+                    #define SA_PROMO_DIRECTION_SAMPLE_RADIUS 12
+
+                    uniform vec3 uRimColor;
+                    uniform float uRimIntensity;
+                    uniform float uRimRadius;
+                    uniform vec2 uTexelSize;
+                    uniform vec2 uRimDirection;
+                    uniform float uDirectionality;
+                    uniform float uDirectionSoftness;
+                    uniform float uDepthEpsilon;
+                    uniform int uHasSceneDepth;
+                    uniform int uUseOcclusion;
+
+                    varying vec2 vPromoUv;
+
+                    vec2 promoEstimateOutwardDirection() {
+                        vec2 inwardDirection = vec2(0.0);
+
+                        /*
+                            This is evaluated only for pixels already inside the
+                            narrow rim band. It finds nearby source-mask pixels
+                            and converts their average direction into an outward
+                            contour normal.
+                        */
+                        for (int radius = 1; radius <= SA_PROMO_DIRECTION_SAMPLE_RADIUS; radius++) {
+                            float pixelRadius = float(radius);
+
+                            if (pixelRadius > uRimRadius + 0.001) {
+                                continue;
+                            }
+
+                            vec2 sampleOffset = uTexelSize * pixelRadius;
+
+                            float sourceRight = texture2D(
+                                uOriginalMask,
+                                vPromoUv + vec2(sampleOffset.x, 0.0)
+                            ).r;
+
+                            float sourceLeft = texture2D(
+                                uOriginalMask,
+                                vPromoUv - vec2(sampleOffset.x, 0.0)
+                            ).r;
+
+                            float sourceTop = texture2D(
+                                uOriginalMask,
+                                vPromoUv + vec2(0.0, sampleOffset.y)
+                            ).r;
+
+                            float sourceBottom = texture2D(
+                                uOriginalMask,
+                                vPromoUv - vec2(0.0, sampleOffset.y)
+                            ).r;
+
+                            float sourceTopRight = texture2D(
+                                uOriginalMask,
+                                vPromoUv + sampleOffset
+                            ).r;
+
+                            float sourceTopLeft = texture2D(
+                                uOriginalMask,
+                                vPromoUv + vec2(-sampleOffset.x, sampleOffset.y)
+                            ).r;
+
+                            float sourceBottomRight = texture2D(
+                                uOriginalMask,
+                                vPromoUv + vec2(sampleOffset.x, -sampleOffset.y)
+                            ).r;
+
+                            float sourceBottomLeft = texture2D(
+                                uOriginalMask,
+                                vPromoUv - sampleOffset
+                            ).r;
+
+                            float inverseRadius =
+                                1.0 / max(pixelRadius, 1.0);
+
+                            inwardDirection += vec2(1.0, 0.0) *
+                                step(0.001, sourceRight) *
+                                inverseRadius;
+
+                            inwardDirection += vec2(-1.0, 0.0) *
+                                step(0.001, sourceLeft) *
+                                inverseRadius;
+
+                            inwardDirection += vec2(0.0, 1.0) *
+                                step(0.001, sourceTop) *
+                                inverseRadius;
+
+                            inwardDirection += vec2(0.0, -1.0) *
+                                step(0.001, sourceBottom) *
+                                inverseRadius;
+
+                            inwardDirection += vec2(0.70710678, 0.70710678) *
+                                step(0.001, sourceTopRight) *
+                                inverseRadius;
+
+                            inwardDirection += vec2(-0.70710678, 0.70710678) *
+                                step(0.001, sourceTopLeft) *
+                                inverseRadius;
+
+                            inwardDirection += vec2(0.70710678, -0.70710678) *
+                                step(0.001, sourceBottomRight) *
+                                inverseRadius;
+
+                            inwardDirection += vec2(-0.70710678, -0.70710678) *
+                                step(0.001, sourceBottomLeft) *
+                                inverseRadius;
+                        }
+
+                        float inwardLength = length(inwardDirection);
+
+                        if (inwardLength <= 0.00001) {
+                            return vec2(0.0);
+                        }
+
+                        return -inwardDirection / inwardLength;
+                    }
+
+                    void main() {
+                        vec4 originalMaskSample = texture2D(
+                            uOriginalMask,
+                            vPromoUv
+                        );
+
+                        vec4 expandedMaskSample = texture2D(
+                            uExpandedMask,
+                            vPromoUv
+                        );
+
+                        float originalMask = step(
+                            0.001,
+                            originalMaskSample.r
+                        );
+
+                        float expandedMask = step(
+                            0.001,
+                            expandedMaskSample.r
+                        );
+
+                        float rimMask = max(
+                            expandedMask - originalMask,
+                            0.0
+                        );
+
+                        if (rimMask <= 0.0) {
+                            discard;
+                        }
+
+                        float visibility = 1.0;
+
+                        if (uUseOcclusion == 1 && uHasSceneDepth == 1) {
+                            float targetDepth = expandedMaskSample.g;
+                            float sceneDepth = texture2D(
+                                uSceneDepth,
+                                vPromoUv
+                            ).x;
+
+                            /*
+                                Depth values are 0.0 near / 1.0 far.
+                                A closer non-promotional object suppresses the rim.
+                            */
+                            visibility = step(
+                                targetDepth - max(uDepthEpsilon, 0.0),
+                                sceneDepth
+                            );
+                        }
+
+                        vec2 outwardDirection =
+                            promoEstimateOutwardDirection();
+
+                        vec2 artisticDirection =
+                            normalize(
+                                uRimDirection +
+                                vec2(0.00001)
+                            );
+
+                        float directionalAlignment = dot(
+                            outwardDirection,
+                            artisticDirection
+                        );
+
+                        float directionalMask = smoothstep(
+                            -max(uDirectionSoftness, 0.001),
+                            max(uDirectionSoftness, 0.001),
+                            directionalAlignment
+                        );
+
+                        float artMask = mix(
+                            1.0,
+                            directionalMask,
+                            clamp(uDirectionality, 0.0, 1.0)
+                        );
+
+                        float alpha = clamp(
+                            rimMask *
+                            visibility *
+                            artMask *
+                            max(uRimIntensity, 0.0),
+                            0.0,
+                            1.0
+                        );
+
+                        if (alpha <= 0.0) {
+                            discard;
+                        }
+
+                        gl_FragColor = vec4(
+                            uRimColor,
+                            alpha
+                        );
+                    }
+                `,
+                depthTest: false,
+                depthWrite: false,
+                transparent: true,
+                blending: THREE.NormalBlending
+            });
+            overlayMaterial.name = 'SA_PromoSilhouetteOverlay';
+
+            const horizontalScene = new THREE.Scene();
+            const horizontalQuad = new THREE.Mesh(
+                this.fullscreenGeometry,
+                horizontalMaterial
+            );
+            horizontalQuad.frustumCulled = false;
+            horizontalScene.add(horizontalQuad);
+
+            const verticalScene = new THREE.Scene();
+            const verticalQuad = new THREE.Mesh(
+                this.fullscreenGeometry,
+                verticalMaterial
+            );
+            verticalQuad.frustumCulled = false;
+            verticalScene.add(verticalQuad);
+
+            const overlayScene = new THREE.Scene();
+            const overlayQuad = new THREE.Mesh(
+                this.fullscreenGeometry,
+                overlayMaterial
+            );
+            overlayQuad.frustumCulled = false;
+            overlayScene.add(overlayQuad);
+
+            return {
+                preview,
+                renderer: preview.renderer,
+                maskTarget,
+                horizontalTarget,
+                verticalTarget,
+                sceneDepthTarget,
+                horizontalMaterial,
+                verticalMaterial,
+                overlayMaterial,
+                horizontalScene,
+                verticalScene,
+                overlayScene,
+                width: 1,
+                height: 1,
+                renderScale: 1.0,
+                texelSize: new THREE.Vector2(1.0, 1.0),
+                silhouetteValid: false,
+                rendering: false
+            };
+        },
+
+        disposeState(state) {
+            if (!state) {
+                return;
+            }
+
+            [
+                state.maskTarget,
+                state.horizontalTarget,
+                state.verticalTarget,
+                state.sceneDepthTarget,
+                state.horizontalMaterial,
+                state.verticalMaterial,
+                state.overlayMaterial
+            ].forEach(resource => {
+                if (resource && typeof resource.dispose === 'function') {
+                    resource.dispose();
+                }
+            });
+        },
+
+        getPreviewState(preview) {
+            if (!preview || !preview.renderer) {
+                return null;
+            }
+
+            let state = this.states.get(preview);
+
+            if (!state) {
+                state = this.createState(preview);
+                this.states.set(preview, state);
+            }
+
+            return state;
+        },
+
+        resizeState(state) {
+            const renderer = state.renderer;
+            const canvas = renderer.domElement || state.preview.canvas;
+
+            const rawWidth = Math.max(
+                2,
+                Math.floor(
+                    (canvas && canvas.width) ||
+                    state.preview.width ||
+                    window.innerWidth ||
+                    800
+                )
+            );
+
+            const rawHeight = Math.max(
+                2,
+                Math.floor(
+                    (canvas && canvas.height) ||
+                    state.preview.height ||
+                    window.innerHeight ||
+                    600
+                )
+            );
+
+            const renderScale = Math.min(
+                1.0,
+                this.MAX_TARGET_SIZE / Math.max(rawWidth, rawHeight)
+            );
+
+            const width = Math.max(
+                2,
+                Math.floor(rawWidth * renderScale)
+            );
+
+            const height = Math.max(
+                2,
+                Math.floor(rawHeight * renderScale)
+            );
+
+            if (
+                state.width === width &&
+                state.height === height &&
+                state.renderScale === renderScale
+            ) {
+                return false;
+            }
+
+            state.width = width;
+            state.height = height;
+            state.renderScale = renderScale;
+
+            [
+                state.maskTarget,
+                state.horizontalTarget,
+                state.verticalTarget,
+                state.sceneDepthTarget
+            ].forEach(target => target.setSize(width, height));
+
+            state.silhouetteValid = false;
+            return true;
+        },
+
+        getMaterialList(mesh) {
+            if (!mesh || !mesh.material) {
+                return [];
+            }
+
+            return Array.isArray(mesh.material)
+                ? mesh.material.filter(Boolean)
+                : [mesh.material];
+        },
+
+        getMaterialTexture(material) {
+            if (!material) {
+                return this.getFallbackTexture();
+            }
+
+            if (
+                material.uniforms &&
+                material.uniforms.map &&
+                material.uniforms.map.value &&
+                material.uniforms.map.value.isTexture
+            ) {
+                return material.uniforms.map.value;
+            }
+
+            if (material.map && material.map.isTexture) {
+                return material.map;
+            }
+
+            return this.getFallbackTexture();
+        },
+
+        getNumberUniform(material, name, fallback) {
+            const uniform = material && material.uniforms
+                ? material.uniforms[name]
+                : null;
+
+            const value = uniform ? Number(uniform.value) : NaN;
+            return Number.isFinite(value) ? value : fallback;
+        },
+
+        getBooleanUniform(material, name, fallback) {
+            const uniform = material && material.uniforms
+                ? material.uniforms[name]
+                : null;
+
+            if (!uniform) {
+                return fallback;
+            }
+
+            return uniform.value === true;
+        },
+
+        getVector2Uniform(material, name, fallback) {
+            const uniform = material && material.uniforms
+                ? material.uniforms[name]
+                : null;
+
+            const value = uniform ? uniform.value : null;
+
+            if (
+                value &&
+                Number.isFinite(value.x) &&
+                Number.isFinite(value.y)
+            ) {
+                return new THREE.Vector2(
+                    value.x,
+                    value.y
+                );
+            }
+
+            return fallback.clone();
+        },
+
+        getVector3Uniform(material, name, fallback) {
+            const uniform = material && material.uniforms
+                ? material.uniforms[name]
+                : null;
+
+            const value = uniform ? uniform.value : null;
+
+            if (
+                value &&
+                Number.isFinite(value.x) &&
+                Number.isFinite(value.y) &&
+                Number.isFinite(value.z)
+            ) {
+                return new THREE.Vector3(
+                    value.x,
+                    value.y,
+                    value.z
+                );
+            }
+
+            return fallback.clone();
+        },
+
+        getPromotionalMaterialLightColor(material) {
+            if (!material || !material.uniforms) {
+                return null;
+            }
+
+            const colorsUniform = material.uniforms.uLightColor;
+            const intensitiesUniform = material.uniforms.uLightIntensity;
+            const activeLightCount = Math.max(
+                0,
+                Math.min(
+                    16,
+                    Math.floor(
+                        this.getNumberUniform(
+                            material,
+                            'max_light_number',
+                            0
+                        )
+                    )
+                )
+            );
+
+            const colors = colorsUniform ? colorsUniform.value : null;
+            const intensities = intensitiesUniform ? intensitiesUniform.value : null;
+
+            if (
+                !Array.isArray(colors) ||
+                !Array.isArray(intensities) ||
+                activeLightCount <= 0
+            ) {
+                return null;
+            }
+
+            const weightedColor = new THREE.Vector3();
+            let totalWeight = 0.0;
+
+            for (let index = 0; index < activeLightCount; index++) {
+                const color = colors[index];
+                const intensity = Number(intensities[index]);
+                const weight = Number.isFinite(intensity)
+                    ? Math.max(0.0, intensity)
+                    : 0.0;
+
+                if (
+                    !color ||
+                    !Number.isFinite(color.x) ||
+                    !Number.isFinite(color.y) ||
+                    !Number.isFinite(color.z) ||
+                    weight <= 0.00001
+                ) {
+                    continue;
+                }
+
+                weightedColor.x += Math.max(0.0, color.x) * weight;
+                weightedColor.y += Math.max(0.0, color.y) * weight;
+                weightedColor.z += Math.max(0.0, color.z) * weight;
+                totalWeight += weight;
+            }
+
+            if (totalWeight <= 0.00001) {
+                return null;
+            }
+
+            weightedColor.multiplyScalar(1.0 / totalWeight);
+
+            const maxChannel = Math.max(
+                weightedColor.x,
+                weightedColor.y,
+                weightedColor.z
+            );
+
+            if (maxChannel <= 0.00001) {
+                return null;
+            }
+
+            return weightedColor.multiplyScalar(1.0 / maxChannel);
+        },
+
+        getEffectivePromotionalRimColor(group) {
+            const fallbackConfig = group && group.config
+                ? group.config
+                : null;
+
+            const fallbackColor = fallbackConfig && fallbackConfig.color
+                ? fallbackConfig.color.clone()
+                : new THREE.Vector3(1.0, 0.78, 0.26);
+
+            const fixedColor = new THREE.Vector3();
+            let fixedColorCount = 0;
+
+            let colorMode = fallbackConfig
+                ? fallbackConfig.colorMode
+                : 0;
+
+            let lightInfluence = fallbackConfig
+                ? fallbackConfig.lightColorInfluence
+                : 1.0;
+
+            const lightColor = new THREE.Vector3();
+            let lightColorCount = 0;
+
+            if (group && group.materials) {
+                group.materials.forEach(material => {
+                    const config = this.getPromotionalRimConfig(material);
+
+                    if (!config) {
+                        return;
+                    }
+
+                    fixedColor.add(config.color);
+                    fixedColorCount++;
+                    colorMode = config.colorMode;
+                    lightInfluence = config.lightColorInfluence;
+
+                    const materialLightColor =
+                        this.getPromotionalMaterialLightColor(material);
+
+                    if (materialLightColor) {
+                        lightColor.add(materialLightColor);
+                        lightColorCount++;
+                    }
+                });
+            }
+
+            if (fixedColorCount > 0) {
+                fixedColor.multiplyScalar(1.0 / fixedColorCount);
+            } else {
+                fixedColor.copy(fallbackColor);
+            }
+
+            if (colorMode <= 0 || lightColorCount <= 0) {
+                return fixedColor;
+            }
+
+            lightColor.multiplyScalar(1.0 / lightColorCount);
+
+            const influence = Math.max(
+                0.0,
+                Math.min(
+                    1.0,
+                    lightInfluence
+                )
+            );
+
+            if (colorMode >= 2) {
+                return new THREE.Vector3(1.0, 1.0, 1.0).lerp(
+                    lightColor,
+                    influence
+                );
+            }
+
+            return fixedColor.lerp(
+                lightColor,
+                influence
+            );
+        },
+
+        getPromotionalRimConfig(material) {
+            if (
+                !material ||
+                material.sa_shader_id !== 'minecraft_promotional_bevel' ||
+                !material.uniforms
+            ) {
+                return null;
+            }
+
+            const enabled = this.getBooleanUniform(
+                material,
+                'PROMO_RIM_ENABLED',
+                false
+            );
+
+            const width = Math.max(
+                0.0,
+                Math.min(
+                    this.MAX_RIM_RADIUS,
+                    this.getNumberUniform(
+                        material,
+                        'PROMO_RIM_WIDTH',
+                        0.0
+                    )
+                )
+            );
+
+            const intensity = Math.max(
+                0.0,
+                this.getNumberUniform(
+                    material,
+                    'PROMO_RIM_INTENSITY',
+                    1.0
+                )
+            );
+
+            if (!enabled || width <= 0.001 || intensity <= 0.001) {
+                return null;
+            }
+
+            return {
+                group: Math.max(
+                    0,
+                    Math.floor(
+                        this.getNumberUniform(
+                            material,
+                            'PROMO_RIM_GROUP',
+                            0
+                        )
+                    )
+                ),
+                width,
+                intensity,
+                color: this.getVector3Uniform(
+                    material,
+                    'PROMO_RIM_COLOR',
+                    new THREE.Vector3(1.0, 0.78, 0.26)
+                ),
+                colorMode: Math.max(
+                    0,
+                    Math.min(
+                        2,
+                        Math.floor(
+                            this.getNumberUniform(
+                                material,
+                                'PROMO_RIM_COLOR_MODE',
+                                0
+                            )
+                        )
+                    )
+                ),
+                lightColorInfluence: Math.max(
+                    0.0,
+                    Math.min(
+                        1.0,
+                        this.getNumberUniform(
+                            material,
+                            'PROMO_RIM_LIGHT_COLOR_INFLUENCE',
+                            1.0
+                        )
+                    )
+                ),
+                direction: this.getVector2Uniform(
+                    material,
+                    'PROMO_RIM_DIRECTION',
+                    new THREE.Vector2(0.70, 0.65)
+                ),
+                directionality: Math.max(
+                    0.0,
+                    Math.min(
+                        1.0,
+                        this.getNumberUniform(
+                            material,
+                            'PROMO_RIM_DIRECTIONALITY',
+                            0.72
+                        )
+                    )
+                ),
+                directionSoftness: Math.max(
+                    0.001,
+                    Math.min(
+                        1.0,
+                        this.getNumberUniform(
+                            material,
+                            'PROMO_RIM_DIRECTION_SOFTNESS',
+                            0.32
+                        )
+                    )
+                ),
+                useOcclusion: this.getBooleanUniform(
+                    material,
+                    'PROMO_RIM_OCCLUSION_ENABLED',
+                    true
+                ),
+                depthEpsilon: Math.max(
+                    0.0,
+                    this.getNumberUniform(
+                        material,
+                        'PROMO_RIM_DEPTH_EPSILON',
+                        0.00075
+                    )
+                )
+            };
+        },
+
+        collectGroups() {
+            const groups = new Map();
+
+            if (!window.Cube || !Array.isArray(Cube.all)) {
+                return groups;
+            }
+
+            Cube.all.forEach(cube => {
+                const mesh = cube && cube.mesh;
+
+                if (!mesh) {
+                    return;
+                }
+
+                this.getMaterialList(mesh).forEach(material => {
+                    const config = this.getPromotionalRimConfig(material);
+
+                    if (!config) {
+                        return;
+                    }
+
+                    const key = String(config.group);
+
+                    if (!groups.has(key)) {
+                        groups.set(key, {
+                            id: config.group,
+                            config,
+                            meshes: new Set(),
+                            meshList: [],
+                            materials: new Set()
+                        });
+                    }
+
+                    const group = groups.get(key);
+
+                    if (!group.meshes.has(mesh)) {
+                        group.meshes.add(mesh);
+                        group.meshList.push(mesh);
+                    }
+
+                    group.materials.add(material);
+                });
+            });
+
+            return groups;
+        },
+
+        getGroups() {
+            if (!this.groupsDirty && this.cachedGroups) {
+                return this.cachedGroups;
+            }
+
+            this.cachedGroups = this.collectGroups();
+            this.groupsDirty = false;
+            return this.cachedGroups;
+        },
+
+        materialBelongsToGroup(material, group) {
+            if (group && group.materials) {
+                return group.materials.has(material);
+            }
+
+            const config = this.getPromotionalRimConfig(material);
+
+            return !!(
+                config &&
+                group &&
+                config.group === group.id
+            );
+        },
+
+        getMaskMaterial(sourceMaterial) {
+            if (!sourceMaterial || typeof sourceMaterial !== 'object') {
+                return this.discardMaterial;
+            }
+
+            let maskMaterial = this.maskMaterialCache.get(sourceMaterial);
+
+            if (!maskMaterial) {
+                maskMaterial = new THREE.ShaderMaterial({
+                    uniforms: {
+                        map: { value: this.getFallbackTexture() },
+                        uAlphaCutoff: { value: 0.01 }
+                    },
+                    vertexShader: `
+                        varying vec2 vPromoMaskUv;
+
+                        void main() {
+                            vPromoMaskUv = uv;
+                            gl_Position =
+                                projectionMatrix *
+                                modelViewMatrix *
+                                vec4(position, 1.0);
+                        }
+                    `,
+                    fragmentShader: `
+                        uniform sampler2D map;
+                        uniform float uAlphaCutoff;
+
+                        varying vec2 vPromoMaskUv;
+
+                        void main() {
+                            float alpha = texture2D(
+                                map,
+                                vPromoMaskUv
+                            ).a;
+
+                            if (alpha < uAlphaCutoff) {
+                                discard;
+                            }
+
+                            /*
+                                Red = binary union mask.
+                                Green = the nearest promotional depth.
+                            */
+                            gl_FragColor = vec4(
+                                1.0,
+                                gl_FragCoord.z,
+                                0.0,
+                                1.0
+                            );
+                        }
+                    `,
+                    depthTest: true,
+                    depthWrite: true,
+                    transparent: false,
+                    blending: THREE.NoBlending,
+                    side: sourceMaterial.side !== undefined
+                        ? sourceMaterial.side
+                        : THREE.FrontSide
+                });
+
+                maskMaterial.name = 'SA_PromoSilhouetteMask';
+                this.maskMaterialCache.set(sourceMaterial, maskMaterial);
+                this.maskMaterials.add(maskMaterial);
+            }
+
+            maskMaterial.uniforms.map.value = this.getMaterialTexture(sourceMaterial);
+            maskMaterial.uniforms.uAlphaCutoff.value = Math.max(
+                0.001,
+                Number(sourceMaterial.alphaTest) || 0.01
+            );
+
+            maskMaterial.side = sourceMaterial.side !== undefined
+                ? sourceMaterial.side
+                : THREE.FrontSide;
+
+            return maskMaterial;
+        },
+
+        temporarilyHideNonTargets(scene, targetMeshes) {
+            const changed = [];
+            const targetSet = targetMeshes instanceof Set
+                ? targetMeshes
+                : new Set(targetMeshes);
+
+            scene.traverse(object => {
+                if (
+                    !object ||
+                    targetSet.has(object) ||
+                    !(
+                        object.isMesh ||
+                        object.isSprite ||
+                        object.isLine ||
+                        object.isLineSegments ||
+                        object.isPoints
+                    )
+                ) {
+                    return;
+                }
+
+                changed.push({
+                    object,
+                    visible: object.visible
+                });
+
+                object.visible = false;
+            });
+
+            return changed;
+        },
+
+        restoreVisibility(changed) {
+            changed.forEach(entry => {
+                if (entry.object) {
+                    entry.object.visible = entry.visible;
+                }
+            });
+        },
+
+        captureSceneDepth(state, camera) {
+            const renderer = state.renderer;
+            const scene = Canvas.scene;
+
+            const previousOverrideMaterial = scene.overrideMaterial;
+            const previousBackground = scene.background;
+
+            try {
+                scene.overrideMaterial = this.sceneDepthMaterial;
+                scene.background = null;
+
+                renderer.setRenderTarget(state.sceneDepthTarget);
+                renderer.setClearColor(0x000000, 0.0);
+                renderer.clear(true, true, true);
+                renderer.render(scene, camera);
+            } finally {
+                scene.overrideMaterial = previousOverrideMaterial;
+                scene.background = previousBackground;
+            }
+        },
+
+        captureGroupMask(state, camera, group) {
+            const renderer = state.renderer;
+            const scene = Canvas.scene;
+            const targetMeshes = (group.meshList || Array.from(group.meshes))
+                .filter(mesh => mesh && mesh.visible !== false);
+
+            if (targetMeshes.length === 0) {
+                return false;
+            }
+
+            const changedVisibility = this.temporarilyHideNonTargets(
+                scene,
+                group.meshes || targetMeshes
+            );
+
+            const materialChanges = [];
+
+            targetMeshes.forEach(mesh => {
+                const originalMaterial = mesh.material;
+                const originalSlots = Array.isArray(originalMaterial)
+                    ? originalMaterial.slice()
+                    : [originalMaterial];
+
+                const maskSlots = originalSlots.map(sourceMaterial => {
+                    if (this.materialBelongsToGroup(sourceMaterial, group)) {
+                        return this.getMaskMaterial(sourceMaterial);
+                    }
+
+                    return this.discardMaterial;
+                });
+
+                materialChanges.push({
+                    mesh,
+                    originalMaterial
+                });
+
+                mesh.material = Array.isArray(originalMaterial)
+                    ? maskSlots
+                    : maskSlots[0];
+            });
+
+            const previousOverrideMaterial = scene.overrideMaterial;
+            const previousBackground = scene.background;
+
+            try {
+                scene.overrideMaterial = null;
+                scene.background = null;
+
+                renderer.setRenderTarget(state.maskTarget);
+                renderer.setClearColor(0x000000, 0.0);
+                renderer.clear(true, true, true);
+                renderer.render(scene, camera);
+                return true;
+            } finally {
+                materialChanges.forEach(entry => {
+                    entry.mesh.material = entry.originalMaterial;
+                });
+
+                this.restoreVisibility(changedVisibility);
+                scene.overrideMaterial = previousOverrideMaterial;
+                scene.background = previousBackground;
+            }
+        },
+
+        renderDilation(state, radius) {
+            const renderer = state.renderer;
+            const texelSize = state.texelSize;
+
+            texelSize.set(
+                1.0 / Math.max(state.width, 1),
+                1.0 / Math.max(state.height, 1)
+            );
+
+            state.horizontalMaterial.uniforms.uSource.value =
+                state.maskTarget.texture;
+
+            state.horizontalMaterial.uniforms.uTexelSize.value.copy(
+                texelSize
+            );
+
+            state.horizontalMaterial.uniforms.uRadius.value = radius;
+
+            renderer.setRenderTarget(state.horizontalTarget);
+            renderer.clear(true, true, true);
+            renderer.render(
+                state.horizontalScene,
+                this.fullscreenCamera
+            );
+
+            state.verticalMaterial.uniforms.uSource.value =
+                state.horizontalTarget.texture;
+
+            state.verticalMaterial.uniforms.uTexelSize.value.copy(
+                texelSize
+            );
+
+            state.verticalMaterial.uniforms.uRadius.value = radius;
+
+            renderer.setRenderTarget(state.verticalTarget);
+            renderer.clear(true, true, true);
+            renderer.render(
+                state.verticalScene,
+                this.fullscreenCamera
+            );
+        },
+
+        compositeGroup(state, destinationTarget, group) {
+            const renderer = state.renderer;
+            const config = group.config;
+
+            state.overlayMaterial.uniforms.uOriginalMask.value =
+                state.maskTarget.texture;
+
+            state.overlayMaterial.uniforms.uExpandedMask.value =
+                state.verticalTarget.texture;
+
+            state.overlayMaterial.uniforms.uSceneDepth.value =
+                state.sceneDepthTarget.depthTexture ||
+                this.getFallbackTexture();
+
+            state.overlayMaterial.uniforms.uRimColor.value.copy(
+                this.getEffectivePromotionalRimColor(group)
+            );
+
+            state.overlayMaterial.uniforms.uRimIntensity.value =
+                config.intensity;
+
+            state.overlayMaterial.uniforms.uRimRadius.value =
+                Math.max(
+                    0.5,
+                    Math.min(
+                        this.MAX_RIM_RADIUS,
+                        config.width * state.renderScale
+                    )
+                );
+
+            state.overlayMaterial.uniforms.uTexelSize.value.set(
+                1.0 / Math.max(state.width, 1),
+                1.0 / Math.max(state.height, 1)
+            );
+
+            state.overlayMaterial.uniforms.uRimDirection.value.copy(
+                config.direction
+            );
+
+            state.overlayMaterial.uniforms.uDirectionality.value =
+                config.directionality;
+
+            state.overlayMaterial.uniforms.uDirectionSoftness.value =
+                config.directionSoftness;
+
+            state.overlayMaterial.uniforms.uDepthEpsilon.value =
+                config.depthEpsilon;
+
+            state.overlayMaterial.uniforms.uHasSceneDepth.value =
+                state.sceneDepthTarget.depthTexture ? 1 : 0;
+
+            state.overlayMaterial.uniforms.uUseOcclusion.value =
+                config.useOcclusion ? 1 : 0;
+
+            renderer.setRenderTarget(destinationTarget);
+            renderer.render(
+                state.overlayScene,
+                this.fullscreenCamera
+            );
+        },
+
+        renderSilhouette(preview) {
+            if (
+                this.disposed ||
+                !preview ||
+                !preview.renderer ||
+                typeof Canvas === 'undefined' ||
+                !Canvas.scene
+            ) {
+                return;
+            }
+
+            const groups = this.getGroups();
+
+            if (groups.size === 0) {
+                return;
+            }
+
+            const state = this.getPreviewState(preview);
+
+            if (!state || state.rendering) {
+                return;
+            }
+
+            state.rendering = true;
+            const targetChanged = this.resizeState(state);
+            const reuseSilhouette =
+                !targetChanged &&
+                state.silhouetteValid &&
+                ShaderEngine.currentPreviewRenderLightOnly;
+
+            const renderer = state.renderer;
+            const previousTarget = renderer.getRenderTarget();
+            const previousAutoClear = renderer.autoClear;
+            const previousClearColor = new THREE.Color();
+            const previousClearAlpha = renderer.getClearAlpha
+                ? renderer.getClearAlpha()
+                : 1.0;
+
+            if (renderer.getClearColor) {
+                renderer.getClearColor(previousClearColor);
+            }
+
+            try {
+                renderer.autoClear = true;
+
+                if (!reuseSilhouette) {
+                    let needsSceneDepth = false;
+                    groups.forEach(group => {
+                        if (group.config && group.config.useOcclusion) {
+                            needsSceneDepth = true;
+                        }
+                    });
+
+                    if (needsSceneDepth) {
+                        /*
+                            Capture the full scene depth once. It keeps the outline
+                            behind a foreground non-promotional block.
+                        */
+                        this.captureSceneDepth(
+                            state,
+                            preview.camera
+                        );
+                    }
+
+                }
+
+                renderer.autoClear = false;
+
+                groups.forEach(group => {
+                    const radius = Math.max(
+                        0.5,
+                        Math.min(
+                            this.MAX_RIM_RADIUS,
+                            group.config.width * state.renderScale
+                        )
+                    );
+
+                    if (!reuseSilhouette) {
+                        if (!this.captureGroupMask(
+                            state,
+                            preview.camera,
+                            group
+                        )) {
+                            return;
+                        }
+
+                        this.renderDilation(
+                            state,
+                            radius
+                        );
+                    }
+
+                    this.compositeGroup(
+                        state,
+                        previousTarget,
+                        group
+                    );
+                });
+
+                if (!reuseSilhouette) {
+                    state.silhouetteValid = true;
+                }
+            } catch (error) {
+                console.warn(
+                    '[Shader Architect] Promotional silhouette render failed.',
+                    error
+                );
+            } finally {
+                renderer.setRenderTarget(previousTarget);
+                renderer.autoClear = previousAutoClear;
+
+                if (renderer.setClearColor) {
+                    renderer.setClearColor(
+                        previousClearColor,
+                        previousClearAlpha
+                    );
+                }
+
+                state.rendering = false;
+            }
+        },
+
+        patchAllPreviews(force = false) {
+            if (
+                this.disposed ||
+                !window.Preview ||
+                !Array.isArray(Preview.all)
+            ) {
+                return;
+            }
+
+            const allAlreadyPatched =
+                Preview.all.length === this.lastPreviewPatchCount &&
+                Preview.all.every(preview =>
+                    this.patchedPreviews.has(preview)
+                );
+
+            if (!force && allAlreadyPatched) {
+                return;
+            }
+
+            this.lastPreviewPatchCount = Preview.all.length;
+
+            Preview.all.forEach(preview => this.patchPreview(preview));
+        },
+
+        patchPreview(preview) {
+            if (
+                !preview ||
+                !preview.renderer ||
+                this.patchedPreviews.has(preview)
+            ) {
+                return;
+            }
+
+            const originalRender = preview.render;
+
+            if (typeof originalRender !== 'function') {
+                return;
+            }
+
+            const manager = this;
+
+            const patchedRender = function minecraftPromotionalSilhouetteRender() {
+                const result = originalRender.apply(
+                    this,
+                    arguments
+                );
+
+                manager.renderSilhouette(this);
+                return result;
+            };
+
+            preview.render = patchedRender;
+
+            this.patchedPreviews.set(preview, {
+                originalRender,
+                patchedRender
+            });
+        }
+    };
+
     const ShaderEngine = {
         globalRenderMode: 'classic',
         animationReq: null,
         pendingSceneUpdateFrame: null,
         pendingSceneUpdateCauses: null,
+        pendingLightUniformFrame: null,
+        pendingLightUniformCause: null,
+        pendingPreviewRenderFrame: null,
+        pendingPreviewRenderLightOnly: false,
+        currentPreviewRenderLightOnly: false,
+        lightUniformMaterialCache: null,
+        lightUniformMaterialCacheDirty: true,
         clock: new THREE.Clock(),
 
         startAnimationLoop() {
@@ -8232,6 +9963,7 @@ void main() {
 
                 self.updateWorldNormalMatrices();
                 ScreenSpaceReflectionManager.patchAllPreviews();
+                MinecraftPromotionalSilhouetteManager.patchAllPreviews();
                 self.animationReq = requestAnimationFrame(tick);
             }
             tick();
@@ -8240,6 +9972,13 @@ void main() {
         stopAnimationLoop() {
             if (this.animationReq) cancelAnimationFrame(this.animationReq);
             this.cancelPendingSceneUpdate();
+            this.cancelPendingLightUniformUpdate();
+            this.cancelPendingPreviewRender();
+        },
+
+        invalidateLightUniformMaterialCache() {
+            this.lightUniformMaterialCache = null;
+            this.lightUniformMaterialCacheDirty = true;
         },
 
         hexToVec3(hex) {
@@ -8319,6 +10058,95 @@ void main() {
             if (this.pendingSceneUpdateCauses) {
                 this.pendingSceneUpdateCauses.clear();
             }
+        },
+
+        requestLightUniformUpdate(cause = 'light_update') {
+            this.pendingLightUniformCause = cause;
+
+            if (this.pendingLightUniformFrame !== null) return;
+
+            const flush = () => {
+                const pendingCause = this.pendingLightUniformCause || 'light_update';
+                this.pendingLightUniformFrame = null;
+                this.pendingLightUniformCause = null;
+                this.updateLightUniforms(pendingCause);
+            };
+
+            if (typeof requestAnimationFrame === 'function') {
+                this.pendingLightUniformFrame = requestAnimationFrame(flush);
+            } else if (typeof queueMicrotask === 'function') {
+                this.pendingLightUniformFrame = 'microtask';
+                queueMicrotask(flush);
+            } else {
+                this.pendingLightUniformFrame = 'promise';
+                Promise.resolve().then(flush);
+            }
+        },
+
+        cancelPendingLightUniformUpdate() {
+            if (
+                typeof this.pendingLightUniformFrame === 'number' &&
+                typeof cancelAnimationFrame === 'function'
+            ) {
+                cancelAnimationFrame(this.pendingLightUniformFrame);
+            }
+
+            this.pendingLightUniformFrame = null;
+            this.pendingLightUniformCause = null;
+        },
+
+        requestPreviewRender(options = {}) {
+            const lightOnly = !!options.lightOnly;
+
+            if (this.pendingPreviewRenderFrame !== null) {
+                this.pendingPreviewRenderLightOnly =
+                    this.pendingPreviewRenderLightOnly && lightOnly;
+                return;
+            }
+
+            this.pendingPreviewRenderLightOnly = lightOnly;
+
+            const flush = () => {
+                const renderLightOnly = this.pendingPreviewRenderLightOnly;
+                this.pendingPreviewRenderFrame = null;
+                this.pendingPreviewRenderLightOnly = false;
+
+                if (!window.Preview || !Array.isArray(Preview.all)) return;
+
+                this.currentPreviewRenderLightOnly = renderLightOnly;
+                try {
+                    Preview.all.forEach(preview => {
+                        if (preview && typeof preview.render === 'function') {
+                            preview.render();
+                        }
+                    });
+                } finally {
+                    this.currentPreviewRenderLightOnly = false;
+                }
+            };
+
+            if (typeof requestAnimationFrame === 'function') {
+                this.pendingPreviewRenderFrame = requestAnimationFrame(flush);
+            } else if (typeof queueMicrotask === 'function') {
+                this.pendingPreviewRenderFrame = 'microtask';
+                queueMicrotask(flush);
+            } else {
+                this.pendingPreviewRenderFrame = 'promise';
+                Promise.resolve().then(flush);
+            }
+        },
+
+        cancelPendingPreviewRender() {
+            if (
+                typeof this.pendingPreviewRenderFrame === 'number' &&
+                typeof cancelAnimationFrame === 'function'
+            ) {
+                cancelAnimationFrame(this.pendingPreviewRenderFrame);
+            }
+
+            this.pendingPreviewRenderFrame = null;
+            this.pendingPreviewRenderLightOnly = false;
+            this.currentPreviewRenderLightOnly = false;
         },
 
         configureTextureWrap(texture, uniformDef, options = {}) {
@@ -8844,6 +10672,10 @@ void main() {
                     if (def.type === 'color' && def.hexValue) {
                         val = this.hexToVec3(def.hexValue);
                     }
+                    if (isColorUniformDefinition(def) && def.type !== 'color') {
+                        syncColorUniformValue(def, def.hexValue || vectorToColorHex(def.value));
+                        val = def.value;
+                    }
 
                     val = cloneUniformValue(val);
                     if (def.type === 'sampler2D' && val && val.isTexture) {
@@ -8996,12 +10828,15 @@ void main() {
 
             const shadowShader = slotShaders.find(slotShader => slotShader && slotShader.enableShadows) || shader;
             setupAlphaShadowMaterials(mesh, firstTexture, firstSourceMaterial, shadowShader);
+            this.invalidateLightUniformMaterialCache();
         },
 
         updateAllCubes(cause = 'default', options = {}) {
             if (!options.keepPending) {
                 this.cancelPendingSceneUpdate();
             }
+
+            this.invalidateLightUniformMaterialCache();
 
             Cube.all.forEach(cube => {
                 if (cube.mesh) {
@@ -9017,6 +10852,7 @@ void main() {
 
             this.updateWorldNormalMatrices();
             this.updateLightUniforms();
+            MinecraftPromotionalSilhouetteManager.invalidateGroups();
 
             //Dispatch Blockbench event to signal that shaders have been updated
 
@@ -9029,6 +10865,8 @@ void main() {
         },
 
         updateAllUniforms(cause = 'default') {
+            this.invalidateLightUniformMaterialCache();
+
             const cloneUniformValue = (value) => {
                 if (value && typeof value.clone === 'function') return value.clone();
                 if (Array.isArray(value)) return value.map(v => cloneUniformValue(v));
@@ -9072,6 +10910,10 @@ void main() {
                             if (def.type === 'color' && def.hexValue) {
                                 val = this.hexToVec3(def.hexValue);
                             }
+                            if (isColorUniformDefinition(def) && def.type !== 'color') {
+                                syncColorUniformValue(def, def.hexValue || vectorToColorHex(def.value));
+                                val = def.value;
+                            }
 
                             val = cloneUniformValue(val);
                             if (def.type === 'sampler2D' && val && val.isTexture) {
@@ -9104,13 +10946,8 @@ void main() {
                 cause
             });
 
-            if (window.Preview && Array.isArray(Preview.all)) {
-                Preview.all.forEach(p => {
-                    if (typeof p.render === 'function') {
-                        p.render();
-                    }
-                });
-            }
+            MinecraftPromotionalSilhouetteManager.invalidateGroups();
+            this.requestPreviewRender();
         },
 
         updateWorldNormalMatrices() {
@@ -9143,7 +10980,57 @@ void main() {
             });
         },
 
+        materialUsesLightUniforms(material) {
+            if (!material || !material.uniforms) return false;
+
+            return [
+                'max_light_number',
+                'uLightPos',
+                'uLightDir',
+                'uLightColor',
+                'uLightIntensity',
+                'uLightDistance',
+                'uLightConeAngle',
+                'uLightType',
+                'uLightPenumbra',
+                'uLightCastShadow',
+                'uLightShadowIndex'
+            ].some(name => !!material.uniforms[name]);
+        },
+
+        getLightUniformMaterials() {
+            if (!this.lightUniformMaterialCacheDirty && this.lightUniformMaterialCache) {
+                return this.lightUniformMaterialCache;
+            }
+
+            const materials = [];
+            const seen = new Set();
+
+            if (window.Cube && Array.isArray(Cube.all)) {
+                Cube.all.forEach(cube => {
+                    const mesh = cube && cube.mesh;
+                    if (!mesh || !mesh.material) return;
+
+                    this.forEachMeshMaterial(mesh, (mat) => {
+                        if (!this.materialUsesLightUniforms(mat)) return;
+
+                        const key = mat.uuid || mat.id || mat;
+                        if (seen.has(key)) return;
+
+                        seen.add(key);
+                        materials.push(mat);
+                    });
+                });
+            }
+
+            this.lightUniformMaterialCache = materials;
+            this.lightUniformMaterialCacheDirty = false;
+            return materials;
+        },
+
         updateLightUniforms() {
+            this.cancelPendingLightUniformUpdate();
+
             const lights = (window.LightElement && Array.isArray(window.LightElement.all))
                 ? window.LightElement.all
                 : [];
@@ -9407,106 +11294,56 @@ void main() {
                 return uniform;
             };
 
-            const processedMaterials = new Set();
+            this.getLightUniformMaterials().forEach(mat => {
+                if (!mat || !mat.uniforms) return;
 
-            Cube.all.forEach(cube => {
-                const mesh = cube.mesh;
-                if (!mesh) return;
+                let lightUniformsUpdated = false;
 
-                this.forEachMeshMaterial(mesh, (mat) => {
-                    if (!mat || !mat.uniforms) return;
+                if (mat.uniforms.max_light_number) {
+                    mat.uniforms.max_light_number.value = activeLightCount;
+                    lightUniformsUpdated = true;
+                }
 
-                    const materialKey = mat.uuid || mat.id || mat;
-                    if (processedMaterials.has(materialKey)) return;
+                const vectorUniforms = [
+                    ['uLightPos', posArray, () => new THREE.Vector3()],
+                    ['uLightDir', dirArray, () => new THREE.Vector3(0, -1, 0)],
+                    ['uLightColor', colArray, () => new THREE.Vector3()]
+                ];
 
-                    processedMaterials.add(materialKey);
-
-                    if (mat.uniforms.map && mat.uniforms.map.value && mat.uniforms.map.value.image) {
-                        if (mat.uniforms.TEXTURE_SIZE) {
-                            mat.uniforms.TEXTURE_SIZE.value.set(
-                                mat.uniforms.map.value.image.width,
-                                mat.uniforms.map.value.image.height
-                            );
-                        }
+                vectorUniforms.forEach(([name, sourceArray, fallbackFactory]) => {
+                    if (!mat.uniforms[name]) return;
+                    const uniform = ensureVectorArrayUniform(mat, name, fallbackFactory);
+                    for (let i = 0; i < MAX_LIGHTS; i++) {
+                        uniform.value[i].copy(sourceArray[i]);
                     }
-
-                    if (mat.uniforms.uWorldNormalMatrix) {
-                        mesh.updateMatrixWorld(true);
-                        let m = mat.uniforms.uWorldNormalMatrix.value;
-
-                        // Ensure this is a valid Matrix3 instance before operating on it.
-                        if (!m || (typeof m.getNormalMatrix !== 'function' && typeof m.setFromMatrix4 !== 'function')) {
-                            const newMatrix = new THREE.Matrix3();
-                            if (m && m.elements) {
-                                newMatrix.fromArray(m.elements);
-                            } else if (m && Array.isArray(m)) {
-                                newMatrix.fromArray(m);
-                            }
-                            mat.uniforms.uWorldNormalMatrix.value = newMatrix;
-                            m = newMatrix;
-                        }
-
-                        if (typeof m.getNormalMatrix === 'function') {
-                            m.getNormalMatrix(mesh.matrixWorld);
-                        } else if (typeof m.setFromMatrix4 === 'function') {
-                            m.setFromMatrix4(mesh.matrixWorld).invert().transpose();
-                        }
-                    }
-
-                    let lightUniformsUpdated = false;
-
-                    if (mat.uniforms.max_light_number) {
-                        mat.uniforms.max_light_number.value = activeLightCount;
-                        lightUniformsUpdated = true;
-                    }
-
-                    const vectorUniforms = [
-                        ['uLightPos', posArray, () => new THREE.Vector3()],
-                        ['uLightDir', dirArray, () => new THREE.Vector3(0, -1, 0)],
-                        ['uLightColor', colArray, () => new THREE.Vector3()]
-                    ];
-
-                    vectorUniforms.forEach(([name, sourceArray, fallbackFactory]) => {
-                        if (!mat.uniforms[name]) return;
-                        const uniform = ensureVectorArrayUniform(mat, name, fallbackFactory);
-                        for (let i = 0; i < MAX_LIGHTS; i++) {
-                            uniform.value[i].copy(sourceArray[i]);
-                        }
-                        lightUniformsUpdated = true;
-                    });
-
-                    const numberUniforms = [
-                        ['uLightIntensity', intArray, 0],
-                        ['uLightDistance', distanceArray, 0],
-                        ['uLightConeAngle', coneAngleArray, 0],
-                        ['uLightType', lightTypeArray, 0],
-                        ['uLightPenumbra', penumbraArray, 0],
-                        ['uLightCastShadow', castShadowArray, 0],
-                        ['uLightShadowIndex', shadowIndexArray, -1]
-                    ];
-
-                    numberUniforms.forEach(([name, sourceArray, fallbackValue]) => {
-                        if (!mat.uniforms[name]) return;
-                        const uniform = ensureNumberArrayUniform(mat, name, fallbackValue);
-                        for (let i = 0; i < MAX_LIGHTS; i++) {
-                            uniform.value[i] = sourceArray[i];
-                        }
-                        lightUniformsUpdated = true;
-                    });
-
-                    if (lightUniformsUpdated) {
-                        mat.uniformsNeedUpdate = true;
-                    }
+                    lightUniformsUpdated = true;
                 });
+
+                const numberUniforms = [
+                    ['uLightIntensity', intArray, 0],
+                    ['uLightDistance', distanceArray, 0],
+                    ['uLightConeAngle', coneAngleArray, 0],
+                    ['uLightType', lightTypeArray, 0],
+                    ['uLightPenumbra', penumbraArray, 0],
+                    ['uLightCastShadow', castShadowArray, 0],
+                    ['uLightShadowIndex', shadowIndexArray, -1]
+                ];
+
+                numberUniforms.forEach(([name, sourceArray, fallbackValue]) => {
+                    if (!mat.uniforms[name]) return;
+                    const uniform = ensureNumberArrayUniform(mat, name, fallbackValue);
+                    for (let i = 0; i < MAX_LIGHTS; i++) {
+                        uniform.value[i] = sourceArray[i];
+                    }
+                    lightUniformsUpdated = true;
+                });
+
+                if (lightUniformsUpdated) {
+                    mat.uniformsNeedUpdate = true;
+                }
             });
 
-            if (window.Preview && Array.isArray(Preview.all)) {
-                Preview.all.forEach(p => {
-                    if (typeof p.render === 'function') {
-                        p.render();
-                    }
-                });
-            }
+            this.requestPreviewRender({ lightOnly: true });
         }
     };
 
@@ -9551,7 +11388,8 @@ void main() {
                         newUniformChannels: {
                             x: { min: null, max: null, step: null, allow_higher: true, allow_lower: true, enabled: false },
                             y: { min: null, max: null, step: null, allow_higher: true, allow_lower: true, enabled: false },
-                            z: { min: null, max: null, step: null, allow_higher: true, allow_lower: true, enabled: false }
+                            z: { min: null, max: null, step: null, allow_higher: true, allow_lower: true, enabled: false },
+                            w: { min: null, max: null, step: null, allow_higher: true, allow_lower: true, enabled: false }
                         },
                         expandedUniforms: {},
                         newTransLang: {},
@@ -9628,6 +11466,15 @@ void main() {
                     formatNumber(val) {
                         let num = Number(val);
                         return isNaN(num) ? "0.00" : num.toFixed(2);
+                    },
+                    isColorUniform(uni) {
+                        return MaterialManager.isColorUniformDefinition(uni);
+                    },
+                    getUniformColorHex(uni) {
+                        return MaterialManager.getUniformColorHex(uni);
+                    },
+                    setUniformColorHex(uni, hex) {
+                        MaterialManager.syncColorUniformValue(uni, hex);
                     },
                     highlighter(code) {
                         if (typeof Prism !== 'undefined' && Prism.languages.glsl) {
@@ -9746,12 +11593,13 @@ void main() {
                         if (!safeVar) return;
 
                         let def = { type: this.newUniformType, value: 0 };
-                        if (this.newUniformType === 'color') def = { type: 'color', value: "#ffffff", hexValue: "#ffffff" };
+                        if (this.newUniformType === 'color') def = { type: 'vec3', value: new THREE.Vector3(1, 1, 1), hexValue: "#ffffff", is_color: true };
                         else if (this.newUniformType === 'bool') def.value = false;
                         else if (this.newUniformType === 'float') def.value = 1.0;
                         else if (this.newUniformType === 'int') def.value = 1;
                         else if (this.newUniformType === 'vec2') def.value = new THREE.Vector2(0, 0);
                         else if (this.newUniformType === 'vec3') def.value = new THREE.Vector3(0, 0, 0);
+                        else if (this.newUniformType === 'vec4') def.value = new THREE.Vector4(0, 0, 0, 1);
 
                         def.expose = this.newUniformExpose;
                         def.advanced = !!this.newUniformAdvanced;
@@ -9761,8 +11609,8 @@ void main() {
                             if (this.newUniformStep !== null && this.newUniformStep !== '') def.step = Number(this.newUniformStep);
                             def.allow_higher = this.newUniformAllowHigher;
                             def.allow_lower = this.newUniformAllowLower;
-                        } else if (this.newUniformType === 'vec2' || this.newUniformType === 'vec3') {
-                            const axes = this.newUniformType === 'vec2' ? ['x', 'y'] : ['x', 'y', 'z'];
+                        } else if (this.newUniformType === 'vec2' || this.newUniformType === 'vec3' || this.newUniformType === 'vec4') {
+                            const axes = this.newUniformType === 'vec2' ? ['x', 'y'] : (this.newUniformType === 'vec3' ? ['x', 'y', 'z'] : ['x', 'y', 'z', 'w']);
                             const channels = {};
                             let hasAny = false;
                             axes.forEach(axis => {
@@ -11050,6 +12898,7 @@ void main() {
                                                 <option value="bool">bool</option>
                                                 <option value="vec2">vec2</option>
                                                 <option value="vec3">vec3</option>
+                                                <option value="vec4">vec4</option>
                                                 <option value="color">color (vec3)</option>
                                             </select>
                                             <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
@@ -11092,8 +12941,8 @@ void main() {
                                             </label>
                                         </div>
                                         <!-- Per-channel range for vec2 / vec3 -->
-                                        <div v-if="(newUniformType === 'vec2' || newUniformType === 'vec3') && activeMat.isCustom" style="margin-top: 8px; display: flex; flex-direction: column; gap: 6px;">
-                                            <div v-for="axis in (newUniformType === 'vec2' ? ['x','y'] : ['x','y','z'])" :key="axis" style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 4px 0; border-top: 1px dashed rgba(255,255,255,0.08);">
+                                        <div v-if="(newUniformType === 'vec2' || newUniformType === 'vec3' || newUniformType === 'vec4') && activeMat.isCustom" style="margin-top: 8px; display: flex; flex-direction: column; gap: 6px;">
+                                            <div v-for="axis in (newUniformType === 'vec2' ? ['x','y'] : (newUniformType === 'vec3' ? ['x','y','z'] : ['x','y','z','w']))" :key="axis" style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 4px 0; border-top: 1px dashed rgba(255,255,255,0.08);">
                                                 <label style="display: flex; align-items: center; gap: 4px; min-width: 100px; cursor: pointer;">
                                                     <input type="checkbox" v-model="newUniformChannels[axis].enabled"> Range <b style="text-transform:uppercase;">{{ axis }}</b>
                                                 </label>
@@ -11132,7 +12981,7 @@ void main() {
                                             <input v-if="uni.type==='float'" type="number" step="0.1" v-model.number="uni.value" class="dark_bordered" style="width: 100px;">
                                             <input v-if="uni.type==='int'" type="number" step="1" v-model.number="uni.value" class="dark_bordered" style="width: 100px;">
                                             <input v-if="uni.type==='bool'" type="checkbox" v-model="uni.value">
-                                            <input v-if="uni.type==='color'" type="color" v-model="uni.hexValue">
+                                            <input v-if="isColorUniform(uni)" type="color" :value="getUniformColorHex(uni)" @input="setUniformColorHex(uni, $event.target.value)">
 
                                             <div v-if="uni.type==='sampler2D'" style="display: flex; gap: 8px; align-items: center;">
                                                 <label style="display: flex; align-items: center; gap: 4px; font-weight: normal; cursor: pointer; font-size:0.9em;">
@@ -11146,10 +12995,17 @@ void main() {
                                                 Y <input type="number" step="0.1" v-model.number="uni.value.y" class="dark_bordered" style="width: 70px;">
                                             </div>
 
-                                            <div v-if="uni.type==='vec3'" style="display: flex; gap: 5px; align-items: center;">
+                                            <div v-if="uni.type==='vec3' && !isColorUniform(uni)" style="display: flex; gap: 5px; align-items: center;">
                                                 X <input type="number" step="0.1" v-model.number="uni.value.x" class="dark_bordered" style="width: 60px;">
                                                 Y <input type="number" step="0.1" v-model.number="uni.value.y" class="dark_bordered" style="width: 60px;">
                                                 Z <input type="number" step="0.1" v-model.number="uni.value.z" class="dark_bordered" style="width: 60px;">
+                                            </div>
+
+                                            <div v-if="uni.type==='vec4' && !isColorUniform(uni)" style="display: flex; gap: 5px; align-items: center;">
+                                                X <input type="number" step="0.1" v-model.number="uni.value.x" class="dark_bordered" style="width: 55px;">
+                                                Y <input type="number" step="0.1" v-model.number="uni.value.y" class="dark_bordered" style="width: 55px;">
+                                                Z <input type="number" step="0.1" v-model.number="uni.value.z" class="dark_bordered" style="width: 55px;">
+                                                W <input type="number" step="0.1" v-model.number="uni.value.w" class="dark_bordered" style="width: 55px;">
                                             </div>
 
                                             <div v-if="uni.type==='vec2v' || uni.type==='vec3v' || uni.type==='floatv'" style="opacity:0.6; font-style:italic;">[Array Data: {{uni.value.length}} items]</div>
@@ -11171,6 +13027,9 @@ void main() {
                                                 <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
                                                     <input type="checkbox" v-model="uni.advanced" :disabled="!activeMat.isCustom"> Advanced
                                                 </label>
+                                                <label v-if="uni.type === 'vec3' || uni.type === 'vec4' || uni.type === 'color'" style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
+                                                    <input type="checkbox" v-model="uni.is_color" :disabled="!activeMat.isCustom" @change="uni.is_color ? setUniformColorHex(uni, getUniformColorHex(uni)) : null"> Is Color
+                                                </label>
                                             </div>
                                             <div v-if="uni.type === 'float' || uni.type === 'int'" style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center;">
                                                 <label style="display: flex; align-items: center; gap: 4px;">
@@ -11189,10 +13048,10 @@ void main() {
                                                     <input type="checkbox" v-model="uni.allow_lower" :disabled="!activeMat.isCustom"> Allow Lower
                                                 </label>
                                             </div>
-                                            <!-- Per-channel range for vec2 / vec3 in expanded metadata -->
-                                            <div v-if="uni.type === 'vec2' || uni.type === 'vec3'" style="display: flex; flex-direction: column; gap: 5px; margin-top: 4px;">
+                                            <!-- Per-channel range for vector uniforms in expanded metadata -->
+                                            <div v-if="uni.type === 'vec2' || uni.type === 'vec3' || uni.type === 'vec4'" style="display: flex; flex-direction: column; gap: 5px; margin-top: 4px;">
                                                 <div style="font-size: 0.85em; opacity: 0.7; margin-bottom: 2px;">Per-channel range (optional):</div>
-                                                <div v-for="axis in (uni.type === 'vec2' ? ['x','y'] : ['x','y','z'])" :key="axis" style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 4px 6px; background: rgba(255,255,255,0.03); border-radius: 4px;">
+                                                <div v-for="axis in (uni.type === 'vec2' ? ['x','y'] : (uni.type === 'vec3' ? ['x','y','z'] : ['x','y','z','w']))" :key="axis" style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 4px 6px; background: rgba(255,255,255,0.03); border-radius: 4px;">
                                                     <label style="min-width: 110px; display: flex; align-items: center; gap: 4px; cursor: pointer; font-weight: bold;">
                                                         <input type="checkbox"
                                                             :checked="uni.channels && uni.channels[axis] !== undefined"
@@ -11314,8 +13173,8 @@ void main() {
                                     </div>
 
                                     <!-- Color picker -->
-                                    <div v-if="uni.type==='color'">
-                                        <input type="color" v-model="uni.hexValue" @change="applyLive()" style="width:100%; padding:0; border:none; height:24px; cursor:pointer;">
+                                    <div v-if="isColorUniform(uni)">
+                                        <input type="color" :value="getUniformColorHex(uni)" @input="setUniformColorHex(uni, $event.target.value); applyLive()" style="width:100%; padding:0; border:none; height:24px; cursor:pointer;">
                                     </div>
 
                                     <!-- Vec2 input with optional per-channel sliders -->
@@ -11339,8 +13198,28 @@ void main() {
                                     </div>
 
                                     <!-- Vec3 input with optional per-channel sliders -->
-                                    <div v-if="uni.type==='vec3'" style="display: flex; flex-direction: column; gap: 4px; font-size:0.85em; width: 100%;">
+                                    <div v-if="uni.type==='vec3' && !isColorUniform(uni)" style="display: flex; flex-direction: column; gap: 4px; font-size:0.85em; width: 100%;">
                                         <div v-for="axis in ['x','y','z']" :key="axis" style="display: flex; align-items: center; gap: 4px;">
+                                            <span style="font-family: monospace; text-transform: uppercase; min-width: 14px;">{{ axis }}:</span>
+                                            <template v-if="uni.channels && uni.channels[axis] !== undefined">
+                                                <input type="range"
+                                                    :min="uni.channels[axis].min !== undefined ? uni.channels[axis].min : 0"
+                                                    :max="uni.channels[axis].max !== undefined ? uni.channels[axis].max : 1"
+                                                    :step="uni.channels[axis].step || 0.05"
+                                                    v-model.number="uni.value[axis]"
+                                                    @input="applyLive()"
+                                                    style="flex-grow:1; cursor:pointer; height:4px; padding:0;">
+                                                <span style="font-family:monospace; min-width:36px; text-align:right;">{{ formatNumber(uni.value[axis]) }}</span>
+                                            </template>
+                                            <template v-else>
+                                                <input type="number" :step="0.1" v-model.number="uni.value[axis]" @change="applyLive()" class="dark_bordered" style="flex-grow:1; min-width:30px;">
+                                            </template>
+                                        </div>
+                                    </div>
+
+                                    <!-- Vec4 input with optional per-channel sliders -->
+                                    <div v-if="uni.type==='vec4' && !isColorUniform(uni)" style="display: flex; flex-direction: column; gap: 4px; font-size:0.85em; width: 100%;">
+                                        <div v-for="axis in ['x','y','z','w']" :key="axis" style="display: flex; align-items: center; gap: 4px;">
                                             <span style="font-family: monospace; text-transform: uppercase; min-width: 14px;">{{ axis }}:</span>
                                             <template v-if="uni.channels && uni.channels[axis] !== undefined">
                                                 <input type="range"
@@ -11526,7 +13405,7 @@ void main() {
             UpdateShaderArchitectLights: window.UpdateShaderArchitectLights,
             on_light_element_updated: window.on_light_element_updated
         };
-        const updateShaderLights = () => ShaderEngine.updateLightUniforms();
+        const updateShaderLights = () => ShaderEngine.updateLightUniforms('light_element_update');
 
         window.updateLights = updateShaderLights;
         window.UpdateShaderArchitectLights = updateShaderLights;
@@ -11589,6 +13468,7 @@ void main() {
             window.FancyShaderMaterial = FancyShaderMaterial;
             window.FancyShaderMaterialInstance = FancyShaderMaterialInstance;
             window.ScreenSpaceReflectionManager = ScreenSpaceReflectionManager;
+            window.MinecraftPromotionalSilhouetteManager = MinecraftPromotionalSilhouetteManager;
             bindShaderArchitectLightCallbacks();
             const saProjectInstancesProp = MaterialManager.registerProjectMaterialInstanceProperty();
             if (saProjectInstancesProp) deletables.push(saProjectInstancesProp);
@@ -11611,6 +13491,7 @@ void main() {
             // Init backend
             MaterialManager.init();
             ScreenSpaceReflectionManager.init();
+            MinecraftPromotionalSilhouetteManager.init();
             initMaterialStudio();
             deletables.push(MaterialStudioDialog);
 
@@ -12122,11 +14003,11 @@ void main() {
                                         padding_right: '32px'
                                     }
                                 }
-                                else if (uni.type === 'color') {
+                                else if (MaterialManager.isColorUniformDefinition(uni)) {
                                     form_config[uniName] = {
                                         type: 'color',
                                         label: resolvedLabel + ':',
-                                        value: uni.hexValue || (uni.value instanceof THREE.Color ? '#' + uni.value.getHexString() : (typeof uni.value === 'string' ? uni.value : '#ffffff')),
+                                        value: MaterialManager.getUniformColorHex(uni),
                                         title: resolvedDesc || undefined,
                                         description: resolvedDesc || undefined
                                     }
@@ -12157,6 +14038,30 @@ void main() {
                                         ranges: baseMat.uniforms[uniName] && baseMat.uniforms[uniName].channels ? baseMat.uniforms[uniName].channels : undefined,
                                         resettable: true,
                                         default: [base_val.x !== undefined ? parseFloat(base_val.x) || 0 : 0, base_val.y !== undefined ? parseFloat(base_val.y) || 0 : 0, base_val.z !== undefined ? parseFloat(base_val.z) || 0 : 0]
+                                    };
+                                }
+                                else if (uni.type === 'vec4') {
+                                    const val = uni.value || new THREE.Vector4(0, 0, 0, 1);
+                                    const base_val = baseMat.uniforms[uniName] ? baseMat.uniforms[uniName].value : new THREE.Vector4(0, 0, 0, 1);
+                                    form_config[uniName] = {
+                                        type: 'custom_vector',
+                                        label: resolvedLabel + ':',
+                                        dimensions: 4,
+                                        value: [
+                                            val.x !== undefined ? parseFloat(val.x) || 0 : 0,
+                                            val.y !== undefined ? parseFloat(val.y) || 0 : 0,
+                                            val.z !== undefined ? parseFloat(val.z) || 0 : 0,
+                                            val.w !== undefined ? parseFloat(val.w) || 0 : 0
+                                        ],
+                                        description: resolvedDesc || undefined,
+                                        ranges: baseMat.uniforms[uniName] && baseMat.uniforms[uniName].channels ? baseMat.uniforms[uniName].channels : undefined,
+                                        resettable: true,
+                                        default: [
+                                            base_val.x !== undefined ? parseFloat(base_val.x) || 0 : 0,
+                                            base_val.y !== undefined ? parseFloat(base_val.y) || 0 : 0,
+                                            base_val.z !== undefined ? parseFloat(base_val.z) || 0 : 0,
+                                            base_val.w !== undefined ? parseFloat(base_val.w) || 0 : 0
+                                        ]
                                     };
                                 }
                             }
@@ -12545,7 +14450,9 @@ void main() {
                         }
                     } else if (instance.uniforms[key]) {
                         const uni = instance.uniforms[key];
-                        if (uni.type === 'float') {
+                        if (MaterialManager.isColorUniformDefinition(uni)) {
+                            MaterialManager.syncColorUniformValue(uni, result[key]);
+                        } else if (uni.type === 'float') {
                             uni.value = parseFloat(result[key]) || 0;
                         } else if (uni.type === 'int') {
                             uni.value = parseInt(result[key]) || 0;
@@ -12577,9 +14484,6 @@ void main() {
                             uni.value.w = parseFloat(result[key][3]) || 0;
                         }
 
-                        if (uni.type === 'color') {
-                            uni.hexValue = result[key];
-                        }
                     }
                 }
                 MaterialManager.saveMaterialInstances({ cause: 'update_form' });
@@ -12644,7 +14548,7 @@ void main() {
                 deletables.push(addCubeEvent);
 
                 let transformEvent = Blockbench.on('update_transform', () => {
-                    ShaderEngine.updateLightUniforms();
+                    ShaderEngine.requestLightUniformUpdate('update_transform');
                 });
                 deletables.push(transformEvent);
 
@@ -12691,6 +14595,7 @@ void main() {
 
         onunload() {
             ShaderEngine.stopAnimationLoop();
+            MinecraftPromotionalSilhouetteManager.dispose();
             ScreenSpaceReflectionManager.dispose();
 
             if (styleEl && styleEl.parentElement) {
@@ -12722,6 +14627,7 @@ void main() {
             if (window.FancyShaderMaterial === FancyShaderMaterial) delete window.FancyShaderMaterial;
             if (window.FancyShaderMaterialInstance === FancyShaderMaterialInstance) delete window.FancyShaderMaterialInstance;
             if (window.ScreenSpaceReflectionManager === ScreenSpaceReflectionManager) delete window.ScreenSpaceReflectionManager;
+            if (window.MinecraftPromotionalSilhouetteManager === MinecraftPromotionalSilhouetteManager) delete window.MinecraftPromotionalSilhouetteManager;
 
             styleEl = undefined;
             renderModeSelector = undefined;
