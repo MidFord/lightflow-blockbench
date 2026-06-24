@@ -7185,108 +7185,62 @@ vec3 applyStylizedBevel(
         keyAmount
     );
 
-    // 1. Calculamos cómo reacciona a la luz CADA borde de forma absoluta.
-    // Esto soluciona que las caras muy oscuras o muy iluminadas conecten todas sus líneas.
+    // --- ENFOQUE HÍBRIDO 3D/2D: NORMALES FÍSICAS + MÁSCARAS PLANAS ---
+
+    // 1. Calculamos la normal 3D inclinada de cada uno de los 4 bordes.
+    // Al sumar la normal de la cara, arreglamos el problema de las caras traseras y laterales.
     float slope = clamp(BEVEL_SLOPE, 0.0, 2.0);
+    vec3 nL = safeNormalize(normalValue - tangentU * slope, normalValue);
+    vec3 nR = safeNormalize(normalValue + tangentU * slope, normalValue);
+    vec3 nB = safeNormalize(normalValue - tangentV * slope, normalValue);
+    vec3 nT = safeNormalize(normalValue + tangentV * slope, normalValue);
+
+    // 2. ¿La luz golpea el borde? 
+    // CORRECCIÓN: smoothstep crea una transición suave. 
+    // Evita tajos duros cuando una luz de punto cruza por en medio de la cara o roza una esquina.
+    float typeL = smoothstep(-0.05, 0.05, dot(nL, keyDirection));
+    float typeR = smoothstep(-0.05, 0.05, dot(nR, keyDirection));
+    float typeB = smoothstep(-0.05, 0.05, dot(nB, keyDirection));
+    float typeT = smoothstep(-0.05, 0.05, dot(nT, keyDirection));
+
+    // 3. Extraemos el grosor de las bandas
+    float bandL = edgeBands.x;
+    float bandR = edgeBands.y;
+    float bandB = edgeBands.z;
+    float bandT = edgeBands.w;
+
+    // 4. LÓGICA DEL FADE (UV Normalizado 0.0 a 1.0)
+    // Ahora BEVEL_CORNER_FADE dicta exactamente qué porcentaje de la cara abarca el degradado.
+    // Si lo pones en 0.2, consumirá el 20% de cada esquina, dejando el 60% central sólido.
+    float fadeLimit = max(BEVEL_CORNER_FADE, 0.0001);
     
-    float lightL = dot(safeNormalize(normalValue - tangentU * slope, normalValue), keyDirection);
-    float lightR = dot(safeNormalize(normalValue + tangentU * slope, normalValue), keyDirection);
-    float lightB = dot(safeNormalize(normalValue - tangentV * slope, normalValue), keyDirection);
-    float lightT = dot(safeNormalize(normalValue + tangentV * slope, normalValue), keyDirection);
+    // Máscaras de distancia (0 en la esquina, 1 cuando se alejan de la esquina hacia el centro)
+    float gapL = smoothstep(0.0, fadeLimit, vElementLocalUv.x);
+    float gapR = 1.0 - smoothstep(1.0 - fadeLimit, 1.0, vElementLocalUv.x);
+    float gapB = smoothstep(0.0, fadeLimit, vElementLocalUv.y);
+    float gapT = 1.0 - smoothstep(1.0 - fadeLimit, 1.0, vElementLocalUv.y);
 
-    // 2. Clasificamos cada borde: ¿Es iluminación (positivo) o es sombra (negativo)?
-    // Usamos 0.05 como punto medio estimado entre el inicio de luz y sombra.
-    float typeL = sign(lightL - 0.05);
-    float typeR = sign(lightR - 0.05);
-    float typeB = sign(lightB - 0.05);
-    float typeT = sign(lightT - 0.05);
+    // 5. Aplicamos el Fade a las líneas SOLO si chocan con un tipo opuesto en la esquina.
+    float matchTL = 1.0 - abs(typeT - typeL);
+    float matchTR = 1.0 - abs(typeT - typeR);
+    float matchBL = 1.0 - abs(typeB - typeL);
+    float matchBR = 1.0 - abs(typeB - typeR);
 
-    // 3. Comprobamos las esquinas. Si dos bordes son del mismo tipo (ej: sombra y sombra), 
-    // su multiplicación dará positivo y se conectarán sin degradado.
-    float matchTL = step(0.0, typeT * typeL); 
-    float matchTR = step(0.0, typeT * typeR);
-    float matchBL = step(0.0, typeB * typeL);
-    float matchBR = step(0.0, typeB * typeR);
+    // Si coinciden (match = 1.0), el mix anula el hueco. Si son distintos (match = 0.0), aplica el fade.
+    float bL = bandL * mix(gapT, 1.0, matchTL) * mix(gapB, 1.0, matchBL);
+    float bR = bandR * mix(gapT, 1.0, matchTR) * mix(gapB, 1.0, matchBR);
+    float bB = bandB * mix(gapL, 1.0, matchBL) * mix(gapR, 1.0, matchBR);
+    float bT = bandT * mix(gapL, 1.0, matchTL) * mix(gapR, 1.0, matchTR);
 
-    // 4. Crear las máscaras de degradado para las esquinas
-    float maskLeft   = smoothstep(0.0, BEVEL_CORNER_FADE, vElementLocalUv.x);
-    float maskRight  = 1.0 - smoothstep(1.0 - BEVEL_CORNER_FADE, 1.0, vElementLocalUv.x);
-    float maskBottom = smoothstep(0.0, BEVEL_CORNER_FADE, vElementLocalUv.y);
-    float maskTop    = 1.0 - smoothstep(1.0 - BEVEL_CORNER_FADE, 1.0, vElementLocalUv.y);
+    // 6. Construimos las máscaras finales fusionando con max() para evitar costuras
+    float hMask = max(max(bL * typeL, bR * typeR), max(bB * typeB, bT * typeT));
+    float sMask = max(max(bL * (1.0 - typeL), bR * (1.0 - typeR)), max(bB * (1.0 - typeB), bT * (1.0 - typeT)));
 
-    // 5. Aplicar degradado SOLO si NO coinciden (cuando el match es 0.0)
-    edgeBands.x *= mix(maskBottom, 1.0, matchBL) * mix(maskTop, 1.0, matchTL); // Izquierda
-    edgeBands.y *= mix(maskBottom, 1.0, matchBR) * mix(maskTop, 1.0, matchTR); // Derecha
-    edgeBands.z *= mix(maskLeft, 1.0, matchBL) * mix(maskRight, 1.0, matchBR); // Abajo
-    edgeBands.w *= mix(maskLeft, 1.0, matchTL) * mix(maskRight, 1.0, matchTR); // Arriba
+    // 7. Aplicamos intensidad
+    float highlightMask = clamp(hMask * keyAmount * max(BEVEL_LIGHT_STRENGTH, 0.0), 0.0, 1.0);
+    float shadowMask    = clamp(sMask * mix(0.35, 1.0, keyAmount), 0.0, 1.0);
 
-    // 6. Máscara general y optimización (descartar si no hay bevel)
-    float bevelMask = max(max(edgeBands.x, edgeBands.y), max(edgeBands.z, edgeBands.w));
-
-    if (bevelMask <= 0.00001) {
-        return sourceColor;
-    }
-    
-    /*
-        A single bevel normal avoids additive square artifacts in corners.
-        CORRECCIÓN: Usar max y step para crear un corte diagonal limpio en las esquinas.
-    */
-    float strengthU = max(edgeBands.x, edgeBands.y);
-    float strengthV = max(edgeBands.z, edgeBands.w);
-
-    // Si el borde horizontal es más fuerte, usamos U. Si el vertical es más fuerte, usamos V.
-    float useU = step(strengthV, strengthU);
-    float useV = 1.0 - useU;
-
-    vec3 bevelDirection =
-        tangentU * (edgeBands.y - edgeBands.x) * useU +
-        tangentV * (edgeBands.w - edgeBands.z) * useV;
-
-    vec3 bevelNormal = safeNormalize(
-        normalValue +
-        bevelDirection *
-        clamp(BEVEL_SLOPE, 0.0, 2.0),
-        normalValue
-    );
-
-    float bevelLight = dot(
-        bevelNormal,
-        keyDirection
-    );
-
-    float highlightMask =
-        bevelMask *
-        smoothstep(
-            0.0,
-            0.72,
-            bevelLight
-        );
-
-    float shadowMask =
-        bevelMask *
-        (
-            1.0 -
-            smoothstep(
-                -0.65,
-                0.12,
-                bevelLight
-            )
-        );
-
-    highlightMask = clamp(
-        highlightMask *
-        keyAmount *
-        max(BEVEL_LIGHT_STRENGTH, 0.0),
-        0.0,
-        1.0
-    );
-
-    shadowMask = clamp(
-        shadowMask *
-        mix(0.35, 1.0, keyAmount),
-        0.0,
-        1.0
-    );
+    // --- FIN DEL NUEVO ENFOQUE ---
 
     vec3 hsv = rgbToHsv(
         clamp(
