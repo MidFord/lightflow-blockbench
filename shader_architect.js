@@ -441,6 +441,8 @@
         "shader_architect.uniform.BEVEL_LIGHT_COLOR_STRENGTH.desc": "Boost how strongly Light Manager colors tint promotional bevel highlights",
         "shader_architect.uniform.BEVEL_ENABLED": "Bevel",
         "shader_architect.uniform.BEVEL_ENABLED.desc": "Enable promotional bevel lighting",
+        "shader_architect.uniform.BEVEL_ALPHA_ENABLED": "Alpha Bevel",
+        "shader_architect.uniform.BEVEL_ALPHA_ENABLED.desc": "Enable promotional bevel on alpha texture edges",
         "shader_architect.uniform.BEVEL_WIDTH": "Bevel Width",
         "shader_architect.uniform.BEVEL_WIDTH.desc": "Width of the bevel highlight band",
         "shader_architect.uniform.BEVEL_SOFTNESS": "Bevel Soft",
@@ -525,6 +527,10 @@
         "shader_architect.uniform.PROMO_RIM_GROUP.desc": "Group mask for promotional rim light",
         "shader_architect.uniform.PROMO_RIM_TEXTURE_BLEND": "Rim Tex Blend",
         "shader_architect.uniform.PROMO_RIM_TEXTURE_BLEND.desc": "Blends the rim color with the edge texture to seamlessly connect with inner glow",
+        "shader_architect.uniform.PROMO_RIM_SCALE_WITH_ZOOM": "Rim Scale Zoom",
+        "shader_architect.uniform.PROMO_RIM_SCALE_WITH_ZOOM.desc": "Scale rim thickness with camera distance (Constant world size)",
+        "shader_architect.uniform.OUTLINE_CONSTANT_SCREEN_SIZE": "Line Screen Size",
+        "shader_architect.uniform.OUTLINE_CONSTANT_SCREEN_SIZE.desc": "Keep element outline thickness constant in screen pixels",
         "shader_architect.uniform.EDGE_FALLBACK_LIGHT_DIRECTION": "Edge Light",
         "shader_architect.uniform.EDGE_FALLBACK_LIGHT_DIRECTION.desc": "Fallback direction for edge lighting",
         "shader_architect.uniform.uLightCastShadow": "Shadow Casters",
@@ -978,6 +984,8 @@
         "shader_architect.uniform.BEVEL_LIGHT_COLOR_STRENGTH.desc": "Refuerza cuanto los colores de Light Manager tintan los highlights del bevel promocional",
         "shader_architect.uniform.BEVEL_ENABLED": "Bisel",
         "shader_architect.uniform.BEVEL_ENABLED.desc": "Activa el bisel promocional",
+        "shader_architect.uniform.BEVEL_ALPHA_ENABLED": "Bisel Alfa",
+        "shader_architect.uniform.BEVEL_ALPHA_ENABLED.desc": "Activa el bisel promocional en los bordes alfa de la textura",
         "shader_architect.uniform.BEVEL_WIDTH": "Ancho Bisel",
         "shader_architect.uniform.BEVEL_WIDTH.desc": "Ancho de la banda de bisel",
         "shader_architect.uniform.BEVEL_SOFTNESS": "Suave Bisel",
@@ -1062,6 +1070,10 @@
         "shader_architect.uniform.PROMO_RIM_GROUP.desc": "Grupo de mascara para rim",
         "shader_architect.uniform.PROMO_RIM_TEXTURE_BLEND": "Rim Textura",
         "shader_architect.uniform.PROMO_RIM_TEXTURE_BLEND.desc": "Mezcla el color del rim con la textura del borde para conectar fluido con el glow interior",
+        "shader_architect.uniform.PROMO_RIM_SCALE_WITH_ZOOM": "Zoom de Rim",
+        "shader_architect.uniform.PROMO_RIM_SCALE_WITH_ZOOM.desc": "Escala el grosor del Rim segun la distancia de la camara (Tamano global constante)",
+        "shader_architect.uniform.OUTLINE_CONSTANT_SCREEN_SIZE": "Linea en Pantalla",
+        "shader_architect.uniform.OUTLINE_CONSTANT_SCREEN_SIZE.desc": "Mantiene el grosor de la linea de elemento constante en pixeles de la pantalla",
         "shader_architect.uniform.EDGE_FALLBACK_LIGHT_DIRECTION": "Luz Borde",
         "shader_architect.uniform.EDGE_FALLBACK_LIGHT_DIRECTION.desc": "Direccion alternativa para bordes",
         "shader_architect.uniform.uLightCastShadow": "Sombras por luz",
@@ -6725,6 +6737,7 @@ uniform bool OUTLINE_ELEMENT_ENABLED;
 uniform bool OUTLINE_ALPHA_ENABLED;
 uniform bool OUTLINE_ALPHA_CLAMP_TO_ELEMENT;
 uniform bool OUTLINE_ALPHA_DIAGONAL_ONLY;
+uniform bool OUTLINE_CONSTANT_SCREEN_SIZE;
 
 uniform float OUTLINE_WIDTH;
 uniform float OUTLINE_FADE;
@@ -6738,6 +6751,7 @@ uniform bool OUTLINE_AFFECTED_BY_LIGHT;
     Per-face promotional bevel controls.
 */
 uniform bool BEVEL_ENABLED;
+uniform bool BEVEL_ALPHA_ENABLED;
 uniform float BEVEL_WIDTH;
 uniform float BEVEL_SOFTNESS;
 uniform float BEVEL_SLOPE;
@@ -7245,12 +7259,117 @@ vec3 promoGetInnerGlowColor(
     );
 }
 
+float promoSampleNeighborAlpha(
+    vec2 localOffset,
+    vec2 mapOffset,
+    float sourceAlpha,
+    bool clampToElement
+) {
+    if (clampToElement) {
+        vec2 localSample =
+            vPromoElementUv +
+            localOffset;
+
+        if (
+            localSample.x < 0.0 ||
+            localSample.y < 0.0 ||
+            localSample.x > 1.0 ||
+            localSample.y > 1.0
+        ) {
+            return sourceAlpha;
+        }
+    }
+
+    vec2 mapSample =
+        vPromoMapUv +
+        mapOffset;
+
+    if (
+        mapSample.x < 0.0 ||
+        mapSample.y < 0.0 ||
+        mapSample.x > 1.0 ||
+        mapSample.y > 1.0
+    ) {
+        return 0.0;
+    }
+
+    return texture2D(map, mapSample).a;
+}
+
+vec4 promoGetAlphaBands(
+    float sourceAlpha,
+    float width,
+    mat2 elementToMapJacobian
+) {
+    if (!BEVEL_ALPHA_ENABLED || width <= 0.0) {
+        return vec4(0.0);
+    }
+    
+    vec2 safeSize = max(abs(vPromoElementSize), vec2(0.0001));
+    vec2 localStep = vec2(width) / safeSize;
+    
+    bool validJacobian = length(elementToMapJacobian[0]) + length(elementToMapJacobian[1]) > 0.000001;
+    
+    vec2 fallbackMapStep = max(
+        abs(vPromoElementUvSize) * width / max(TEXTURE_SIZE, vec2(1.0)),
+        vec2(0.00001)
+    );
+
+    // 1. Calculamos las distancias en cruz (Norte, Sur, Este, Oeste)
+    vec2 mStepL = validJacobian ? elementToMapJacobian * vec2(-localStep.x, 0.0) : vec2(-fallbackMapStep.x, 0.0);
+    vec2 mStepR = validJacobian ? elementToMapJacobian * vec2(localStep.x, 0.0) : vec2(fallbackMapStep.x, 0.0);
+    vec2 mStepB = validJacobian ? elementToMapJacobian * vec2(0.0, -localStep.y) : vec2(0.0, -fallbackMapStep.y);
+    vec2 mStepT = validJacobian ? elementToMapJacobian * vec2(0.0, localStep.y) : vec2(0.0, fallbackMapStep.y);
+
+    // 2. Calculamos las distancias en diagonal (Esquinas)
+    vec2 stepTL = vec2(-localStep.x, localStep.y);
+    vec2 mStepTL = validJacobian ? elementToMapJacobian * stepTL : vec2(-fallbackMapStep.x, fallbackMapStep.y);
+    
+    vec2 stepTR = vec2(localStep.x, localStep.y);
+    vec2 mStepTR = validJacobian ? elementToMapJacobian * stepTR : vec2(fallbackMapStep.x, fallbackMapStep.y);
+    
+    vec2 stepBL = vec2(-localStep.x, -localStep.y);
+    vec2 mStepBL = validJacobian ? elementToMapJacobian * stepBL : vec2(-fallbackMapStep.x, -fallbackMapStep.y);
+    
+    vec2 stepBR = vec2(localStep.x, -localStep.y);
+    vec2 mStepBR = validJacobian ? elementToMapJacobian * stepBR : vec2(fallbackMapStep.x, -fallbackMapStep.y);
+
+    // 3. Muestreamos la transparencia en cruz
+    float aL = promoSampleNeighborAlpha(vec2(-localStep.x, 0.0), mStepL, sourceAlpha, true);
+    float aR = promoSampleNeighborAlpha(vec2(localStep.x, 0.0), mStepR, sourceAlpha, true);
+    float aB = promoSampleNeighborAlpha(vec2(0.0, -localStep.y), mStepB, sourceAlpha, true);
+    float aT = promoSampleNeighborAlpha(vec2(0.0, localStep.y), mStepT, sourceAlpha, true);
+
+    // 4. Muestreamos la transparencia en las esquinas
+    float aTL = promoSampleNeighborAlpha(stepTL, mStepTL, sourceAlpha, true);
+    float aTR = promoSampleNeighborAlpha(stepTR, mStepTR, sourceAlpha, true);
+    float aBL = promoSampleNeighborAlpha(stepBL, mStepBL, sourceAlpha, true);
+    float aBR = promoSampleNeighborAlpha(stepBR, mStepBR, sourceAlpha, true);
+
+    // 5. Detección de esquinas internas: 
+    // Se activa (1.0) solo si el pixel está flanqueado por lados sólidos, pero la esquina diagonal está vacía.
+    float innerTL = aL * aT * (1.0 - aTL);
+    float innerTR = aR * aT * (1.0 - aTR);
+    float innerBL = aL * aB * (1.0 - aBL);
+    float innerBR = aR * aB * (1.0 - aBR);
+
+    // 6. Añadimos el peso de las esquinas internas a las bandas correspondientes para conectarlas
+    float leftBand = (sourceAlpha - aL) + innerTL + innerBL;
+    float rightBand = (sourceAlpha - aR) + innerTR + innerBR;
+    float bottomBand = (sourceAlpha - aB) + innerBL + innerBR;
+    float topBand = (sourceAlpha - aT) + innerTL + innerTR;
+
+    return clamp(vec4(leftBand, rightBand, bottomBand, topBand), 0.0, 1.0);
+}
+
 
 vec3 promoApplyBevel(
     vec3 sourceColor,
     vec3 normalValue,
     vec3 tangentU,
-    vec3 tangentV
+    vec3 tangentV,
+    float sourceAlpha,
+    mat2 elementToMapJacobian
 ) {
     float innerGlowIntensity = promoGetInnerGlowIntensity();
 
@@ -7296,6 +7415,9 @@ vec3 promoApplyBevel(
         max(BEVEL_WIDTH, 0.00001),
         BEVEL_SOFTNESS
     );
+    
+    vec4 alphaBands = promoGetAlphaBands(sourceAlpha, max(BEVEL_WIDTH, 0.00001), elementToMapJacobian);
+    edgeBands = max(edgeBands, alphaBands);
 
     float slope = clamp(BEVEL_SLOPE, 0.0, 2.0);
 
@@ -7467,6 +7589,9 @@ vec3 promoApplyBevel(
             max(BEVEL_GLOW_WIDTH, BEVEL_WIDTH),
             BEVEL_GLOW_SOFTNESS
         );
+        
+        vec4 alphaGlowBands = promoGetAlphaBands(sourceAlpha, max(BEVEL_GLOW_WIDTH, BEVEL_WIDTH), elementToMapJacobian);
+        glowBands = max(glowBands, alphaGlowBands);
 
         float glowFadeLimit = max(
             clamp(BEVEL_GLOW_CORNER_FADE, 0.0, 1.0),
@@ -7497,36 +7622,39 @@ vec3 promoApplyBevel(
             vPromoElementUv.y
         );
 
-        float glowMatchTL = 1.0 - abs(glowTypeT - glowTypeL);
-        float glowMatchTR = 1.0 - abs(glowTypeT - glowTypeR);
-        float glowMatchBL = 1.0 - abs(glowTypeB - glowTypeL);
-        float glowMatchBR = 1.0 - abs(glowTypeB - glowTypeR);
+        // NUEVA LÓGICA DE CONEXIÓN DE ESQUINAS
+            // Si el borde adyacente está encendido (> 0.01), fuerza la esquina sólida (1.0).
+            // Si está apagado, usa el gap para desvanecer suavemente.
+            float adjT = max(glowGapT, step(0.01, glowTypeT));
+            float adjB = max(glowGapB, step(0.01, glowTypeB));
+            float adjL = max(glowGapL, step(0.01, glowTypeL));
+            float adjR = max(glowGapR, step(0.01, glowTypeR));
 
-        float glowL =
-            glowBands.x *
-            glowTypeL *
-            mix(glowGapT, 1.0, glowMatchTL) *
-            mix(glowGapB, 1.0, glowMatchBL);
+            float glowL =
+                glowBands.x *
+                glowTypeL *
+                adjT *
+                adjB;
 
-        float glowR =
-            glowBands.y *
-            glowTypeR *
-            mix(glowGapT, 1.0, glowMatchTR) *
-            mix(glowGapB, 1.0, glowMatchBR);
+            float glowR =
+                glowBands.y *
+                glowTypeR *
+                adjT *
+                adjB;
 
-        float glowB =
-            glowBands.z *
-            glowTypeB *
-            mix(glowGapL, 1.0, glowMatchBL) *
-            mix(glowGapR, 1.0, glowMatchBR);
+            float glowB =
+                glowBands.z *
+                glowTypeB *
+                adjL *
+                adjR;
 
-        float glowT =
-            glowBands.w *
-            glowTypeT *
-            mix(glowGapL, 1.0, glowMatchTL) *
-            mix(glowGapR, 1.0, glowMatchBR);
+            float glowT =
+                glowBands.w *
+                glowTypeT *
+                adjL *
+                adjR;
 
-        innerGlowMask = clamp(
+            innerGlowMask = clamp(
             max(
                 max(glowL, glowR),
                 max(glowB, glowT)
@@ -7625,6 +7753,11 @@ float promoGetElementOutlineMask() {
 
     float width = max(OUTLINE_WIDTH, 0.0);
 
+    if (OUTLINE_CONSTANT_SCREEN_SIZE) {
+        vec2 fw = fwidth(vPromoElementUv * safeSize);
+        width *= max(fw.x, fw.y) * 15.0;
+    }
+
     if (width <= 0.00001) {
         return 0.0;
     }
@@ -7659,42 +7792,6 @@ float promoGetElementOutlineMask() {
     );
 }
 
-float promoSampleNeighborAlpha(
-    vec2 localOffset,
-    vec2 mapOffset,
-    float sourceAlpha,
-    bool clampToElement
-) {
-    if (clampToElement) {
-        vec2 localSample =
-            vPromoElementUv +
-            localOffset;
-
-        if (
-            localSample.x < 0.0 ||
-            localSample.y < 0.0 ||
-            localSample.x > 1.0 ||
-            localSample.y > 1.0
-        ) {
-            return sourceAlpha;
-        }
-    }
-
-    vec2 mapSample =
-        vPromoMapUv +
-        mapOffset;
-
-    if (
-        mapSample.x < 0.0 ||
-        mapSample.y < 0.0 ||
-        mapSample.x > 1.0 ||
-        mapSample.y > 1.0
-    ) {
-        return 0.0;
-    }
-
-    return texture2D(map, mapSample).a;
-}
 
 float promoGetAlphaOutlineMask(
     float sourceAlpha,
@@ -7712,8 +7809,14 @@ float promoGetAlphaOutlineMask(
         vec2(0.0001)
     );
 
+    float currentOutlineWidth = max(OUTLINE_WIDTH, 0.0);
+    if (OUTLINE_CONSTANT_SCREEN_SIZE) {
+        vec2 fw = fwidth(vPromoElementUv * safeSize);
+        currentOutlineWidth *= max(fw.x, fw.y) * 15.0;
+    }
+
     vec2 localStep =
-        vec2(OUTLINE_WIDTH) /
+        vec2(currentOutlineWidth) /
         safeSize;
 
     bool validJacobian =
@@ -7945,7 +8048,9 @@ void main() {
             finalColor,
             surfaceNormal,
             faceTangentU,
-            faceTangentV
+            faceTangentV,
+            sampledColor.a,
+            elementToMapJacobian
         );
     }
 
@@ -8000,6 +8105,13 @@ void main() {
                     },
 
                     OUTLINE_ALPHA_DIAGONAL_ONLY: {
+                        type: 'bool',
+                        value: false,
+                        expose: true,
+                        advanced: true
+                    },
+
+                    OUTLINE_CONSTANT_SCREEN_SIZE: {
                         type: 'bool',
                         value: false,
                         expose: true,
@@ -8077,6 +8189,12 @@ void main() {
                         expose: true
                     },
 
+                    BEVEL_ALPHA_ENABLED: {
+                        type: 'bool',
+                        value: false,
+                        expose: true
+                    },
+
                     /*
                         Fraction of the shortest face side. 0.055 matches the
                         thick painted bevels in the current promotional art.
@@ -8127,7 +8245,7 @@ void main() {
 
                     BEVEL_HIGHLIGHT: {
                         type: 'float',
-                        value: 0.35,
+                        value: 0.1,
                         expose: true,
                         min: 0.0,
                         max: 1.0,
@@ -8232,7 +8350,7 @@ void main() {
 
                     BEVEL_GLOW_WIDTH: {
                         type: 'float',
-                        value: 0.25,
+                        value: 0.16,
                         expose: true,
                         min: 0.0,
                         max: 2.0,
@@ -8311,7 +8429,7 @@ void main() {
                     */
                     PROMO_RIM_WIDTH: {
                         type: 'float',
-                        value: 4.0,
+                        value: 6.5,
                         expose: true,
                         min: 0.0,
                         max: 12.0,
@@ -8322,7 +8440,7 @@ void main() {
 
                     PROMO_RIM_INTENSITY: {
                         type: 'float',
-                        value: 0.5,
+                        value: 0.25,
                         expose: true,
                         min: 0.0,
                         max: 1.0,
@@ -8451,6 +8569,12 @@ void main() {
                         step: 0.00005,
                         allow_higher: true,
                         allow_lower: false
+                    },
+
+                    PROMO_RIM_SCALE_WITH_ZOOM: {
+                        type: 'bool',
+                        value: true,
+                        expose: true
                     }
                 }
             });
@@ -9418,6 +9542,21 @@ void main() {
 
                     varying vec2 vPromoUv;
 
+                    vec3 promoRgbToHsv(vec3 rgb) {
+                        vec4 K = vec4(0.0, -1.0 / 3.0, 2.0 / 3.0, -1.0);
+                        vec4 p = mix(vec4(rgb.bg, K.wz), vec4(rgb.gb, K.xy), step(rgb.b, rgb.g));
+                        vec4 q = mix(vec4(p.xyw, rgb.r), vec4(rgb.r, p.yzx), step(p.x, rgb.r));
+                        float delta = q.x - min(q.w, q.y);
+                        float epsilon = 0.0000001;
+                        return vec3(abs(q.z + (q.w - q.y) / (6.0 * delta + epsilon)), delta / (q.x + epsilon), q.x);
+                    }
+
+                    vec3 promoHsvToRgb(vec3 hsv) {
+                        vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+                        vec3 p = abs(fract(hsv.xxx + K.xyz) * 6.0 - K.www);
+                        return hsv.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), hsv.y);
+                    }
+
                     vec2 promoEstimateOutwardDirection() {
                         vec2 inwardDirection = vec2(0.0);
 
@@ -9430,48 +9569,16 @@ void main() {
 
                             vec2 sampleOffset = uTexelSize * pixelRadius;
 
-                            float sourceRight = texture2D(
-                                uOriginalMask,
-                                vPromoUv + vec2(sampleOffset.x, 0.0)
-                            ).a;
+                            float sourceRight = texture2D(uOriginalMask, vPromoUv + vec2(sampleOffset.x, 0.0)).a;
+                            float sourceLeft = texture2D(uOriginalMask, vPromoUv - vec2(sampleOffset.x, 0.0)).a;
+                            float sourceTop = texture2D(uOriginalMask, vPromoUv + vec2(0.0, sampleOffset.y)).a;
+                            float sourceBottom = texture2D(uOriginalMask, vPromoUv - vec2(0.0, sampleOffset.y)).a;
+                            float sourceTopRight = texture2D(uOriginalMask, vPromoUv + sampleOffset).a;
+                            float sourceTopLeft = texture2D(uOriginalMask, vPromoUv + vec2(-sampleOffset.x, sampleOffset.y)).a;
+                            float sourceBottomRight = texture2D(uOriginalMask, vPromoUv + vec2(sampleOffset.x, -sampleOffset.y)).a;
+                            float sourceBottomLeft = texture2D(uOriginalMask, vPromoUv - sampleOffset).a;
 
-                            float sourceLeft = texture2D(
-                                uOriginalMask,
-                                vPromoUv - vec2(sampleOffset.x, 0.0)
-                            ).a;
-
-                            float sourceTop = texture2D(
-                                uOriginalMask,
-                                vPromoUv + vec2(0.0, sampleOffset.y)
-                            ).a;
-
-                            float sourceBottom = texture2D(
-                                uOriginalMask,
-                                vPromoUv - vec2(0.0, sampleOffset.y)
-                            ).a;
-
-                            float sourceTopRight = texture2D(
-                                uOriginalMask,
-                                vPromoUv + sampleOffset
-                            ).a;
-
-                            float sourceTopLeft = texture2D(
-                                uOriginalMask,
-                                vPromoUv + vec2(-sampleOffset.x, sampleOffset.y)
-                            ).a;
-
-                            float sourceBottomRight = texture2D(
-                                uOriginalMask,
-                                vPromoUv + vec2(sampleOffset.x, -sampleOffset.y)
-                            ).a;
-
-                            float sourceBottomLeft = texture2D(
-                                uOriginalMask,
-                                vPromoUv - sampleOffset
-                            ).a;
-
-                            float inverseRadius =
-                                1.0 / max(pixelRadius, 1.0);
+                            float inverseRadius = 1.0 / max(pixelRadius, 1.0);
 
                             inwardDirection += vec2(1.0, 0.0) * step(0.005, sourceRight) * inverseRadius;
                             inwardDirection += vec2(-1.0, 0.0) * step(0.005, sourceLeft) * inverseRadius;
@@ -9526,23 +9633,38 @@ void main() {
 
                         float artMask = mix(1.0, directionalMask, clamp(uDirectionality, 0.0, 1.0));
 
-                        float alpha = clamp(
+                        // CÁLCULO DE ALPHA BASE (Mascara geométrica pura)
+                        float baseAlpha = clamp(
                             rimMask *
                             visibility *
-                            artMask *
-                            max(uRimIntensity, 0.0),
+                            artMask,
                             0.0,
                             1.0
                         );
 
-                        if (alpha <= 0.0) {
-                            discard;
+                        float alpha = baseAlpha;
+                        vec3 finalRimColor = uRimColor;
+
+                        if (uTextureBlend == 1) {
+                            // Mantenemos la opacidad sólida para conectar perfecto con el Inner Glow, 
+                            // y aplicamos uRimIntensity al color sumado, exactamente igual que el Inner Glow.
+                            // Solo desvanecemos el alpha a 0 si la intensidad es menor a 0.05 para evitar un borde gordo si Rim Power = 0.
+                            alpha *= smoothstep(0.0, 0.05, uRimIntensity);
+
+                            vec3 additiveBlend = expandedMaskSample.rgb + (uRimColor * max(uRimIntensity, 0.0));
+                            vec3 hsv = promoRgbToHsv(clamp(additiveBlend, vec3(0.0), vec3(1.0)));
+                            
+                            hsv.y = clamp(hsv.y, 0.0, 1.0);
+                            hsv.z = clamp(hsv.z, 0.0, 1.0);
+                            
+                            finalRimColor = promoHsvToRgb(hsv);
+                        } else {
+                            // Modo clásico de color sólido: la intensidad sí debe controlar la transparencia global.
+                            alpha *= clamp(uRimIntensity, 0.0, 1.0);
                         }
 
-                        vec3 finalRimColor = uRimColor;
-                        if (uTextureBlend == 1) {
-                            // Suma el color extendido de la textura + el color de RIM para emular el Inner Glow
-                            finalRimColor = clamp(expandedMaskSample.rgb + uRimColor, 0.0, 1.0);
+                        if (alpha <= 0.0) {
+                            discard;
                         }
 
                         gl_FragColor = vec4(finalRimColor, alpha);
@@ -9992,7 +10114,7 @@ void main() {
                     for (let index = 0; index < activeLightCount; index++) {
                         const intensity = Number(intensities[index]);
                         const weight = Number.isFinite(intensity) ? Math.max(0.0, intensity) : 0.0;
-                        
+
                         if (weight <= 0.00001) continue;
 
                         const type = types ? types[index] : 0;
@@ -10016,7 +10138,7 @@ void main() {
                         if (camera) {
                             weightedDirection.transformDirection(camera.matrixWorldInverse);
                         }
-                        
+
                         const screenDir = new THREE.Vector2(weightedDirection.x, weightedDirection.y);
                         if (screenDir.lengthSq() > 0.000001) {
                             screenDir.normalize();
@@ -10160,6 +10282,11 @@ void main() {
                         'PROMO_RIM_DEPTH_EPSILON',
                         0.00075
                     )
+                ),
+                scaleWithZoom: this.getBooleanUniform(
+                    material,
+                    'PROMO_RIM_SCALE_WITH_ZOOM',
+                    false
                 )
             };
         },
@@ -10532,7 +10659,7 @@ void main() {
 
             state.overlayMaterial.uniforms.uUseOcclusion.value =
                 config.useOcclusion ? 1 : 0;
-                
+
             state.overlayMaterial.uniforms.uTextureBlend.value =
                 config.textureBlend ? 1 : 0;
 
@@ -10612,11 +10739,34 @@ void main() {
                 renderer.autoClear = false;
 
                 groups.forEach(group => {
+                    let configRadius = group.config.width;
+                    if (group.config.scaleWithZoom && preview.camera) {
+                        const centerPos = new THREE.Vector3(0, 0, 0);
+                        let validMeshes = 0;
+                        group.meshList.forEach(mesh => {
+                            if (mesh && typeof mesh.getWorldPosition === 'function') {
+                                const pos = new THREE.Vector3();
+                                mesh.getWorldPosition(pos);
+                                centerPos.add(pos);
+                                validMeshes++;
+                            }
+                        });
+                        if (validMeshes > 0) centerPos.multiplyScalar(1.0 / validMeshes);
+
+                        if (preview.camera.isPerspectiveCamera) {
+                            const dist = preview.camera.position.distanceTo(centerPos);
+                            const baselineDist = 24.0;
+                            configRadius = configRadius * (baselineDist / Math.max(dist, 0.1));
+                        } else {
+                            configRadius = configRadius * preview.camera.zoom;
+                        }
+                    }
+
                     const radius = Math.max(
                         0.5,
                         Math.min(
                             this.MAX_RIM_RADIUS,
-                            group.config.width * state.renderScale
+                            configRadius * state.renderScale
                         )
                     );
 
