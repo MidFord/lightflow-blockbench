@@ -6583,16 +6583,43 @@ vec4 promoGetEdgeBands(
     vec2 safeSize = max(abs(elementSize), vec2(0.0001));
     vec2 localPosition = clamp(localUv, vec2(0.0), vec2(1.0)) * safeSize;
 
-    // AHORA EL GROSOR ES GLOBAL. 1.0 equivale exactamente a 1 píxel de Minecraft.
     float bevelWidth = max(absoluteWidth, 0.00001);
     float feather = max(bevelWidth * max(softness, 0.0), 0.00001);
 
-    float leftBand = 1.0 - smoothstep(bevelWidth, bevelWidth + feather, localPosition.x);
-    float rightBand = 1.0 - smoothstep(bevelWidth, bevelWidth + feather, safeSize.x - localPosition.x);
-    float bottomBand = 1.0 - smoothstep(bevelWidth, bevelWidth + feather, localPosition.y);
-    float topBand = 1.0 - smoothstep(bevelWidth, bevelWidth + feather, safeSize.y - localPosition.y);
+    float leftBand = 1.0 - smoothstep(
+        bevelWidth,
+        bevelWidth + feather,
+        localPosition.x
+    );
 
-    return clamp(vec4(leftBand, rightBand, bottomBand, topBand), 0.0, 1.0);
+    float rightBand = 1.0 - smoothstep(
+        bevelWidth,
+        bevelWidth + feather,
+        safeSize.x - localPosition.x
+    );
+
+    float bottomBand = 1.0 - smoothstep(
+        bevelWidth,
+        bevelWidth + feather,
+        localPosition.y
+    );
+
+    float topBand = 1.0 - smoothstep(
+        bevelWidth,
+        bevelWidth + feather,
+        safeSize.y - localPosition.y
+    );
+
+    return clamp(
+        vec4(
+            leftBand,
+            rightBand,
+            bottomBand,
+            topBand
+        ),
+        0.0,
+        1.0
+    );
 }
 
 float promoDistanceAttenuation(
@@ -6797,23 +6824,24 @@ vec3 promoApplyBevel(
     vec3 tangentU,
     vec3 tangentV
 ) {
+    bool primaryBevelEnabled =
+        BEVEL_WIDTH > 0.0 &&
+        (
+            BEVEL_HIGHLIGHT > 0.0 ||
+            BEVEL_SHADOW > 0.0
+        );
+
+    bool innerGlowEnabled =
+        BEVEL_GLOW_ENABLED &&
+        BEVEL_GLOW_WIDTH > 0.0 &&
+        BEVEL_GLOW_INTENSITY > 0.0;
+
     if (
         !BEVEL_ENABLED ||
-        BEVEL_WIDTH <= 0.0 ||
-        (
-            BEVEL_HIGHLIGHT <= 0.0 &&
-            BEVEL_SHADOW <= 0.0
-        )
+        (!primaryBevelEnabled && !innerGlowEnabled)
     ) {
         return sourceColor;
     }
-
-    vec4 edgeBands = promoGetEdgeBands(
-        vPromoElementUv,
-        vPromoElementSize,
-        BEVEL_WIDTH,
-        BEVEL_SOFTNESS
-    );
 
     vec3 keyDirection;
     vec3 keyColor;
@@ -6825,68 +6853,255 @@ vec3 promoApplyBevel(
         keyEnergy
     );
 
-// --- ENFOQUE HÍBRIDO 3D/2D RESTAURADO (Adaptado a tus nuevas variables Promo) ---
-
-    // 1. Calculamos la normal 3D inclinada
-    float slope = clamp(BEVEL_SLOPE, 0.0, 2.0);
-    vec3 nL = promoSafeNormalize(normalValue - tangentU * slope, normalValue);
-    vec3 nR = promoSafeNormalize(normalValue + tangentU * slope, normalValue);
-    vec3 nB = promoSafeNormalize(normalValue - tangentV * slope, normalValue);
-    vec3 nT = promoSafeNormalize(normalValue + tangentV * slope, normalValue);
-
-    // 2. ¿La luz golpea el borde? (suavizado para evitar cortes por luces de punto)
-    float typeL = smoothstep(-0.05, 0.05, dot(nL, keyDirection));
-    float typeR = smoothstep(-0.05, 0.05, dot(nR, keyDirection));
-    float typeB = smoothstep(-0.05, 0.05, dot(nB, keyDirection));
-    float typeT = smoothstep(-0.05, 0.05, dot(nT, keyDirection));
-
-    // 3. Extraemos el grosor de las bandas
-    float bandL = edgeBands.x;
-    float bandR = edgeBands.y;
-    float bandB = edgeBands.z;
-    float bandT = edgeBands.w;
-
-    // 4. LÓGICA DEL FADE (UV Normalizado de 0.0 a 1.0)
-    // BEVEL_CORNER_FADE ahora representa el porcentaje total de la cara.
-    // 0.5 siempre abarcará hasta el centro exacto de la cara,
-    // sin importar si mide 4x12 u 8x8.
-    float fadeLimit = clamp(BEVEL_CORNER_FADE, 0.0, 1.0);
-
-    // Usamos directamente vPromoElementUv (que va de 0.0 a 1.0)
-    float gapL = smoothstep(0.0, fadeLimit, vPromoElementUv.x);
-    float gapR = 1.0 - smoothstep(1.0 - fadeLimit, 1.0, vPromoElementUv.x);
-    float gapB = smoothstep(0.0, fadeLimit, vPromoElementUv.y);
-    float gapT = 1.0 - smoothstep(1.0 - fadeLimit, 1.0, vPromoElementUv.y);
-
-    // 5. Aplicamos el Fade a las líneas SOLO si chocan con un tipo opuesto en la esquina.
-    float matchTL = 1.0 - abs(typeT - typeL);
-    float matchTR = 1.0 - abs(typeT - typeR);
-    float matchBL = 1.0 - abs(typeB - typeL);
-    float matchBR = 1.0 - abs(typeB - typeR);
-
-    float bL = bandL * mix(gapT, 1.0, matchTL) * mix(gapB, 1.0, matchBL);
-    float bR = bandR * mix(gapT, 1.0, matchTR) * mix(gapB, 1.0, matchBR);
-    float bB = bandB * mix(gapL, 1.0, matchBL) * mix(gapR, 1.0, matchBR);
-    float bT = bandT * mix(gapL, 1.0, matchTL) * mix(gapR, 1.0, matchTR);
-
-    // 6. Construimos las máscaras finales fusionando con max()
-    float hMask = max(max(bL * typeL, bR * typeR), max(bB * typeB, bT * typeT));
-    float sMask = max(max(bL * (1.0 - typeL), bR * (1.0 - typeR)), max(bB * (1.0 - typeB), bT * (1.0 - typeT)));
-
-    // 7. Aplicamos intensidad (Usando tu variable keyEnergy)
-    float highlightMask = clamp(hMask * keyEnergy * max(BEVEL_LIGHT_STRENGTH, 0.0), 0.0, 1.0);
-    float shadowMask    = clamp(sMask * mix(0.35, 1.0, keyEnergy), 0.0, 1.0);
-
-    // --- Aplicamos el color y el HSV (Incluyendo tu nueva lógica de Color Influence) ---
-
-    vec3 result = sourceColor;
-
     vec3 normalizedKeyColor =
         keyColor /
         max(
             max(keyColor.r, max(keyColor.g, keyColor.b)),
             0.0001
         );
+
+    /*
+        The masks are evaluated before any bevel color is added.
+        Thus the inner glow can reserve its pixels instead of being added over
+        an already bright bevel that will later clamp to white.
+    */
+    vec4 edgeBands = promoGetEdgeBands(
+        vPromoElementUv,
+        vPromoElementSize,
+        max(BEVEL_WIDTH, 0.00001),
+        BEVEL_SOFTNESS
+    );
+
+    float slope = clamp(BEVEL_SLOPE, 0.0, 2.0);
+
+    vec3 nL = promoSafeNormalize(
+        normalValue - tangentU * slope,
+        normalValue
+    );
+
+    vec3 nR = promoSafeNormalize(
+        normalValue + tangentU * slope,
+        normalValue
+    );
+
+    vec3 nB = promoSafeNormalize(
+        normalValue - tangentV * slope,
+        normalValue
+    );
+
+    vec3 nT = promoSafeNormalize(
+        normalValue + tangentV * slope,
+        normalValue
+    );
+
+    float typeL = smoothstep(
+        -0.05,
+        0.05,
+        dot(nL, keyDirection)
+    );
+
+    float typeR = smoothstep(
+        -0.05,
+        0.05,
+        dot(nR, keyDirection)
+    );
+
+    float typeB = smoothstep(
+        -0.05,
+        0.05,
+        dot(nB, keyDirection)
+    );
+
+    float typeT = smoothstep(
+        -0.05,
+        0.05,
+        dot(nT, keyDirection)
+    );
+
+    float fadeLimit = max(
+        clamp(BEVEL_CORNER_FADE, 0.0, 1.0),
+        0.0001
+    );
+
+    float gapL = smoothstep(
+        0.0,
+        fadeLimit,
+        vPromoElementUv.x
+    );
+
+    float gapR = 1.0 - smoothstep(
+        1.0 - fadeLimit,
+        1.0,
+        vPromoElementUv.x
+    );
+
+    float gapB = smoothstep(
+        0.0,
+        fadeLimit,
+        vPromoElementUv.y
+    );
+
+    float gapT = 1.0 - smoothstep(
+        1.0 - fadeLimit,
+        1.0,
+        vPromoElementUv.y
+    );
+
+    float matchTL = 1.0 - abs(typeT - typeL);
+    float matchTR = 1.0 - abs(typeT - typeR);
+    float matchBL = 1.0 - abs(typeB - typeL);
+    float matchBR = 1.0 - abs(typeB - typeR);
+
+    float bevelL =
+        edgeBands.x *
+        mix(gapT, 1.0, matchTL) *
+        mix(gapB, 1.0, matchBL);
+
+    float bevelR =
+        edgeBands.y *
+        mix(gapT, 1.0, matchTR) *
+        mix(gapB, 1.0, matchBR);
+
+    float bevelB =
+        edgeBands.z *
+        mix(gapL, 1.0, matchBL) *
+        mix(gapR, 1.0, matchBR);
+
+    float bevelT =
+        edgeBands.w *
+        mix(gapL, 1.0, matchTL) *
+        mix(gapR, 1.0, matchTR);
+
+    float rawHighlightMask = max(
+        max(bevelL * typeL, bevelR * typeR),
+        max(bevelB * typeB, bevelT * typeT)
+    );
+
+    float shadowMask = max(
+        max(bevelL * (1.0 - typeL), bevelR * (1.0 - typeR)),
+        max(bevelB * (1.0 - typeB), bevelT * (1.0 - typeT))
+    );
+
+    rawHighlightMask = clamp(
+        rawHighlightMask *
+        keyEnergy *
+        max(BEVEL_LIGHT_STRENGTH, 0.0),
+        0.0,
+        1.0
+    );
+
+    shadowMask = clamp(
+        shadowMask *
+        mix(0.35, 1.0, keyEnergy),
+        0.0,
+        1.0
+    );
+
+    /*
+        The inner glow is now the foreground layer.
+
+        Its coverage removes the highlight and dark bevel beneath it, producing
+        a controlled crossfade in the feather instead of stacked additive light.
+    */
+    float innerGlowMask = 0.0;
+
+    if (innerGlowEnabled) {
+        float glowFaceThreshold = clamp(
+            BEVEL_GLOW_FACE_THRESHOLD,
+            -1.0,
+            1.0
+        );
+
+        float faceIllumination = smoothstep(
+            glowFaceThreshold - 0.15,
+            glowFaceThreshold + 0.15,
+            dot(normalValue, keyDirection)
+        );
+
+        vec4 glowBands = promoGetEdgeBands(
+            vPromoElementUv,
+            vPromoElementSize,
+            max(BEVEL_GLOW_WIDTH, BEVEL_WIDTH),
+            BEVEL_GLOW_SOFTNESS
+        );
+
+        float glowFadeLimit = max(
+            clamp(BEVEL_GLOW_CORNER_FADE, 0.0, 1.0),
+            0.0001
+        );
+
+        float glowGapL = smoothstep(
+            0.0,
+            glowFadeLimit,
+            vPromoElementUv.x
+        );
+
+        float glowGapR = 1.0 - smoothstep(
+            1.0 - glowFadeLimit,
+            1.0,
+            vPromoElementUv.x
+        );
+
+        float glowGapB = smoothstep(
+            0.0,
+            glowFadeLimit,
+            vPromoElementUv.y
+        );
+
+        float glowGapT = 1.0 - smoothstep(
+            1.0 - glowFadeLimit,
+            1.0,
+            vPromoElementUv.y
+        );
+
+        float glowL =
+            glowBands.x *
+            typeL *
+            mix(glowGapT, 1.0, matchTL) *
+            mix(glowGapB, 1.0, matchBL);
+
+        float glowR =
+            glowBands.y *
+            typeR *
+            mix(glowGapT, 1.0, matchTR) *
+            mix(glowGapB, 1.0, matchBR);
+
+        float glowB =
+            glowBands.z *
+            typeB *
+            mix(glowGapL, 1.0, matchBL) *
+            mix(glowGapR, 1.0, matchBR);
+
+        float glowT =
+            glowBands.w *
+            typeT *
+            mix(glowGapL, 1.0, matchTL) *
+            mix(glowGapR, 1.0, matchTR);
+
+        innerGlowMask = clamp(
+            max(
+                max(glowL, glowR),
+                max(glowB, glowT)
+            ) *
+            faceIllumination,
+            0.0,
+            1.0
+        );
+    }
+
+    /*
+        Priority inversion:
+        Before, glow was removed by highlightMask.
+        Now innerGlowMask removes the bright bevel and shadow bevel first.
+    */
+    float highlightMask =
+        rawHighlightMask *
+        (1.0 - innerGlowMask);
+
+    shadowMask *=
+        1.0 - innerGlowMask;
+
+    vec3 result = sourceColor;
 
     float lightColorAmount = clamp(
         BEVEL_HIGHLIGHT_COLOR_INFLUENCE *
@@ -6917,70 +7132,26 @@ vec3 promoApplyBevel(
         highlightMask *
         max(BEVEL_HIGHLIGHT, 0.0);
 
-    // --- NUEVO: INNER GLOW (Bisel secundario direccional) ---
-    if (BEVEL_GLOW_ENABLED) {
-        // 1. EVALUACIÓN DE LA CARA: ¿Está la cara entera mirando a la luz?
-        // dot() da 1.0 si mira directo a la luz, 0.0 si está de perfil, y negativo si da la espalda.
-        float faceLightDot = dot(normalValue, keyDirection);
-        
-        // Creamos una transición suave basada en el threshold configurado
-        float faceIllumination = smoothstep(
-            BEVEL_GLOW_FACE_THRESHOLD - 0.15, 
-            BEVEL_GLOW_FACE_THRESHOLD + 0.15, 
-            faceLightDot
+    if (innerGlowMask > 0.0) {
+        vec3 glowColor = mix(
+            vec3(1.0),
+            normalizedKeyColor,
+            clamp(BEVEL_GLOW_COLOR_INFLUENCE, 0.0, 1.0)
         );
 
-        // Solo procesamos el glow si la cara recibe suficiente luz
-        if (faceIllumination > 0.001) {
-            
-            // 2. Generamos las bandas del resplandor (Garantizando que siempre sea más ancho que el bisel)
-            vec4 glowBands = promoGetEdgeBands(
-                vPromoElementUv,
-                vPromoElementSize,
-                max(BEVEL_GLOW_WIDTH, BEVEL_WIDTH), // <--- ESTO
-                BEVEL_GLOW_SOFTNESS
-            );
-
-            // 3. FADE DE ESQUINAS (Específico para el glow)
-            float glowFadeLimit = clamp(BEVEL_GLOW_CORNER_FADE, 0.0, 1.0);
-            float gGapL = smoothstep(0.0, glowFadeLimit, vPromoElementUv.x);
-            float gGapR = 1.0 - smoothstep(1.0 - glowFadeLimit, 1.0, vPromoElementUv.x);
-            float gGapB = smoothstep(0.0, glowFadeLimit, vPromoElementUv.y);
-            float gGapT = 1.0 - smoothstep(1.0 - glowFadeLimit, 1.0, vPromoElementUv.y);
-
-            // 4. Filtramos los bordes iluminados y aplicamos el fade INTELIGENTE
-            // Usamos las variables 'match' del bisel principal: si chocan luz con luz, se unen.
-            float gL = glowBands.x * typeL * mix(gGapT, 1.0, matchTL) * mix(gGapB, 1.0, matchBL);
-            float gR = glowBands.y * typeR * mix(gGapT, 1.0, matchTR) * mix(gGapB, 1.0, matchBR);
-            float gB = glowBands.z * typeB * mix(gGapL, 1.0, matchBL) * mix(gGapR, 1.0, matchBR);
-            float gT = glowBands.w * typeT * mix(gGapL, 1.0, matchTL) * mix(gGapR, 1.0, matchTR);
-
-            // Unimos las líneas resultantes
-            float glowMask = max(max(gL, gR), max(gB, gT));
-
-            // Multiplicamos por la iluminación de la cara (para que no aparezca en los pies/espalda)
-            glowMask *= faceIllumination;
-            // REGLA DE EXCLUSIÓN: Si el bisel principal (highlightMask) ya está brillando aquí,
-            // le restamos ese espacio al Glow para que se coloquen "hombro con hombro" sin pisarse.
-            glowMask *= (1.0 - highlightMask);
-
-            // 5. Aplicamos color e intensidad
-            vec3 glowColor = mix(
-                vec3(1.0), 
-                normalizedKeyColor, 
-                BEVEL_GLOW_COLOR_INFLUENCE
-            );
-
-            result += glowColor * glowMask * BEVEL_GLOW_INTENSITY * keyEnergy;
-        }
+        result +=
+            glowColor *
+            innerGlowMask *
+            max(BEVEL_GLOW_INTENSITY, 0.0) *
+            keyEnergy;
     }
-    // --- FIN INNER GLOW ---
 
     vec3 hsv = promoRgbToHsv(
         clamp(result, vec3(0.0), vec3(1.0))
     );
 
-    hsv.z *= 1.0 -
+    hsv.z *=
+        1.0 -
         shadowMask *
         clamp(BEVEL_SHADOW, 0.0, 1.0);
 
