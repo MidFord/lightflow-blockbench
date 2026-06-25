@@ -6369,6 +6369,14 @@ uniform float BEVEL_LIGHT_STRENGTH;
 uniform float BEVEL_HIGHLIGHT_COLOR_INFLUENCE;
 uniform float BEVEL_LIGHT_COLOR_STRENGTH;
 
+uniform bool BEVEL_GLOW_ENABLED;
+uniform float BEVEL_GLOW_WIDTH;
+uniform float BEVEL_GLOW_SOFTNESS;
+uniform float BEVEL_GLOW_INTENSITY;
+uniform float BEVEL_GLOW_COLOR_INFLUENCE;
+uniform float BEVEL_GLOW_FACE_THRESHOLD;
+uniform float BEVEL_GLOW_CORNER_FADE;
+
 uniform vec3 EDGE_FALLBACK_LIGHT_DIRECTION;
 
 /*
@@ -6909,6 +6917,65 @@ vec3 promoApplyBevel(
         highlightMask *
         max(BEVEL_HIGHLIGHT, 0.0);
 
+    // --- NUEVO: INNER GLOW (Bisel secundario direccional) ---
+    if (BEVEL_GLOW_ENABLED) {
+        // 1. EVALUACIÓN DE LA CARA: ¿Está la cara entera mirando a la luz?
+        // dot() da 1.0 si mira directo a la luz, 0.0 si está de perfil, y negativo si da la espalda.
+        float faceLightDot = dot(normalValue, keyDirection);
+        
+        // Creamos una transición suave basada en el threshold configurado
+        float faceIllumination = smoothstep(
+            BEVEL_GLOW_FACE_THRESHOLD - 0.15, 
+            BEVEL_GLOW_FACE_THRESHOLD + 0.15, 
+            faceLightDot
+        );
+
+        // Solo procesamos el glow si la cara recibe suficiente luz
+        if (faceIllumination > 0.001) {
+            
+            // 2. Generamos las bandas del resplandor (Garantizando que siempre sea más ancho que el bisel)
+            vec4 glowBands = promoGetEdgeBands(
+                vPromoElementUv,
+                vPromoElementSize,
+                max(BEVEL_GLOW_WIDTH, BEVEL_WIDTH), // <--- ESTO
+                BEVEL_GLOW_SOFTNESS
+            );
+
+            // 3. FADE DE ESQUINAS (Específico para el glow)
+            float glowFadeLimit = clamp(BEVEL_GLOW_CORNER_FADE, 0.0, 1.0);
+            float gGapL = smoothstep(0.0, glowFadeLimit, vPromoElementUv.x);
+            float gGapR = 1.0 - smoothstep(1.0 - glowFadeLimit, 1.0, vPromoElementUv.x);
+            float gGapB = smoothstep(0.0, glowFadeLimit, vPromoElementUv.y);
+            float gGapT = 1.0 - smoothstep(1.0 - glowFadeLimit, 1.0, vPromoElementUv.y);
+
+            // 4. Filtramos los bordes iluminados y aplicamos el fade INTELIGENTE
+            // Usamos las variables 'match' del bisel principal: si chocan luz con luz, se unen.
+            float gL = glowBands.x * typeL * mix(gGapT, 1.0, matchTL) * mix(gGapB, 1.0, matchBL);
+            float gR = glowBands.y * typeR * mix(gGapT, 1.0, matchTR) * mix(gGapB, 1.0, matchBR);
+            float gB = glowBands.z * typeB * mix(gGapL, 1.0, matchBL) * mix(gGapR, 1.0, matchBR);
+            float gT = glowBands.w * typeT * mix(gGapL, 1.0, matchTL) * mix(gGapR, 1.0, matchTR);
+
+            // Unimos las líneas resultantes
+            float glowMask = max(max(gL, gR), max(gB, gT));
+
+            // Multiplicamos por la iluminación de la cara (para que no aparezca en los pies/espalda)
+            glowMask *= faceIllumination;
+            // REGLA DE EXCLUSIÓN: Si el bisel principal (highlightMask) ya está brillando aquí,
+            // le restamos ese espacio al Glow para que se coloquen "hombro con hombro" sin pisarse.
+            glowMask *= (1.0 - highlightMask);
+
+            // 5. Aplicamos color e intensidad
+            vec3 glowColor = mix(
+                vec3(1.0), 
+                normalizedKeyColor, 
+                BEVEL_GLOW_COLOR_INFLUENCE
+            );
+
+            result += glowColor * glowMask * BEVEL_GLOW_INTENSITY * keyEnergy;
+        }
+    }
+    // --- FIN INNER GLOW ---
+
     vec3 hsv = promoRgbToHsv(
         clamp(result, vec3(0.0), vec3(1.0))
     );
@@ -7375,7 +7442,9 @@ void main() {
                             0.05,
                             0.04
                         ),
-                        expose: true
+                        expose: true,
+                        is_color: true,
+                        hexValue: '#140d0a'
                     },
 
                     OUTLINE_AFFECTED_BY_LIGHT: {
@@ -7429,7 +7498,7 @@ void main() {
 
                     BEVEL_CORNER_FADE: {
                         type: 'float',
-                        value: 0.15, // Por defecto se comerá el 15% de cada punta
+                        value: 1.0,
                         expose: true,
                         min: 0.0,
                         max: 1.0,    // 1.0 = todo el lado de la cara, 0.5 = mitad de la cara
@@ -7501,6 +7570,81 @@ void main() {
                         max: 4.0,
                         step: 0.05,
                         allow_higher: true,
+                        allow_lower: false
+                    },
+
+                    BEVEL_GLOW_ENABLED: {
+                        type: 'bool',
+                        value: true,
+                        expose: true
+                    },
+
+                    // Controla qué tan directo debe mirar la cara a la luz para tener glow.
+                    // 0.0 = Cualquier cara que roce la luz. 0.5 = Solo caras muy iluminadas.
+                    BEVEL_GLOW_FACE_THRESHOLD: {
+                        type: 'float',
+                        value: 0.25, 
+                        expose: true,
+                        min: -0.2,
+                        max: 1.0,
+                        step: 0.05,
+                        allow_higher: false,
+                        allow_lower: false
+                    },
+
+                    BEVEL_GLOW_WIDTH: {
+                        type: 'float',
+                        value: 0.25, 
+                        expose: true,
+                        min: 0.0,
+                        max: 2.0,
+                        step: 0.01,
+                        allow_higher: true,
+                        allow_lower: false
+                    },
+
+                    BEVEL_GLOW_SOFTNESS: {
+                        type: 'float',
+                        value: 0.35, // Reducido drásticamente para que no sea tan borroso
+                        expose: true,
+                        min: 0.0,
+                        max: 5.0,
+                        step: 0.05,
+                        allow_higher: true,
+                        allow_lower: false
+                    },
+
+                    // Controla la distancia de las esquinas para este glow independiente
+                    BEVEL_GLOW_CORNER_FADE: {
+                        type: 'float',
+                        value: 0.35, 
+                        expose: true,
+                        min: 0.0,
+                        max: 1.0,
+                        step: 0.01,
+                        allow_higher: false,
+                        allow_lower: false
+                    },
+
+                    BEVEL_GLOW_INTENSITY: {
+                        type: 'float',
+                        value: 0.40,
+                        expose: true,
+                        min: 0.0,
+                        max: 2.0,
+                        step: 0.01,
+                        allow_higher: true,
+                        allow_lower: false
+                    },
+
+                    BEVEL_GLOW_COLOR_INFLUENCE: {
+                        type: 'float',
+                        value: 0.85,
+                        expose: true,
+                        min: 0.0,
+                        max: 1.0,
+                        step: 0.01,
+                        allow_higher: false,
                         allow_lower: false
                     },
 
