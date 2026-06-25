@@ -463,6 +463,10 @@
         "shader_architect.uniform.BEVEL_GLOW_ENABLED.desc": "Enable the inner bevel glow",
         "shader_architect.uniform.BEVEL_GLOW_SYNC_TO_PROMO_RIM": "Glow Sync",
         "shader_architect.uniform.BEVEL_GLOW_SYNC_TO_PROMO_RIM.desc": "Use rim settings for inner glow",
+        "shader_architect.uniform.BEVEL_GLOW_SYNC_DIRECTION": "Glow Screen Sync",
+        "shader_architect.uniform.BEVEL_GLOW_SYNC_DIRECTION.desc": "Aligns the glow with the 2D screen direction of the light, syncing with RIM",
+        "shader_architect.uniform.BEVEL_GLOW_REQUIRE_LIGHT_FACING": "Glow Face Cull",
+        "shader_architect.uniform.BEVEL_GLOW_REQUIRE_LIGHT_FACING.desc": "Require the face to point towards the light to show the glow",
         "shader_architect.uniform.BEVEL_GLOW_FACE_THRESHOLD": "Glow Face",
         "shader_architect.uniform.BEVEL_GLOW_FACE_THRESHOLD.desc": "Light angle needed for inner glow",
         "shader_architect.uniform.BEVEL_GLOW_WIDTH": "Glow Width",
@@ -519,6 +523,8 @@
         "shader_architect.uniform.PROMO_RIM_OCCLUSION_ENABLED.desc": "Occlude rim light by nearby geometry",
         "shader_architect.uniform.PROMO_RIM_GROUP": "Rim Group",
         "shader_architect.uniform.PROMO_RIM_GROUP.desc": "Group mask for promotional rim light",
+        "shader_architect.uniform.PROMO_RIM_TEXTURE_BLEND": "Rim Tex Blend",
+        "shader_architect.uniform.PROMO_RIM_TEXTURE_BLEND.desc": "Blends the rim color with the edge texture to seamlessly connect with inner glow",
         "shader_architect.uniform.EDGE_FALLBACK_LIGHT_DIRECTION": "Edge Light",
         "shader_architect.uniform.EDGE_FALLBACK_LIGHT_DIRECTION.desc": "Fallback direction for edge lighting",
         "shader_architect.uniform.uLightCastShadow": "Shadow Casters",
@@ -994,6 +1000,10 @@
         "shader_architect.uniform.BEVEL_GLOW_ENABLED.desc": "Activa el brillo interior",
         "shader_architect.uniform.BEVEL_GLOW_SYNC_TO_PROMO_RIM": "Sync Glow",
         "shader_architect.uniform.BEVEL_GLOW_SYNC_TO_PROMO_RIM.desc": "Usa ajustes del rim para el glow",
+        "shader_architect.uniform.BEVEL_GLOW_SYNC_DIRECTION": "Sync Glow Pantalla",
+        "shader_architect.uniform.BEVEL_GLOW_SYNC_DIRECTION.desc": "Alinea el glow con la direccion 2D de la luz en pantalla (Sync con Rim)",
+        "shader_architect.uniform.BEVEL_GLOW_REQUIRE_LIGHT_FACING": "Cull Cara Glow",
+        "shader_architect.uniform.BEVEL_GLOW_REQUIRE_LIGHT_FACING.desc": "Oculta el glow en caras que no apuntan a la luz",
         "shader_architect.uniform.BEVEL_GLOW_FACE_THRESHOLD": "Cara Glow",
         "shader_architect.uniform.BEVEL_GLOW_FACE_THRESHOLD.desc": "Angulo de luz requerido para glow",
         "shader_architect.uniform.BEVEL_GLOW_WIDTH": "Ancho Glow",
@@ -1050,6 +1060,8 @@
         "shader_architect.uniform.PROMO_RIM_OCCLUSION_ENABLED.desc": "Oculta rim con geometria cercana",
         "shader_architect.uniform.PROMO_RIM_GROUP": "Grupo Rim",
         "shader_architect.uniform.PROMO_RIM_GROUP.desc": "Grupo de mascara para rim",
+        "shader_architect.uniform.PROMO_RIM_TEXTURE_BLEND": "Rim Textura",
+        "shader_architect.uniform.PROMO_RIM_TEXTURE_BLEND.desc": "Mezcla el color del rim con la textura del borde para conectar fluido con el glow interior",
         "shader_architect.uniform.EDGE_FALLBACK_LIGHT_DIRECTION": "Luz Borde",
         "shader_architect.uniform.EDGE_FALLBACK_LIGHT_DIRECTION.desc": "Direccion alternativa para bordes",
         "shader_architect.uniform.uLightCastShadow": "Sombras por luz",
@@ -6747,6 +6759,8 @@ uniform float BEVEL_GLOW_FACE_THRESHOLD;
 uniform float BEVEL_GLOW_CORNER_FADE;
 
 uniform bool BEVEL_GLOW_SYNC_TO_PROMO_RIM;
+uniform bool BEVEL_GLOW_SYNC_DIRECTION;
+uniform bool BEVEL_GLOW_REQUIRE_LIGHT_FACING;
 
 uniform vec3 EDGE_FALLBACK_LIGHT_DIRECTION;
 
@@ -7329,6 +7343,26 @@ vec3 promoApplyBevel(
         dot(nT, keyDirection)
     );
 
+    float glowTypeL = typeL;
+    float glowTypeR = typeR;
+    float glowTypeB = typeB;
+    float glowTypeT = typeT;
+
+    if (BEVEL_GLOW_SYNC_DIRECTION) {
+        vec3 viewKeyDir = (viewMatrix * vec4(keyDirection, 0.0)).xyz;
+        vec2 screenKeyDir = normalize(viewKeyDir.xy + vec2(0.00001));
+
+        vec2 snL = normalize((viewMatrix * vec4(nL, 0.0)).xy + vec2(0.00001));
+        vec2 snR = normalize((viewMatrix * vec4(nR, 0.0)).xy + vec2(0.00001));
+        vec2 snB = normalize((viewMatrix * vec4(nB, 0.0)).xy + vec2(0.00001));
+        vec2 snT = normalize((viewMatrix * vec4(nT, 0.0)).xy + vec2(0.00001));
+
+        glowTypeL = smoothstep(-0.05, 0.05, dot(snL, screenKeyDir));
+        glowTypeR = smoothstep(-0.05, 0.05, dot(snR, screenKeyDir));
+        glowTypeB = smoothstep(-0.05, 0.05, dot(snB, screenKeyDir));
+        glowTypeT = smoothstep(-0.05, 0.05, dot(snT, screenKeyDir));
+    }
+
     float fadeLimit = max(
         clamp(BEVEL_CORNER_FADE, 0.0, 1.0),
         0.0001
@@ -7411,17 +7445,21 @@ vec3 promoApplyBevel(
     float innerGlowMask = 0.0;
 
     if (innerGlowEnabled) {
-        float glowFaceThreshold = clamp(
-            BEVEL_GLOW_FACE_THRESHOLD,
-            -1.0,
-            1.0
-        );
+        float faceIllumination = 1.0;
+        
+        if (BEVEL_GLOW_REQUIRE_LIGHT_FACING) {
+            float glowFaceThreshold = clamp(
+                BEVEL_GLOW_FACE_THRESHOLD,
+                -1.0,
+                1.0
+            );
 
-        float faceIllumination = smoothstep(
-            glowFaceThreshold - 0.15,
-            glowFaceThreshold + 0.15,
-            dot(normalValue, keyDirection)
-        );
+            faceIllumination = smoothstep(
+                glowFaceThreshold - 0.15,
+                glowFaceThreshold + 0.15,
+                dot(normalValue, keyDirection)
+            );
+        }
 
         vec4 glowBands = promoGetEdgeBands(
             vPromoElementUv,
@@ -7459,29 +7497,34 @@ vec3 promoApplyBevel(
             vPromoElementUv.y
         );
 
+        float glowMatchTL = 1.0 - abs(glowTypeT - glowTypeL);
+        float glowMatchTR = 1.0 - abs(glowTypeT - glowTypeR);
+        float glowMatchBL = 1.0 - abs(glowTypeB - glowTypeL);
+        float glowMatchBR = 1.0 - abs(glowTypeB - glowTypeR);
+
         float glowL =
             glowBands.x *
-            typeL *
-            mix(glowGapT, 1.0, matchTL) *
-            mix(glowGapB, 1.0, matchBL);
+            glowTypeL *
+            mix(glowGapT, 1.0, glowMatchTL) *
+            mix(glowGapB, 1.0, glowMatchBL);
 
         float glowR =
             glowBands.y *
-            typeR *
-            mix(glowGapT, 1.0, matchTR) *
-            mix(glowGapB, 1.0, matchBR);
+            glowTypeR *
+            mix(glowGapT, 1.0, glowMatchTR) *
+            mix(glowGapB, 1.0, glowMatchBR);
 
         float glowB =
             glowBands.z *
-            typeB *
-            mix(glowGapL, 1.0, matchBL) *
-            mix(glowGapR, 1.0, matchBR);
+            glowTypeB *
+            mix(glowGapL, 1.0, glowMatchBL) *
+            mix(glowGapR, 1.0, glowMatchBR);
 
         float glowT =
             glowBands.w *
-            typeT *
-            mix(glowGapL, 1.0, matchTL) *
-            mix(glowGapR, 1.0, matchBR);
+            glowTypeT *
+            mix(glowGapL, 1.0, glowMatchTL) *
+            mix(glowGapR, 1.0, glowMatchBR);
 
         innerGlowMask = clamp(
             max(
@@ -8162,6 +8205,18 @@ void main() {
                         expose: true
                     },
 
+                    BEVEL_GLOW_SYNC_DIRECTION: {
+                        type: 'bool',
+                        value: true,
+                        expose: true
+                    },
+
+                    BEVEL_GLOW_REQUIRE_LIGHT_FACING: {
+                        type: 'bool',
+                        value: false,
+                        expose: true
+                    },
+
                     // Controla qué tan directo debe mirar la cara a la luz para tener glow.
                     // 0.0 = Cualquier cara que roce la luz. 0.5 = Solo caras muy iluminadas.
                     BEVEL_GLOW_FACE_THRESHOLD: {
@@ -8371,6 +8426,12 @@ void main() {
                         step: 1,
                         allow_higher: false,
                         allow_lower: false
+                    },
+
+                    PROMO_RIM_TEXTURE_BLEND: {
+                        type: 'bool',
+                        value: true,
+                        expose: true
                     },
 
                     PROMO_RIM_OCCLUSION_ENABLED: {
@@ -9245,8 +9306,9 @@ void main() {
                 varying vec2 vPromoUv;
 
                 void main() {
-                    float expandedMask = 0.0;
+                    vec3 expandedColor = vec3(0.0);
                     float nearestDepth = 1.0;
+                    float isMask = 0.0;
 
                     for (int offset = -SA_PROMO_RIM_MAX_RADIUS; offset <= SA_PROMO_RIM_MAX_RADIUS; offset++) {
                         float sampleOffset = float(offset);
@@ -9266,25 +9328,21 @@ void main() {
                             sampleUv
                         );
 
-                        if (sampleValue.r > 0.001) {
-                            expandedMask = max(
-                                expandedMask,
-                                sampleValue.r
-                            );
-
-                            nearestDepth = min(
-                                nearestDepth,
-                                sampleValue.g
-                            );
+                        if (sampleValue.a > 0.001) {
+                            float depth = (sampleValue.a - 0.01) / 0.99;
+                            if (isMask == 0.0 || depth < nearestDepth) {
+                                nearestDepth = depth;
+                                expandedColor = sampleValue.rgb;
+                                isMask = 1.0;
+                            }
                         }
                     }
 
-                    gl_FragColor = vec4(
-                        expandedMask,
-                        nearestDepth,
-                        0.0,
-                        1.0
-                    );
+                    if (isMask > 0.5) {
+                        gl_FragColor = vec4(expandedColor, nearestDepth * 0.99 + 0.01);
+                    } else {
+                        gl_FragColor = vec4(0.0);
+                    }
                 }
             `;
 
@@ -9328,7 +9386,8 @@ void main() {
                     uHasSceneDepth: {
                         value: sceneDepthTarget.depthTexture ? 1 : 0
                     },
-                    uUseOcclusion: { value: 1 }
+                    uUseOcclusion: { value: 1 },
+                    uTextureBlend: { value: 1 }
                 },
                 vertexShader: `
                     varying vec2 vPromoUv;
@@ -9355,18 +9414,13 @@ void main() {
                     uniform float uDepthEpsilon;
                     uniform int uHasSceneDepth;
                     uniform int uUseOcclusion;
+                    uniform int uTextureBlend;
 
                     varying vec2 vPromoUv;
 
                     vec2 promoEstimateOutwardDirection() {
                         vec2 inwardDirection = vec2(0.0);
 
-                        /*
-                            This is evaluated only for pixels already inside the
-                            narrow rim band. It finds nearby source-mask pixels
-                            and converts their average direction into an outward
-                            contour normal.
-                        */
                         for (int radius = 1; radius <= SA_PROMO_DIRECTION_SAMPLE_RADIUS; radius++) {
                             float pixelRadius = float(radius);
 
@@ -9379,77 +9433,54 @@ void main() {
                             float sourceRight = texture2D(
                                 uOriginalMask,
                                 vPromoUv + vec2(sampleOffset.x, 0.0)
-                            ).r;
+                            ).a;
 
                             float sourceLeft = texture2D(
                                 uOriginalMask,
                                 vPromoUv - vec2(sampleOffset.x, 0.0)
-                            ).r;
+                            ).a;
 
                             float sourceTop = texture2D(
                                 uOriginalMask,
                                 vPromoUv + vec2(0.0, sampleOffset.y)
-                            ).r;
+                            ).a;
 
                             float sourceBottom = texture2D(
                                 uOriginalMask,
                                 vPromoUv - vec2(0.0, sampleOffset.y)
-                            ).r;
+                            ).a;
 
                             float sourceTopRight = texture2D(
                                 uOriginalMask,
                                 vPromoUv + sampleOffset
-                            ).r;
+                            ).a;
 
                             float sourceTopLeft = texture2D(
                                 uOriginalMask,
                                 vPromoUv + vec2(-sampleOffset.x, sampleOffset.y)
-                            ).r;
+                            ).a;
 
                             float sourceBottomRight = texture2D(
                                 uOriginalMask,
                                 vPromoUv + vec2(sampleOffset.x, -sampleOffset.y)
-                            ).r;
+                            ).a;
 
                             float sourceBottomLeft = texture2D(
                                 uOriginalMask,
                                 vPromoUv - sampleOffset
-                            ).r;
+                            ).a;
 
                             float inverseRadius =
                                 1.0 / max(pixelRadius, 1.0);
 
-                            inwardDirection += vec2(1.0, 0.0) *
-                                step(0.001, sourceRight) *
-                                inverseRadius;
-
-                            inwardDirection += vec2(-1.0, 0.0) *
-                                step(0.001, sourceLeft) *
-                                inverseRadius;
-
-                            inwardDirection += vec2(0.0, 1.0) *
-                                step(0.001, sourceTop) *
-                                inverseRadius;
-
-                            inwardDirection += vec2(0.0, -1.0) *
-                                step(0.001, sourceBottom) *
-                                inverseRadius;
-
-                            inwardDirection += vec2(0.70710678, 0.70710678) *
-                                step(0.001, sourceTopRight) *
-                                inverseRadius;
-
-                            inwardDirection += vec2(-0.70710678, 0.70710678) *
-                                step(0.001, sourceTopLeft) *
-                                inverseRadius;
-
-                            inwardDirection += vec2(0.70710678, -0.70710678) *
-                                step(0.001, sourceBottomRight) *
-                                inverseRadius;
-
-                            inwardDirection += vec2(-0.70710678, -0.70710678) *
-                                step(0.001, sourceBottomLeft) *
-                                inverseRadius;
+                            inwardDirection += vec2(1.0, 0.0) * step(0.005, sourceRight) * inverseRadius;
+                            inwardDirection += vec2(-1.0, 0.0) * step(0.005, sourceLeft) * inverseRadius;
+                            inwardDirection += vec2(0.0, 1.0) * step(0.005, sourceTop) * inverseRadius;
+                            inwardDirection += vec2(0.0, -1.0) * step(0.005, sourceBottom) * inverseRadius;
+                            inwardDirection += vec2(0.70710678, 0.70710678) * step(0.005, sourceTopRight) * inverseRadius;
+                            inwardDirection += vec2(-0.70710678, 0.70710678) * step(0.005, sourceTopLeft) * inverseRadius;
+                            inwardDirection += vec2(0.70710678, -0.70710678) * step(0.005, sourceBottomRight) * inverseRadius;
+                            inwardDirection += vec2(-0.70710678, -0.70710678) * step(0.005, sourceBottomLeft) * inverseRadius;
                         }
 
                         float inwardLength = length(inwardDirection);
@@ -9462,30 +9493,12 @@ void main() {
                     }
 
                     void main() {
-                        vec4 originalMaskSample = texture2D(
-                            uOriginalMask,
-                            vPromoUv
-                        );
+                        vec4 originalMaskSample = texture2D(uOriginalMask, vPromoUv);
+                        vec4 expandedMaskSample = texture2D(uExpandedMask, vPromoUv);
 
-                        vec4 expandedMaskSample = texture2D(
-                            uExpandedMask,
-                            vPromoUv
-                        );
-
-                        float originalMask = step(
-                            0.001,
-                            originalMaskSample.r
-                        );
-
-                        float expandedMask = step(
-                            0.001,
-                            expandedMaskSample.r
-                        );
-
-                        float rimMask = max(
-                            expandedMask - originalMask,
-                            0.0
-                        );
+                        float originalMask = step(0.005, originalMaskSample.a);
+                        float expandedMask = step(0.005, expandedMaskSample.a);
+                        float rimMask = max(expandedMask - originalMask, 0.0);
 
                         if (rimMask <= 0.0) {
                             discard;
@@ -9494,35 +9507,16 @@ void main() {
                         float visibility = 1.0;
 
                         if (uUseOcclusion == 1 && uHasSceneDepth == 1) {
-                            float targetDepth = expandedMaskSample.g;
-                            float sceneDepth = texture2D(
-                                uSceneDepth,
-                                vPromoUv
-                            ).x;
+                            float targetDepth = (expandedMaskSample.a - 0.01) / 0.99;
+                            float sceneDepth = texture2D(uSceneDepth, vPromoUv).x;
 
-                            /*
-                                Depth values are 0.0 near / 1.0 far.
-                                A closer non-promotional object suppresses the rim.
-                            */
-                            visibility = step(
-                                targetDepth - max(uDepthEpsilon, 0.0),
-                                sceneDepth
-                            );
+                            visibility = step(targetDepth - max(uDepthEpsilon, 0.0), sceneDepth);
                         }
 
-                        vec2 outwardDirection =
-                            promoEstimateOutwardDirection();
+                        vec2 outwardDirection = promoEstimateOutwardDirection();
+                        vec2 artisticDirection = normalize(uRimDirection + vec2(0.00001));
 
-                        vec2 artisticDirection =
-                            normalize(
-                                uRimDirection +
-                                vec2(0.00001)
-                            );
-
-                        float directionalAlignment = dot(
-                            outwardDirection,
-                            artisticDirection
-                        );
+                        float directionalAlignment = dot(outwardDirection, artisticDirection);
 
                         float directionalMask = smoothstep(
                             -max(uDirectionSoftness, 0.001),
@@ -9530,11 +9524,7 @@ void main() {
                             directionalAlignment
                         );
 
-                        float artMask = mix(
-                            1.0,
-                            directionalMask,
-                            clamp(uDirectionality, 0.0, 1.0)
-                        );
+                        float artMask = mix(1.0, directionalMask, clamp(uDirectionality, 0.0, 1.0));
 
                         float alpha = clamp(
                             rimMask *
@@ -9549,12 +9539,14 @@ void main() {
                             discard;
                         }
 
-                        gl_FragColor = vec4(
-                            uRimColor,
-                            alpha
-                        );
-                    }
-                `,
+                        vec3 finalRimColor = uRimColor;
+                        if (uTextureBlend == 1) {
+                            // Suma el color extendido de la textura + el color de RIM para emular el Inner Glow
+                            finalRimColor = clamp(expandedMaskSample.rgb + uRimColor, 0.0, 1.0);
+                        }
+
+                        gl_FragColor = vec4(finalRimColor, alpha);
+                    }`,
                 depthTest: false,
                 depthWrite: false,
                 transparent: true,
@@ -9957,6 +9949,91 @@ void main() {
             );
         },
 
+        getEffectivePromotionalRimDirection(group, camera) {
+            const fallbackConfig = group && group.config ? group.config : null;
+            const fallbackDirection = fallbackConfig && fallbackConfig.direction
+                ? fallbackConfig.direction.clone()
+                : new THREE.Vector2(0.70, 0.65);
+
+            let lightDirection = new THREE.Vector2();
+            let lightDirectionCount = 0;
+
+            const centerPos = new THREE.Vector3(0, 0, 0);
+            if (group && group.meshList && group.meshList.length > 0) {
+                let validMeshes = 0;
+                group.meshList.forEach(mesh => {
+                    if (mesh && typeof mesh.getWorldPosition === 'function') {
+                        const pos = new THREE.Vector3();
+                        mesh.getWorldPosition(pos);
+                        centerPos.add(pos);
+                        validMeshes++;
+                    }
+                });
+                if (validMeshes > 0) {
+                    centerPos.multiplyScalar(1.0 / validMeshes);
+                }
+            }
+
+            if (group && group.materials) {
+                group.materials.forEach(material => {
+                    if (!material || !material.uniforms) return;
+
+                    const intensities = material.uniforms.uLightIntensity ? material.uniforms.uLightIntensity.value : null;
+                    const positions = material.uniforms.uLightPos ? material.uniforms.uLightPos.value : null;
+                    const directions = material.uniforms.uLightDir ? material.uniforms.uLightDir.value : null;
+                    const types = material.uniforms.uLightType ? material.uniforms.uLightType.value : null;
+                    const activeLightCount = Math.max(0, Math.min(16, Math.floor(this.getNumberUniform(material, 'max_light_number', 0))));
+
+                    if (!Array.isArray(intensities) || activeLightCount <= 0) return;
+
+                    const weightedDirection = new THREE.Vector3();
+                    let totalWeight = 0.0;
+
+                    for (let index = 0; index < activeLightCount; index++) {
+                        const intensity = Number(intensities[index]);
+                        const weight = Number.isFinite(intensity) ? Math.max(0.0, intensity) : 0.0;
+                        
+                        if (weight <= 0.00001) continue;
+
+                        const type = types ? types[index] : 0;
+                        let currentDir = new THREE.Vector3();
+
+                        if (type === 1 && directions && directions[index]) {
+                            currentDir.copy(directions[index]).multiplyScalar(-1);
+                        } else if (positions && positions[index]) {
+                            currentDir.copy(positions[index]).sub(centerPos);
+                        }
+
+                        if (currentDir.lengthSq() > 0.000001) {
+                            currentDir.normalize();
+                            weightedDirection.add(currentDir.multiplyScalar(weight));
+                            totalWeight += weight;
+                        }
+                    }
+
+                    if (totalWeight > 0.00001) {
+                        weightedDirection.normalize();
+                        if (camera) {
+                            weightedDirection.transformDirection(camera.matrixWorldInverse);
+                        }
+                        
+                        const screenDir = new THREE.Vector2(weightedDirection.x, weightedDirection.y);
+                        if (screenDir.lengthSq() > 0.000001) {
+                            screenDir.normalize();
+                            lightDirection.add(screenDir);
+                            lightDirectionCount++;
+                        }
+                    }
+                });
+            }
+
+            if (lightDirectionCount > 0) {
+                return lightDirection.normalize();
+            }
+
+            return fallbackDirection;
+        },
+
         getPromotionalRimConfig(material) {
             if (
                 !material ||
@@ -10069,6 +10146,11 @@ void main() {
                 useOcclusion: this.getBooleanUniform(
                     material,
                     'PROMO_RIM_OCCLUSION_ENABLED',
+                    true
+                ),
+                textureBlend: this.getBooleanUniform(
+                    material,
+                    'PROMO_RIM_TEXTURE_BLEND',
                     true
                 ),
                 depthEpsilon: Math.max(
@@ -10184,24 +10266,22 @@ void main() {
                         varying vec2 vPromoMaskUv;
 
                         void main() {
-                            float alpha = texture2D(
+                            vec4 texColor = texture2D(
                                 map,
                                 vPromoMaskUv
-                            ).a;
+                            );
 
-                            if (alpha < uAlphaCutoff) {
+                            if (texColor.a < uAlphaCutoff) {
                                 discard;
                             }
 
                             /*
-                                Red = binary union mask.
-                                Green = the nearest promotional depth.
+                                RGB = Texture Color
+                                A = Mask Flag + Depth (0.0 = empty, 0.01-1.0 = depth)
                             */
                             gl_FragColor = vec4(
-                                1.0,
-                                gl_FragCoord.z,
-                                0.0,
-                                1.0
+                                texColor.rgb,
+                                gl_FragCoord.z * 0.99 + 0.01
                             );
                         }
                     `,
@@ -10399,7 +10479,7 @@ void main() {
             );
         },
 
-        compositeGroup(state, destinationTarget, group) {
+        compositeGroup(state, destinationTarget, group, camera) {
             const renderer = state.renderer;
             const config = group.config;
 
@@ -10435,7 +10515,7 @@ void main() {
             );
 
             state.overlayMaterial.uniforms.uRimDirection.value.copy(
-                config.direction
+                this.getEffectivePromotionalRimDirection(group, camera)
             );
 
             state.overlayMaterial.uniforms.uDirectionality.value =
@@ -10452,6 +10532,9 @@ void main() {
 
             state.overlayMaterial.uniforms.uUseOcclusion.value =
                 config.useOcclusion ? 1 : 0;
+                
+            state.overlayMaterial.uniforms.uTextureBlend.value =
+                config.textureBlend ? 1 : 0;
 
             renderer.setRenderTarget(destinationTarget);
             renderer.render(
@@ -10555,7 +10638,8 @@ void main() {
                     this.compositeGroup(
                         state,
                         previousTarget,
-                        group
+                        group,
+                        preview.camera
                     );
                 });
 
