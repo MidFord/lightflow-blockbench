@@ -409,15 +409,17 @@
         "shader_architect.preset.pbr": "Standard PBR",
 
         // Preset Uniform Translations (Short labels for properties UI)
+        "shader_architect.uniform.map": "Texture",
+        "shader_architect.uniform.map.desc": "Main texture sampled by the material",
         "shader_architect.uniform.LIGHTCOLOR": "Light Tint",
         "shader_architect.uniform.LIGHTCOLOR.desc": "Overall color tint multiplier applied to the final render",
-        "shader_architect.uniform.SHADE": "Shade Enable",
+        "shader_architect.uniform.SHADE": "Shade",
         "shader_architect.uniform.SHADE.desc": "Toggle scene shading/shadowing systems",
         "shader_architect.uniform.LIGHTSIDE": "Light Side",
         "shader_architect.uniform.LIGHTSIDE.desc": "Side direction representing the main lighting vector",
-        "shader_architect.uniform.EMISSIVE": "Emissive Glow",
+        "shader_architect.uniform.EMISSIVE": "Emissive",
         "shader_architect.uniform.EMISSIVE.desc": "Treat textures as fully self-illuminated/emissive",
-        "shader_architect.uniform.max_light_number": "Active Lights",
+        "shader_architect.uniform.max_light_number": "Lights",
         "shader_architect.uniform.max_light_number.desc": "Number of Light Manager lights sampled by this material",
         "shader_architect.uniform.uLightPos": "Light Positions",
         "shader_architect.uniform.uLightPos.desc": "World positions for Light Manager lights",
@@ -435,12 +437,90 @@
         "shader_architect.uniform.uLightType.desc": "Light type IDs for point, spot, and directional lights",
         "shader_architect.uniform.uLightColor": "Light Colors",
         "shader_architect.uniform.uLightColor.desc": "Per-light color values from Light Manager",
-        "shader_architect.uniform.BEVEL_LIGHT_COLOR_STRENGTH": "Bevel Light Color",
+        "shader_architect.uniform.BEVEL_LIGHT_COLOR_STRENGTH": "Bevel Tint",
         "shader_architect.uniform.BEVEL_LIGHT_COLOR_STRENGTH.desc": "Boost how strongly Light Manager colors tint promotional bevel highlights",
-        "shader_architect.uniform.PROMO_RIM_COLOR_MODE": "Rim Color Mode",
+        "shader_architect.uniform.BEVEL_ENABLED": "Bevel",
+        "shader_architect.uniform.BEVEL_ENABLED.desc": "Enable promotional bevel lighting",
+        "shader_architect.uniform.BEVEL_WIDTH": "Bevel Width",
+        "shader_architect.uniform.BEVEL_WIDTH.desc": "Width of the bevel highlight band",
+        "shader_architect.uniform.BEVEL_SOFTNESS": "Bevel Soft",
+        "shader_architect.uniform.BEVEL_SOFTNESS.desc": "Softness of the bevel transition",
+        "shader_architect.uniform.BEVEL_SLOPE": "Bevel Slope",
+        "shader_architect.uniform.BEVEL_SLOPE.desc": "Slope response of the bevel mask",
+        "shader_architect.uniform.BEVEL_HIGHLIGHT": "Highlight",
+        "shader_architect.uniform.BEVEL_HIGHLIGHT.desc": "Strength of the bright bevel edge",
+        "shader_architect.uniform.BEVEL_HIGHLIGHT_COLOR_INFLUENCE": "Hi Tint",
+        "shader_architect.uniform.BEVEL_HIGHLIGHT_COLOR_INFLUENCE.desc": "Light color influence on bevel highlights",
+        "shader_architect.uniform.BEVEL_LIGHT_STRENGTH": "Key Light",
+        "shader_architect.uniform.BEVEL_LIGHT_STRENGTH.desc": "Main light strength used by the bevel",
+        "shader_architect.uniform.BEVEL_SHADOW": "Shade",
+        "shader_architect.uniform.BEVEL_SHADOW.desc": "Strength of the dark bevel edge",
+        "shader_architect.uniform.BEVEL_SHADOW_SATURATION": "Shade Sat",
+        "shader_architect.uniform.BEVEL_SHADOW_SATURATION.desc": "Color saturation of bevel shadowing",
+        "shader_architect.uniform.BEVEL_CORNER_FADE": "Corner Fade",
+        "shader_architect.uniform.BEVEL_CORNER_FADE.desc": "Fade amount near bevel corners",
+        "shader_architect.uniform.BEVEL_GLOW_ENABLED": "Glow",
+        "shader_architect.uniform.BEVEL_GLOW_ENABLED.desc": "Enable the inner bevel glow",
+        "shader_architect.uniform.BEVEL_GLOW_SYNC_TO_PROMO_RIM": "Glow Sync",
+        "shader_architect.uniform.BEVEL_GLOW_SYNC_TO_PROMO_RIM.desc": "Use rim settings for inner glow",
+        "shader_architect.uniform.BEVEL_GLOW_FACE_THRESHOLD": "Glow Face",
+        "shader_architect.uniform.BEVEL_GLOW_FACE_THRESHOLD.desc": "Light angle needed for inner glow",
+        "shader_architect.uniform.BEVEL_GLOW_WIDTH": "Glow Width",
+        "shader_architect.uniform.BEVEL_GLOW_WIDTH.desc": "Width of the inner glow band",
+        "shader_architect.uniform.BEVEL_GLOW_SOFTNESS": "Glow Soft",
+        "shader_architect.uniform.BEVEL_GLOW_SOFTNESS.desc": "Softness of the inner glow",
+        "shader_architect.uniform.BEVEL_GLOW_CORNER_FADE": "Glow Corner",
+        "shader_architect.uniform.BEVEL_GLOW_CORNER_FADE.desc": "Corner fade of the inner glow",
+        "shader_architect.uniform.BEVEL_GLOW_INTENSITY": "Glow Power",
+        "shader_architect.uniform.BEVEL_GLOW_INTENSITY.desc": "Brightness of the inner glow",
+        "shader_architect.uniform.BEVEL_GLOW_COLOR_INFLUENCE": "Glow Tint",
+        "shader_architect.uniform.BEVEL_GLOW_COLOR_INFLUENCE.desc": "Light color influence on inner glow",
+        "shader_architect.uniform.OUTLINE_ELEMENT_ENABLED": "Elem Line",
+        "shader_architect.uniform.OUTLINE_ELEMENT_ENABLED.desc": "Enable element edge outline",
+        "shader_architect.uniform.OUTLINE_ALPHA_ENABLED": "Alpha Line",
+        "shader_architect.uniform.OUTLINE_ALPHA_ENABLED.desc": "Enable alpha edge outline",
+        "shader_architect.uniform.OUTLINE_ALPHA_CLAMP_TO_ELEMENT": "Alpha Clamp",
+        "shader_architect.uniform.OUTLINE_ALPHA_CLAMP_TO_ELEMENT.desc": "Keep alpha outline inside element bounds",
+        "shader_architect.uniform.OUTLINE_ALPHA_DIAGONAL_ONLY": "Diag Only",
+        "shader_architect.uniform.OUTLINE_ALPHA_DIAGONAL_ONLY.desc": "Limit alpha outline to diagonal corners",
+        "shader_architect.uniform.OUTLINE_WIDTH": "Line Width",
+        "shader_architect.uniform.OUTLINE_WIDTH.desc": "Width of the promotional outline",
+        "shader_architect.uniform.OUTLINE_COLOR": "Line Color",
+        "shader_architect.uniform.OUTLINE_COLOR.desc": "Color of the promotional outline",
+        "shader_architect.uniform.OUTLINE_INTENSITY": "Line Power",
+        "shader_architect.uniform.OUTLINE_INTENSITY.desc": "Brightness of the promotional outline",
+        "shader_architect.uniform.OUTLINE_FADE": "Line Fade",
+        "shader_architect.uniform.OUTLINE_FADE.desc": "Fade softness of the outline",
+        "shader_architect.uniform.OUTLINE_MODE": "Line Mode",
+        "shader_architect.uniform.OUTLINE_MODE.desc": "Outline blend mode",
+        "shader_architect.uniform.OUTLINE_AFFECTED_BY_LIGHT": "Lit Line",
+        "shader_architect.uniform.OUTLINE_AFFECTED_BY_LIGHT.desc": "Let lighting affect the outline",
+        "shader_architect.uniform.PROMO_RIM_ENABLED": "Rim",
+        "shader_architect.uniform.PROMO_RIM_ENABLED.desc": "Enable promotional rim light",
+        "shader_architect.uniform.PROMO_RIM_WIDTH": "Rim Width",
+        "shader_architect.uniform.PROMO_RIM_WIDTH.desc": "Width of the rim light",
+        "shader_architect.uniform.PROMO_RIM_INTENSITY": "Rim Power",
+        "shader_architect.uniform.PROMO_RIM_INTENSITY.desc": "Brightness of the rim light",
+        "shader_architect.uniform.PROMO_RIM_COLOR": "Rim Color",
+        "shader_architect.uniform.PROMO_RIM_COLOR.desc": "Fixed color of the rim light",
+        "shader_architect.uniform.PROMO_RIM_COLOR_MODE": "Rim Mode",
         "shader_architect.uniform.PROMO_RIM_COLOR_MODE.desc": "0 fixed color, 1 mix with lights, 2 use light color",
-        "shader_architect.uniform.PROMO_RIM_LIGHT_COLOR_INFLUENCE": "Rim Light Color",
+        "shader_architect.uniform.PROMO_RIM_LIGHT_COLOR_INFLUENCE": "Rim Light",
         "shader_architect.uniform.PROMO_RIM_LIGHT_COLOR_INFLUENCE.desc": "How much Light Manager color affects the promotional silhouette rim",
+        "shader_architect.uniform.PROMO_RIM_DIRECTION": "Rim Dir",
+        "shader_architect.uniform.PROMO_RIM_DIRECTION.desc": "Direction of the rim light",
+        "shader_architect.uniform.PROMO_RIM_DIRECTION_SOFTNESS": "Rim Soft",
+        "shader_architect.uniform.PROMO_RIM_DIRECTION_SOFTNESS.desc": "Softness of the rim direction mask",
+        "shader_architect.uniform.PROMO_RIM_DIRECTIONALITY": "Rim Focus",
+        "shader_architect.uniform.PROMO_RIM_DIRECTIONALITY.desc": "Directional focus of the rim light",
+        "shader_architect.uniform.PROMO_RIM_DEPTH_EPSILON": "Rim Depth",
+        "shader_architect.uniform.PROMO_RIM_DEPTH_EPSILON.desc": "Depth tolerance for rim detection",
+        "shader_architect.uniform.PROMO_RIM_OCCLUSION_ENABLED": "Rim Occl",
+        "shader_architect.uniform.PROMO_RIM_OCCLUSION_ENABLED.desc": "Occlude rim light by nearby geometry",
+        "shader_architect.uniform.PROMO_RIM_GROUP": "Rim Group",
+        "shader_architect.uniform.PROMO_RIM_GROUP.desc": "Group mask for promotional rim light",
+        "shader_architect.uniform.EDGE_FALLBACK_LIGHT_DIRECTION": "Edge Light",
+        "shader_architect.uniform.EDGE_FALLBACK_LIGHT_DIRECTION.desc": "Fallback direction for edge lighting",
         "shader_architect.uniform.uLightCastShadow": "Shadow Casters",
         "shader_architect.uniform.uLightCastShadow.desc": "Per-light shadow casting flags",
         "shader_architect.uniform.uLightShadowIndex": "Shadow Indices",
@@ -449,145 +529,189 @@
         "shader_architect.uniform.uWorldNormalMatrix.desc": "Normal transform matrix updated from each rendered cube",
         "shader_architect.uniform.uTime": "Time",
         "shader_architect.uniform.uTime.desc": "Animated time value updated every preview frame",
-        "shader_architect.uniform.uAmbient": "Ambient Light",
+        "shader_architect.uniform.uAmbient": "Ambient",
         "shader_architect.uniform.uAmbient.desc": "Baseline light level in unlit areas",
-        "shader_architect.uniform.uAmbientColor": "Ambient Color",
+        "shader_architect.uniform.uAmbientColor": "Amb Color",
         "shader_architect.uniform.uAmbientColor.desc": "Color of the background ambient light source",
-        "shader_architect.uniform.uExposure": "Brightness",
+        "shader_architect.uniform.uExposure": "Exposure",
         "shader_architect.uniform.uExposure.desc": "Overall brightness after lighting",
-        "shader_architect.uniform.uToneMapping": "Color Mapping",
+        "shader_architect.uniform.uToneMapping": "Tone Map",
         "shader_architect.uniform.uToneMapping.desc": "Algorithm for mapping high dynamic range color values",
-        "shader_architect.uniform.uUseToneMapping": "Color Mapping",
+        "shader_architect.uniform.uUseToneMapping": "Tone Map",
         "shader_architect.uniform.uUseToneMapping.desc": "Algorithm for mapping high dynamic range color values",
-        "shader_architect.uniform.uStylizedNormalInfluence": "Stylized Shape",
+        "shader_architect.uniform.uStylizedNormalInfluence": "Shape",
         "shader_architect.uniform.uStylizedNormalInfluence.desc": "How much Blockbench-style side lighting shapes the material",
-        "shader_architect.uniform.uLightWrap": "Soft Light",
+        "shader_architect.uniform.uLightWrap": "Light Wrap",
         "shader_architect.uniform.uLightWrap.desc": "Lets light wrap onto edges for a softer stylized look",
-        "shader_architect.uniform.uAOEnabled": "Contact Shadows",
+        "shader_architect.uniform.uAOEnabled": "Contact AO",
         "shader_architect.uniform.uAOEnabled.desc": "Toggle stylized contact shadowing",
-        "shader_architect.uniform.uAOStrength": "Contact Strength",
+        "shader_architect.uniform.uAOStrength": "AO Amount",
         "shader_architect.uniform.uAOStrength.desc": "Intensity of contact shadows",
-        "shader_architect.uniform.uAORadius": "Contact Size",
+        "shader_architect.uniform.uAORadius": "AO Radius",
         "shader_architect.uniform.uAORadius.desc": "How far contact shadows spread from edges and corners",
         "shader_architect.uniform.uAOPower": "AO Power",
         "shader_architect.uniform.uAOPower.desc": "Exponent curve adjustment for ambient occlusion falloff",
         "shader_architect.uniform.uAOMin": "AO Min",
         "shader_architect.uniform.uAOMin.desc": "Minimum ambient occlusion brightness clamp",
-        "shader_architect.uniform.uAODirectInfluence": "AO Direct Influence",
+        "shader_architect.uniform.uAODirectInfluence": "AO Direct",
         "shader_architect.uniform.uAODirectInfluence.desc": "How much AO shadows affect direct light sources",
-        "shader_architect.uniform.uShadowStrength": "Shadow Strength",
+        "shader_architect.uniform.uShadowStrength": "Shadow",
         "shader_architect.uniform.uShadowStrength.desc": "Darkness intensity of cast shadows",
-        "shader_architect.uniform.uShadowFloor": "Shadow Floor",
+        "shader_architect.uniform.uShadowFloor": "Shadow Min",
         "shader_architect.uniform.uShadowFloor.desc": "Minimum ambient shadow value (shadow brightness floor)",
         "shader_architect.uniform.AMBIENT_INTENSITY": "Ambient Int",
         "shader_architect.uniform.AMBIENT_INTENSITY.desc": "Intensity multiplier for ambient scene lighting",
-        "shader_architect.uniform.uBaseColor": "Base Color",
+        "shader_architect.uniform.uBaseColor": "Base",
         "shader_architect.uniform.uBaseColor.desc": "Primary diffuse color of the material",
         "shader_architect.uniform.uMetallic": "Metallic",
         "shader_architect.uniform.uMetallic.desc": "Metallic metalness factor (0.0 = dielectric, 1.0 = metallic)",
         "shader_architect.uniform.uRoughness": "Roughness",
         "shader_architect.uniform.uRoughness.desc": "Surface roughness factor, controlling glossy reflections scatter",
-        "shader_architect.uniform.uAO": "AO Strength",
+        "shader_architect.uniform.uAO": "Baked AO",
         "shader_architect.uniform.uAO.desc": "Baked ambient occlusion factor",
         "shader_architect.uniform.uClearcoat": "Clearcoat",
         "shader_architect.uniform.uClearcoat.desc": "Clearcoat layer intensity (e.g. lacquer/varnish)",
-        "shader_architect.uniform.uClearcoatRoughness": "Clearcoat Rough",
+        "shader_architect.uniform.uClearcoatRoughness": "Coat Rough",
         "shader_architect.uniform.uClearcoatRoughness.desc": "Roughness of the clearcoat layer",
         "shader_architect.uniform.uAnisotropy": "Anisotropy",
         "shader_architect.uniform.uAnisotropy.desc": "Reflection anisotropy level (stretching along a direction)",
-        "shader_architect.uniform.uAnisotropyDirection": "Anisotropy Dir",
+        "shader_architect.uniform.uAnisotropyDirection": "Aniso Dir",
         "shader_architect.uniform.uAnisotropyDirection.desc": "Orientation angle/vector of anisotropy tangent",
         "shader_architect.uniform.uSheen": "Sheen",
         "shader_architect.uniform.uSheen.desc": "Sheen backscattering intensity for velvet/fabric effects",
         "shader_architect.uniform.uSheenColor": "Sheen Color",
         "shader_architect.uniform.uSheenColor.desc": "Color of the sheen reflection",
-        "shader_architect.uniform.uSheenRoughness": "Sheen Rough",
+        "shader_architect.uniform.uSheenRoughness": "Sheen Soft",
         "shader_architect.uniform.uSheenRoughness.desc": "Roughness of the sheen reflection",
         "shader_architect.uniform.uTransmission": "Transmission",
         "shader_architect.uniform.uTransmission.desc": "Light transmission factor (translucency/glass effect)",
         "shader_architect.uniform.uThickness": "Thickness",
         "shader_architect.uniform.uThickness.desc": "Volumetric thickness of the medium for absorption",
-        "shader_architect.uniform.uAttenuationColor": "Atten Color",
+        "shader_architect.uniform.uAttenuationColor": "Absorb Tint",
         "shader_architect.uniform.uAttenuationColor.desc": "Color tint when light passes through the thickness",
-        "shader_architect.uniform.uAttenuationDistance": "Atten Dist",
+        "shader_architect.uniform.uAttenuationDistance": "Absorb Dist",
         "shader_architect.uniform.uAttenuationDistance.desc": "Distance light travels through medium before absorption",
-        "shader_architect.uniform.uIOR": "Refraction IOR",
+        "shader_architect.uniform.uIOR": "IOR",
         "shader_architect.uniform.uIOR.desc": "Index of Refraction (IOR) determining light bending",
         "shader_architect.uniform.uIridescence": "Iridescence",
         "shader_architect.uniform.uIridescence.desc": "Thin-film interference iridescence (rainbow shimmer)",
-        "shader_architect.uniform.uIridescenceIOR": "Iridescence IOR",
+        "shader_architect.uniform.uIridescenceIOR": "Iridesc IOR",
         "shader_architect.uniform.uIridescenceIOR.desc": "Index of refraction of the thin iridescence film",
-        "shader_architect.uniform.uIridescenceThicknessMin": "Iridescence Min",
+        "shader_architect.uniform.uIridescenceThicknessMin": "Iridesc Min",
         "shader_architect.uniform.uIridescenceThicknessMin.desc": "Minimum thickness of thin-film in nanometers",
-        "shader_architect.uniform.uIridescenceThicknessMax": "Iridescence Max",
+        "shader_architect.uniform.uIridescenceThicknessMax": "Iridesc Max",
         "shader_architect.uniform.uIridescenceThicknessMax.desc": "Maximum thickness of thin-film in nanometers",
-        "shader_architect.uniform.uEmissiveColor": "Emiss Color",
+        "shader_architect.uniform.uEmissiveColor": "Emit Color",
         "shader_architect.uniform.uEmissiveColor.desc": "Self-illumination emissive color",
-        "shader_architect.uniform.uEmissiveStrength": "Emiss Strength",
+        "shader_architect.uniform.uEmissiveStrength": "Emit Power",
         "shader_architect.uniform.uEmissiveStrength.desc": "Intensity multiplier for self-illumination emission",
-        "shader_architect.uniform.uUseBaseColorMap": "Base Color Map",
+        "shader_architect.uniform.uUseBaseColorMap": "Base Map",
         "shader_architect.uniform.uUseBaseColorMap.desc": "Toggle using texture map for base color",
-        "shader_architect.uniform.uUseMetallicRoughnessMap": "Metal/Rough Map",
+        "shader_architect.uniform.uUseMetallicRoughnessMap": "M/R Map",
         "shader_architect.uniform.uUseMetallicRoughnessMap.desc": "Toggle using texture map for metallic/roughness",
         "shader_architect.uniform.uUseNormalMap": "Normal Map",
         "shader_architect.uniform.uUseNormalMap.desc": "Toggle using normal map for surface details",
         "shader_architect.uniform.uUseAOMap": "AO Map",
         "shader_architect.uniform.uUseAOMap.desc": "Toggle using texture map for Ambient Occlusion",
-        "shader_architect.uniform.uUseEmissiveMap": "Emissive Map",
+        "shader_architect.uniform.uUseEmissiveMap": "Emit Map",
         "shader_architect.uniform.uUseEmissiveMap.desc": "Toggle using texture map for emissive glow",
-        "shader_architect.uniform.uUseClearcoatMap": "Clearcoat Map",
+        "shader_architect.uniform.uUseClearcoatMap": "Coat Map",
         "shader_architect.uniform.uUseClearcoatMap.desc": "Toggle using texture map for clearcoat",
-        "shader_architect.uniform.uUseClearcoatRoughnessMap": "Clearcoat Rough Map",
+        "shader_architect.uniform.uUseClearcoatRoughnessMap": "Coat R Map",
         "shader_architect.uniform.uUseClearcoatRoughnessMap.desc": "Toggle using texture map for clearcoat roughness",
-        "shader_architect.uniform.uUseAnisotropyMap": "Anisotropy Map",
+        "shader_architect.uniform.uUseAnisotropyMap": "Aniso Map",
         "shader_architect.uniform.uUseAnisotropyMap.desc": "Toggle using texture map for anisotropy",
         "shader_architect.uniform.uUseSheenColorMap": "Sheen Color Map",
         "shader_architect.uniform.uUseSheenColorMap.desc": "Toggle using texture map for sheen color",
-        "shader_architect.uniform.uUseSheenRoughnessMap": "Sheen Rough Map",
+        "shader_architect.uniform.uUseSheenRoughnessMap": "Sheen R Map",
         "shader_architect.uniform.uUseSheenRoughnessMap.desc": "Toggle using texture map for sheen roughness",
-        "shader_architect.uniform.uUseTransmissionMap": "Transmission Map",
+        "shader_architect.uniform.uUseTransmissionMap": "Trans Map",
         "shader_architect.uniform.uUseTransmissionMap.desc": "Toggle using texture map for transmission",
         "shader_architect.uniform.uUseThicknessMap": "Thickness Map",
         "shader_architect.uniform.uUseThicknessMap.desc": "Toggle using texture map for thickness",
-        "shader_architect.uniform.uUseIridescenceMap": "Iridescence Map",
+        "shader_architect.uniform.uUseIridescenceMap": "Iridesc Map",
         "shader_architect.uniform.uUseIridescenceMap.desc": "Toggle using texture map for iridescence",
-        "shader_architect.uniform.uUseIridescenceThicknessMap": "Iridescence Thick Map",
+        "shader_architect.uniform.uUseIridescenceThicknessMap": "Iridesc T Map",
         "shader_architect.uniform.uUseIridescenceThicknessMap.desc": "Toggle using texture map for iridescence thickness",
-        "shader_architect.uniform.uNormalScale": "Normal Scale",
+        "shader_architect.uniform.uNormalScale": "Normal Power",
         "shader_architect.uniform.uNormalScale.desc": "Strength multiplier for normal mapping details",
-        "shader_architect.uniform.uEnvSpecularStrength": "Env Specular",
+        "shader_architect.uniform.uBaseColorMapScale": "Base Scale",
+        "shader_architect.uniform.uBaseColorMapScale.desc": "Repeat scale for the base color map",
+        "shader_architect.uniform.uMetallicRoughnessMapScale": "M/R Scale",
+        "shader_architect.uniform.uMetallicRoughnessMapScale.desc": "Repeat scale for the metallic roughness map",
+        "shader_architect.uniform.uNormalMapScale": "Normal Scale",
+        "shader_architect.uniform.uNormalMapScale.desc": "Repeat scale for the normal map",
+        "shader_architect.uniform.uAOMapScale": "AO Scale",
+        "shader_architect.uniform.uAOMapScale.desc": "Repeat scale for the AO map",
+        "shader_architect.uniform.uEmissiveMapScale": "Emit Scale",
+        "shader_architect.uniform.uEmissiveMapScale.desc": "Repeat scale for the emissive map",
+        "shader_architect.uniform.uClearcoatMapScale": "Coat Scale",
+        "shader_architect.uniform.uClearcoatMapScale.desc": "Repeat scale for the clearcoat map",
+        "shader_architect.uniform.uClearcoatRoughnessMapScale": "Coat R Scale",
+        "shader_architect.uniform.uClearcoatRoughnessMapScale.desc": "Repeat scale for the clearcoat roughness map",
+        "shader_architect.uniform.uAnisotropyMapScale": "Aniso Scale",
+        "shader_architect.uniform.uAnisotropyMapScale.desc": "Repeat scale for the anisotropy map",
+        "shader_architect.uniform.uSheenColorMapScale": "Sheen Scale",
+        "shader_architect.uniform.uSheenColorMapScale.desc": "Repeat scale for the sheen color map",
+        "shader_architect.uniform.uSheenRoughnessMapScale": "Sheen R Scale",
+        "shader_architect.uniform.uSheenRoughnessMapScale.desc": "Repeat scale for the sheen roughness map",
+        "shader_architect.uniform.uTransmissionMapScale": "Trans Scale",
+        "shader_architect.uniform.uTransmissionMapScale.desc": "Repeat scale for the transmission map",
+        "shader_architect.uniform.uThicknessMapScale": "Thick Scale",
+        "shader_architect.uniform.uThicknessMapScale.desc": "Repeat scale for the thickness map",
+        "shader_architect.uniform.uIridescenceMapScale": "Iridesc Scale",
+        "shader_architect.uniform.uIridescenceMapScale.desc": "Repeat scale for the iridescence map",
+        "shader_architect.uniform.uIridescenceThicknessMapScale": "Iris T Scale",
+        "shader_architect.uniform.uIridescenceThicknessMapScale.desc": "Repeat scale for the iridescence thickness map",
+        "shader_architect.uniform.uEnvSpecularStrength": "Env Shine",
         "shader_architect.uniform.uEnvSpecularStrength.desc": "Intensity of specular reflection from the environment environment",
-        "shader_architect.uniform.uSpecularIntensity": "Specular Int",
+        "shader_architect.uniform.uSpecularIntensity": "Specular",
         "shader_architect.uniform.uSpecularIntensity.desc": "General multiplier for direct specular highlight highlights",
-        "shader_architect.uniform.uSSREnabled": "Reflections",
+        "shader_architect.uniform.uSSREnabled": "SSR",
         "shader_architect.uniform.uSSREnabled.desc": "Enable real screen-space reflections for this material",
-        "shader_architect.uniform.uSSRIntensity": "Reflection Strength",
+        "shader_architect.uniform.uSSRIntensity": "SSR Power",
         "shader_architect.uniform.uSSRIntensity.desc": "How visible the reflected scene appears on this material",
-        "shader_architect.uniform.uSSRRoughness": "Reflection Softness",
+        "shader_architect.uniform.uSSRRoughness": "SSR Soft",
         "shader_architect.uniform.uSSRRoughness.desc": "How soft and blurry the reflected scene appears",
-        "shader_architect.uniform.uSSRThickness": "SSR Thickness",
+        "shader_architect.uniform.uSSRThickness": "SSR Depth",
         "shader_architect.uniform.uSSRThickness.desc": "Depth hit tolerance used while raymarching reflections",
-        "shader_architect.uniform.uSSRMaxDistance": "SSR Distance",
+        "shader_architect.uniform.uSSRMaxDistance": "SSR Range",
         "shader_architect.uniform.uSSRMaxDistance.desc": "Maximum screen-space ray distance for reflected hits",
-        "shader_architect.uniform.uSSRDistortion": "SSR Distortion",
+        "shader_architect.uniform.uSSRDistortion": "SSR Warp",
         "shader_architect.uniform.uSSRDistortion.desc": "Subtle animated distortion applied to reflected samples",
-        "shader_architect.uniform.uSSRFresnelPower": "SSR Fresnel Pow",
+        "shader_architect.uniform.uSSRFresnelPower": "Fresnel Pow",
         "shader_architect.uniform.uSSRFresnelPower.desc": "Fresnel curve sharpness for grazing-angle reflections",
-        "shader_architect.uniform.uSSRFresnelStrength": "SSR Fresnel Str",
+        "shader_architect.uniform.uSSRFresnelStrength": "Fresnel",
         "shader_architect.uniform.uSSRFresnelStrength.desc": "How much Fresnel affects reflection visibility",
-        "shader_architect.uniform.uSSREdgeFade": "SSR Edge Fade",
+        "shader_architect.uniform.uSSREdgeFade": "Edge Fade",
         "shader_architect.uniform.uSSREdgeFade.desc": "Fade width near screen borders",
-        "shader_architect.uniform.uSSRDistanceFade": "SSR Dist Fade",
+        "shader_architect.uniform.uSSRDistanceFade": "Range Fade",
         "shader_architect.uniform.uSSRDistanceFade.desc": "Distance ratio where reflected hits start fading out",
-        "shader_architect.uniform.uSSRDepthBias": "SSR Depth Bias",
+        "shader_architect.uniform.uSSRDepthBias": "Depth Bias",
         "shader_architect.uniform.uSSRDepthBias.desc": "Extra ray thickness added with distance to stabilize hits",
         "shader_architect.uniform.uSSRQuality": "SSR Quality",
         "shader_architect.uniform.uSSRQuality.desc": "Raymarch quality used by screen-space reflections",
-        "shader_architect.uniform.uSSRRenderScale": "SSR Render Scale",
+        "shader_architect.uniform.uSSRRenderScale": "SSR Scale",
         "shader_architect.uniform.uSSRRenderScale.desc": "Internal capture resolution scale for screen-space reflections",
-        "shader_architect.uniform.uSSRFrameInterval": "SSR Refresh Rate",
+        "shader_architect.uniform.uSSRFrameInterval": "SSR Refresh",
         "shader_architect.uniform.uSSRFrameInterval.desc": "How often reflections refresh while previewing",
-        "shader_architect.uniform.uShadowStrength": "Shadow Strength",
+        "shader_architect.uniform.shadowPixelResolution": "Pixel Size",
+        "shader_architect.uniform.shadowPixelResolution.desc": "Size of the pixelated shadow grid",
+        "shader_architect.uniform.shadowThreshold": "Cutoff",
+        "shader_architect.uniform.shadowThreshold.desc": "Shadow threshold for the pixelated shadow mask",
+        "shader_architect.uniform.AUTO_TILE": "Auto Tile",
+        "shader_architect.uniform.AUTO_TILE.desc": "Scale texture tiling from face size",
+        "shader_architect.uniform.TILING": "Tiling",
+        "shader_architect.uniform.TILING.desc": "Manual texture repeat scale",
+        "shader_architect.uniform.uClampLighting": "Clamp Light",
+        "shader_architect.uniform.uClampLighting.desc": "Keep combined lighting inside display range",
+        "shader_architect.uniform.uAOEdgeSharpness": "AO Edge",
+        "shader_architect.uniform.uAOEdgeSharpness.desc": "Sharpness of edge contact occlusion",
+        "shader_architect.uniform.uAOCornerWeight": "AO Corner",
+        "shader_architect.uniform.uAOCornerWeight.desc": "Strength of corner contact occlusion",
+        "shader_architect.uniform.uAOFaceNormalWeight": "AO Face",
+        "shader_architect.uniform.uAOFaceNormalWeight.desc": "Normal based contact occlusion influence",
+        "shader_architect.uniform.uShadowStrength": "Shadow",
         "shader_architect.uniform.uShadowStrength.desc": "Darkness intensity of cast shadows",
         "shader_architect.uniform.uShadowFloor": "Shadow Floor",
         "shader_architect.uniform.uShadowFloor.desc": "Minimum ambient shadow value (shadow brightness floor)",
@@ -668,15 +792,163 @@
         "shader_architect.preset.pixelated_shaded_lightflow": "Luces con Sombra Pixeladas",
 
         "shader_architect.preset.pbr": "Standard PBR",
-        "shader_architect.uniform.uSSREnabled": "Reflejos",
-        "shader_architect.uniform.uSSREnabled.desc": "Activa reflejos reales en espacio de pantalla para este material",
-        "shader_architect.uniform.uSSRIntensity": "Fuerza de reflejo",
+        "shader_architect.uniform.map": "Textura",
+        "shader_architect.uniform.map.desc": "Textura principal del material",
+        "shader_architect.uniform.LIGHTCOLOR": "Tinte Luz",
+        "shader_architect.uniform.LIGHTCOLOR.desc": "Tinte general aplicado al resultado final",
+        "shader_architect.uniform.SHADE": "Sombra",
+        "shader_architect.uniform.SHADE.desc": "Activa el sombreado del material",
+        "shader_architect.uniform.LIGHTSIDE": "Lado Luz",
+        "shader_architect.uniform.LIGHTSIDE.desc": "Direccion usada para la luz base",
+        "shader_architect.uniform.EMISSIVE": "Emisivo",
+        "shader_architect.uniform.EMISSIVE.desc": "Renderiza la textura como iluminada",
+        "shader_architect.uniform.max_light_number": "Luces",
+        "shader_architect.uniform.max_light_number.desc": "Numero de luces activas de Light Manager",
+        "shader_architect.uniform.uAmbient": "Ambiente",
+        "shader_architect.uniform.uAmbient.desc": "Luz base en zonas sin luz directa",
+        "shader_architect.uniform.uAmbientColor": "Color Amb",
+        "shader_architect.uniform.uAmbientColor.desc": "Color de la luz ambiente",
+        "shader_architect.uniform.uBaseColor": "Base",
+        "shader_architect.uniform.uBaseColor.desc": "Color difuso principal",
+        "shader_architect.uniform.uMetallic": "Metal",
+        "shader_architect.uniform.uMetallic.desc": "Factor metalico de la superficie",
+        "shader_architect.uniform.uRoughness": "Rugosidad",
+        "shader_architect.uniform.uRoughness.desc": "Que tan opacos o definidos son los brillos",
+        "shader_architect.uniform.uAO": "AO Baked",
+        "shader_architect.uniform.uAO.desc": "Factor de oclusion ambiente horneada",
+        "shader_architect.uniform.uClearcoat": "Barniz",
+        "shader_architect.uniform.uClearcoat.desc": "Capa brillante adicional",
+        "shader_architect.uniform.uClearcoatRoughness": "Barniz Rug",
+        "shader_architect.uniform.uClearcoatRoughness.desc": "Rugosidad del barniz",
+        "shader_architect.uniform.uAnisotropy": "Aniso",
+        "shader_architect.uniform.uAnisotropy.desc": "Estiramiento direccional del brillo",
+        "shader_architect.uniform.uAnisotropyDirection": "Dir Aniso",
+        "shader_architect.uniform.uAnisotropyDirection.desc": "Direccion del brillo anisotropico",
+        "shader_architect.uniform.uSheen": "Tela",
+        "shader_architect.uniform.uSheen.desc": "Brillo suave tipo tela",
+        "shader_architect.uniform.uSheenColor": "Color Tela",
+        "shader_architect.uniform.uSheenColor.desc": "Color del brillo tipo tela",
+        "shader_architect.uniform.uSheenRoughness": "Tela Rug",
+        "shader_architect.uniform.uSheenRoughness.desc": "Suavidad del brillo tipo tela",
+        "shader_architect.uniform.uTransmission": "Transmis",
+        "shader_architect.uniform.uTransmission.desc": "Paso de luz tipo vidrio",
+        "shader_architect.uniform.uThickness": "Grosor",
+        "shader_architect.uniform.uThickness.desc": "Grosor del medio translucido",
+        "shader_architect.uniform.uAttenuationColor": "Absorcion",
+        "shader_architect.uniform.uAttenuationColor.desc": "Color absorbido por el grosor",
+        "shader_architect.uniform.uAttenuationDistance": "Dist Abs",
+        "shader_architect.uniform.uAttenuationDistance.desc": "Distancia antes de absorber luz",
+        "shader_architect.uniform.uIOR": "IOR",
+        "shader_architect.uniform.uIOR.desc": "Indice de refraccion",
+        "shader_architect.uniform.uIridescence": "Irisado",
+        "shader_architect.uniform.uIridescence.desc": "Brillo de interferencia de color",
+        "shader_architect.uniform.uIridescenceIOR": "IOR Iris",
+        "shader_architect.uniform.uIridescenceIOR.desc": "IOR de la capa irisada",
+        "shader_architect.uniform.uIridescenceThicknessMin": "Iris Min",
+        "shader_architect.uniform.uIridescenceThicknessMin.desc": "Grosor minimo del irisado",
+        "shader_architect.uniform.uIridescenceThicknessMax": "Iris Max",
+        "shader_architect.uniform.uIridescenceThicknessMax.desc": "Grosor maximo del irisado",
+        "shader_architect.uniform.uEmissiveColor": "Color Emit",
+        "shader_architect.uniform.uEmissiveColor.desc": "Color de autoiluminacion",
+        "shader_architect.uniform.uEmissiveStrength": "Pot Emit",
+        "shader_architect.uniform.uEmissiveStrength.desc": "Intensidad de autoiluminacion",
+        "shader_architect.uniform.uUseBaseColorMap": "Mapa Base",
+        "shader_architect.uniform.uUseBaseColorMap.desc": "Usar textura de color base",
+        "shader_architect.uniform.uUseMetallicRoughnessMap": "Mapa M/R",
+        "shader_architect.uniform.uUseMetallicRoughnessMap.desc": "Usar textura metal/rugosidad",
+        "shader_architect.uniform.uUseNormalMap": "Mapa Normal",
+        "shader_architect.uniform.uUseNormalMap.desc": "Usar mapa normal",
+        "shader_architect.uniform.uUseAOMap": "Mapa AO",
+        "shader_architect.uniform.uUseAOMap.desc": "Usar mapa de oclusion",
+        "shader_architect.uniform.uUseEmissiveMap": "Mapa Emit",
+        "shader_architect.uniform.uUseEmissiveMap.desc": "Usar textura emisiva",
+        "shader_architect.uniform.uUseClearcoatMap": "Mapa Barn",
+        "shader_architect.uniform.uUseClearcoatMap.desc": "Usar textura de barniz",
+        "shader_architect.uniform.uUseClearcoatRoughnessMap": "Mapa B Rug",
+        "shader_architect.uniform.uUseClearcoatRoughnessMap.desc": "Usar rugosidad de barniz",
+        "shader_architect.uniform.uUseAnisotropyMap": "Mapa Aniso",
+        "shader_architect.uniform.uUseAnisotropyMap.desc": "Usar textura anisotropica",
+        "shader_architect.uniform.uUseSheenColorMap": "Mapa Tela",
+        "shader_architect.uniform.uUseSheenColorMap.desc": "Usar color de tela",
+        "shader_architect.uniform.uUseSheenRoughnessMap": "Mapa T Rug",
+        "shader_architect.uniform.uUseSheenRoughnessMap.desc": "Usar rugosidad de tela",
+        "shader_architect.uniform.uUseTransmissionMap": "Mapa Trans",
+        "shader_architect.uniform.uUseTransmissionMap.desc": "Usar textura de transmision",
+        "shader_architect.uniform.uUseThicknessMap": "Mapa Grosor",
+        "shader_architect.uniform.uUseThicknessMap.desc": "Usar textura de grosor",
+        "shader_architect.uniform.uUseIridescenceMap": "Mapa Iris",
+        "shader_architect.uniform.uUseIridescenceMap.desc": "Usar textura irisada",
+        "shader_architect.uniform.uUseIridescenceThicknessMap": "Mapa I Gros",
+        "shader_architect.uniform.uUseIridescenceThicknessMap.desc": "Usar grosor de irisado",
+        "shader_architect.uniform.uNormalScale": "Normal",
+        "shader_architect.uniform.uNormalScale.desc": "Fuerza del mapa normal",
+        "shader_architect.uniform.uBaseColorMapScale": "Esc Base",
+        "shader_architect.uniform.uBaseColorMapScale.desc": "Escala del mapa base",
+        "shader_architect.uniform.uMetallicRoughnessMapScale": "Esc M/R",
+        "shader_architect.uniform.uMetallicRoughnessMapScale.desc": "Escala del mapa metal/rugosidad",
+        "shader_architect.uniform.uNormalMapScale": "Esc Normal",
+        "shader_architect.uniform.uNormalMapScale.desc": "Escala del mapa normal",
+        "shader_architect.uniform.uAOMapScale": "Esc AO",
+        "shader_architect.uniform.uAOMapScale.desc": "Escala del mapa AO",
+        "shader_architect.uniform.uEmissiveMapScale": "Esc Emit",
+        "shader_architect.uniform.uEmissiveMapScale.desc": "Escala del mapa emisivo",
+        "shader_architect.uniform.uClearcoatMapScale": "Esc Barniz",
+        "shader_architect.uniform.uClearcoatMapScale.desc": "Escala del mapa de barniz",
+        "shader_architect.uniform.uClearcoatRoughnessMapScale": "Esc B Rug",
+        "shader_architect.uniform.uClearcoatRoughnessMapScale.desc": "Escala de rugosidad de barniz",
+        "shader_architect.uniform.uAnisotropyMapScale": "Esc Aniso",
+        "shader_architect.uniform.uAnisotropyMapScale.desc": "Escala del mapa anisotropico",
+        "shader_architect.uniform.uSheenColorMapScale": "Esc Tela",
+        "shader_architect.uniform.uSheenColorMapScale.desc": "Escala del color de tela",
+        "shader_architect.uniform.uSheenRoughnessMapScale": "Esc T Rug",
+        "shader_architect.uniform.uSheenRoughnessMapScale.desc": "Escala de rugosidad de tela",
+        "shader_architect.uniform.uTransmissionMapScale": "Esc Trans",
+        "shader_architect.uniform.uTransmissionMapScale.desc": "Escala del mapa de transmision",
+        "shader_architect.uniform.uThicknessMapScale": "Esc Grosor",
+        "shader_architect.uniform.uThicknessMapScale.desc": "Escala del mapa de grosor",
+        "shader_architect.uniform.uIridescenceMapScale": "Esc Iris",
+        "shader_architect.uniform.uIridescenceMapScale.desc": "Escala del mapa irisado",
+        "shader_architect.uniform.uIridescenceThicknessMapScale": "Esc I Gros",
+        "shader_architect.uniform.uIridescenceThicknessMapScale.desc": "Escala del grosor irisado",
+        "shader_architect.uniform.uEnvSpecularStrength": "Brillo Env",
+        "shader_architect.uniform.uEnvSpecularStrength.desc": "Fuerza del reflejo de entorno",
+        "shader_architect.uniform.uSpecularIntensity": "Especular",
+        "shader_architect.uniform.uSpecularIntensity.desc": "Fuerza del brillo especular",
+        "shader_architect.uniform.uSSREnabled": "SSR",
+        "shader_architect.uniform.uSSREnabled.desc": "Activa reflejos en pantalla",
+        "shader_architect.uniform.uSSRIntensity": "Pot SSR",
         "shader_architect.uniform.uSSRIntensity.desc": "Que tan visible aparece la escena reflejada sobre el material",
-        "shader_architect.uniform.uSSRRoughness": "Suavidad de reflejo",
+        "shader_architect.uniform.uSSRRoughness": "Suave SSR",
         "shader_architect.uniform.uSSRRoughness.desc": "Que tan suave o borrosa aparece la escena reflejada",
+        "shader_architect.uniform.uSSRThickness": "Prof SSR",
+        "shader_architect.uniform.uSSRThickness.desc": "Tolerancia de profundidad del reflejo",
+        "shader_architect.uniform.uSSRMaxDistance": "Rango SSR",
+        "shader_architect.uniform.uSSRMaxDistance.desc": "Distancia maxima del reflejo",
+        "shader_architect.uniform.uSSRDistortion": "Warp SSR",
+        "shader_architect.uniform.uSSRDistortion.desc": "Distorsion animada del reflejo",
+        "shader_architect.uniform.uSSRFresnelPower": "Pot Fresnel",
+        "shader_architect.uniform.uSSRFresnelPower.desc": "Curva Fresnel del reflejo",
+        "shader_architect.uniform.uSSRFresnelStrength": "Fresnel",
+        "shader_architect.uniform.uSSRFresnelStrength.desc": "Influencia Fresnel",
+        "shader_architect.uniform.uSSREdgeFade": "Borde SSR",
+        "shader_architect.uniform.uSSREdgeFade.desc": "Desvanecido en bordes de pantalla",
+        "shader_architect.uniform.uSSRDistanceFade": "Fade Rango",
+        "shader_architect.uniform.uSSRDistanceFade.desc": "Desvanecido por distancia",
+        "shader_architect.uniform.uSSRDepthBias": "Bias Prof",
+        "shader_architect.uniform.uSSRDepthBias.desc": "Margen extra de profundidad",
+        "shader_architect.uniform.uSSRQuality": "Calidad SSR",
+        "shader_architect.uniform.uSSRQuality.desc": "Calidad del raymarch",
+        "shader_architect.uniform.uSSRRenderScale": "Escala SSR",
+        "shader_architect.uniform.uSSRRenderScale.desc": "Escala interna de captura",
+        "shader_architect.uniform.uSSRFrameInterval": "Refresh SSR",
+        "shader_architect.uniform.uSSRFrameInterval.desc": "Frecuencia de refresco del reflejo",
         "shader_architect.uniform.uExposure": "Brillo",
         "shader_architect.uniform.uExposure.desc": "Brillo general despues de calcular la luz",
-        "shader_architect.uniform.uStylizedNormalInfluence": "Forma estilizada",
+        "shader_architect.uniform.uToneMapping": "Mapeo",
+        "shader_architect.uniform.uToneMapping.desc": "Curva de color final",
+        "shader_architect.uniform.uUseToneMapping": "Mapeo",
+        "shader_architect.uniform.uUseToneMapping.desc": "Curva de color final",
+        "shader_architect.uniform.uStylizedNormalInfluence": "Forma",
         "shader_architect.uniform.uStylizedNormalInfluence.desc": "Cuanto la iluminacion lateral estilo Blockbench moldea el material",
         "shader_architect.uniform.uLightWrap": "Luz suave",
         "shader_architect.uniform.uLightWrap.desc": "Permite que la luz envuelva bordes para un estilo mas suave",
@@ -696,12 +968,90 @@
         "shader_architect.uniform.uLightType.desc": "IDs de tipo para luces point, spot y direccionales",
         "shader_architect.uniform.uLightColor": "Colores de luz",
         "shader_architect.uniform.uLightColor.desc": "Valores de color por luz desde Light Manager",
-        "shader_architect.uniform.BEVEL_LIGHT_COLOR_STRENGTH": "Color de luz en bevel",
+        "shader_architect.uniform.BEVEL_LIGHT_COLOR_STRENGTH": "Tinte Bisel",
         "shader_architect.uniform.BEVEL_LIGHT_COLOR_STRENGTH.desc": "Refuerza cuanto los colores de Light Manager tintan los highlights del bevel promocional",
-        "shader_architect.uniform.PROMO_RIM_COLOR_MODE": "Modo de color de silueta",
+        "shader_architect.uniform.BEVEL_ENABLED": "Bisel",
+        "shader_architect.uniform.BEVEL_ENABLED.desc": "Activa el bisel promocional",
+        "shader_architect.uniform.BEVEL_WIDTH": "Ancho Bisel",
+        "shader_architect.uniform.BEVEL_WIDTH.desc": "Ancho de la banda de bisel",
+        "shader_architect.uniform.BEVEL_SOFTNESS": "Suave Bisel",
+        "shader_architect.uniform.BEVEL_SOFTNESS.desc": "Suavidad del bisel",
+        "shader_architect.uniform.BEVEL_SLOPE": "Pendiente",
+        "shader_architect.uniform.BEVEL_SLOPE.desc": "Respuesta de pendiente del bisel",
+        "shader_architect.uniform.BEVEL_HIGHLIGHT": "Brillo",
+        "shader_architect.uniform.BEVEL_HIGHLIGHT.desc": "Fuerza del borde claro",
+        "shader_architect.uniform.BEVEL_HIGHLIGHT_COLOR_INFLUENCE": "Tinte Br",
+        "shader_architect.uniform.BEVEL_HIGHLIGHT_COLOR_INFLUENCE.desc": "Influencia de color en brillo de bisel",
+        "shader_architect.uniform.BEVEL_LIGHT_STRENGTH": "Luz Clave",
+        "shader_architect.uniform.BEVEL_LIGHT_STRENGTH.desc": "Fuerza de la luz principal",
+        "shader_architect.uniform.BEVEL_SHADOW": "Sombra",
+        "shader_architect.uniform.BEVEL_SHADOW.desc": "Fuerza del borde oscuro",
+        "shader_architect.uniform.BEVEL_SHADOW_SATURATION": "Sat Sombra",
+        "shader_architect.uniform.BEVEL_SHADOW_SATURATION.desc": "Saturacion de la sombra del bisel",
+        "shader_architect.uniform.BEVEL_CORNER_FADE": "Esquina",
+        "shader_architect.uniform.BEVEL_CORNER_FADE.desc": "Desvanecido cerca de esquinas",
+        "shader_architect.uniform.BEVEL_GLOW_ENABLED": "Glow",
+        "shader_architect.uniform.BEVEL_GLOW_ENABLED.desc": "Activa el brillo interior",
+        "shader_architect.uniform.BEVEL_GLOW_SYNC_TO_PROMO_RIM": "Sync Glow",
+        "shader_architect.uniform.BEVEL_GLOW_SYNC_TO_PROMO_RIM.desc": "Usa ajustes del rim para el glow",
+        "shader_architect.uniform.BEVEL_GLOW_FACE_THRESHOLD": "Cara Glow",
+        "shader_architect.uniform.BEVEL_GLOW_FACE_THRESHOLD.desc": "Angulo de luz requerido para glow",
+        "shader_architect.uniform.BEVEL_GLOW_WIDTH": "Ancho Glow",
+        "shader_architect.uniform.BEVEL_GLOW_WIDTH.desc": "Ancho del brillo interior",
+        "shader_architect.uniform.BEVEL_GLOW_SOFTNESS": "Suave Glow",
+        "shader_architect.uniform.BEVEL_GLOW_SOFTNESS.desc": "Suavidad del brillo interior",
+        "shader_architect.uniform.BEVEL_GLOW_CORNER_FADE": "Glow Esq",
+        "shader_architect.uniform.BEVEL_GLOW_CORNER_FADE.desc": "Fade de glow en esquinas",
+        "shader_architect.uniform.BEVEL_GLOW_INTENSITY": "Pot Glow",
+        "shader_architect.uniform.BEVEL_GLOW_INTENSITY.desc": "Brillo del glow interior",
+        "shader_architect.uniform.BEVEL_GLOW_COLOR_INFLUENCE": "Tinte Glow",
+        "shader_architect.uniform.BEVEL_GLOW_COLOR_INFLUENCE.desc": "Influencia de color en glow",
+        "shader_architect.uniform.OUTLINE_ELEMENT_ENABLED": "Linea Elem",
+        "shader_architect.uniform.OUTLINE_ELEMENT_ENABLED.desc": "Activa borde por elemento",
+        "shader_architect.uniform.OUTLINE_ALPHA_ENABLED": "Linea Alfa",
+        "shader_architect.uniform.OUTLINE_ALPHA_ENABLED.desc": "Activa borde por alfa",
+        "shader_architect.uniform.OUTLINE_ALPHA_CLAMP_TO_ELEMENT": "Clamp Alfa",
+        "shader_architect.uniform.OUTLINE_ALPHA_CLAMP_TO_ELEMENT.desc": "Mantiene borde dentro del elemento",
+        "shader_architect.uniform.OUTLINE_ALPHA_DIAGONAL_ONLY": "Solo Diag",
+        "shader_architect.uniform.OUTLINE_ALPHA_DIAGONAL_ONLY.desc": "Limita el borde a diagonales",
+        "shader_architect.uniform.OUTLINE_WIDTH": "Ancho Linea",
+        "shader_architect.uniform.OUTLINE_WIDTH.desc": "Ancho del borde",
+        "shader_architect.uniform.OUTLINE_COLOR": "Color Linea",
+        "shader_architect.uniform.OUTLINE_COLOR.desc": "Color del borde",
+        "shader_architect.uniform.OUTLINE_INTENSITY": "Pot Linea",
+        "shader_architect.uniform.OUTLINE_INTENSITY.desc": "Brillo del borde",
+        "shader_architect.uniform.OUTLINE_FADE": "Fade Linea",
+        "shader_architect.uniform.OUTLINE_FADE.desc": "Suavidad del borde",
+        "shader_architect.uniform.OUTLINE_MODE": "Modo Linea",
+        "shader_architect.uniform.OUTLINE_MODE.desc": "Modo de mezcla del borde",
+        "shader_architect.uniform.OUTLINE_AFFECTED_BY_LIGHT": "Linea Luz",
+        "shader_architect.uniform.OUTLINE_AFFECTED_BY_LIGHT.desc": "Permite que la luz afecte el borde",
+        "shader_architect.uniform.PROMO_RIM_ENABLED": "Rim",
+        "shader_architect.uniform.PROMO_RIM_ENABLED.desc": "Activa la luz de silueta",
+        "shader_architect.uniform.PROMO_RIM_WIDTH": "Ancho Rim",
+        "shader_architect.uniform.PROMO_RIM_WIDTH.desc": "Ancho de la luz de silueta",
+        "shader_architect.uniform.PROMO_RIM_INTENSITY": "Pot Rim",
+        "shader_architect.uniform.PROMO_RIM_INTENSITY.desc": "Brillo de la luz de silueta",
+        "shader_architect.uniform.PROMO_RIM_COLOR": "Color Rim",
+        "shader_architect.uniform.PROMO_RIM_COLOR.desc": "Color fijo de la silueta",
+        "shader_architect.uniform.PROMO_RIM_COLOR_MODE": "Modo Rim",
         "shader_architect.uniform.PROMO_RIM_COLOR_MODE.desc": "0 color fijo, 1 mezcla con luces, 2 usa color de luces",
-        "shader_architect.uniform.PROMO_RIM_LIGHT_COLOR_INFLUENCE": "Color de luz en silueta",
+        "shader_architect.uniform.PROMO_RIM_LIGHT_COLOR_INFLUENCE": "Luz Rim",
         "shader_architect.uniform.PROMO_RIM_LIGHT_COLOR_INFLUENCE.desc": "Cuanto afecta el color de Light Manager a la silueta promocional",
+        "shader_architect.uniform.PROMO_RIM_DIRECTION": "Dir Rim",
+        "shader_architect.uniform.PROMO_RIM_DIRECTION.desc": "Direccion de la luz rim",
+        "shader_architect.uniform.PROMO_RIM_DIRECTION_SOFTNESS": "Suave Rim",
+        "shader_architect.uniform.PROMO_RIM_DIRECTION_SOFTNESS.desc": "Suavidad de direccion rim",
+        "shader_architect.uniform.PROMO_RIM_DIRECTIONALITY": "Foco Rim",
+        "shader_architect.uniform.PROMO_RIM_DIRECTIONALITY.desc": "Foco direccional del rim",
+        "shader_architect.uniform.PROMO_RIM_DEPTH_EPSILON": "Prof Rim",
+        "shader_architect.uniform.PROMO_RIM_DEPTH_EPSILON.desc": "Tolerancia de profundidad del rim",
+        "shader_architect.uniform.PROMO_RIM_OCCLUSION_ENABLED": "Ocl Rim",
+        "shader_architect.uniform.PROMO_RIM_OCCLUSION_ENABLED.desc": "Oculta rim con geometria cercana",
+        "shader_architect.uniform.PROMO_RIM_GROUP": "Grupo Rim",
+        "shader_architect.uniform.PROMO_RIM_GROUP.desc": "Grupo de mascara para rim",
+        "shader_architect.uniform.EDGE_FALLBACK_LIGHT_DIRECTION": "Luz Borde",
+        "shader_architect.uniform.EDGE_FALLBACK_LIGHT_DIRECTION.desc": "Direccion alternativa para bordes",
         "shader_architect.uniform.uLightCastShadow": "Sombras por luz",
         "shader_architect.uniform.uLightCastShadow.desc": "Flags de sombras proyectadas por cada luz",
         "shader_architect.uniform.uLightShadowIndex": "Indices de sombra",
@@ -710,15 +1060,37 @@
         "shader_architect.uniform.uWorldNormalMatrix.desc": "Matriz de normales actualizada desde cada cubo renderizado",
         "shader_architect.uniform.uTime": "Tiempo",
         "shader_architect.uniform.uTime.desc": "Valor de tiempo animado actualizado en cada frame del preview",
-        "shader_architect.uniform.uAOEnabled": "Sombras de contacto",
+        "shader_architect.uniform.uAOEnabled": "AO Contacto",
         "shader_architect.uniform.uAOEnabled.desc": "Activa sombras de contacto estilizadas",
-        "shader_architect.uniform.uAOStrength": "Fuerza de contacto",
+        "shader_architect.uniform.uAOStrength": "Fuerza AO",
         "shader_architect.uniform.uAOStrength.desc": "Intensidad de las sombras de contacto",
-        "shader_architect.uniform.uAORadius": "Tamano de contacto",
+        "shader_architect.uniform.uAORadius": "Radio AO",
         "shader_architect.uniform.uAORadius.desc": "Que tanto se extienden las sombras desde bordes y esquinas",
-        "shader_architect.uniform.uShadowStrength": "Fuerza de sombra",
+        "shader_architect.uniform.uAOPower": "Pot AO",
+        "shader_architect.uniform.uAOPower.desc": "Curva de la oclusion",
+        "shader_architect.uniform.uAOMin": "Min AO",
+        "shader_architect.uniform.uAOMin.desc": "Brillo minimo de AO",
+        "shader_architect.uniform.uAODirectInfluence": "AO Directa",
+        "shader_architect.uniform.uAODirectInfluence.desc": "Cuanto afecta AO a luz directa",
+        "shader_architect.uniform.uAOEdgeSharpness": "Borde AO",
+        "shader_architect.uniform.uAOEdgeSharpness.desc": "Nitidez de AO en bordes",
+        "shader_architect.uniform.uAOCornerWeight": "Esquina AO",
+        "shader_architect.uniform.uAOCornerWeight.desc": "Fuerza de AO en esquinas",
+        "shader_architect.uniform.uAOFaceNormalWeight": "Cara AO",
+        "shader_architect.uniform.uAOFaceNormalWeight.desc": "AO segun normal de cara",
+        "shader_architect.uniform.uClampLighting": "Limitar Luz",
+        "shader_architect.uniform.uClampLighting.desc": "Evita que la luz se pase de rango",
+        "shader_architect.uniform.AUTO_TILE": "Auto Tile",
+        "shader_architect.uniform.AUTO_TILE.desc": "Ajusta repeticion por tamano de cara",
+        "shader_architect.uniform.TILING": "Tile",
+        "shader_architect.uniform.TILING.desc": "Repeticion manual de textura",
+        "shader_architect.uniform.shadowPixelResolution": "Pixel",
+        "shader_architect.uniform.shadowPixelResolution.desc": "Tamano del pixel de sombra",
+        "shader_architect.uniform.shadowThreshold": "Corte",
+        "shader_architect.uniform.shadowThreshold.desc": "Umbral de sombra pixelada",
+        "shader_architect.uniform.uShadowStrength": "Sombra",
         "shader_architect.uniform.uShadowStrength.desc": "Intensidad de las sombras proyectadas",
-        "shader_architect.uniform.uShadowFloor": "Piso de sombra",
+        "shader_architect.uniform.uShadowFloor": "Min Sombra",
         "shader_architect.uniform.uShadowFloor.desc": "Brillo minimo dentro de las sombras",
         "shader_architect.ui.toggle_left": "Alternar Biblioteca de Materiales (Ctrl+B)",
         "shader_architect.ui.toggle_right": "Alternar Barra Lateral de Propiedades",
@@ -872,6 +1244,12 @@
 
     function createMaterialLightingUniforms() {
         return {
+            max_light_number: { type: 'int', value: 0, expose: true, min: 0, max: 16, step: 1, allow_higher: false, allow_lower: false },
+            uAmbient: { type: 'float', value: 0.3, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: true, allow_lower: false },
+            uAmbientColor: { type: 'vec3', value: new THREE.Vector3(1, 1, 1), hexValue: '#ffffff', expose: true, is_color: true },
+            uShadowStrength: { type: 'float', value: 1.0, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
+            uShadowFloor: { type: 'float', value: 0.0, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
+            LIGHTCOLOR: { type: 'vec3', value: new THREE.Vector3(1, 1, 1), hexValue: '#ffffff', expose: true, is_color: true },
             uLightPos: { type: 'vec3v', value: Array.from({ length: 16 }, () => new THREE.Vector3()), expose: false },
             uLightDir: { type: 'vec3v', value: Array.from({ length: 16 }, () => new THREE.Vector3(0, -1, 0)), expose: false },
             uLightIntensity: { type: 'floatv', value: Array(16).fill(0.0), expose: false },
@@ -880,15 +1258,9 @@
             uLightPenumbra: { type: 'floatv', value: Array(16).fill(0.0), expose: false },
             uLightType: { type: 'intv', value: Array(16).fill(0), expose: false },
             uLightColor: { type: 'vec3v', value: Array.from({ length: 16 }, () => new THREE.Vector3()), expose: false },
-            max_light_number: { type: 'int', value: 0, expose: true, min: 0, max: 16, step: 1, allow_higher: false, allow_lower: false },
             uLightCastShadow: { type: 'intv', value: Array(16).fill(0), expose: false },
             uLightShadowIndex: { type: 'intv', value: Array(16).fill(-1), expose: false },
-            uAmbient: { type: 'float', value: 0.3, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: true, allow_lower: false },
-            uAmbientColor: { type: 'vec3', value: new THREE.Vector3(1, 1, 1), hexValue: '#ffffff', expose: true, is_color: true },
             uWorldNormalMatrix: { type: 'mat3', value: new THREE.Matrix3(), expose: false },
-            uShadowStrength: { type: 'float', value: 1.0, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
-            uShadowFloor: { type: 'float', value: 0.0, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
-            LIGHTCOLOR: { type: 'vec3', value: new THREE.Vector3(1, 1, 1), hexValue: '#ffffff', expose: true, is_color: true },
             TEXTURE_SIZE: { type: 'vec2', value: new THREE.Vector2(16, 16), expose: false }
         };
     }
@@ -3834,12 +4206,7 @@ void main() {
         max(uEnvSpecularStrength, uSpecularIntensity)
     );
 }`,
-                uniforms: Object.assign(createScreenSpaceReflectionUniforms({
-                    intensity: 0.82,
-                    roughness: 0.16,
-                    quality: 0.72,
-                    renderScale: 0.85
-                }), {
+                uniforms: Object.assign({
                     // Base PBR Properties
                     "uBaseColor": { type: "vec3", value: new THREE.Vector3(1, 1, 1), hexValue: "#ffffff", expose: true, is_color: true },
                     "uMetallic": { type: "float", value: 0.0, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
@@ -3877,20 +4244,20 @@ void main() {
                     "uEmissiveStrength": { type: "float", value: 0.0, expose: true, min: 0.0, max: 10.0, step: 0.1, allow_higher: true, allow_lower: false },
 
                     // Texture enable flags. Set these to true only when a real texture exists.
-                    "uUseBaseColorMap": { type: "bool", value: false, expose: true },
-                    "uUseMetallicRoughnessMap": { type: "bool", value: false, expose: true },
-                    "uUseNormalMap": { type: "bool", value: false, expose: true },
-                    "uUseAOMap": { type: "bool", value: false, expose: true },
-                    "uUseEmissiveMap": { type: "bool", value: false, expose: true },
-                    "uUseClearcoatMap": { type: "bool", value: false, expose: true },
-                    "uUseClearcoatRoughnessMap": { type: "bool", value: false, expose: true },
-                    "uUseAnisotropyMap": { type: "bool", value: false, expose: true },
-                    "uUseSheenColorMap": { type: "bool", value: false, expose: true },
-                    "uUseSheenRoughnessMap": { type: "bool", value: false, expose: true },
-                    "uUseTransmissionMap": { type: "bool", value: false, expose: true },
-                    "uUseThicknessMap": { type: "bool", value: false, expose: true },
-                    "uUseIridescenceMap": { type: "bool", value: false, expose: true },
-                    "uUseIridescenceThicknessMap": { type: "bool", value: false, expose: true },
+                    "uUseBaseColorMap": { type: "bool", value: false, expose: true, advanced: true },
+                    "uUseMetallicRoughnessMap": { type: "bool", value: false, expose: true, advanced: true },
+                    "uUseNormalMap": { type: "bool", value: false, expose: true, advanced: true },
+                    "uUseAOMap": { type: "bool", value: false, expose: true, advanced: true },
+                    "uUseEmissiveMap": { type: "bool", value: false, expose: true, advanced: true },
+                    "uUseClearcoatMap": { type: "bool", value: false, expose: true, advanced: true },
+                    "uUseClearcoatRoughnessMap": { type: "bool", value: false, expose: true, advanced: true },
+                    "uUseAnisotropyMap": { type: "bool", value: false, expose: true, advanced: true },
+                    "uUseSheenColorMap": { type: "bool", value: false, expose: true, advanced: true },
+                    "uUseSheenRoughnessMap": { type: "bool", value: false, expose: true, advanced: true },
+                    "uUseTransmissionMap": { type: "bool", value: false, expose: true, advanced: true },
+                    "uUseThicknessMap": { type: "bool", value: false, expose: true, advanced: true },
+                    "uUseIridescenceMap": { type: "bool", value: false, expose: true, advanced: true },
+                    "uUseIridescenceThicknessMap": { type: "bool", value: false, expose: true, advanced: true },
 
                     // Texture Maps
                     "uBaseColorMap": { type: "sampler2D", value: null, expose: false },
@@ -3910,20 +4277,20 @@ void main() {
                     "uIridescenceThicknessMap": { type: "sampler2D", value: null, expose: false },
 
                     // Texture Scales
-                    "uBaseColorMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true },
-                    "uMetallicRoughnessMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true },
-                    "uNormalMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true },
-                    "uAOMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true },
-                    "uEmissiveMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true },
-                    "uClearcoatMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true },
-                    "uClearcoatRoughnessMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true },
-                    "uAnisotropyMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true },
-                    "uSheenColorMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true },
-                    "uSheenRoughnessMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true },
-                    "uTransmissionMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true },
-                    "uThicknessMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true },
-                    "uIridescenceMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true },
-                    "uIridescenceThicknessMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true },
+                    "uBaseColorMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true, advanced: true },
+                    "uMetallicRoughnessMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true, advanced: true },
+                    "uNormalMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true, advanced: true },
+                    "uAOMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true, advanced: true },
+                    "uEmissiveMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true, advanced: true },
+                    "uClearcoatMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true, advanced: true },
+                    "uClearcoatRoughnessMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true, advanced: true },
+                    "uAnisotropyMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true, advanced: true },
+                    "uSheenColorMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true, advanced: true },
+                    "uSheenRoughnessMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true, advanced: true },
+                    "uTransmissionMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true, advanced: true },
+                    "uThicknessMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true, advanced: true },
+                    "uIridescenceMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true, advanced: true },
+                    "uIridescenceThicknessMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true, advanced: true },
 
                     // Rendering controls
                     "uNormalScale": { type: "float", value: 1.0, expose: true, min: -2.0, max: 2.0, step: 0.1, allow_higher: true, allow_lower: true },
@@ -3973,7 +4340,12 @@ void main() {
                     "LIGHTSIDE": { type: "int", value: 0, expose: true, min: 0, max: 5, step: 1, allow_higher: false, allow_lower: false },
                     "LIGHTCOLOR": { type: "vec3", value: new THREE.Vector3(1, 1, 1), hexValue: "#ffffff", expose: true, is_color: true },
                     "TEXTURE_SIZE": { type: "vec2", value: new THREE.Vector2(16, 16), expose: false }
-                }),
+                }, createScreenSpaceReflectionUniforms({
+                    intensity: 0.82,
+                    roughness: 0.16,
+                    quality: 0.72,
+                    renderScale: 0.85
+                })),
                 supportsScreenSpaceReflections: true,
                 enableShadows: true
             });
@@ -4017,11 +4389,75 @@ void main() {
                         repeat: true,
                         expose: true
                     },
+                    "SHADE": {
+                        type: "bool",
+                        value: true,
+                        expose: true
+                    },
+                    "LIGHTSIDE": {
+                        type: "int",
+                        value: 0,
+                        expose: true,
+                        min: 0,
+                        max: 5,
+                        step: 1,
+                        allow_higher: false,
+                        allow_lower: false
+                    },
+                    "LIGHTCOLOR": {
+                        type: "vec3",
+                        value: new THREE.Vector3(1, 1, 1),
+                        hexValue: "#ffffff",
+                        expose: true,
+                        is_color: true
+                    },
+                    "AUTO_TILE": {
+                        type: "bool",
+                        value: false,
+                        expose: true,
+                        advanced: false
+                    },
+                    "TILING": {
+                        type: "vec2",
+                        value: new THREE.Vector2(1, 1),
+                        expose: true,
+                        min: 0.1,
+                        max: 10.0,
+                        step: 0.1
+                    },
                     "uClampLighting": {
                         type: "bool",
                         value: false,
                         expose: true,
                         advanced: true
+                    },
+                    "max_light_number": {
+                        type: "int",
+                        value: 0,
+                        expose: true,
+                        min: 0,
+                        max: 16,
+                        step: 1,
+                        allow_higher: false,
+                        allow_lower: false
+                    },
+                    // Ambient
+                    "uAmbient": {
+                        type: "float",
+                        value: 0.3,
+                        expose: true,
+                        min: 0.0,
+                        max: 1.0,
+                        step: 0.05,
+                        allow_higher: true,
+                        allow_lower: false
+                    },
+                    "uAmbientColor": {
+                        type: "vec3",
+                        value: new THREE.Vector3(1, 1, 1),
+                        hexValue: "#ffffff",
+                        expose: true,
+                        is_color: true
                     },
                     // Light arrays
                     "uLightPos": {
@@ -4064,36 +4500,6 @@ void main() {
                         value: Array.from({ length: 16 }, () => new THREE.Vector3()),
                         expose: false
                     },
-                    "max_light_number": {
-                        type: "int",
-                        value: 0,
-                        expose: true,
-                        min: 0,
-                        max: 16,
-                        step: 1,
-                        allow_higher: false,
-                        allow_lower: false
-                    },
-
-                    // Ambient
-                    "uAmbient": {
-                        type: "float",
-                        value: 0.3,
-                        expose: true,
-                        min: 0.0,
-                        max: 1.0,
-                        step: 0.05,
-                        allow_higher: true,
-                        allow_lower: false
-                    },
-                    "uAmbientColor": {
-                        type: "vec3",
-                        value: new THREE.Vector3(1, 1, 1),
-                        hexValue: "#ffffff",
-                        expose: true,
-                        is_color: true
-                    },
-
                     // Normal correction
                     "uWorldNormalMatrix": {
                         type: "mat3",
@@ -4237,43 +4643,6 @@ void main() {
                         allow_lower: false
                     },
 
-                    // Blockbench-style controls
-                    "SHADE": {
-                        type: "bool",
-                        value: true,
-                        expose: true
-                    },
-                    "LIGHTSIDE": {
-                        type: "int",
-                        value: 0,
-                        expose: true,
-                        min: 0,
-                        max: 5,
-                        step: 1,
-                        allow_higher: false,
-                        allow_lower: false
-                    },
-                    "LIGHTCOLOR": {
-                        type: "vec3",
-                        value: new THREE.Vector3(1, 1, 1),
-                        hexValue: "#ffffff",
-                        expose: true,
-                        is_color: true
-                    },
-                    "AUTO_TILE": {
-                        type: "bool",
-                        value: false,
-                        expose: true,
-                        advanced: false
-                    },
-                    "TILING": {
-                        type: "vec2",
-                        value: new THREE.Vector2(1, 1),
-                        expose: true,
-                        min: 0.1,
-                        max: 10.0,
-                        step: 0.1
-                    },
                     "TEXTURE_SIZE": {
                         type: "vec2",
                         value: new THREE.Vector2(16, 16),
@@ -6377,6 +6746,8 @@ uniform float BEVEL_GLOW_COLOR_INFLUENCE;
 uniform float BEVEL_GLOW_FACE_THRESHOLD;
 uniform float BEVEL_GLOW_CORNER_FADE;
 
+uniform bool BEVEL_GLOW_SYNC_TO_PROMO_RIM;
+
 uniform vec3 EDGE_FALLBACK_LIGHT_DIRECTION;
 
 /*
@@ -6818,12 +7189,57 @@ float promoCornerTaper(
     );
 }
 
+float promoGetInnerGlowIntensity() {
+    if (BEVEL_GLOW_SYNC_TO_PROMO_RIM) {
+        return max(PROMO_RIM_INTENSITY, 0.0);
+    }
+
+    return max(BEVEL_GLOW_INTENSITY, 0.0);
+}
+
+vec3 promoResolveSharedRimGlowColor(vec3 keyColor) {
+    vec3 rimColor = max(PROMO_RIM_COLOR, vec3(0.0));
+    vec3 lightColor = max(keyColor, vec3(0.0));
+
+    if (PROMO_RIM_COLOR_MODE == 2) {
+        return lightColor;
+    }
+
+    if (PROMO_RIM_COLOR_MODE == 1) {
+        return mix(
+            rimColor,
+            lightColor,
+            clamp(PROMO_RIM_LIGHT_COLOR_INFLUENCE, 0.0, 1.0)
+        );
+    }
+
+    return rimColor;
+}
+
+vec3 promoGetInnerGlowColor(
+    vec3 keyColor,
+    vec3 normalizedKeyColor
+) {
+    if (BEVEL_GLOW_SYNC_TO_PROMO_RIM) {
+        return promoResolveSharedRimGlowColor(keyColor);
+    }
+
+    return mix(
+        vec3(1.0),
+        normalizedKeyColor,
+        clamp(BEVEL_GLOW_COLOR_INFLUENCE, 0.0, 1.0)
+    );
+}
+
+
 vec3 promoApplyBevel(
     vec3 sourceColor,
     vec3 normalValue,
     vec3 tangentU,
     vec3 tangentV
 ) {
+    float innerGlowIntensity = promoGetInnerGlowIntensity();
+
     bool primaryBevelEnabled =
         BEVEL_WIDTH > 0.0 &&
         (
@@ -6834,7 +7250,7 @@ vec3 promoApplyBevel(
     bool innerGlowEnabled =
         BEVEL_GLOW_ENABLED &&
         BEVEL_GLOW_WIDTH > 0.0 &&
-        BEVEL_GLOW_INTENSITY > 0.0;
+        innerGlowIntensity > 0.0;
 
     if (
         !BEVEL_ENABLED ||
@@ -6860,11 +7276,6 @@ vec3 promoApplyBevel(
             0.0001
         );
 
-    /*
-        The masks are evaluated before any bevel color is added.
-        Thus the inner glow can reserve its pixels instead of being added over
-        an already bright bevel that will later clamp to white.
-    */
     vec4 edgeBands = promoGetEdgeBands(
         vPromoElementUv,
         vPromoElementSize,
@@ -6997,12 +7408,6 @@ vec3 promoApplyBevel(
         1.0
     );
 
-    /*
-        The inner glow is now the foreground layer.
-
-        Its coverage removes the highlight and dark bevel beneath it, producing
-        a controlled crossfade in the feather instead of stacked additive light.
-    */
     float innerGlowMask = 0.0;
 
     if (innerGlowEnabled) {
@@ -7076,7 +7481,7 @@ vec3 promoApplyBevel(
             glowBands.w *
             typeT *
             mix(glowGapL, 1.0, matchTL) *
-            mix(glowGapR, 1.0, matchTR);
+            mix(glowGapR, 1.0, matchBR);
 
         innerGlowMask = clamp(
             max(
@@ -7089,11 +7494,6 @@ vec3 promoApplyBevel(
         );
     }
 
-    /*
-        Priority inversion:
-        Before, glow was removed by highlightMask.
-        Now innerGlowMask removes the bright bevel and shadow bevel first.
-    */
     float highlightMask =
         rawHighlightMask *
         (1.0 - innerGlowMask);
@@ -7133,17 +7533,21 @@ vec3 promoApplyBevel(
         max(BEVEL_HIGHLIGHT, 0.0);
 
     if (innerGlowMask > 0.0) {
-        vec3 glowColor = mix(
-            vec3(1.0),
-            normalizedKeyColor,
-            clamp(BEVEL_GLOW_COLOR_INFLUENCE, 0.0, 1.0)
+        vec3 glowColor = promoGetInnerGlowColor(
+            keyColor,
+            normalizedKeyColor
         );
+
+        float glowEnergy =
+            BEVEL_GLOW_SYNC_TO_PROMO_RIM
+                ? 1.0
+                : keyEnergy;
 
         result +=
             glowColor *
             innerGlowMask *
-            max(BEVEL_GLOW_INTENSITY, 0.0) *
-            keyEnergy;
+            innerGlowIntensity *
+            glowEnergy;
     }
 
     vec3 hsv = promoRgbToHsv(
@@ -7744,7 +8148,15 @@ void main() {
                         allow_lower: false
                     },
 
+
+
                     BEVEL_GLOW_ENABLED: {
+                        type: 'bool',
+                        value: true,
+                        expose: true
+                    },
+
+                    BEVEL_GLOW_SYNC_TO_PROMO_RIM: {
                         type: 'bool',
                         value: true,
                         expose: true
@@ -7754,7 +8166,7 @@ void main() {
                     // 0.0 = Cualquier cara que roce la luz. 0.5 = Solo caras muy iluminadas.
                     BEVEL_GLOW_FACE_THRESHOLD: {
                         type: 'float',
-                        value: 0.25, 
+                        value: 0.25,
                         expose: true,
                         min: -0.2,
                         max: 1.0,
@@ -7765,7 +8177,7 @@ void main() {
 
                     BEVEL_GLOW_WIDTH: {
                         type: 'float',
-                        value: 0.25, 
+                        value: 0.25,
                         expose: true,
                         min: 0.0,
                         max: 2.0,
@@ -7776,7 +8188,7 @@ void main() {
 
                     BEVEL_GLOW_SOFTNESS: {
                         type: 'float',
-                        value: 0.35, // Reducido drásticamente para que no sea tan borroso
+                        value: 0.0, // Reducido drásticamente para que no sea tan borroso
                         expose: true,
                         min: 0.0,
                         max: 5.0,
@@ -7788,7 +8200,7 @@ void main() {
                     // Controla la distancia de las esquinas para este glow independiente
                     BEVEL_GLOW_CORNER_FADE: {
                         type: 'float',
-                        value: 0.35, 
+                        value: 0.35,
                         expose: true,
                         min: 0.0,
                         max: 1.0,
@@ -7844,7 +8256,7 @@ void main() {
                     */
                     PROMO_RIM_WIDTH: {
                         type: 'float',
-                        value: 2.25,
+                        value: 4.0,
                         expose: true,
                         min: 0.0,
                         max: 12.0,
@@ -7855,7 +8267,7 @@ void main() {
 
                     PROMO_RIM_INTENSITY: {
                         type: 'float',
-                        value: 0.95,
+                        value: 0.5,
                         expose: true,
                         min: 0.0,
                         max: 1.0,
@@ -7883,7 +8295,7 @@ void main() {
                     */
                     PROMO_RIM_COLOR_MODE: {
                         type: 'int',
-                        value: 0,
+                        value: 1,
                         expose: true,
                         min: 0,
                         max: 2,
@@ -7923,7 +8335,7 @@ void main() {
                     */
                     PROMO_RIM_DIRECTIONALITY: {
                         type: 'float',
-                        value: 0.72,
+                        value: 1.0,
                         expose: true,
                         min: 0.0,
                         max: 1.0,
@@ -7937,7 +8349,7 @@ void main() {
                     */
                     PROMO_RIM_DIRECTION_SOFTNESS: {
                         type: 'float',
-                        value: 0.32,
+                        value: 0.75,
                         expose: true,
                         min: 0.01,
                         max: 1.0,
@@ -14320,7 +14732,7 @@ void main() {
                                 }
                                 else if (MaterialManager.isColorUniformDefinition(uni)) {
                                     form_config[uniName] = {
-                                        type: 'color',
+                                        type: 'advanced_color',
                                         label: resolvedLabel + ':',
                                         value: MaterialManager.getUniformColorHex(uni),
                                         title: resolvedDesc || undefined,
