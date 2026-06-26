@@ -405,6 +405,7 @@
         "shader_architect.preset.lightflow": "Unshaded Lightflow",
         "shader_architect.preset.shaded_lightflow": "Shaded Lightflow",
         "shader_architect.preset.pixelated_shaded_lightflow": "Pixelated Shaded Lightflow",
+        "shader_architect.preset.luma_forge": "LumaForge",
 
         "shader_architect.preset.pbr": "Standard PBR",
 
@@ -802,6 +803,7 @@
         "shader_architect.preset.lightflow": "Luces Sin Sombra",
         "shader_architect.preset.shaded_lightflow": "Luces con Sombra",
         "shader_architect.preset.pixelated_shaded_lightflow": "Luces con Sombra Pixeladas",
+        "shader_architect.preset.luma_forge": "LumaForge",
 
         "shader_architect.preset.pbr": "Standard PBR",
         "shader_architect.uniform.map": "Textura",
@@ -2904,6 +2906,8 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
             if (changed && options.apply !== false) {
                 ShaderEngine.applyToMesh(cube, this.resolveCubeMaterial(cube, ShaderEngine.globalRenderMode));
                 ShaderEngine.updateLightUniforms();
+                MinecraftPromotionalSilhouetteManager.invalidateGroups();
+                ShaderEngine.requestPreviewRender({ cause: 'assign_face_material_instance' });
             }
 
             return changed;
@@ -2930,6 +2934,8 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
             if (changed && options.apply !== false) {
                 ShaderEngine.applyToMesh(cube, this.resolveCubeMaterial(cube, ShaderEngine.globalRenderMode));
                 ShaderEngine.updateLightUniforms();
+                MinecraftPromotionalSilhouetteManager.invalidateGroups();
+                ShaderEngine.requestPreviewRender({ cause: 'clear_face_material_instance' });
             }
 
             return changed;
@@ -2949,6 +2955,8 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
             if (changed && options.apply !== false) {
                 ShaderEngine.applyToMesh(cube, this.resolveCubeMaterial(cube, ShaderEngine.globalRenderMode));
                 ShaderEngine.updateLightUniforms();
+                MinecraftPromotionalSilhouetteManager.invalidateGroups();
+                ShaderEngine.requestPreviewRender({ cause: 'clear_face_material_overrides' });
             }
 
             return changed;
@@ -2990,6 +2998,8 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
             if (changed && options.apply !== false) {
                 ShaderEngine.applyToMesh(cube, this.resolveCubeMaterial(cube, ShaderEngine.globalRenderMode));
                 ShaderEngine.updateLightUniforms();
+                MinecraftPromotionalSilhouetteManager.invalidateGroups();
+                ShaderEngine.requestPreviewRender({ cause: 'clear_material_assignments' });
             }
 
             return changed;
@@ -3287,6 +3297,8 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
             if (options.apply !== false) {
                 ShaderEngine.applyToMesh(cube, this.getRenderMaterialForInstance(instance));
                 ShaderEngine.updateLightUniforms();
+                MinecraftPromotionalSilhouetteManager.invalidateGroups();
+                ShaderEngine.requestPreviewRender({ cause: 'assign_material_instance' });
             }
             return true;
         },
@@ -8579,6 +8591,274 @@ void main() {
                 }
             });
 
+            const lumaForgeUniforms = {};
+            for (const key in minecraft_promotional_bevel.uniforms) {
+                lumaForgeUniforms[key] = cloneUniformDefinition(minecraft_promotional_bevel.uniforms[key]);
+            }
+            addScreenSpaceReflectionUniforms(lumaForgeUniforms, lightflowScreenSpaceReflectionDefaults);
+
+            const lumaForgeLightflowHelpersStart = shaded_lightflow.fragment.indexOf('#define SA_LIGHT_POINT');
+            const lumaForgeLightflowHelpersEnd = shaded_lightflow.fragment.indexOf('void main() {', lumaForgeLightflowHelpersStart);
+            const lumaForgeLightflowHelpers = shaded_lightflow.fragment.slice(
+                lumaForgeLightflowHelpersStart,
+                lumaForgeLightflowHelpersEnd
+            );
+            const lumaForgePromoMain = minecraft_promotional_bevel.fragment.slice(
+                minecraft_promotional_bevel.fragment.indexOf('void main() {')
+            );
+
+            const lumaForgeVertex = minecraft_promotional_bevel.vertex
+                .replace(
+                    `varying float vPromoClassicLight;
+varying float vPromoHighlightLift;
+`,
+                    `varying float vPromoClassicLight;
+varying float vPromoHighlightLift;
+varying vec3 vSA_SSRViewPosition;
+varying vec3 vSA_SSRViewNormal;
+varying vec4 vSA_SSRClipPosition;
+`
+                )
+                .replace(
+                    `    gl_Position =
+        projectionMatrix *
+        modelViewMatrix *
+        vec4(position, 1.0);
+`,
+                    `    vec4 saSSRViewPosition4 =
+        modelViewMatrix *
+        vec4(position, 1.0);
+
+    vSA_SSRViewPosition = saSSRViewPosition4.xyz;
+    vSA_SSRViewNormal =
+        normalize(normalMatrix * normal);
+    vSA_SSRClipPosition =
+        projectionMatrix *
+        saSSRViewPosition4;
+
+    gl_Position = vSA_SSRClipPosition;
+`
+                );
+
+            const lumaForgeFragment = minecraft_promotional_bevel.fragment
+                .replace(
+                    `#include <common>
+
+uniform sampler2D map;`,
+                    `#include <common>
+#include <packing>
+#include <lights_pars_begin>
+#include <shadowmap_pars_fragment>
+${SCREEN_SPACE_REFLECTIONS_PARS_FRAGMENT}
+
+uniform sampler2D map;`
+                )
+                .replace(
+                    `uniform int max_light_number;
+`,
+                    `uniform int max_light_number;
+
+uniform int uLightCastShadow[16];
+uniform int uLightShadowIndex[16];
+
+uniform float uAmbient;
+uniform vec3 uAmbientColor;
+
+uniform float uExposure;
+uniform int uToneMapping;
+uniform float uLightWrap;
+
+uniform bool uAOEnabled;
+uniform float uAOStrength;
+uniform float uAORadius;
+uniform float uAOPower;
+uniform float uAOMin;
+uniform float uAODirectInfluence;
+uniform float uAOEdgeSharpness;
+uniform float uAOCornerWeight;
+uniform float uAOFaceNormalWeight;
+
+uniform bool uClampLighting;
+
+uniform float uShadowStrength;
+uniform float uShadowFloor;
+`
+                )
+                .replace(
+                    `varying float vPromoClassicLight;
+varying float vPromoHighlightLift;
+`,
+                    `varying float vPromoClassicLight;
+varying float vPromoHighlightLift;
+
+${lumaForgeLightflowHelpers}`
+                )
+                .replace(
+                    lumaForgePromoMain,
+                    `void main() {
+    /*
+        All dFdx/dFdy-dependent values must be resolved before alpha discard.
+    */
+    mat2 elementToMapJacobian =
+        promoGetElementToMapJacobian();
+
+    vec3 surfaceNormal = promoSafeNormalize(
+        vPromoWorldNormal,
+        vec3(0.0, 1.0, 0.0)
+    );
+
+    vec3 faceTangentU;
+    vec3 faceTangentV;
+
+    promoGetFaceFrame(
+        surfaceNormal,
+        faceTangentU,
+        faceTangentV
+    );
+
+    vec4 sampledColor = texture2D(
+        map,
+        vPromoMapUv
+    );
+
+    if (sampledColor.a < 0.01) {
+        discard;
+    }
+
+    vec3 finalColor;
+    float finalAlpha = sampledColor.a;
+
+    if (EMISSIVE) {
+        vec3 emissiveMix =
+            (vPromoClassicLight * LIGHTCOLOR) +
+            (
+                1.0 -
+                vPromoClassicLight * LIGHTCOLOR
+            ) *
+            (
+                1.0 -
+                sampledColor.a
+            );
+
+        finalColor =
+            vPromoHighlightLift +
+            sampledColor.rgb *
+            emissiveMix;
+
+        finalAlpha = 1.0;
+    } else {
+        vec4 texel = sampledColor;
+
+        #if defined( sRGBToLinear )
+            texel.rgb = sRGBToLinear(texel.rgb);
+        #else
+            texel.rgb = pow(max(texel.rgb, vec3(0.0)), vec3(2.2));
+        #endif
+
+        vec3 normal = safeNormalize(
+            surfaceNormal,
+            vec3(0.0, 1.0, 0.0)
+        );
+
+        vec3 directLight = vec3(0.0);
+
+        for (int i = 0; i < 16; i++) {
+            if (i >= max_light_number) break;
+            if (uLightIntensity[i] <= 0.0) continue;
+
+            vec3 lightContribution = computeLightContribution(
+                i,
+                normal,
+                vPromoWorldPosition
+            );
+            float shadow = getCustomLightShadow(i);
+
+            directLight += lightContribution * shadow;
+        }
+
+        float ambientOcclusion = computeVoxelAO(
+            vPromoElementUv,
+            normal
+        );
+
+        vec3 ambientLight =
+            max(uAmbientColor, vec3(0.0)) *
+            max(uAmbient, 0.0);
+        ambientLight *= ambientOcclusion;
+
+        float directAO = mix(
+            1.0,
+            ambientOcclusion,
+            clamp(uAODirectInfluence, 0.0, 1.0)
+        );
+        vec3 lighting = ambientLight + directLight * directAO;
+
+        if (uClampLighting) {
+            float maxChannel = max(lighting.r, max(lighting.g, lighting.b));
+            if (maxChannel > 1.0) {
+                lighting /= maxChannel;
+            }
+        }
+
+        finalColor = texel.rgb * lighting;
+        finalColor += vec3(vPromoHighlightLift);
+        finalColor *= LIGHTCOLOR;
+
+        if (vPromoHighlightLift > 0.2) {
+            finalColor.rg *= vec2(0.6, 0.7);
+        }
+
+        finalColor = applyToneMapping(finalColor);
+        finalColor = pow(max(finalColor, vec3(0.0)), vec3(1.0 / 2.2));
+
+        finalColor = promoApplyBevel(
+            finalColor,
+            surfaceNormal,
+            faceTangentU,
+            faceTangentV,
+            sampledColor.a,
+            elementToMapJacobian
+        );
+    }
+
+    finalColor = promoApplyOutline(
+        finalColor,
+        sampledColor.a,
+        elementToMapJacobian
+    );
+
+    vec4 outputColor = vec4(
+        clamp(
+            finalColor,
+            vec3(0.0),
+            vec3(1.0)
+        ),
+        finalAlpha
+    );
+
+    gl_FragColor = saApplyScreenSpaceReflection(
+        outputColor,
+        vSA_SSRViewNormal,
+        vSA_SSRViewPosition,
+        vSA_SSRClipPosition,
+        0.22,
+        1.0
+    );
+}`
+                );
+
+            let luma_forge = new FancyShaderMaterial({
+                id: 'luma_forge',
+                name: tl('shader_architect.preset.luma_forge'),
+                icon: 'auto_awesome',
+                isCustom: false,
+                enableShadows: true,
+                supportsScreenSpaceReflections: true,
+                vertex: lumaForgeVertex,
+                fragment: lumaForgeFragment,
+                uniforms: lumaForgeUniforms
+            });
+
             let realview_pbr = new FancyShaderMaterial({
                 id: 'realview_pbr',
                 name: tl('shader_architect.preset.realview_pbr'),
@@ -8736,6 +9016,7 @@ void main() {
             this.materials['pbr_metallic_roughness'] = pbr_metallic_roughness;
             this.materials['pixelated_shaded_lightflow'] = pixelated_shaded_lightflow;
             this.materials['minecraft_promotional_bevel'] = minecraft_promotional_bevel;
+            this.materials['luma_forge'] = luma_forge;
             //this.materials['uv_shadow'] = uv_shadow;
             // The new PBR material occupies the former hologram slot.
             // This keeps existing app references working.
@@ -8746,6 +9027,26 @@ void main() {
     // =========================================================================
     // 4. ANIMATION & SHADER ENGINE
     // =========================================================================
+    function collectShaderArchitectRenderPreviews() {
+        const previews = new Set();
+
+        if (window.Preview && Array.isArray(Preview.all)) {
+            Preview.all.forEach(preview => {
+                if (preview) previews.add(preview);
+            });
+        }
+
+        [
+            window.main_preview,
+            window.MediaPreview,
+            window.Screencam?.NoAAPreview
+        ].forEach(preview => {
+            if (preview) previews.add(preview);
+        });
+
+        return previews;
+    }
+
     const ScreenSpaceReflectionManager = {
         states: new Map(),
         patchedPreviews: new Map(),
@@ -8856,9 +9157,10 @@ void main() {
 
         patchAllPreviews(force = false) {
             if (this.disposed || !window.Preview || !Array.isArray(Preview.all)) return;
-            if (!force && Preview.all.length === this.lastPreviewPatchCount && Preview.all.every(preview => this.patchedPreviews.has(preview))) return;
-            this.lastPreviewPatchCount = Preview.all.length;
-            Preview.all.forEach(preview => this.patchPreview(preview));
+            const previews = collectShaderArchitectRenderPreviews();
+            if (!force && previews.size === this.lastPreviewPatchCount && Array.from(previews).every(preview => this.patchedPreviews.has(preview))) return;
+            this.lastPreviewPatchCount = previews.size;
+            previews.forEach(preview => this.patchPreview(preview));
         },
 
         preparePreviewForRender(preview) {
@@ -9192,6 +9494,8 @@ void main() {
         fallbackTexture: null,
         cachedGroups: null,
         groupsDirty: true,
+        advancedScreenshotPatch: null,
+        screenshotPreviewPatch: null,
         lastPreviewPatchCount: -1,
         disposed: false,
 
@@ -9202,6 +9506,7 @@ void main() {
             this.disposed = false;
             this.ensureSharedResources();
             this.patchAllPreviews(true);
+            this.patchScreencamPreviewRenders();
         },
 
         dispose() {
@@ -9228,6 +9533,7 @@ void main() {
             this.maskMaterialCache = new WeakMap();
             this.cachedGroups = null;
             this.groupsDirty = true;
+            this.restoreScreencamPreviewRenders();
 
             if (this.discardMaterial && typeof this.discardMaterial.dispose === 'function') {
                 this.discardMaterial.dispose();
@@ -9352,13 +9658,16 @@ void main() {
                 : THREE.UnsignedByteType;
         },
 
-        createRenderTarget(name, withDepthTexture = false) {
+        createRenderTarget(name, withDepthBuffer = false) {
             const options = {
                 minFilter: THREE.NearestFilter,
                 magFilter: THREE.NearestFilter,
                 format: THREE.RGBAFormat,
                 type: this.getIntermediateTargetType(),
-                depthBuffer: !!withDepthTexture,
+
+                // Solo sceneDepthTarget necesita depth buffer para conservar
+                // la profundidad del fragmento frontal durante MeshDepthMaterial.
+                depthBuffer: !!withDepthBuffer,
                 stencilBuffer: false
             };
 
@@ -9366,14 +9675,12 @@ void main() {
             target.texture.name = name;
             target.texture.generateMipmaps = false;
 
-            if (withDepthTexture) {
-                const depthTexture = this.createDepthTexture();
+            /*
+                No adjuntar THREE.DepthTexture.
 
-                if (depthTexture) {
-                    target.depthTexture = depthTexture;
-                }
-            }
-
+                La profundidad autoritativa será el color RGBA que escribe
+                MeshDepthMaterial con THREE.RGBADepthPacking.
+            */
             return target;
         },
 
@@ -9497,7 +9804,7 @@ void main() {
                     uOriginalMask: { value: maskTarget.texture },
                     uExpandedMask: { value: verticalTarget.texture },
                     uSceneDepth: {
-                        value: sceneDepthTarget.depthTexture || this.getFallbackTexture()
+                        value: sceneDepthTarget.texture
                     },
                     uRimColor: { value: new THREE.Vector3(1.0, 0.78, 0.26) },
                     uRimIntensity: { value: 1.0 },
@@ -9508,7 +9815,7 @@ void main() {
                     uDirectionSoftness: { value: 0.32 },
                     uDepthEpsilon: { value: 0.00075 },
                     uHasSceneDepth: {
-                        value: sceneDepthTarget.depthTexture ? 1 : 0
+                        value: 1
                     },
                     uUseOcclusion: { value: 1 },
                     uTextureBlend: { value: 1 }
@@ -9522,6 +9829,8 @@ void main() {
                     }
                 `,
                 fragmentShader: `
+                    #include <packing>
+
                     uniform sampler2D uOriginalMask;
                     uniform sampler2D uExpandedMask;
                     uniform sampler2D uSceneDepth;
@@ -9615,9 +9924,19 @@ void main() {
 
                         if (uUseOcclusion == 1 && uHasSceneDepth == 1) {
                             float targetDepth = (expandedMaskSample.a - 0.01) / 0.99;
-                            float sceneDepth = texture2D(uSceneDepth, vPromoUv).x;
 
-                            visibility = step(targetDepth - max(uDepthEpsilon, 0.0), sceneDepth);
+                            float sceneDepth = unpackRGBAToDepth(
+                                texture2D(uSceneDepth, vPromoUv)
+                            );
+
+                            if (sceneDepth <= 0.000001 || sceneDepth >= 0.999999) {
+                                visibility = 1.0;
+                            } else {
+                                visibility = step(
+                                    targetDepth - max(uDepthEpsilon, 0.0),
+                                    sceneDepth + 0.0005
+                                );
+                            }
                         }
 
                         vec2 outwardDirection = promoEstimateOutwardDirection();
@@ -9631,7 +9950,11 @@ void main() {
                             directionalAlignment
                         );
 
-                        float artMask = mix(1.0, directionalMask, clamp(uDirectionality, 0.0, 1.0));
+                        float artMask = mix(
+                            1.0,
+                            max(directionalMask, 0.18),
+                            clamp(uDirectionality, 0.0, 1.0)
+                        );
 
                         // CÁLCULO DE ALPHA BASE (Mascara geométrica pura)
                         float baseAlpha = clamp(
@@ -9718,6 +10041,7 @@ void main() {
                 renderScale: 1.0,
                 texelSize: new THREE.Vector2(1.0, 1.0),
                 silhouetteValid: false,
+                viewSignature: '',
                 rendering: false
             };
         },
@@ -9755,6 +10079,178 @@ void main() {
             }
 
             return state;
+        },
+
+        getPreviewSampleScale(preview) {
+            const scale = Number(preview && preview.sa_promotional_rim_sample_scale);
+            return Number.isFinite(scale)
+                ? Math.max(1.0, Math.min(scale, 8.0))
+                : 1.0;
+        },
+
+        getRenderRadius(state, width) {
+            return Math.max(
+                0.5,
+                Math.min(
+                    this.MAX_RIM_RADIUS,
+                    width *
+                    state.renderScale *
+                    this.getPreviewSampleScale(state.preview)
+                )
+            );
+        },
+
+        getCameraViewSignature(camera) {
+            if (!camera) {
+                return 'no-camera';
+            }
+
+            const view = camera.view || {};
+            const matrix = camera.matrixWorld?.elements || [];
+
+            return [
+                camera.type || '',
+                camera.near || 0,
+                camera.far || 0,
+                camera.zoom || 1,
+                camera.fov || 0,
+                camera.aspect || 0,
+
+                view.enabled ? 1 : 0,
+                view.fullWidth || 0,
+                view.fullHeight || 0,
+                view.offsetX || 0,
+                view.offsetY || 0,
+                view.width || 0,
+                view.height || 0,
+
+                ...Array.from(matrix).map(value => Number(value).toFixed(6))
+            ].join('|');
+        },
+
+        setPreviewSampleScale(preview, scale) {
+            if (!preview) {
+                return () => {};
+            }
+
+            const previousScale = preview.sa_promotional_rim_sample_scale;
+            preview.sa_promotional_rim_sample_scale = scale;
+
+            return () => {
+                if (previousScale === undefined) {
+                    delete preview.sa_promotional_rim_sample_scale;
+                } else {
+                    preview.sa_promotional_rim_sample_scale = previousScale;
+                }
+            };
+        },
+
+        preparePreviewForRender(preview, options = {}) {
+            if (!preview || !preview.renderer) {
+                return;
+            }
+
+            this.patchAllPreviews(true);
+            this.patchPreview(preview);
+            this.invalidateGroups();
+
+            const sampleScale = Number(options.sampleScale);
+            if (Number.isFinite(sampleScale)) {
+                preview.sa_promotional_rim_sample_scale = Math.max(
+                    1.0,
+                    Math.min(sampleScale, 8.0)
+                );
+            }
+
+            const state = this.states.get(preview);
+            if (state) {
+                state.silhouetteValid = false;
+            }
+
+            ShaderEngine.updateWorldNormalMatrices();
+        },
+
+        patchScreencamPreviewRenders() {
+            if (!window.Screencam) {
+                return;
+            }
+
+            if (!this.screenshotPreviewPatch && typeof Screencam.screenshotPreview === 'function') {
+                const manager = this;
+                const original = Screencam.screenshotPreview;
+                const patched = function shaderArchitectScreenshotPreview() {
+                    manager.patchAllPreviews(true);
+                    return original.apply(this, arguments);
+                };
+
+                Screencam.screenshotPreview = patched;
+                this.screenshotPreviewPatch = {
+                    original,
+                    patched
+                };
+            }
+
+            if (!this.advancedScreenshotPatch && typeof Screencam.advancedScreenshot === 'function') {
+                const manager = this;
+                const original = Screencam.advancedScreenshot;
+                const patched = function shaderArchitectAdvancedScreenshot(preview, options) {
+                    const screenshotOptions = options || {};
+                    const renderPreview = screenshotOptions.anti_aliasing === 'msaa'
+                        ? window.MediaPreview
+                        : window.Screencam?.NoAAPreview;
+                    const sampleScale = screenshotOptions.anti_aliasing === 'ssaa'
+                        ? 4.0
+                        : 1.0;
+                    const restoreSampleScale = manager.setPreviewSampleScale(
+                        renderPreview,
+                        sampleScale
+                    );
+
+                    manager.patchAllPreviews(true);
+
+                    let result;
+                    try {
+                        result = original.apply(this, arguments);
+                    } catch (error) {
+                        restoreSampleScale();
+                        throw error;
+                    }
+
+                    if (result && typeof result.finally === 'function') {
+                        return result.finally(restoreSampleScale);
+                    }
+
+                    restoreSampleScale();
+                    return result;
+                };
+
+                Screencam.advancedScreenshot = patched;
+                this.advancedScreenshotPatch = {
+                    original,
+                    patched
+                };
+            }
+        },
+
+        restoreScreencamPreviewRenders() {
+            if (window.Screencam) {
+                if (
+                    this.screenshotPreviewPatch &&
+                    Screencam.screenshotPreview === this.screenshotPreviewPatch.patched
+                ) {
+                    Screencam.screenshotPreview = this.screenshotPreviewPatch.original;
+                }
+
+                if (
+                    this.advancedScreenshotPatch &&
+                    Screencam.advancedScreenshot === this.advancedScreenshotPatch.patched
+                ) {
+                    Screencam.advancedScreenshot = this.advancedScreenshotPatch.original;
+                }
+            }
+
+            this.screenshotPreviewPatch = null;
+            this.advancedScreenshotPatch = null;
         },
 
         resizeState(state) {
@@ -9868,7 +10364,21 @@ void main() {
                 return fallback;
             }
 
-            return uniform.value === true;
+            const value = uniform.value;
+
+            if (value === true || value === 1) {
+                return true;
+            }
+
+            if (value === false || value === 0) {
+                return false;
+            }
+
+            if (typeof value === 'string') {
+                return value === 'true' || value === '1';
+            }
+
+            return fallback;
         },
 
         getVector2Uniform(material, name, fallback) {
@@ -9913,6 +10423,16 @@ void main() {
             }
 
             return fallback.clone();
+        },
+
+        materialHasPromotionalRimUniforms(material) {
+            return !!(
+                material &&
+                material.uniforms &&
+                material.uniforms.PROMO_RIM_ENABLED &&
+                material.uniforms.PROMO_RIM_WIDTH &&
+                material.uniforms.PROMO_RIM_INTENSITY
+            );
         },
 
         getPromotionalMaterialLightColor(material) {
@@ -10157,10 +10677,13 @@ void main() {
         },
 
         getPromotionalRimConfig(material) {
+            const shaderId = material && material.sa_shader_id;
+            const hasPromotionalShaderId = ['minecraft_promotional_bevel', 'luma_forge'].includes(shaderId);
+
             if (
                 !material ||
-                material.sa_shader_id !== 'minecraft_promotional_bevel' ||
-                !material.uniforms
+                !material.uniforms ||
+                (!hasPromotionalShaderId && !this.materialHasPromotionalRimUniforms(material))
             ) {
                 return null;
             }
@@ -10606,7 +11129,7 @@ void main() {
             );
         },
 
-        compositeGroup(state, destinationTarget, group, camera) {
+        compositeGroup(state, destinationTarget, group, camera, radius) {
             const renderer = state.renderer;
             const config = group.config;
 
@@ -10617,8 +11140,7 @@ void main() {
                 state.verticalTarget.texture;
 
             state.overlayMaterial.uniforms.uSceneDepth.value =
-                state.sceneDepthTarget.depthTexture ||
-                this.getFallbackTexture();
+                state.sceneDepthTarget.texture;
 
             state.overlayMaterial.uniforms.uRimColor.value.copy(
                 this.getEffectivePromotionalRimColor(group)
@@ -10627,14 +11149,7 @@ void main() {
             state.overlayMaterial.uniforms.uRimIntensity.value =
                 config.intensity;
 
-            state.overlayMaterial.uniforms.uRimRadius.value =
-                Math.max(
-                    0.5,
-                    Math.min(
-                        this.MAX_RIM_RADIUS,
-                        config.width * state.renderScale
-                    )
-                );
+            state.overlayMaterial.uniforms.uRimRadius.value = radius;
 
             state.overlayMaterial.uniforms.uTexelSize.value.set(
                 1.0 / Math.max(state.width, 1),
@@ -10654,8 +11169,7 @@ void main() {
             state.overlayMaterial.uniforms.uDepthEpsilon.value =
                 config.depthEpsilon;
 
-            state.overlayMaterial.uniforms.uHasSceneDepth.value =
-                state.sceneDepthTarget.depthTexture ? 1 : 0;
+            state.overlayMaterial.uniforms.uHasSceneDepth.value = 1;
 
             state.overlayMaterial.uniforms.uUseOcclusion.value =
                 config.useOcclusion ? 1 : 0;
@@ -10694,9 +11208,21 @@ void main() {
             }
 
             state.rendering = true;
+
             const targetChanged = this.resizeState(state);
+
+            const currentViewSignature = this.getCameraViewSignature(
+                preview.camera
+            );
+
+            const viewChanged =
+                state.viewSignature !== currentViewSignature;
+
+            state.viewSignature = currentViewSignature;
+
             const reuseSilhouette =
                 !targetChanged &&
+                !viewChanged &&
                 state.silhouetteValid &&
                 ShaderEngine.currentPreviewRenderLightOnly;
 
@@ -10762,12 +11288,9 @@ void main() {
                         }
                     }
 
-                    const radius = Math.max(
-                        0.5,
-                        Math.min(
-                            this.MAX_RIM_RADIUS,
-                            configRadius * state.renderScale
-                        )
+                    const radius = this.getRenderRadius(
+                        state,
+                        configRadius
                     );
 
                     if (!reuseSilhouette) {
@@ -10789,7 +11312,8 @@ void main() {
                         state,
                         previousTarget,
                         group,
-                        preview.camera
+                        preview.camera,
+                        radius
                     );
                 });
 
@@ -10825,9 +11349,10 @@ void main() {
                 return;
             }
 
+            const previews = collectShaderArchitectRenderPreviews();
             const allAlreadyPatched =
-                Preview.all.length === this.lastPreviewPatchCount &&
-                Preview.all.every(preview =>
+                previews.size === this.lastPreviewPatchCount &&
+                Array.from(previews).every(preview =>
                     this.patchedPreviews.has(preview)
                 );
 
@@ -10835,9 +11360,9 @@ void main() {
                 return;
             }
 
-            this.lastPreviewPatchCount = Preview.all.length;
+            this.lastPreviewPatchCount = previews.size;
 
-            Preview.all.forEach(preview => this.patchPreview(preview));
+            previews.forEach(preview => this.patchPreview(preview));
         },
 
         patchPreview(preview) {
@@ -10863,7 +11388,9 @@ void main() {
                     arguments
                 );
 
-                manager.renderSilhouette(this);
+                if (!this.sa_studio_render_manual_silhouette) {
+                    manager.renderSilhouette(this);
+                }
                 return result;
             };
 
@@ -14453,6 +14980,23 @@ void main() {
             MaterialManager.init();
             ScreenSpaceReflectionManager.init();
             MinecraftPromotionalSilhouetteManager.init();
+            const studioRenderPreTileListener = Blockbench.on('studio_render_pre_tile', event => {
+                const preview = event && event.preview;
+                const settings = event && event.settings ? event.settings : {};
+                const sampleScale = Math.max(
+                    1,
+                    Math.min(
+                        8,
+                        parseInt(settings.samples, 10) || 1
+                    )
+                );
+
+                ScreenSpaceReflectionManager.patchAllPreviews(true);
+                ScreenSpaceReflectionManager.patchPreview(preview);
+                ScreenSpaceReflectionManager.preparePreviewForRender(preview);
+                MinecraftPromotionalSilhouetteManager.preparePreviewForRender(preview, { sampleScale });
+            });
+            deletables.push(studioRenderPreTileListener);
             initMaterialStudio();
             deletables.push(MaterialStudioDialog);
 
