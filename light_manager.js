@@ -74,6 +74,7 @@ const LIGHT_MANAGER_BAR_ITEM_IDS = [
     'light_temperature_slider',
     'cast_shadows',
     'light_shadow_resolution_select',
+    'light_studio_shadow_resolution_select',
     'light_intensity_slider',
     'light_distance_slider',
     'light_cone_angle_slider',
@@ -100,7 +101,7 @@ function deleteLightManagerRegistryItem(registry, id) {
         try {
             item.delete();
         } catch (error) {
-            console.warn(`[Light Manager] Failed to delete stale registry item "${id}".`, error);
+            // Ignore stale registry cleanup failures during plugin reload.
         }
     }
 
@@ -126,18 +127,40 @@ const LIGHT_MANAGER_SHADOW_STATE = {
     previousRendererShadowSettings: new WeakMap()
 };
 
+const LIGHT_MANAGER_SHADOW_DEBUG_STATE = {
+    lastLogs: new Map()
+};
+
 const LIGHT_MANAGER_UPDATE_STATE = {
     frame: null,
     running: false,
     rerun: false,
-    options: null
+    options: null,
+    preparingLights: false
 };
 
 const LIGHT_MANAGER_DEFAULT_UPDATE_OPTIONS = {
     shadows: true,
     scene: true,
-    gizmos: true
+    gizmos: true,
+    studio: false
 };
+
+function translateLightManager(key, fallback) {
+    if (typeof tl !== 'function') return fallback || key;
+    const value = tl(key);
+    return value === key ? (fallback || key) : value;
+}
+
+function formatLightManagerMessage(key, values, fallback) {
+    return translateLightManager(key, fallback).replace(/\{(\w+)\}/g, (match, name) => {
+        return values && values[name] !== undefined ? values[name] : match;
+    });
+}
+
+function formatLightManagerCount(count, singularKey, pluralKey) {
+    return formatLightManagerMessage(count === 1 ? singularKey : pluralKey, { count });
+}
 
 function resetLightManagerShadowState() {
     LIGHT_MANAGER_SHADOW_STATE.dirty = true;
@@ -146,6 +169,7 @@ function resetLightManagerShadowState() {
     LIGHT_MANAGER_SHADOW_STATE.dirtyRenderers = new Set();
     LIGHT_MANAGER_SHADOW_STATE.configuredRenderers = new Set();
     LIGHT_MANAGER_SHADOW_STATE.previousRendererShadowSettings = new WeakMap();
+    LIGHT_MANAGER_SHADOW_DEBUG_STATE.lastLogs.clear();
 }
 
 function markLightManagerShadowsDirty(options = {}) {
@@ -223,6 +247,7 @@ function getLightManagerShadowSignature() {
                 lightManagerShadowValue(element.angle),
                 lightManagerShadowValue(element.penumbra),
                 lightManagerShadowValue(element.shadow_resolution),
+                lightManagerShadowValue(element.studio_shadow_resolution),
                 lightManagerShadowValue(element.shadow_bias),
                 lightManagerShadowValue(element.shadow_normal_bias),
                 lightManagerShadowValue(element.shadow_near),
@@ -382,6 +407,20 @@ const LightManagerUtils = {
         return LIGHT_MANAGER_SHADOW_RESOLUTIONS.includes(parsed) ? parsed : 1024;
     },
 
+    studioShadowResolution(value) {
+        const parsed = this.int(value, 0, 0);
+        if (parsed === 0) return 0;
+        return LIGHT_MANAGER_SHADOW_RESOLUTIONS.includes(parsed) ? parsed : 0;
+    },
+
+    getRenderShadowResolution(element, options = {}) {
+        if (options && (options.studio || options.studioRender)) {
+            const studioResolution = this.studioShadowResolution(element && element.studio_shadow_resolution);
+            if (studioResolution > 0) return studioResolution;
+        }
+        return this.shadowResolution(element && element.shadow_resolution);
+    },
+
     colorArray(value, fallback = [255, 255, 255]) {
         const source = Array.isArray(value) ? value : fallback;
         return [
@@ -432,6 +471,7 @@ const LightManagerUtils = {
             penumbra: formResult.penumbra,
             has_shadow: formResult.has_shadow,
             shadow_resolution: formResult.shadow_resolution,
+            studio_shadow_resolution: formResult.studio_shadow_resolution,
             shadow_bias: formResult.shadow_bias,
             shadow_normal_bias: formResult.shadow_normal_bias,
             shadow_near: formResult.shadow_near,
@@ -464,6 +504,7 @@ const LightManagerUtils = {
             penumbra: this.num(config.penumbra, 0, 0, 1),
             has_shadow: this.bool(config.has_shadow, true),
             shadow_resolution: this.shadowResolution(config.shadow_resolution),
+            studio_shadow_resolution: this.studioShadowResolution(config.studio_shadow_resolution),
             shadow_bias: this.num(config.shadow_bias, DEFAULT_SHADOW_BIAS, -1, 1),
             shadow_normal_bias: this.num(config.shadow_normal_bias, DEFAULT_SHADOW_NORMAL_BIAS, -1, 1),
             shadow_near,
@@ -523,8 +564,15 @@ function configureLightManagerRendererShadows(renderer) {
         changed = true;
     }
 
-    if (renderer.shadowMap.autoUpdate !== false) {
-        renderer.shadowMap.autoUpdate = false;
+    /*
+    * Después de cambiar resolución, shadow.map se elimina y debe ser recreado
+    * y rellenado con un shadow pass real antes de ser muestreado.
+    *
+    * autoUpdate = false permite que un preview normal use un mapa recién creado
+    * sin profundidad válida, produciendo oclusión total.
+    */
+    if (renderer.shadowMap.autoUpdate !== true) {
+        renderer.shadowMap.autoUpdate = true;
         changed = true;
     }
 
@@ -557,6 +605,21 @@ function configureLightManagerRenderers() {
     forEachLightManagerPreview(preview => {
         if (configureLightManagerRendererShadows(preview.renderer)) changed = true;
     });
+    return changed;
+}
+
+function prepareLightManagerStudioShadowRenderer(renderer) {
+    if (!renderer || !renderer.shadowMap) return false;
+
+    rememberLightManagerRendererShadowSettings(renderer);
+
+    let changed = false;
+    if (renderer.shadowMap.autoUpdate !== true) {
+        renderer.shadowMap.autoUpdate = true;
+        changed = true;
+    }
+
+    renderer.shadowMap.needsUpdate = true;
     return changed;
 }
 
@@ -600,6 +663,515 @@ function configureLightManagerSceneShadowMeshes(force = false) {
 
     LIGHT_MANAGER_SHADOW_STATE.sceneDirty = false;
     if (changed) markLightManagerShadowsDirty();
+    return changed;
+}
+
+function isLightManagerShadowDebugEnabled() {
+    const config = window.LightManagerShadowDebug;
+    return config === true || !!(config && config.enabled);
+}
+
+function getLightManagerShadowDebugConfig() {
+    const config = window.LightManagerShadowDebug;
+    if (config === true) return {};
+    return config && typeof config === 'object' ? config : {};
+}
+
+function getLightManagerShadowDebugStages(config) {
+    if (Array.isArray(config.stages)) {
+        return new Set(config.stages.map(stage => String(stage)));
+    }
+    if (config.verbose || config.prepareAll) return null;
+    if (config.prepare) return new Set(['prepare-start', 'prepare-end', 'three-light-sync', 'resolution-change', 'shadow-flag-repair']);
+    return new Set(['three-light-sync', 'resolution-change', 'shadow-flag-repair', 'warning']);
+}
+
+function shouldLogLightManagerPrepareDebug(stage, snapshot, options = {}, extra = {}, config = {}) {
+    if (stage !== 'prepare-start' && stage !== 'prepare-end') return true;
+    if (config.verbose || config.prepareAll) return true;
+
+    if (!snapshot.activeShadowLights && !snapshot.lights.length) return false;
+    if (options.force || options.studio || options.studioRender) return true;
+    if (snapshot.dirty || snapshot.sceneDirty) return true;
+
+    if (stage === 'prepare-end') {
+        return !!(
+            extra.lightObjectsChanged ||
+            extra.shadowFlagsChanged ||
+            extra.resolutionChanged ||
+            extra.studioAutoUpdateChanged
+        );
+    }
+
+    return false;
+}
+
+function getLightManagerPreviewDebugName(preview) {
+    if (!preview) return 'none';
+    if (preview === window.main_preview) return 'main_preview';
+    if (preview === window.MediaPreview) return 'MediaPreview';
+    if (preview === window.Screencam?.NoAAPreview) return 'Screencam.NoAAPreview';
+    if (preview.id) return String(preview.id);
+    if (preview.uuid) return String(preview.uuid);
+    return 'preview';
+}
+
+function getLightManagerRendererShadowDebug(renderer) {
+    const shadowMap = renderer && renderer.shadowMap;
+    if (!shadowMap) return null;
+    return {
+        enabled: !!shadowMap.enabled,
+        autoUpdate: shadowMap.autoUpdate,
+        needsUpdate: shadowMap.needsUpdate,
+        type: shadowMap.type
+    };
+}
+
+function getLightManagerShadowTargetDebug(shadow) {
+    if (!shadow || !shadow.map) return null;
+
+    return {
+        width: shadow.map.width,
+        height: shadow.map.height,
+        textureWidth: shadow.map.texture?.image?.width,
+        textureHeight: shadow.map.texture?.image?.height,
+        hasMapPass: !!shadow.mapPass
+    };
+}
+
+function getLightManagerShadowTargetLayout(light) {
+    const isPointLight = !!(
+        light && (
+            light.isPointLight ||
+            light.shadow?.isPointLightShadow
+        )
+    );
+
+    return isPointLight
+        ? {
+            kind: 'point-cube-atlas',
+            widthMultiplier: 4,
+            heightMultiplier: 2
+        }
+        : {
+            kind: 'single-shadow-map',
+            widthMultiplier: 1,
+            heightMultiplier: 1
+        };
+}
+
+function getLightManagerExpectedShadowTargetSize(light, resolution) {
+    const safeResolution = Math.max(
+        1,
+        Math.round(Number(resolution) || 1)
+    );
+
+    const layout = getLightManagerShadowTargetLayout(light);
+
+    return {
+        width: safeResolution * layout.widthMultiplier,
+        height: safeResolution * layout.heightMultiplier,
+        layout: layout.kind
+    };
+}
+
+function disposeLightManagerShadowTargets(shadow) {
+    const mapBefore = getLightManagerShadowTargetDebug(shadow);
+    const targets = new Set();
+    const errors = [];
+
+    if (shadow?.map) targets.add(shadow.map);
+    if (shadow?.mapPass) targets.add(shadow.mapPass);
+
+    targets.forEach(target => {
+        try {
+            target?.dispose?.();
+        } catch (error) {
+            errors.push(error?.message || String(error));
+        }
+    });
+
+    shadow.map = null;
+
+    if ('mapPass' in shadow) {
+        shadow.mapPass = null;
+    }
+
+    return {
+        mapBefore,
+        disposedTargets: targets.size,
+        disposeErrors: errors
+    };
+}
+
+function resizeLightManagerShadowMap(light, targetResolution) {
+    const shadow = light?.shadow;
+    if (!shadow) return { changed: false };
+
+    const safeResolution = Math.max(
+        1,
+        Math.round(Number(targetResolution) || 1)
+    );
+
+    const fromWidth = Number(shadow.mapSize?.width) || 0;
+    const fromHeight = Number(shadow.mapSize?.height) || 0;
+
+    if (
+        fromWidth === safeResolution &&
+        fromHeight === safeResolution
+    ) {
+        return { changed: false };
+    }
+
+    /*
+     * CRÍTICO:
+     * WebGLShadowMap solo crea un target nuevo si shadow.map es null.
+     * Cambiar mapSize sin liberar el target anterior rompe el atlas de
+     * PointLight y deja el tamaño lógico desincronizado del tamaño GPU.
+     */
+    const reset = disposeLightManagerShadowTargets(shadow);
+
+    shadow.mapSize.width = safeResolution;
+    shadow.mapSize.height = safeResolution;
+    shadow.needsUpdate = true;
+
+    return {
+        changed: true,
+        from: {
+            width: fromWidth,
+            height: fromHeight
+        },
+        to: safeResolution,
+        expectedTarget: getLightManagerExpectedShadowTargetSize(
+            light,
+            safeResolution
+        ),
+        ...reset
+    };
+}
+
+function collectLightManagerShadowDebug(preview, options = {}) {
+    const renderOptions = normalizeLightManagerUpdateOptions(options);
+    const lights = [];
+
+    if (window.LightElement && Array.isArray(LightElement.all)) {
+        LightElement.all.forEach(element => {
+            if (!element) return;
+            const light = window.three_lights && window.three_lights[element.uuid];
+            const shadow = light && light.shadow;
+
+            const targetResolution =
+                LightManagerUtils.getRenderShadowResolution(
+                    element,
+                    renderOptions
+                );
+
+            const map = getLightManagerShadowTargetDebug(shadow);
+
+            const expectedTarget =
+                getLightManagerExpectedShadowTargetSize(
+                    light,
+                    targetResolution
+                );
+
+            lights.push({
+                name: element.name || element.uuid,
+                uuid: element.uuid,
+                threeType: light && light.constructor ? light.constructor.name : null,
+                threeIsLight: !!(light && light.isLight),
+                hasThreeLight: !!light,
+                hasShadowObject: !!shadow,
+                type: element.light_type,
+                visible: element.visibility !== false,
+                elementShadow: element.has_shadow !== false,
+                threeVisible: light ? light.visible !== false : false,
+                castShadow: !!(light && light.castShadow),
+                targetResolution,
+                previewResolution: LightManagerUtils.shadowResolution(element.shadow_resolution),
+                studioResolution: LightManagerUtils.studioShadowResolution(element.studio_shadow_resolution),
+                mapSize: shadow ? {
+                    width: shadow.mapSize?.width,
+                    height: shadow.mapSize?.height
+                } : null,
+                expectedTarget,
+                map,
+                mapMatchesExpected: !map || (
+                    map.width === expectedTarget.width &&
+                    map.height === expectedTarget.height
+                ),
+                shadowNeedsUpdate: shadow ? shadow.needsUpdate : undefined,
+                bias: shadow ? shadow.bias : undefined,
+                normalBias: shadow ? shadow.normalBias : undefined
+            });
+        });
+    }
+
+    return {
+        preview: getLightManagerPreviewDebugName(preview),
+        mode: renderOptions.studio ? 'studio' : 'preview',
+        force: !!options.force,
+        dirty: LIGHT_MANAGER_SHADOW_STATE.dirty,
+        sceneDirty: LIGHT_MANAGER_SHADOW_STATE.sceneDirty,
+        renderer: getLightManagerRendererShadowDebug(preview && preview.renderer),
+        activeShadowLights: lightManagerHasActiveShadowLights(),
+        lights
+    };
+}
+
+function logLightManagerShadowDebug(stage, preview, options = {}, extra = {}) {
+    if (!isLightManagerShadowDebugEnabled()) return;
+    const snapshot = collectLightManagerShadowDebug(preview, options);
+    const config = getLightManagerShadowDebugConfig();
+    const stages = getLightManagerShadowDebugStages(config);
+
+    if (stages && !stages.has(stage)) return;
+    if (!shouldLogLightManagerPrepareDebug(stage, snapshot, options, extra, config)) return;
+
+    const throttleMs = Math.max(0, Number(config.throttleMs ?? config.interval ?? 750) || 0);
+    const lightSignature = snapshot.lights.map(light => [
+        light.uuid,
+        light.castShadow ? 1 : 0,
+        light.targetResolution,
+        light.mapSize?.width || 0,
+        light.mapSize?.height || 0,
+        light.map?.width || 0,
+        light.map?.height || 0,
+        light.shadowNeedsUpdate ? 1 : 0
+    ].join(':')).join(',');
+    const extraSignature = extra && Object.keys(extra).length
+        ? JSON.stringify(extra)
+        : '';
+    const signature = [
+        snapshot.preview,
+        snapshot.mode,
+        snapshot.force ? 1 : 0,
+        snapshot.dirty ? 1 : 0,
+        snapshot.renderer?.enabled ? 1 : 0,
+        snapshot.renderer?.needsUpdate ? 1 : 0,
+        lightSignature,
+        extraSignature
+    ].join('|');
+    const key = [
+        stage,
+        snapshot.preview,
+        snapshot.mode
+    ].join('|');
+    const now = Date.now();
+    const previous = LIGHT_MANAGER_SHADOW_DEBUG_STATE.lastLogs.get(key);
+
+    if (
+        previous &&
+        previous.signature === signature &&
+        throttleMs > 0 &&
+        now - previous.time < throttleMs
+    ) {
+        return;
+    }
+
+    LIGHT_MANAGER_SHADOW_DEBUG_STATE.lastLogs.set(key, {
+        signature,
+        time: now
+    });
+
+    console.log('[Light Manager Shadows]', stage, JSON.stringify({
+        ...snapshot,
+        ...extra
+    }));
+}
+
+function getLightManagerShadowDebugIssues(snapshot) {
+    const issues = [];
+
+    if (snapshot.activeShadowLights && !snapshot.renderer) {
+        issues.push('active shadow lights but no preview renderer shadowMap was found');
+    } else if (snapshot.activeShadowLights && snapshot.renderer && !snapshot.renderer.enabled) {
+        issues.push('active shadow lights but renderer.shadowMap.enabled is false');
+    }
+    const previewRestoreDeferred = !!snapshot.previewRestoreDeferred;
+    snapshot.lights.forEach(light => {
+        if (!light.visible || !light.elementShadow) return;
+        if (!light.hasThreeLight) {
+            issues.push(`${light.name}: no THREE light was registered for this LightElement`);
+            return;
+        }
+        if (!light.threeIsLight) {
+            issues.push(`${light.name}: registered THREE light does not expose isLight (${light.threeType || 'unknown'})`);
+        }
+        if (!light.castShadow) {
+            issues.push(`${light.name}: THREE light castShadow is false`);
+        }
+        if (
+            !previewRestoreDeferred &&
+            light.mapSize &&
+            (
+                light.mapSize.width !== light.targetResolution ||
+                light.mapSize.height !== light.targetResolution
+            )
+        ) {
+            issues.push(`${light.name}: shadow mapSize ${light.mapSize.width}x${light.mapSize.height} expected ${light.targetResolution}`);
+        }
+
+        if (light.map && !light.mapMatchesExpected) {
+            issues.push(
+                `${light.name}: GPU shadow target ${light.map.width}x${light.map.height} ` +
+                `does not match ${light.expectedTarget.width}x${light.expectedTarget.height} ` +
+                `(${light.expectedTarget.layout}, resolution ${light.targetResolution})`
+            );
+        }
+    });
+
+    return issues;
+}
+
+function logLightManagerShadowDebugIssues(preview, options = {}, extra = {}) {
+    if (!isLightManagerShadowDebugEnabled()) return;
+    const snapshot = collectLightManagerShadowDebug(preview, options);
+    const issues = getLightManagerShadowDebugIssues(snapshot);
+    if (!issues.length) return;
+    logLightManagerShadowDebug('warning', preview, options, {
+        ...extra,
+        issues
+    });
+}
+
+function syncLightManagerThreeLightShadowFlags(options = {}) {
+    const repairs = [];
+
+    if (!window.LightElement || !Array.isArray(LightElement.all)) return false;
+
+    LightElement.all.forEach(element => {
+        if (!element || !element.uuid) return;
+
+        const light = window.three_lights && window.three_lights[element.uuid];
+        if (!light) return;
+
+        const desiredVisible = element.visibility !== false;
+        const desiredCastShadow = element.has_shadow !== false;
+        const before = {
+            visible: light.visible !== false,
+            castShadow: light.castShadow === true
+        };
+        let repaired = false;
+
+        if (light.visible !== desiredVisible) {
+            light.visible = desiredVisible;
+            repaired = true;
+        }
+
+        if (light.castShadow !== desiredCastShadow) {
+            light.castShadow = desiredCastShadow;
+            if (light.shadow) {
+                light.shadow.needsUpdate = true;
+            }
+            repaired = true;
+        }
+
+
+        /*
+        * No marcar needsUpdate en cada frame.
+        * La invalidación real ya se realiza cuando cambia resolución,
+        * flags, transformaciones, cámara de sombra o escena.
+        */
+        /*if (desiredCastShadow && light.shadow) {
+            light.shadow.needsUpdate = true;
+        }*/
+
+        if (repaired) {
+            repairs.push({
+                name: element.name || element.uuid,
+                uuid: element.uuid,
+                before,
+                after: {
+                    visible: desiredVisible,
+                    castShadow: desiredCastShadow
+                },
+                mode: normalizeLightManagerUpdateOptions(options).studio ? 'studio' : 'preview'
+            });
+        }
+    });
+
+    if (!repairs.length) return false;
+
+    markLightManagerShadowsDirty();
+    logLightManagerShadowDebug('shadow-flag-repair', null, options, { repairs });
+    return true;
+}
+
+function notifyLightManagerShadowStateRepaired(options = {}) {
+    if (typeof window.on_light_element_updated !== 'function') return;
+    window.on_light_element_updated({
+        ...normalizeLightManagerUpdateOptions(options),
+        shadows: true,
+        scene: false,
+        gizmos: false,
+        repaired: true
+    });
+}
+
+function syncLightManagerRenderShadowResolution(options = {}) {
+    const renderOptions = normalizeLightManagerUpdateOptions(options);
+    const preview = options.preview || null;
+    let changed = false;
+    const resolutionChanges = [];
+
+    if (!window.LightElement || !Array.isArray(LightElement.all)) {
+        return false;
+    }
+
+    if (
+        window.LightManagerStudioRenderSession &&
+        !renderOptions.studio &&
+        preview !== window.LightManagerStudioRenderPreview
+    ) {
+        logLightManagerShadowDebug('resolution-skip', preview, renderOptions, {
+            reason: 'studio-session-preview-restore-blocked',
+            studioPreview: getLightManagerPreviewDebugName(
+                window.LightManagerStudioRenderPreview
+            )
+        });
+        return false;
+    }
+
+    LightElement.all.forEach(element => {
+        if (!element || element.has_shadow === false) return;
+
+        const light = window.three_lights?.[element.uuid];
+        if (!light?.shadow) return;
+
+        const targetResolution =
+            LightManagerUtils.getRenderShadowResolution(
+                element,
+                renderOptions
+            );
+
+        const resize = resizeLightManagerShadowMap(
+            light,
+            targetResolution
+        );
+
+        if (!resize.changed) return;
+
+        resolutionChanges.push({
+            name: element.name || element.uuid,
+            uuid: element.uuid,
+            mode: renderOptions.studio ? 'studio' : 'preview',
+            ...resize
+        });
+
+        changed = true;
+    });
+
+    if (changed) {
+        markLightManagerShadowsDirty();
+
+        logLightManagerShadowDebug(
+            'resolution-change',
+            preview,
+            renderOptions,
+            { resolutionChanges }
+        );
+    }
+
     return changed;
 }
 
@@ -664,19 +1236,171 @@ function syncLightManagerShadowSignature() {
     return false;
 }
 
+function getLightManagerThreeLightConstructor(element) {
+    if (!element || !window.THREE) return null;
+    if (element.light_type === 'directional') return THREE.DirectionalLight;
+    if (element.light_type === 'spot') return THREE.SpotLight;
+    return THREE.PointLight;
+}
+
+function lightManagerNeedsThreeLightSync() {
+    if (!window.scene) return false;
+    if (!window.LightElement || !Array.isArray(LightElement.all)) return false;
+    if (!LightElement.all.length) return false;
+    if (!window.three_lights_group) return true;
+    if (!window.three_lights) return true;
+
+    return LightElement.all.some(element => {
+        if (!element || !element.uuid) return false;
+        const light = window.three_lights[element.uuid];
+        const LightConstructor = getLightManagerThreeLightConstructor(element);
+        return !light || (LightConstructor && light.constructor !== LightConstructor);
+    });
+}
+
+function ensureLightManagerThreeLights(options = {}) {
+    if (!lightManagerNeedsThreeLightSync()) return false;
+    if (LIGHT_MANAGER_UPDATE_STATE.preparingLights) return false;
+    if (typeof runLightManagerElementUpdate !== 'function') return false;
+
+    const beforeMissing = [];
+    if (window.LightElement && Array.isArray(LightElement.all)) {
+        LightElement.all.forEach(element => {
+            if (!element || !element.uuid) return;
+            const light = window.three_lights && window.three_lights[element.uuid];
+            const LightConstructor = getLightManagerThreeLightConstructor(element);
+            if (!light || (LightConstructor && light.constructor !== LightConstructor)) {
+                beforeMissing.push({
+                    name: element.name || element.uuid,
+                    uuid: element.uuid,
+                    expected: LightConstructor ? LightConstructor.name : null,
+                    actual: light && light.constructor ? light.constructor.name : null
+                });
+            }
+        });
+    }
+
+    LIGHT_MANAGER_UPDATE_STATE.preparingLights = true;
+    try {
+        runLightManagerElementUpdate({
+            ...normalizeLightManagerUpdateOptions(options),
+            shadows: true,
+            scene: true,
+            gizmos: false
+        });
+    } finally {
+        LIGHT_MANAGER_UPDATE_STATE.preparingLights = false;
+    }
+
+    logLightManagerShadowDebug('three-light-sync', null, options, { beforeMissing });
+    return true;
+}
+
 window.LightManagerMarkShadowsDirty = markLightManagerShadowsDirty;
+window.LightManagerDebugShadows = function LightManagerDebugShadows(preview, options = {}) {
+    if (preview && !preview.renderer && typeof preview === 'object') {
+        options = preview;
+        preview = null;
+    }
+
+    const targetPreview =
+        preview ||
+        (typeof Preview !== 'undefined' && Preview.selected) ||
+        window.main_preview ||
+        window.MediaPreview ||
+        window.Screencam?.NoAAPreview ||
+        null;
+    const snapshot = collectLightManagerShadowDebug(targetPreview, options);
+    console.log('[Light Manager Shadows] manual-snapshot', JSON.stringify(snapshot));
+    return snapshot;
+};
+
+window.LightManagerSyncLights = function LightManagerSyncLights(options = {}) {
+    const updateOptions = {
+        ...normalizeLightManagerUpdateOptions(options),
+        shadows: true,
+        scene: true,
+        gizmos: false
+    };
+    const lightObjectsChanged = ensureLightManagerThreeLights(updateOptions);
+    const shadowFlagsChanged = syncLightManagerThreeLightShadowFlags(updateOptions);
+    const resolutionChanged = syncLightManagerRenderShadowResolution(updateOptions);
+    invalidateLightManagerShadowMaps({
+        force: lightObjectsChanged || shadowFlagsChanged || resolutionChanged
+    });
+    if (lightObjectsChanged || shadowFlagsChanged) {
+        notifyLightManagerShadowStateRepaired(updateOptions);
+    }
+    const snapshot = collectLightManagerShadowDebug(null, updateOptions);
+    console.log('[Light Manager Shadows] manual-sync', JSON.stringify({
+        lightObjectsChanged,
+        shadowFlagsChanged,
+        resolutionChanged,
+        ...snapshot
+    }));
+    return snapshot;
+};
 
 window.LightManagerPrepareRender = function LightManagerPrepareRender(preview, options = {}) {
-    const force = !!options.force;
+    const studioPreview = window.LightManagerStudioRenderPreview || null;
+    const previewIsStudioRender = !!(
+        preview &&
+        (
+            preview === studioPreview ||
+            preview.sa_studio_render_active
+        )
+    );
+    const implicitStudioRender = !!(
+        window.LightManagerStudioRenderActive &&
+        (
+            previewIsStudioRender ||
+            (!preview && studioPreview)
+        )
+    );
+    const renderOptions = {
+        ...options,
+        studio: !!(
+            options.studio ||
+            options.studioRender ||
+            previewIsStudioRender ||
+            implicitStudioRender
+        )
+    };
+    const force = !!renderOptions.force;
+    const renderPreview = preview || (renderOptions.studio ? window.LightManagerStudioRenderPreview : null);
+    logLightManagerShadowDebug('prepare-start', renderPreview, renderOptions);
 
-    if (preview?.renderer) {
-        configureLightManagerRendererShadows(preview.renderer);
+    if (renderPreview?.renderer) {
+        configureLightManagerRendererShadows(renderPreview.renderer);
     } else {
         configureLightManagerRenderers();
     }
 
+    const lightObjectsChanged = ensureLightManagerThreeLights(renderOptions);
+
+    /*
+     * ensureLightManagerThreeLights puede ejecutar el updater interno,
+     * el cual vuelve a poner los renderers en autoUpdate = false.
+     * Studio debe reactivarlo después para asegurar el primer shadow pass.
+     */
+    const studioAutoUpdateChanged = renderOptions.studio && renderPreview?.renderer
+        ? prepareLightManagerStudioShadowRenderer(renderPreview.renderer)
+        : false;
     configureLightManagerSceneShadowMeshes(force);
-    invalidateLightManagerShadowMaps({ force, preview });
+    const shadowFlagsChanged = syncLightManagerThreeLightShadowFlags(renderOptions);
+    const resolutionChanged = syncLightManagerRenderShadowResolution({
+        ...renderOptions,
+        preview: renderPreview
+    });
+    invalidateLightManagerShadowMaps({
+        force: force || lightObjectsChanged || shadowFlagsChanged || resolutionChanged,
+        preview: renderPreview
+    });
+    if (lightObjectsChanged || shadowFlagsChanged) {
+        notifyLightManagerShadowStateRepaired(renderOptions);
+    }
+    logLightManagerShadowDebug('prepare-end', renderPreview, renderOptions, { lightObjectsChanged, shadowFlagsChanged, resolutionChanged, studioAutoUpdateChanged });
+    logLightManagerShadowDebugIssues(renderPreview, renderOptions, { lightObjectsChanged, shadowFlagsChanged, resolutionChanged, studioAutoUpdateChanged });
 };
 
 function cancelLightManagerElementUpdate() {
@@ -696,7 +1420,8 @@ function normalizeLightManagerUpdateOptions(options = {}) {
     return {
         shadows: options.shadows !== false,
         scene: options.scene !== false,
-        gizmos: options.gizmos !== false
+        gizmos: options.gizmos !== false,
+        studio: !!(options.studio || options.studioRender)
     };
 }
 
@@ -706,7 +1431,8 @@ function mergeLightManagerUpdateOptions(previous, next) {
     return {
         shadows: previous.shadows || next.shadows,
         scene: previous.scene || next.scene,
-        gizmos: previous.gizmos || next.gizmos
+        gizmos: previous.gizmos || next.gizmos,
+        studio: previous.studio || next.studio
     };
 }
 
@@ -1244,11 +1970,11 @@ window.LightManagerFitTool = {
         const points = this.collectTargetPoints(targets);
 
         if (!lights.length) {
-            Blockbench.showQuickMessage('Select one or more lights first.');
+            Blockbench.showQuickMessage(translateLightManager('light_manager.message.select_lights_first'));
             return;
         }
         if (!targets.length || !points.length) {
-            Blockbench.showQuickMessage('Select at least one target object or group.');
+            Blockbench.showQuickMessage(translateLightManager('light_manager.message.select_targets_first'));
             return;
         }
 
@@ -1277,17 +2003,20 @@ window.LightManagerFitTool = {
                 window.LightElement.preview_controller.updateSelection(light);
             }
         });
-        Undo.finishEdit('Fit light bounds to selection');
+        Undo.finishEdit(translateLightManager('light_manager.undo.fit_to_selection'));
 
         updateSelection();
         window.update_light_element_callback?.();
         window.LightManagerAreaGizmos?.updateAll();
 
-        const targetText = targets.length === 1 ? '1 target' : `${targets.length} targets`;
-        const lightText = lights.length === 1 ? '1 light' : `${lights.length} lights`;
-        Blockbench.showQuickMessage(`Fitted ${lightText} to ${targetText}.`);
+        const targetText = formatLightManagerCount(targets.length, 'light_manager.count.target.one', 'light_manager.count.target.many');
+        const lightText = formatLightManagerCount(lights.length, 'light_manager.count.light.one', 'light_manager.count.light.many');
+        Blockbench.showQuickMessage(formatLightManagerMessage('light_manager.message.fit_complete', {
+            lights: lightText,
+            targets: targetText
+        }));
         if (clippedLights > 0 && !aimToCenter) {
-            Blockbench.showQuickMessage('Some target points are behind a fitted directional/spot light.');
+            Blockbench.showQuickMessage(translateLightManager('light_manager.message.behind_points'));
         }
     },
 
@@ -1298,20 +2027,40 @@ window.LightManagerFitTool = {
 
     openDialog() {
         if (!this.getSelectedLights().length) {
-            Blockbench.showQuickMessage('Select one or more lights first.');
+            Blockbench.showQuickMessage(translateLightManager('light_manager.message.select_lights_first'));
             return;
         }
         if (!this.getSelectedTargets().length) {
-            Blockbench.showQuickMessage('Select target objects or groups too.');
+            Blockbench.showQuickMessage(translateLightManager('light_manager.message.select_targets_too'));
             return;
         }
 
         new Dialog('fit_light_bounds_dialog', {
-            title: 'Fit Lights to Selection',
+            title: translateLightManager('light_manager.dialog.fit.title'),
             form: {
-                margin: { label: 'Extra Margin', type: 'number', value: 0, min: 0, step: 0.1, description: 'Adds scene-unit padding to distance, bounds, near/far, and spot cone fitting.' },
-                angle_margin: { label: 'Spot Angle Margin', type: 'number', value: 0, min: 0, max: 45, step: 0.1, description: 'Additional spot cone padding in degrees.' },
-                aim_to_center: { label: 'Aim Directional/Spot', type: 'checkbox', value: true, description: 'Rotate directional and spot lights toward the center of the target selection.' }
+                margin: {
+                    label: translateLightManager('light_manager.dialog.fit.margin'),
+                    type: 'number',
+                    value: 0,
+                    min: 0,
+                    step: 0.1,
+                    description: translateLightManager('light_manager.dialog.fit.margin.desc')
+                },
+                angle_margin: {
+                    label: translateLightManager('light_manager.dialog.fit.angle_margin'),
+                    type: 'number',
+                    value: 0,
+                    min: 0,
+                    max: 45,
+                    step: 0.1,
+                    description: translateLightManager('light_manager.dialog.fit.angle_margin.desc')
+                },
+                aim_to_center: {
+                    label: translateLightManager('light_manager.dialog.fit.aim_to_center'),
+                    type: 'checkbox',
+                    value: true,
+                    description: translateLightManager('light_manager.dialog.fit.aim_to_center.desc')
+                }
             },
             onConfirm: form => {
                 this.fit(form);
@@ -1375,9 +2124,7 @@ function runLightManagerElementUpdate(options = LIGHT_MANAGER_DEFAULT_UPDATE_OPT
             let light = window.three_lights[element.uuid];
 
             // Determine required THREE light type based on user config
-            let LightConstructor = THREE.PointLight;
-            if (element.light_type === 'directional') LightConstructor = THREE.DirectionalLight;
-            else if (element.light_type === 'spot') LightConstructor = THREE.SpotLight;
+            let LightConstructor = getLightManagerThreeLightConstructor(element) || THREE.PointLight;
 
             // Recreate if type changed or it doesn't exist
             if (!light || light.constructor !== LightConstructor) {
@@ -1409,15 +2156,34 @@ function runLightManagerElementUpdate(options = LIGHT_MANAGER_DEFAULT_UPDATE_OPT
 
             // Sync dynamic shadow properties
             if (updateOptions.shadows && light.shadow) {
-                let currentResolution = light.shadow.mapSize.width;
-                let targetResolution = LightManagerUtils.shadowResolution(element.shadow_resolution);
-                if (currentResolution !== targetResolution) {
-                    light.shadow.mapSize.width = targetResolution;
-                    light.shadow.mapSize.height = targetResolution;
-                    if (light.shadow.map) {
-                        light.shadow.map.dispose();
-                        light.shadow.map = null;
-                    }
+                const targetResolution =
+                    LightManagerUtils.getRenderShadowResolution(
+                        element,
+                        updateOptions
+                    );
+
+                const resize = resizeLightManagerShadowMap(
+                    light,
+                    targetResolution
+                );
+
+                if (resize.changed) {
+                    markLightManagerShadowsDirty();
+
+                    logLightManagerShadowDebug(
+                        'resolution-change',
+                        null,
+                        updateOptions,
+                        {
+                            source: 'element-update',
+                            resolutionChanges: [{
+                                name: element.name || element.uuid,
+                                uuid: element.uuid,
+                                mode: updateOptions.studio ? 'studio' : 'preview',
+                                ...resize
+                            }]
+                        }
+                    );
                 }
 
                 light.shadow.bias = LightManagerUtils.num(element.shadow_bias, DEFAULT_SHADOW_BIAS, -1, 1);
@@ -1607,8 +2373,8 @@ let light_icons_b64 = {};
 
 /**
  * @name Light Manager
- * @author Blockbench User (Refactored & Fixed)
- * @description A standalone plugin to add, manage, and animate Light entities in the Blockbench Outliner.
+ * @author MidFord
+ * @description Adds animatable point, spot, and directional lights to the Blockbench outliner.
  */
 
 function initialize_light_plugin() {
@@ -1644,12 +2410,224 @@ function initialize_light_plugin() {
         'property.shadow_area': 'Shadow Area',
         'property.shadow_biases': 'Shadow Bias',
         'property.shadow_resolution': 'Resolution',
+        'property.studio_shadow_resolution': 'Studio Shadow',
+        'property.studio_shadow_resolution.desc': 'Shadow size used only while Studio Render captures. Same keeps the viewport resolution.',
         'property.shadow_bias': 'Bias',
         'property.shadow_bias.desc': 'Adjusts shadow depth to reduce artifacts. Positive values can reduce shadow acne but may cause peter-panning. Default: 0.001',
         'property.shadow_normal_bias': 'Normal Bias',
         'property.shadow_normal_bias.desc': 'Adjusts bias based on surface normal. Reduces shadow acne on angled surfaces. Default: 0.02',
         'action.edit_light_properties': 'Edit Light Properties',
-        'action.fit_light_bounds_to_selection': 'Fit Light Bounds to Selection'
+        'action.fit_light_bounds_to_selection': 'Fit Light Bounds to Selection',
+        'light_manager.plugin.title': 'Light Entity Manager',
+        'light_manager.plugin.description': 'Adds animatable point, spot, and directional light elements to the outliner with viewport gizmos, shadow controls, and production-friendly presets.',
+        'light_manager.action.add_point': 'Add Point Light',
+        'light_manager.action.add_point.desc': 'Add a soft point light with balanced shadows.',
+        'light_manager.action.add_spot': 'Add Spot Light',
+        'light_manager.action.add_spot.desc': 'Add an aimable cone light for key lighting.',
+        'light_manager.action.add_directional': 'Add Directional Light',
+        'light_manager.action.add_directional.desc': 'Add a sun-style light for broad scene lighting.',
+        'light_manager.action.show_area_gizmos': 'Show Light Area Gizmos',
+        'light_manager.action.hide_area_gizmos': 'Hide Light Area Gizmos',
+        'light_manager.action.fit_to_selection': 'Fit Lights to Selection...',
+        'light_manager.action.fit_to_selection.desc': 'Fit selected lights to the selected objects or groups.',
+        'light_manager.action.edit_properties': 'Light Properties...',
+        'light_manager.action.edit_properties.desc': 'Edit the selected light values, presets, and shadow settings.',
+        'light_manager.message.select_lights_first': 'Select one or more lights first.',
+        'light_manager.message.select_targets_first': 'Select at least one target object or group.',
+        'light_manager.message.select_targets_too': 'Select target objects or groups too.',
+        'light_manager.message.fit_complete': 'Fitted {lights} to {targets}.',
+        'light_manager.message.behind_points': 'Some target points are behind a fitted directional/spot light.',
+        'light_manager.count.light.one': '1 light',
+        'light_manager.count.light.many': '{count} lights',
+        'light_manager.count.target.one': '1 target',
+        'light_manager.count.target.many': '{count} targets',
+        'light_manager.dialog.fit.title': 'Fit Lights to Selection',
+        'light_manager.dialog.fit.margin': 'Extra Margin',
+        'light_manager.dialog.fit.margin.desc': 'Adds scene-unit padding to distance, bounds, near/far, and spot cone fitting.',
+        'light_manager.dialog.fit.angle_margin': 'Spot Angle Margin',
+        'light_manager.dialog.fit.angle_margin.desc': 'Additional spot cone padding in degrees.',
+        'light_manager.dialog.fit.aim_to_center': 'Aim Directional/Spot',
+        'light_manager.dialog.fit.aim_to_center.desc': 'Rotate directional and spot lights toward the center of the target selection.',
+        'light_manager.dialog.edit.title_one': 'Edit Light',
+        'light_manager.dialog.edit.title_many': 'Edit {count} Lights',
+        'light_manager.field.quick_setup': 'Quick Setup',
+        'light_manager.field.quick_setup.desc': 'Choose a profile to replace the technical values below on confirm.',
+        'light_manager.option.keep_values': 'Keep values below',
+        'light_manager.profile.point_fill': 'Point fill light',
+        'light_manager.profile.spot_key': 'Spot key light',
+        'light_manager.profile.directional_sun': 'Directional sun light',
+        'light_manager.profile.minecraft_optimized': 'Minecraft Optimized (Directional)',
+        'light_manager.option.point_radius': 'Point - radius light',
+        'light_manager.option.directional_sun': 'Directional - sun light',
+        'light_manager.option.spot_cone': 'Spot - cone light',
+        'light_manager.property.color': 'Color',
+        'light_manager.property.brightness': 'Brightness',
+        'light_manager.property.range': 'Range',
+        'light_manager.property.range.desc': 'Point/spot range. 0 means no hard cutoff.',
+        'light_manager.property.spot_cone': 'Spot Cone',
+        'light_manager.property.spot_cone.desc': 'Spot only. Values near 90 are very wide.',
+        'light_manager.property.spot_soft_edge': 'Spot Soft Edge',
+        'light_manager.property.shadow_preset': 'Shadow Preset',
+        'light_manager.property.casts_shadows': 'Casts Shadows',
+        'light_manager.property.shadow_size': 'Shadow Size',
+        'light_manager.property.shadow_near': 'Shadow Near',
+        'light_manager.property.shadow_far': 'Shadow Far',
+        'light_manager.property.sun_shadow_area': 'Sun Shadow Area',
+        'light_manager.property.sun_shadow_area.desc': 'Directional only. Smaller is sharper; larger covers more scene.',
+        'light_manager.option.use_values_below': 'Use values below',
+        'light_manager.option.shadow_off': 'Off',
+        'light_manager.option.shadow_preview': 'Preview - fast',
+        'light_manager.option.shadow_balanced': 'Balanced',
+        'light_manager.option.shadow_crisp': 'Crisp - heavier',
+        'light_manager.option.shadow_minecraft': 'Minecraft Optimized',
+        'light_manager.option.shadow_same_preview': 'Same as Preview',
+        'light_manager.generic.reset_value': 'Reset value',
+        'light_manager.generic.reset': 'Reset',
+        'light_manager.undo.add_point': 'Add point light',
+        'light_manager.undo.add_spot': 'Add spot light',
+        'light_manager.undo.add_directional': 'Add directional light',
+        'light_manager.undo.fit_to_selection': 'Fit light bounds to selection',
+        'light_manager.undo.edit_properties': 'Edit light properties',
+        'light_manager.undo.change_type': 'Change light type',
+        'light_manager.undo.change_color': 'Change light color',
+        'light_manager.undo.change_temperature': 'Change light temperature',
+        'light_manager.undo.toggle_shadows': 'Toggle shadows',
+        'light_manager.undo.change_shadow_resolution': 'Change shadow resolution',
+        'light_manager.undo.change_studio_shadow_resolution': 'Change Studio Render shadow resolution',
+        'light_manager.undo.change_intensity': 'Change light intensity',
+        'light_manager.undo.change_distance': 'Change light distance',
+        'light_manager.undo.change_cone_angle': 'Change light cone angle',
+        'light_manager.undo.change_penumbra': 'Change light penumbra',
+        'light_manager.undo.change_shadow_clip': 'Change shadow clip',
+        'light_manager.undo.change_shadow_bounds': 'Change shadow bounds',
+        'light_manager.undo.change_shadow_bias': 'Change shadow bias',
+        'light_manager.undo.change_shadow_normal_bias': 'Change shadow normal bias'
+    });
+
+    Language.addTranslations('es', {
+        'dialog.preview_options.show_light_area_gizmos': 'Mostrar gizmos de area de luz',
+        'panel.light_properties': 'LUZ',
+        'property.light_settings': 'Ajustes de luz',
+        'property.light_color': 'Color de luz',
+        'property.light_intensity': 'Intensidad',
+        'property.light_intensity.desc': 'Brillo de la luz. Valores mas altos producen mas iluminacion.',
+        'property.light_temperature': 'Temperatura',
+        'property.light_temperature.desc': 'Temperatura de color en Kelvin. Menor es mas calida; mayor es mas fria.',
+        'property.light_type': 'Tipo de luz',
+        'property.light_type.point': 'Punto',
+        'property.light_type.directional': 'Direccional',
+        'property.light_type.spot': 'Spot',
+        'property.distance': 'Distancia',
+        'property.distance.desc': 'Rango maximo de la luz. 0 significa sin limite.',
+        'property.angle': 'Angulo del cono',
+        'property.angle.desc': 'Angulo del cono de la luz spot en grados.',
+        'property.penumbra': 'Penumbra',
+        'property.penumbra.desc': 'Suavidad del borde del cono spot (0 a 1).',
+        'property.cone_angle': 'Angulo del cono',
+        'property.cone_angle.desc': 'Angulo del cono de la luz spot en grados.',
+        'property.cone_penumbra': 'Penumbra',
+        'property.cone_penumbra.desc': 'Suavidad del borde del cono spot (0 a 1).',
+        'property.light.quickbuttons': 'Luz',
+        'property.cast_shadows': 'Proyecta sombras',
+        'property.shadow_near': 'Cerca',
+        'property.shadow_far': 'Lejos',
+        'property.shadow_bounds': 'Area',
+        'property.shadow_clip': 'Recorte',
+        'property.shadow_area': 'Area de sombra',
+        'property.shadow_biases': 'Bias de sombra',
+        'property.shadow_resolution': 'Resolucion',
+        'property.studio_shadow_resolution': 'Sombra Studio',
+        'property.studio_shadow_resolution.desc': 'Tamano de sombra usado solo durante capturas de Studio Render. Igual conserva la resolucion del preview.',
+        'property.shadow_bias': 'Bias',
+        'property.shadow_bias.desc': 'Ajusta la profundidad de sombra para reducir artefactos. Valores positivos pueden reducir acne, pero pueden separar sombras. Por defecto: 0.001',
+        'property.shadow_normal_bias': 'Bias normal',
+        'property.shadow_normal_bias.desc': 'Ajusta el bias segun la normal de la superficie. Reduce acne en superficies inclinadas. Por defecto: 0.02',
+        'action.edit_light_properties': 'Editar propiedades de luz',
+        'action.fit_light_bounds_to_selection': 'Ajustar luces a seleccion',
+        'light_manager.plugin.title': 'Light Entity Manager',
+        'light_manager.plugin.description': 'Agrega luces de punto, spot y direccionales animables al outliner con gizmos de viewport, controles de sombra y presets listos para produccion.',
+        'light_manager.action.add_point': 'Agregar luz de punto',
+        'light_manager.action.add_point.desc': 'Agrega una luz de punto suave con sombras balanceadas.',
+        'light_manager.action.add_spot': 'Agregar luz spot',
+        'light_manager.action.add_spot.desc': 'Agrega una luz de cono orientable para luz principal.',
+        'light_manager.action.add_directional': 'Agregar luz direccional',
+        'light_manager.action.add_directional.desc': 'Agrega una luz tipo sol para iluminacion amplia de escena.',
+        'light_manager.action.show_area_gizmos': 'Mostrar gizmos de area de luz',
+        'light_manager.action.hide_area_gizmos': 'Ocultar gizmos de area de luz',
+        'light_manager.action.fit_to_selection': 'Ajustar luces a seleccion...',
+        'light_manager.action.fit_to_selection.desc': 'Ajusta las luces seleccionadas a los objetos o grupos seleccionados.',
+        'light_manager.action.edit_properties': 'Propiedades de luz...',
+        'light_manager.action.edit_properties.desc': 'Edita valores, presets y ajustes de sombra de las luces seleccionadas.',
+        'light_manager.message.select_lights_first': 'Selecciona una o mas luces primero.',
+        'light_manager.message.select_targets_first': 'Selecciona al menos un objeto o grupo objetivo.',
+        'light_manager.message.select_targets_too': 'Selecciona tambien objetos o grupos objetivo.',
+        'light_manager.message.fit_complete': 'Se ajusto {lights} a {targets}.',
+        'light_manager.message.behind_points': 'Algunos puntos objetivo quedan detras de una luz direccional/spot ajustada.',
+        'light_manager.count.light.one': '1 luz',
+        'light_manager.count.light.many': '{count} luces',
+        'light_manager.count.target.one': '1 objetivo',
+        'light_manager.count.target.many': '{count} objetivos',
+        'light_manager.dialog.fit.title': 'Ajustar luces a seleccion',
+        'light_manager.dialog.fit.margin': 'Margen extra',
+        'light_manager.dialog.fit.margin.desc': 'Agrega margen en unidades de escena a distancia, area, near/far y cono spot.',
+        'light_manager.dialog.fit.angle_margin': 'Margen del cono spot',
+        'light_manager.dialog.fit.angle_margin.desc': 'Margen adicional del cono spot en grados.',
+        'light_manager.dialog.fit.aim_to_center': 'Apuntar direccional/spot',
+        'light_manager.dialog.fit.aim_to_center.desc': 'Rota luces direccionales y spot hacia el centro de la seleccion objetivo.',
+        'light_manager.dialog.edit.title_one': 'Editar luz',
+        'light_manager.dialog.edit.title_many': 'Editar {count} luces',
+        'light_manager.field.quick_setup': 'Ajuste rapido',
+        'light_manager.field.quick_setup.desc': 'Elige un preset para reemplazar los valores tecnicos al confirmar.',
+        'light_manager.option.keep_values': 'Mantener valores actuales',
+        'light_manager.profile.point_fill': 'Luz de relleno de punto',
+        'light_manager.profile.spot_key': 'Luz spot principal',
+        'light_manager.profile.directional_sun': 'Luz solar direccional',
+        'light_manager.profile.minecraft_optimized': 'Optimizada para Minecraft (Direccional)',
+        'light_manager.option.point_radius': 'Punto - luz radial',
+        'light_manager.option.directional_sun': 'Direccional - luz solar',
+        'light_manager.option.spot_cone': 'Spot - luz de cono',
+        'light_manager.property.color': 'Color',
+        'light_manager.property.brightness': 'Brillo',
+        'light_manager.property.range': 'Rango',
+        'light_manager.property.range.desc': 'Rango de punto/spot. 0 significa sin corte duro.',
+        'light_manager.property.spot_cone': 'Cono spot',
+        'light_manager.property.spot_cone.desc': 'Solo spot. Valores cercanos a 90 son muy amplios.',
+        'light_manager.property.spot_soft_edge': 'Borde suave spot',
+        'light_manager.property.shadow_preset': 'Preset de sombra',
+        'light_manager.property.casts_shadows': 'Proyecta sombras',
+        'light_manager.property.shadow_size': 'Tamano de sombra',
+        'light_manager.property.shadow_near': 'Sombra cerca',
+        'light_manager.property.shadow_far': 'Sombra lejos',
+        'light_manager.property.sun_shadow_area': 'Area de sombra solar',
+        'light_manager.property.sun_shadow_area.desc': 'Solo direccional. Menor es mas nitido; mayor cubre mas escena.',
+        'light_manager.option.use_values_below': 'Usar valores inferiores',
+        'light_manager.option.shadow_off': 'Apagada',
+        'light_manager.option.shadow_preview': 'Preview - rapida',
+        'light_manager.option.shadow_balanced': 'Balanceada',
+        'light_manager.option.shadow_crisp': 'Nitida - mas pesada',
+        'light_manager.option.shadow_minecraft': 'Optimizada para Minecraft',
+        'light_manager.option.shadow_same_preview': 'Igual que preview',
+        'light_manager.generic.reset_value': 'Reiniciar valor',
+        'light_manager.generic.reset': 'Reiniciar',
+        'light_manager.undo.add_point': 'Agregar luz de punto',
+        'light_manager.undo.add_spot': 'Agregar luz spot',
+        'light_manager.undo.add_directional': 'Agregar luz direccional',
+        'light_manager.undo.fit_to_selection': 'Ajustar limites de luz a seleccion',
+        'light_manager.undo.edit_properties': 'Editar propiedades de luz',
+        'light_manager.undo.change_type': 'Cambiar tipo de luz',
+        'light_manager.undo.change_color': 'Cambiar color de luz',
+        'light_manager.undo.change_temperature': 'Cambiar temperatura de luz',
+        'light_manager.undo.toggle_shadows': 'Alternar sombras',
+        'light_manager.undo.change_shadow_resolution': 'Cambiar resolucion de sombra',
+        'light_manager.undo.change_studio_shadow_resolution': 'Cambiar resolucion de sombra Studio Render',
+        'light_manager.undo.change_intensity': 'Cambiar intensidad de luz',
+        'light_manager.undo.change_distance': 'Cambiar distancia de luz',
+        'light_manager.undo.change_cone_angle': 'Cambiar angulo del cono',
+        'light_manager.undo.change_penumbra': 'Cambiar penumbra de luz',
+        'light_manager.undo.change_shadow_clip': 'Cambiar recorte de sombra',
+        'light_manager.undo.change_shadow_bounds': 'Cambiar area de sombra',
+        'light_manager.undo.change_shadow_bias': 'Cambiar bias de sombra',
+        'light_manager.undo.change_shadow_normal_bias': 'Cambiar bias normal de sombra'
     });
 
 
@@ -1702,9 +2680,11 @@ function initialize_light_plugin() {
     Plugin.register('light_manager', {
         title: 'Light Entity Manager',
         icon: 'emoji_objects',
-        author: 'Extracted & Refactored',
-        description: 'Adds fully manipulatable and animatable Light elements to the outliner without shader logic.',
+        author: 'MidFord',
+        description: 'Adds animatable point, spot, and directional light elements to the outliner with viewport gizmos, shadow controls, and production-friendly presets.',
+        tags: ['Light', 'Animation', 'Render'],
         version: '1.3.0',
+        min_version: '4.9.0',
         variant: 'both',
 
         onload() {
@@ -1805,7 +2785,7 @@ function initialize_light_plugin() {
                     if (this.settings.resettable) {
                         this.resetBtn = Interface.createElement('i', {
                             class: 'material-icons icon',
-                            title: 'Reset value',
+                            title: translateLightManager('light_manager.generic.reset_value'),
                             style: `font-size: 18px;cursor: pointer;display: none;margin-left: 2px;color: var(--color-subtle_text);display: flex;align-items: center;`
                         }, 'replay');
 
@@ -3189,7 +4169,7 @@ function initialize_light_plugin() {
                     if (this.settings.resettable) {
                         this.resetBtn = Interface.createElement('i', {
                             class: 'material-icons icon',
-                            title: 'Reset',
+                            title: translateLightManager('light_manager.generic.reset'),
                             style: `font-size: 18px;cursor: pointer;display: none;margin-left: 2px;color: var(--color-subtle_text);display: flex;align-items: center;`
                         }, 'replay');
 
@@ -4587,8 +5567,9 @@ function initialize_light_plugin() {
             new Property(LightElement, 'boolean', 'visibility', { default: true });
             new Property(LightElement, 'boolean', 'has_shadow', { default: true });
             new Property(LightElement, 'number', 'shadow_resolution', { default: 1024 });
+            new Property(LightElement, 'number', 'studio_shadow_resolution', { default: 0 });
             new Property(LightElement, 'number', 'shadow_bias', { default: DEFAULT_SHADOW_BIAS });
-            new Property(LightElement, 'number', 'shadow_normal_bias', { default: DEFAULT_SHADOW_NORMAL_BIAS, description: 'Adjusts bias based on surface normal. Reduces shadow acne on angled surfaces. Default: 0.02' });
+            new Property(LightElement, 'number', 'shadow_normal_bias', { default: DEFAULT_SHADOW_NORMAL_BIAS, description: 'property.shadow_normal_bias.desc' });
             new Property(LightElement, 'number', 'shadow_near', { default: 0.1, min: 0 });
             new Property(LightElement, 'number', 'shadow_far', { default: 200, min: 0 });
             new Property(LightElement, 'number', 'shadow_bounds', { default: 35, min: 0 });
@@ -4931,8 +5912,8 @@ function initialize_light_plugin() {
             LightAnimator.prototype.channels = {
                 position: { name: tl('timeline.position'), mutable: true, transform: true, max_data_points: 3 },
                 rotation: { name: tl('timeline.rotation'), mutable: true, transform: true, max_data_points: 3 },
-                color: { name: 'Color', mutable: true, transform: true, max_data_points: 3 },
-                intensity: { name: 'Intensity', mutable: true, transform: true, max_data_points: 1 },
+                color: { name: tl('property.light_color'), mutable: true, transform: true, max_data_points: 3 },
+                intensity: { name: tl('property.light_intensity'), mutable: true, transform: true, max_data_points: 1 },
             };
             LightElement.animator = LightAnimator;
 
@@ -4971,13 +5952,13 @@ function initialize_light_plugin() {
             };
 
             let addLightAction = new Action('add_light', {
-                name: 'Add Point Light',
-                description: 'Add a soft point light with balanced shadows.',
+                name: 'light_manager.action.add_point',
+                description: 'light_manager.action.add_point.desc',
                 icon: 'lightbulb',
                 category: 'edit',
                 condition: () => Modes.edit,
                 click() {
-                    return createLightFromProfile('point_fill', 'Add point light');
+                    return createLightFromProfile('point_fill', translateLightManager('light_manager.undo.add_point'));
                 }
             });
             deletables.push(addLightAction);
@@ -4985,13 +5966,13 @@ function initialize_light_plugin() {
             MenuBar.menus.edit.addAction(addLightAction, '9');
 
             let addSpotLightAction = new Action('add_spot_light', {
-                name: 'Add Spot Light',
-                description: 'Add an aimable cone light for key lighting.',
+                name: 'light_manager.action.add_spot',
+                description: 'light_manager.action.add_spot.desc',
                 icon: 'highlight',
                 category: 'edit',
                 condition: () => Modes.edit,
                 click() {
-                    return createLightFromProfile('spot_key', 'Add spot light');
+                    return createLightFromProfile('spot_key', translateLightManager('light_manager.undo.add_spot'));
                 }
             });
             deletables.push(addSpotLightAction);
@@ -4999,13 +5980,13 @@ function initialize_light_plugin() {
             MenuBar.menus.edit.addAction(addSpotLightAction, '9');
 
             let addDirectionalLightAction = new Action('add_directional_light', {
-                name: 'Add Directional Light',
-                description: 'Add a sun-style light for broad scene lighting.',
+                name: 'light_manager.action.add_directional',
+                description: 'light_manager.action.add_directional.desc',
                 icon: 'light_mode',
                 category: 'edit',
                 condition: () => Modes.edit,
                 click() {
-                    return createLightFromProfile('directional_sun', 'Add directional light');
+                    return createLightFromProfile('directional_sun', translateLightManager('light_manager.undo.add_directional'));
                 }
             });
             deletables.push(addDirectionalLightAction);
@@ -5014,7 +5995,7 @@ function initialize_light_plugin() {
 
             const updateAreaGizmoActionState = (action) => {
                 const enabled = window.LightManagerAreaGizmos.enabled;
-                action.name = enabled ? 'Hide Light Area Gizmos' : 'Show Light Area Gizmos';
+                action.name = translateLightManager(enabled ? 'light_manager.action.hide_area_gizmos' : 'light_manager.action.show_area_gizmos');
                 action.icon = enabled ? 'visibility' : 'visibility_off';
                 if (typeof action.update === 'function') action.update();
             };
@@ -5043,8 +6024,8 @@ function initialize_light_plugin() {
             });
 
             let fitLightBoundsAction = new Action('fit_light_bounds_to_selection', {
-                name: 'Fit Lights to Selection...',
-                description: 'Fit selected lights to the selected objects or groups.',
+                name: 'light_manager.action.fit_to_selection',
+                description: 'light_manager.action.fit_to_selection.desc',
                 icon: 'center_focus_strong',
                 category: 'edit',
                 condition: () => window.LightManagerFitTool.getSelectedLights().length > 0,
@@ -5056,7 +6037,8 @@ function initialize_light_plugin() {
             MenuBar.menus.edit.addAction(fitLightBoundsAction, '9');
 
             let editLightPropertiesAction = new Action('edit_light_properties', {
-                name: 'Light Properties...',
+                name: 'light_manager.action.edit_properties',
+                description: 'light_manager.action.edit_properties.desc',
                 icon: 'settings',
                 category: 'edit',
                 condition: () => Array.isArray(LightElement.selected) && LightElement.selected.length > 0,
@@ -5069,56 +6051,94 @@ function initialize_light_plugin() {
                     const selectedCount = LightElement.selected.length;
 
                     new Dialog('edit_light_properties_dialog', {
-                        title: selectedCount === 1 ? 'Edit Light' : `Edit ${selectedCount} Lights`,
+                        title: selectedCount === 1
+                            ? translateLightManager('light_manager.dialog.edit.title_one')
+                            : formatLightManagerMessage('light_manager.dialog.edit.title_many', { count: selectedCount }),
                         form: {
                             profile: {
-                                label: 'Quick Setup',
+                                label: translateLightManager('light_manager.field.quick_setup'),
                                 type: 'select',
                                 options: {
-                                    keep: 'Keep values below',
-                                    point_fill: 'Point fill light',
-                                    spot_key: 'Spot key light',
-                                    directional_sun: 'Directional sun light',
-                                    minecraft_optimized: 'Minecraft Optimized (Directional)'
+                                    keep: translateLightManager('light_manager.option.keep_values'),
+                                    point_fill: translateLightManager('light_manager.profile.point_fill'),
+                                    spot_key: translateLightManager('light_manager.profile.spot_key'),
+                                    directional_sun: translateLightManager('light_manager.profile.directional_sun'),
+                                    minecraft_optimized: translateLightManager('light_manager.profile.minecraft_optimized')
                                 },
                                 value: 'keep',
-                                description: 'Choose a profile to replace the technical values below on confirm.'
+                                description: translateLightManager('light_manager.field.quick_setup.desc')
                             },
                             light_type: {
-                                label: 'Light Type',
+                                label: translateLightManager('property.light_type'),
                                 type: 'select',
                                 options: {
-                                    point: 'Point - radius light',
-                                    directional: 'Directional - sun light',
-                                    spot: 'Spot - cone light'
+                                    point: translateLightManager('light_manager.option.point_radius'),
+                                    directional: translateLightManager('light_manager.option.directional_sun'),
+                                    spot: translateLightManager('light_manager.option.spot_cone')
                                 },
                                 value: firstLight.light_type
                             },
-                            color: { label: 'Color', type: 'color', value: currentHex },
-                            intensity: { label: 'Brightness', type: 'number', value: firstLight.intensity, min: 0, step: 0.1 },
-                            distance: { label: 'Range', type: 'number', value: firstLight.distance, min: 0, step: 0.5, description: 'Point/spot range. 0 means no hard cutoff.' },
-                            angle: { label: 'Spot Cone', type: 'number', value: firstLight.angle, min: 0.1, max: 89.9, step: 0.1, description: 'Spot only. Values near 90 are very wide.' },
-                            penumbra: { label: 'Spot Soft Edge', type: 'number', value: firstLight.penumbra, min: 0, max: 1, step: 0.01 },
+                            color: { label: translateLightManager('light_manager.property.color'), type: 'color', value: currentHex },
+                            intensity: { label: translateLightManager('light_manager.property.brightness'), type: 'number', value: firstLight.intensity, min: 0, step: 0.1 },
+                            distance: {
+                                label: translateLightManager('light_manager.property.range'),
+                                type: 'number',
+                                value: firstLight.distance,
+                                min: 0,
+                                step: 0.5,
+                                description: translateLightManager('light_manager.property.range.desc')
+                            },
+                            angle: {
+                                label: translateLightManager('light_manager.property.spot_cone'),
+                                type: 'number',
+                                value: firstLight.angle,
+                                min: 0.1,
+                                max: 89.9,
+                                step: 0.1,
+                                description: translateLightManager('light_manager.property.spot_cone.desc')
+                            },
+                            penumbra: { label: translateLightManager('light_manager.property.spot_soft_edge'), type: 'number', value: firstLight.penumbra, min: 0, max: 1, step: 0.01 },
                             shadow_preset: {
-                                label: 'Shadow Preset',
+                                label: translateLightManager('light_manager.property.shadow_preset'),
                                 type: 'select',
                                 options: {
-                                    custom: 'Use values below',
-                                    off: 'Off',
-                                    preview: 'Preview - fast',
-                                    balanced: 'Balanced',
-                                    crisp: 'Crisp - heavier',
-                                    minecraft: 'Minecraft Optimized'
+                                    custom: translateLightManager('light_manager.option.use_values_below'),
+                                    off: translateLightManager('light_manager.option.shadow_off'),
+                                    preview: translateLightManager('light_manager.option.shadow_preview'),
+                                    balanced: translateLightManager('light_manager.option.shadow_balanced'),
+                                    crisp: translateLightManager('light_manager.option.shadow_crisp'),
+                                    minecraft: translateLightManager('light_manager.option.shadow_minecraft')
                                 },
                                 value: 'custom'
                             },
-                            has_shadow: { label: 'Casts Shadows', type: 'checkbox', value: firstLight.has_shadow },
-                            shadow_resolution: { label: 'Shadow Size', type: 'select', options: { '256': '256', '512': '512', '1024': '1024', '2048': '2048', '4096': '4096' }, value: firstLight.shadow_resolution ? firstLight.shadow_resolution.toString() : '1024' },
-                            shadow_bias: { label: 'Shadow Bias', type: 'number', value: firstLight.shadow_bias !== undefined ? firstLight.shadow_bias : DEFAULT_SHADOW_BIAS, step: 0.0001, description: 'Small offsets reduce acne; too much causes detached shadows. Default: -0.0005' },
-                            shadow_normal_bias: { label: 'Shadow Normal Bias', type: 'number', value: firstLight.shadow_normal_bias !== undefined ? firstLight.shadow_normal_bias : DEFAULT_SHADOW_NORMAL_BIAS, step: 0.0001, description: 'Adjusts bias based on surface normal. Reduces shadow acne on angled surfaces. Default: 0.02' },
-                            shadow_near: { label: 'Shadow Near', type: 'number', value: firstLight.shadow_near !== undefined ? firstLight.shadow_near : 0.1, min: 0, step: 0.1 },
-                            shadow_far: { label: 'Shadow Far', type: 'number', value: firstLight.shadow_far !== undefined ? firstLight.shadow_far : 200, min: 0.001, step: 1 },
-                            shadow_bounds: { label: 'Sun Shadow Area', type: 'number', value: firstLight.shadow_bounds !== undefined ? firstLight.shadow_bounds : 35, min: 0.001, step: 1, description: 'Directional only. Smaller is sharper; larger covers more scene.' }
+                            has_shadow: { label: translateLightManager('light_manager.property.casts_shadows'), type: 'checkbox', value: firstLight.has_shadow },
+                            shadow_resolution: { label: translateLightManager('light_manager.property.shadow_size'), type: 'select', options: { '256': '256', '512': '512', '1024': '1024', '2048': '2048', '4096': '4096' }, value: firstLight.shadow_resolution ? firstLight.shadow_resolution.toString() : '1024' },
+                            studio_shadow_resolution: {
+                                label: translateLightManager('property.studio_shadow_resolution'),
+                                type: 'select',
+                                options: {
+                                    '0': translateLightManager('light_manager.option.shadow_same_preview'),
+                                    '256': '256',
+                                    '512': '512',
+                                    '1024': '1024',
+                                    '2048': '2048',
+                                    '4096': '4096'
+                                },
+                                value: firstLight.studio_shadow_resolution ? firstLight.studio_shadow_resolution.toString() : '0',
+                                description: translateLightManager('property.studio_shadow_resolution.desc')
+                            },
+                            shadow_bias: { label: translateLightManager('property.shadow_bias'), type: 'number', value: firstLight.shadow_bias !== undefined ? firstLight.shadow_bias : DEFAULT_SHADOW_BIAS, step: 0.0001, description: translateLightManager('property.shadow_bias.desc') },
+                            shadow_normal_bias: { label: translateLightManager('property.shadow_normal_bias'), type: 'number', value: firstLight.shadow_normal_bias !== undefined ? firstLight.shadow_normal_bias : DEFAULT_SHADOW_NORMAL_BIAS, step: 0.0001, description: translateLightManager('property.shadow_normal_bias.desc') },
+                            shadow_near: { label: translateLightManager('light_manager.property.shadow_near'), type: 'number', value: firstLight.shadow_near !== undefined ? firstLight.shadow_near : 0.1, min: 0, step: 0.1 },
+                            shadow_far: { label: translateLightManager('light_manager.property.shadow_far'), type: 'number', value: firstLight.shadow_far !== undefined ? firstLight.shadow_far : 200, min: 0.001, step: 1 },
+                            shadow_bounds: {
+                                label: translateLightManager('light_manager.property.sun_shadow_area'),
+                                type: 'number',
+                                value: firstLight.shadow_bounds !== undefined ? firstLight.shadow_bounds : 35,
+                                min: 0.001,
+                                step: 1,
+                                description: translateLightManager('light_manager.property.sun_shadow_area.desc')
+                            }
                         },
                         onConfirm(form_result) {
                             const selectedLights = LightElement.selected.slice();
@@ -5132,7 +6152,7 @@ function initialize_light_plugin() {
                                 LightElement.preview_controller?.updateSelection(light);
                             });
 
-                            Undo.finishEdit('Edit light properties');
+                            Undo.finishEdit(translateLightManager('light_manager.undo.edit_properties'));
                             updateSelection();
                             window.update_light_element_callback?.();
                         }
@@ -5158,6 +6178,7 @@ function initialize_light_plugin() {
             let light_cone_penumbra_slider;
             let cast_shadows_toggle;
             let light_shadow_resolution_select;
+            let light_studio_shadow_resolution_select;
             let light_shadow_near_sliderbox;
             let light_shadow_far_sliderbox;
             let light_shadow_bounds_slider;
@@ -5242,6 +6263,8 @@ function initialize_light_plugin() {
                         return !!value;
                     case 'shadow_resolution':
                         return LightManagerUtils.shadowResolution(value);
+                    case 'studio_shadow_resolution':
+                        return LightManagerUtils.studioShadowResolution(value);
                     case 'shadow_bias':
                         return LightManagerUtils.num(value, light.shadow_bias ?? DEFAULT_SHADOW_BIAS, -1, 1);
                     case 'shadow_normal_bias':
@@ -5258,6 +6281,14 @@ function initialize_light_plugin() {
             };
 
             const getLightPanelUpdateOptions = (property) => {
+                if (property === 'studio_shadow_resolution') {
+                    return {
+                        shadows: false,
+                        scene: false,
+                        gizmos: false
+                    };
+                }
+
                 if (['color', 'temperature', 'intensity'].includes(property)) {
                     return {
                         shadows: false,
@@ -5295,6 +6326,7 @@ function initialize_light_plugin() {
 
                     cast_shadows_toggle?.set?.(light.has_shadow !== false);
                     setBarControl(light_shadow_resolution_select, String(LightManagerUtils.shadowResolution(light.shadow_resolution)));
+                    setBarControl(light_studio_shadow_resolution_select, String(LightManagerUtils.studioShadowResolution(light.studio_shadow_resolution)));
                     setNumControl(light_shadow_near_sliderbox, light.shadow_near);
                     setNumControl(light_shadow_far_sliderbox, light.shadow_far);
                     setNumControl(light_shadow_bounds_slider, light.shadow_bounds);
@@ -5352,13 +6384,13 @@ function initialize_light_plugin() {
                 name: 'property.light_type',
                 icon_mode: true,
                 options: {
-                    point: { name: 'Point', icon: 'lightbulb' },
-                    directional: { name: 'Directional', icon: 'light_mode' },
-                    spot: { name: 'Spot', icon: 'highlight' }
+                    point: { name: 'property.light_type.point', icon: 'lightbulb' },
+                    directional: { name: 'property.light_type.directional', icon: 'light_mode' },
+                    spot: { name: 'property.light_type.spot', icon: 'highlight' }
                 },
                 condition: singleLightCondition,
                 onChange: function () {
-                    applyLightPanelValue('light_type', this.value, 'Change light type');
+                    applyLightPanelValue('light_type', this.value, translateLightManager('light_manager.undo.change_type'));
                 }
             });
 
@@ -5368,16 +6400,16 @@ function initialize_light_plugin() {
                 label: false,
                 value: tinycolor('ffffff'),
                 condition: singleLightCondition,
-                onBefore: () => beginLightEdit('Change light color'),
+                onBefore: () => beginLightEdit(translateLightManager('light_manager.undo.change_color')),
                 onChange: function (color) {
                     let newColor = tinycolor(color);
-                    applyLightPanelValue('color', [newColor._r, newColor._g, newColor._b], 'Change light color');
+                    applyLightPanelValue('color', [newColor._r, newColor._g, newColor._b], translateLightManager('light_manager.undo.change_color'));
                 },
                 onMove: function (color) {
                     let newColor = tinycolor(color);
-                    applyLightPanelValue('color', [newColor._r, newColor._g, newColor._b], 'Change light color');
+                    applyLightPanelValue('color', [newColor._r, newColor._g, newColor._b], translateLightManager('light_manager.undo.change_color'));
                 },
-                onAfter: () => finishLightEdit('Change light color')
+                onAfter: () => finishLightEdit(translateLightManager('light_manager.undo.change_color'))
             });
 
             light_temperature_slider = new ComboSlider('light_temperature_slider', {
@@ -5398,11 +6430,11 @@ function initialize_light_plugin() {
                     let light = getSelectedLight();
                     return light ? (light.temperature || 6500) : 6500;
                 },
-                onBefore: () => beginLightEdit('Change light temperature'),
+                onBefore: () => beginLightEdit(translateLightManager('light_manager.undo.change_temperature')),
                 onChange: function () {
                     applyLightPanelValue('temperature', this.value);
                 },
-                onAfter: () => finishLightEdit('Change light temperature')
+                onAfter: () => finishLightEdit(translateLightManager('light_manager.undo.change_temperature'))
             });
 
             cast_shadows_toggle = new Toggle('cast_shadows', {
@@ -5412,7 +6444,7 @@ function initialize_light_plugin() {
                 condition: singleLightCondition,
                 default: true,
                 onChange(toggle_value) {
-                    applyLightPanelValue('has_shadow', toggle_value, 'Toggle shadows');
+                    applyLightPanelValue('has_shadow', toggle_value, translateLightManager('light_manager.undo.toggle_shadows'));
                 }
             });
 
@@ -5427,7 +6459,24 @@ function initialize_light_plugin() {
                 },
                 condition: shadowLightCondition,
                 onChange: function () {
-                    applyLightPanelValue('shadow_resolution', this.value, 'Change shadow resolution');
+                    applyLightPanelValue('shadow_resolution', this.value, translateLightManager('light_manager.undo.change_shadow_resolution'));
+                }
+            });
+
+            light_studio_shadow_resolution_select = new BarSelect('light_studio_shadow_resolution_select', {
+                name: 'property.studio_shadow_resolution',
+                description: 'property.studio_shadow_resolution.desc',
+                options: {
+                    0: { name: 'light_manager.option.shadow_same_preview' },
+                    256: { name: '256' },
+                    512: { name: '512' },
+                    1024: { name: '1024' },
+                    2048: { name: '2048' },
+                    4096: { name: '4096' }
+                },
+                condition: shadowLightCondition,
+                onChange: function () {
+                    applyLightPanelValue('studio_shadow_resolution', this.value, translateLightManager('light_manager.undo.change_studio_shadow_resolution'));
                 }
             });
 
@@ -5436,12 +6485,12 @@ function initialize_light_plugin() {
                 name: 'property.light.quickbuttons',
                 label: true,
                 condition: singleLightCondition,
-                children: ['light_type_select', 'light_color_picker', '+', 'cast_shadows', 'light_shadow_resolution_select', '#', 'light_temperature_slider']
+                children: ['light_type_select', 'light_color_picker', '+', 'cast_shadows', 'light_shadow_resolution_select', 'light_studio_shadow_resolution_select', '#', 'light_temperature_slider']
             });
 
             light_intensity_slider = new ComboSlider('light_intensity_slider', {
                 label: 'property.light_intensity',
-                //icon: 'flare',
+                icon: 'flare',
                 title: 'property.light_intensity.desc',
                 grow: true,
                 color: 'var(--color-axis-w)',
@@ -5456,11 +6505,11 @@ function initialize_light_plugin() {
                     let light = getSelectedLight();
                     return light ? light.intensity : 0;
                 },
-                onBefore: () => beginLightEdit('Change light intensity'),
+                onBefore: () => beginLightEdit(translateLightManager('light_manager.undo.change_intensity')),
                 onChange: function () {
                     applyLightPanelValue('intensity', this.value);
                 },
-                onAfter: () => finishLightEdit('Change light intensity')
+                onAfter: () => finishLightEdit(translateLightManager('light_manager.undo.change_intensity'))
             });
 
             light_distance_slider = new ComboSlider('light_distance_slider', {
@@ -5480,11 +6529,11 @@ function initialize_light_plugin() {
                     let light = getSelectedLight();
                     return light ? light.distance : 0;
                 },
-                onBefore: () => beginLightEdit('Change light distance'),
+                onBefore: () => beginLightEdit(translateLightManager('light_manager.undo.change_distance')),
                 onChange: function () {
                     applyLightPanelValue('distance', this.value);
                 },
-                onAfter: () => finishLightEdit('Change light distance')
+                onAfter: () => finishLightEdit(translateLightManager('light_manager.undo.change_distance'))
             });
 
             light_cone_angle_slider = new ComboSlider('light_cone_angle_slider', {
@@ -5504,11 +6553,11 @@ function initialize_light_plugin() {
                     let light = getSelectedLight();
                     return light ? light.angle : 45;
                 },
-                onBefore: () => beginLightEdit('Change light cone angle'),
+                onBefore: () => beginLightEdit(translateLightManager('light_manager.undo.change_cone_angle')),
                 onChange: function () {
                     applyLightPanelValue('angle', this.value);
                 },
-                onAfter: () => finishLightEdit('Change light cone angle')
+                onAfter: () => finishLightEdit(translateLightManager('light_manager.undo.change_cone_angle'))
             });
 
             light_cone_penumbra_slider = new ComboSlider('light_cone_penumbra_slider', {
@@ -5528,11 +6577,11 @@ function initialize_light_plugin() {
                     let light = getSelectedLight();
                     return light ? light.penumbra : 0;
                 },
-                onBefore: () => beginLightEdit('Change light penumbra'),
+                onBefore: () => beginLightEdit(translateLightManager('light_manager.undo.change_penumbra')),
                 onChange: function () {
                     applyLightPanelValue('penumbra', this.value);
                 },
-                onAfter: () => finishLightEdit('Change light penumbra')
+                onAfter: () => finishLightEdit(translateLightManager('light_manager.undo.change_penumbra'))
             });
 
 
@@ -5550,9 +6599,9 @@ function initialize_light_plugin() {
                 color: 'var(--color-axis-x)',
                 settings: { default: 0.1, min: 0, max: 100000, step: 0.05 },
                 condition: shadowLightCondition,
-                onBefore: () => beginLightEdit('Change shadow clip'),
+                onBefore: () => beginLightEdit(translateLightManager('light_manager.undo.change_shadow_clip')),
                 onChange: modify => applyLightPanelValue('shadow_near', modify),
-                onAfter: () => finishLightEdit('Change shadow clip')
+                onAfter: () => finishLightEdit(translateLightManager('light_manager.undo.change_shadow_clip'))
             });
 
             Object.assign(light_shadow_near_sliderbox.node.style, {
@@ -5566,9 +6615,9 @@ function initialize_light_plugin() {
                 color: 'var(--color-axis-w)',
                 settings: { default: 200, min: 0.001, max: 100000, step: 1 },
                 condition: shadowLightCondition,
-                onBefore: () => beginLightEdit('Change shadow clip'),
+                onBefore: () => beginLightEdit(translateLightManager('light_manager.undo.change_shadow_clip')),
                 onChange: modify => applyLightPanelValue('shadow_far', modify),
-                onAfter: () => finishLightEdit('Change shadow clip')
+                onAfter: () => finishLightEdit(translateLightManager('light_manager.undo.change_shadow_clip'))
             });
 
             Object.assign(light_shadow_far_sliderbox.node.style, {
@@ -5591,11 +6640,11 @@ function initialize_light_plugin() {
                     let light = getSelectedLight();
                     return light ? light.shadow_bounds : 35;
                 },
-                onBefore: () => beginLightEdit('Change shadow bounds'),
+                onBefore: () => beginLightEdit(translateLightManager('light_manager.undo.change_shadow_bounds')),
                 onChange: function () {
                     applyLightPanelValue('shadow_bounds', this.value);
                 },
-                onAfter: () => finishLightEdit('Change shadow bounds')
+                onAfter: () => finishLightEdit(translateLightManager('light_manager.undo.change_shadow_bounds'))
             });
 
             Object.assign(light_shadow_bounds_slider.node.style, {
@@ -5620,11 +6669,11 @@ function initialize_light_plugin() {
                 reset_value: DEFAULT_SHADOW_BIAS,
                 min: -1, max: 1, step: 0.0001,
                 condition: shadowLightCondition,
-                onBefore: () => beginLightEdit('Change shadow bias'),
+                onBefore: () => beginLightEdit(translateLightManager('light_manager.undo.change_shadow_bias')),
                 onChange: function () {
                     applyLightPanelValue('shadow_bias', this.value);
                 },
-                onAfter: () => finishLightEdit('Change shadow bias')
+                onAfter: () => finishLightEdit(translateLightManager('light_manager.undo.change_shadow_bias'))
             });
 
             light_shadow_normal_bias_sliderbox = new ComboSlider('light_shadow_normal_bias_sliderbox', {
@@ -5636,11 +6685,11 @@ function initialize_light_plugin() {
                 reset_value: DEFAULT_SHADOW_NORMAL_BIAS,
                 min: -1, max: 1, step: 0.0001,
                 condition: shadowLightCondition,
-                onBefore: () => beginLightEdit('Change shadow normal bias'),
+                onBefore: () => beginLightEdit(translateLightManager('light_manager.undo.change_shadow_normal_bias')),
                 onChange: function () {
                     applyLightPanelValue('shadow_normal_bias', this.value);
                 },
-                onAfter: () => finishLightEdit('Change shadow normal bias')
+                onAfter: () => finishLightEdit(translateLightManager('light_manager.undo.change_shadow_normal_bias'))
             });
 
             let light_shadow_bias_settings_toolbar = new Toolbar({
@@ -5667,6 +6716,7 @@ function initialize_light_plugin() {
 
                 cast_shadows_toggle,
                 light_shadow_resolution_select,
+                light_studio_shadow_resolution_select,
                 light_quickbuttons_toolbar,
                 light_shadow_near_sliderbox,
                 light_shadow_far_sliderbox,
@@ -5750,8 +6800,13 @@ function initialize_light_plugin() {
             const syncLightManagerShadows = (options = {}) => {
                 markLightManagerShadowsDirty(options);
                 configureLightManagerRenderers();
+                const lightObjectsChanged = ensureLightManagerThreeLights(options);
                 configureLightManagerSceneShadowMeshes();
+                const shadowFlagsChanged = syncLightManagerThreeLightShadowFlags(options);
                 invalidateLightManagerShadowMaps();
+                if (lightObjectsChanged || shadowFlagsChanged) {
+                    notifyLightManagerShadowStateRepaired(options);
+                }
             };
 
             const viewUpdateShadowListener = Blockbench.on('update_view', (options = {}) => {
@@ -5858,6 +6913,8 @@ function initialize_light_plugin() {
             delete window.LightManagerFitTool;
             delete window.LightManagerPrepareRender;
             delete window.LightManagerMarkShadowsDirty;
+            delete window.LightManagerDebugShadows;
+            delete window.LightManagerSyncLights;
             delete window.update_light_element_callback;
             restoreLightManagerAnimatorPreview();
             restoreLightManagerRendererShadowSettings();

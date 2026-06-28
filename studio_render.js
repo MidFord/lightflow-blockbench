@@ -1,4 +1,4 @@
-(function() {
+(function () {
     'use strict';
 
     const PLUGIN_ID = 'studio_render';
@@ -8,6 +8,8 @@
     const MAX_OUTPUT_PIXELS = 140000000;
     const DEFAULT_TILE_SIZE = 2048;
     const DEFAULT_ZOOM = 42;
+    const PROMOTIONAL_RIM_MAX_RENDER_RADIUS = 192;
+
 
     const RESOLUTION_PRESETS = {
         hd: [1920, 1080],
@@ -43,6 +45,7 @@
     let stylesheet;
     let activeDialog;
     let currentSettings = Object.assign({}, DEFAULT_SETTINGS);
+    let gpuGuidanceShown = false;
 
     function clamp(value, min, max) {
         return Math.max(min, Math.min(max, value));
@@ -72,7 +75,7 @@
         try {
             localStorage.setItem(key, JSON.stringify(value));
         } catch (error) {
-            console.warn('[Studio Render] Could not save settings', error);
+            // Ignore unavailable storage; defaults keep the renderer usable.
         }
     }
 
@@ -80,6 +83,180 @@
         if (typeof tl !== 'function') return fallback || key;
         const value = tl(key);
         return value === key ? (fallback || key) : value;
+    }
+
+    function truncateText(text, maxLength) {
+        const value = String(text || '');
+        if (value.length <= maxLength) return value;
+        return value.slice(0, Math.max(1, maxLength - 3)) + '...';
+    }
+
+    function getRendererContext(renderer) {
+        try {
+            return renderer && typeof renderer.getContext === 'function'
+                ? renderer.getContext()
+                : null;
+        } catch (error) {
+            return null;
+        }
+    }
+
+    function getGLParameter(gl, parameter, fallback) {
+        try {
+            const value = gl && parameter !== undefined
+                ? gl.getParameter(parameter)
+                : null;
+            return value || fallback;
+        } catch (error) {
+            return fallback;
+        }
+    }
+
+    function classifyGpuRenderer(vendor, rendererName) {
+        const text = `${vendor || ''} ${rendererName || ''}`.toLowerCase();
+
+        if (/swiftshader|software|llvmpipe|warp|microsoft basic/.test(text)) {
+            return 'software';
+        }
+
+        if (/nvidia|geforce|rtx|gtx|quadro|tesla|radeon rx|radeon pro|\brx\s*\d|intel\(r\) arc|arc\(tm\) a|arc\(tm\) b/.test(text)) {
+            return 'dedicated';
+        }
+
+        if (/intel|uhd|iris|hd graphics|integrated|radeon graphics|vega|apple/.test(text)) {
+            return 'integrated';
+        }
+
+        return 'unknown';
+    }
+
+    function getGpuProfile(renderer) {
+        const gl = getRendererContext(renderer);
+
+        if (!gl) {
+            return {
+                available: false,
+                vendor: '',
+                renderer: '',
+                classification: 'unknown',
+                maxTextureSize: 4096,
+                maxRenderbufferSize: 4096,
+                maxViewportSize: 4096
+            };
+        }
+
+        let debugInfo = null;
+        try {
+            debugInfo = gl.getExtension && gl.getExtension('WEBGL_debug_renderer_info');
+        } catch (error) {
+            debugInfo = null;
+        }
+
+        const vendor = debugInfo
+            ? getGLParameter(gl, debugInfo.UNMASKED_VENDOR_WEBGL, '')
+            : getGLParameter(gl, gl.VENDOR, '');
+
+        const rendererName = debugInfo
+            ? getGLParameter(gl, debugInfo.UNMASKED_RENDERER_WEBGL, '')
+            : getGLParameter(gl, gl.RENDERER, '');
+
+        const viewportDims = getGLParameter(gl, gl.MAX_VIEWPORT_DIMS, null);
+        const maxViewportSize = viewportDims && viewportDims.length >= 2
+            ? Math.min(Number(viewportDims[0]) || 4096, Number(viewportDims[1]) || 4096)
+            : 4096;
+
+        return {
+            available: true,
+            vendor: String(vendor || ''),
+            renderer: String(rendererName || ''),
+            classification: classifyGpuRenderer(vendor, rendererName),
+            maxTextureSize: Number(getGLParameter(gl, gl.MAX_TEXTURE_SIZE, 4096)) || 4096,
+            maxRenderbufferSize: Number(getGLParameter(gl, gl.MAX_RENDERBUFFER_SIZE, 4096)) || 4096,
+            maxViewportSize
+        };
+    }
+
+    function getGpuClassLabel(profile) {
+        const key = profile && profile.classification ? profile.classification : 'unknown';
+        const labels = {
+            dedicated: translate('studio_render.option.gpu.dedicated', 'Dedicated GPU'),
+            integrated: translate('studio_render.option.gpu.integrated', 'Integrated GPU'),
+            software: translate('studio_render.option.gpu.software', 'Software Renderer'),
+            unknown: translate('studio_render.option.gpu.unknown', 'GPU Unknown')
+        };
+        return labels[key] || labels.unknown;
+    }
+
+    function getGpuDisplayName(profile) {
+        if (!profile || !profile.available) {
+            return translate('studio_render.option.gpu.unavailable', 'WebGL renderer unavailable');
+        }
+        return profile.renderer || profile.vendor || translate('studio_render.option.gpu.unknown', 'GPU Unknown');
+    }
+
+    function getGpuStatusLabel(renderer) {
+        const profile = getGpuProfile(renderer);
+        return truncateText(
+            `${getGpuClassLabel(profile)} - ${getGpuDisplayName(profile)}`,
+            72
+        );
+    }
+
+    function getGpuGuidanceMessage(profile) {
+        const lines = [
+            `${translate('studio_render.field.gpu', 'GPU')}: ${getGpuClassLabel(profile)}`,
+            `${translate('studio_render.field.gpu_renderer', 'Renderer')}: ${getGpuDisplayName(profile)}`
+        ];
+
+        if (profile && profile.available) {
+            lines.push(
+                `MAX_TEXTURE_SIZE: ${profile.maxTextureSize}`,
+                `MAX_RENDERBUFFER_SIZE: ${profile.maxRenderbufferSize}`,
+                `MAX_VIEWPORT: ${profile.maxViewportSize}`
+            );
+        }
+
+        lines.push('');
+
+        if (profile && profile.classification === 'dedicated') {
+            lines.push(translate(
+                'studio_render.message.gpu_dedicated',
+                'Studio Render is already using a renderer that looks like a dedicated GPU.'
+            ));
+        } else {
+            lines.push(translate(
+                'studio_render.message.gpu_guidance',
+                'Blockbench chooses the WebGL GPU before plugins run. To force a dedicated GPU, set Blockbench.exe to High performance in Windows Graphics settings or your NVIDIA/AMD control panel, then restart Blockbench.'
+            ));
+        }
+
+        return lines.join('\n');
+    }
+
+    function showGpuProfileDetails(renderer) {
+        const profile = getGpuProfile(renderer);
+        Blockbench.showMessageBox({
+            title: translate('studio_render.message.gpu_title', 'Studio Render GPU'),
+            message: getGpuGuidanceMessage(profile),
+            icon: profile.classification === 'dedicated' ? 'memory' : 'settings_suggest'
+        });
+    }
+
+    function showGpuGuidanceIfNeeded(profile) {
+        if (
+            gpuGuidanceShown ||
+            !profile ||
+            profile.classification === 'dedicated'
+        ) {
+            return;
+        }
+
+        gpuGuidanceShown = true;
+        Blockbench.showMessageBox({
+            title: translate('studio_render.message.gpu_title', 'Studio Render GPU'),
+            message: getGpuGuidanceMessage(profile),
+            icon: 'settings_suggest'
+        });
     }
 
     function addTranslations() {
@@ -91,6 +268,7 @@
             'studio_render.action.frame': 'Studio Render Frame',
             'studio_render.action.frame.desc': 'Show or hide the adjustable capture frame for Studio Render.',
             'studio_render.action.reset_frame': 'Reset Studio Render Frame',
+            'studio_render.action.reset_frame.desc': 'Restore the Studio Render frame to its centered default size.',
             'studio_render.action.capture': 'Render Now',
             'studio_render.action.capture.desc': 'Render the current Studio Render frame.',
             'studio_render.action.settings': 'Render Settings',
@@ -113,6 +291,8 @@
             'studio_render.field.show_gizmos': 'Show Gizmos',
             'studio_render.field.show_tile_grid': 'Show Tile Grid',
             'studio_render.field.zoom': 'Focal Length',
+            'studio_render.field.gpu': 'GPU',
+            'studio_render.field.gpu_renderer': 'Renderer',
             'studio_render.field.destination': 'After Render',
             'studio_render.field.file_name': 'File Name',
             'studio_render.group.camera': 'Camera',
@@ -138,6 +318,11 @@
             'studio_render.option.tile.1536': '1536 px',
             'studio_render.option.tile.2048': '2048 px',
             'studio_render.option.tile.3072': '3072 px',
+            'studio_render.option.gpu.dedicated': 'Dedicated GPU',
+            'studio_render.option.gpu.integrated': 'Integrated GPU',
+            'studio_render.option.gpu.software': 'Software Renderer',
+            'studio_render.option.gpu.unknown': 'GPU Unknown',
+            'studio_render.option.gpu.unavailable': 'WebGL renderer unavailable',
             'studio_render.option.area.full': 'Full Composition',
             'studio_render.option.area.frame': 'Render Frame',
             'studio_render.option.background.transparent': 'Transparent',
@@ -158,6 +343,9 @@
             'studio_render.message.too_large': 'The requested output is too large for a safe browser canvas.',
             'studio_render.message.rendered': 'Studio render complete',
             'studio_render.message.copied': 'Studio render copied to clipboard',
+            'studio_render.message.gpu_title': 'Studio Render GPU',
+            'studio_render.message.gpu_dedicated': 'Studio Render is already using a renderer that looks like a dedicated GPU.',
+            'studio_render.message.gpu_guidance': 'Blockbench chooses the WebGL GPU before plugins run. To force a dedicated GPU, set Blockbench.exe to High performance in Windows Graphics settings or your NVIDIA/AMD control panel, then restart Blockbench.',
             'studio_render.frame.label': 'Studio Render Frame'
         });
 
@@ -169,6 +357,7 @@
             'studio_render.action.frame': 'Marco de Render de Estudio',
             'studio_render.action.frame.desc': 'Muestra u oculta el marco ajustable de captura para Render de Estudio.',
             'studio_render.action.reset_frame': 'Reiniciar Marco de Render',
+            'studio_render.action.reset_frame.desc': 'Restaura el marco de Render de Estudio a su tamano centrado por defecto.',
             'studio_render.action.capture': 'Renderizar Ahora',
             'studio_render.action.capture.desc': 'Renderiza el marco actual de Render de Estudio.',
             'studio_render.action.settings': 'Ajustes de Render',
@@ -191,6 +380,8 @@
             'studio_render.field.show_gizmos': 'Mostrar Gizmos',
             'studio_render.field.show_tile_grid': 'Mostrar Tiles',
             'studio_render.field.zoom': 'Distancia Focal',
+            'studio_render.field.gpu': 'GPU',
+            'studio_render.field.gpu_renderer': 'Renderer',
             'studio_render.field.destination': 'Despues de Render',
             'studio_render.field.file_name': 'Nombre de Archivo',
             'studio_render.group.camera': 'Camara',
@@ -216,6 +407,11 @@
             'studio_render.option.tile.1536': '1536 px',
             'studio_render.option.tile.2048': '2048 px',
             'studio_render.option.tile.3072': '3072 px',
+            'studio_render.option.gpu.dedicated': 'GPU dedicada',
+            'studio_render.option.gpu.integrated': 'GPU integrada',
+            'studio_render.option.gpu.software': 'Renderer por software',
+            'studio_render.option.gpu.unknown': 'GPU desconocida',
+            'studio_render.option.gpu.unavailable': 'Renderer WebGL no disponible',
             'studio_render.option.area.full': 'Composicion Completa',
             'studio_render.option.area.frame': 'Marco de Render',
             'studio_render.option.background.transparent': 'Transparente',
@@ -236,6 +432,9 @@
             'studio_render.message.too_large': 'La salida solicitada es demasiado grande para un canvas seguro.',
             'studio_render.message.rendered': 'Render de estudio completado',
             'studio_render.message.copied': 'Render de estudio copiado al portapapeles',
+            'studio_render.message.gpu_title': 'GPU de Render de Estudio',
+            'studio_render.message.gpu_dedicated': 'Render de Estudio ya esta usando un renderer que parece una GPU dedicada.',
+            'studio_render.message.gpu_guidance': 'Blockbench elige la GPU WebGL antes de que corran los plugins. Para forzar una GPU dedicada, asigna Blockbench.exe a Alto rendimiento en Graficos de Windows o en el panel NVIDIA/AMD, y reinicia Blockbench.',
             'studio_render.frame.label': 'Marco de Render'
         });
     }
@@ -258,6 +457,7 @@
             : !!settings.shading;
         settings.show_gizmos = !!settings.show_gizmos;
         settings.show_tile_grid = !!settings.show_tile_grid;
+        delete settings.gpu_status;
         return settings;
     }
 
@@ -488,6 +688,7 @@
             ? null
             : toNumber(settings.zoom, DEFAULT_ZOOM);
         settings.file_name = String(settings.file_name || DEFAULT_SETTINGS.file_name).trim() || DEFAULT_SETTINGS.file_name;
+        delete settings.gpu_status;
         return settings;
     }
 
@@ -525,22 +726,26 @@
     }
 
     function resolveTileSize(settings, renderer, sampleFactor) {
-        let maxTextureSize = 4096;
+        const gpuProfile = getGpuProfile(renderer);
+        const maxTextureSize = Math.max(
+            sampleFactor,
+            Math.min(
+                gpuProfile.maxTextureSize || 4096,
+                gpuProfile.maxRenderbufferSize || 4096,
+                gpuProfile.maxViewportSize || 4096
+            )
+        );
 
-        try {
-            const gl = renderer && renderer.getContext && renderer.getContext();
-
-            if (gl) {
-                maxTextureSize =
-                    gl.getParameter(gl.MAX_TEXTURE_SIZE) ||
-                    maxTextureSize;
-            }
-        } catch (error) {
-            maxTextureSize = 4096;
-        }
+        const autoTileSize = gpuProfile.classification === 'software'
+            ? 1024
+            : (
+                gpuProfile.classification === 'integrated'
+                    ? 1536
+                    : DEFAULT_TILE_SIZE
+            );
 
         const requested = settings.tile_size === 'auto'
-            ? DEFAULT_TILE_SIZE
+            ? autoTileSize
             : parseInt(settings.tile_size, 10);
 
         /*
@@ -550,7 +755,8 @@
         */
         const maxBleed = Math.max(
             32,
-            sampleFactor * 32
+            sampleFactor * 32,
+            PROMOTIONAL_RIM_MAX_RENDER_RADIUS + 4
         );
 
         const safeRenderExtent = Math.floor(
@@ -580,8 +786,24 @@
     }
 
     function resolveTileBleed(sampleFactor, tileSize) {
-        const bleed = Math.max(32, sampleFactor * 32);
-        return Math.max(0, Math.min(Math.floor(tileSize / 2), bleed));
+        /*
+            El RIM puede alcanzar hasta 192 px internos despues de aplicar
+            el zoom del Render Frame. Este margen evita cortes en los bordes
+            del Frame y uniones visibles entre tiles.
+        */
+        const requiredBleed = Math.max(
+            32,
+            sampleFactor * 32,
+            PROMOTIONAL_RIM_MAX_RENDER_RADIUS + 4
+        );
+
+        return Math.max(
+            0,
+            Math.min(
+                Math.floor(tileSize / 2),
+                requiredBleed
+            )
+        );
     }
 
     function createCanvas(width, height) {
@@ -729,6 +951,26 @@
         );
 
         /*
+            El RIM vive en screen-space. Para que conserve el mismo grosor
+            visual que en el viewport, su radio debe crecer con la resolucion
+            final y, si hay Render Frame, con el zoom de ese encuadre.
+        */
+        const outputPixelScale = Math.max(
+            size.width / sourceWidth,
+            size.height / sourceHeight,
+            1.0
+        );
+
+        const frameZoomScale = useFrame
+            ? Math.max(
+                sourceWidth / Math.max(frameRect.width, 1),
+                sourceHeight / Math.max(frameRect.height, 1)
+            )
+            : 1.0;
+
+        const promotionalRimFrameScale = outputPixelScale * frameZoomScale;
+
+        /*
             Margen compartido entre tiles.
 
             También se usa como overscan exterior del frame. Es mayor que
@@ -861,6 +1103,8 @@
                     cropX,
                     cropY,
 
+                    promotionalRimFrameScale,
+
                     outputX: x / sampleFactor,
                     outputY: y / sampleFactor,
 
@@ -901,16 +1145,45 @@
             renderPreview.renderer.setScissorTest(false);
         }
         if (typeof window.LightManagerPrepareRender === 'function') {
-            window.LightManagerPrepareRender(renderPreview);
+            window.LightManagerPrepareRender(renderPreview, { studio: true });
         }
         if (typeof Blockbench !== 'undefined' && typeof Blockbench.dispatchEvent === 'function') {
             Blockbench.dispatchEvent('studio_render_pre_tile', {
                 preview: renderPreview,
                 source_preview: sourcePreview,
                 tile,
-                settings
+                settings,
+
+                promotionalRimFrameScale: Math.max(
+                    1.0,
+                    Number(tile.promotionalRimFrameScale) || 1.0
+                )
             });
         }
+    }
+
+    function previewHasPromotionalRimPreparation(preview, sampleScale, frameScale) {
+        if (!preview) return false;
+        const currentSampleScale = Number(preview.sa_promotional_rim_sample_scale);
+        const currentFrameScale = Number(preview.sa_promotional_rim_frame_scale);
+
+        return (
+            Number.isFinite(currentSampleScale) &&
+            Number.isFinite(currentFrameScale) &&
+            Math.abs(currentSampleScale - sampleScale) < 0.0001 &&
+            Math.abs(currentFrameScale - frameScale) < 0.0001
+        );
+    }
+
+    function studioRenderNeedsShadowWarmup() {
+        if (!window.LightElement || !Array.isArray(LightElement.all)) return false;
+
+        return LightElement.all.some(element => {
+            if (!element || element.has_shadow === false) return false;
+            const previewResolution = Number(element.shadow_resolution) || 0;
+            const studioResolution = Number(element.studio_shadow_resolution) || 0;
+            return studioResolution > 0 && studioResolution !== previewResolution;
+        });
     }
 
     function compositeStudioRenderPostEffects(renderPreview, settings, tile) {
@@ -920,10 +1193,23 @@
         const renderer = renderPreview && renderPreview.renderer;
         if (!renderer) return;
 
+        const sampleScale = clamp(
+            parseInt(settings.samples, 10) || 1,
+            1,
+            8
+        );
+        const frameScale = Math.max(
+            1.0,
+            Number(tile.promotionalRimFrameScale) || 1.0
+        );
+
         if (typeof manager.preparePreviewForRender === 'function') {
-            manager.preparePreviewForRender(renderPreview, {
-                sampleScale: clamp(parseInt(settings.samples, 10) || 1, 1, 8)
-            });
+            if (!previewHasPromotionalRimPreparation(renderPreview, sampleScale, frameScale)) {
+                manager.preparePreviewForRender(renderPreview, {
+                    sampleScale,
+                    frameScale
+                });
+            }
         }
 
         const previousTarget = typeof renderer.getRenderTarget === 'function'
@@ -994,6 +1280,34 @@
                 setTimeout(resolve, 0);
             }
         });
+    }
+
+    async function recoverPreviewShadowsAfterStudioRender(sourcePreview, renderPreview) {
+        if (typeof window.LightManagerPrepareRender !== 'function') return;
+
+        const previews = [];
+        if (sourcePreview) previews.push(sourcePreview);
+        if (renderPreview && renderPreview !== sourcePreview) previews.push(renderPreview);
+
+        previews.forEach(preview => {
+            window.LightManagerPrepareRender(preview, { force: true, studio: false });
+        });
+
+        if (typeof window.UpdateShaderArchitectLights === 'function') {
+            window.UpdateShaderArchitectLights();
+        } else if (typeof window.updateLights === 'function') {
+            window.updateLights();
+        }
+
+        if (sourcePreview && typeof sourcePreview.render === 'function') {
+            await waitForFrame();
+            window.LightManagerPrepareRender(sourcePreview, { force: true, studio: false });
+            sourcePreview.render();
+
+            await waitForFrame();
+            window.LightManagerPrepareRender(sourcePreview, { force: true, studio: false });
+            sourcePreview.render();
+        }
     }
 
     async function copyImageToClipboard(dataUrl) {
@@ -1077,6 +1391,8 @@
         const blockbenchShading = window.settings && window.settings.shading;
         const oldShading = blockbenchShading ? blockbenchShading.value : undefined;
         const previousState = capturePreviewState(renderPreview);
+        const gpuProfile = getGpuProfile(renderPreview.renderer);
+        showGpuGuidanceIfNeeded(gpuProfile);
 
         try {
             if (blockbenchShading && blockbenchShading.value !== normalized.shading) {
@@ -1092,8 +1408,16 @@
             const tileSize = resolveTileSize(normalized, renderPreview.renderer, sampleFactor);
             const tiles = buildTileList(outputSize, sampleFactor, tileSize, cameraSourcePreview, normalized, frameRect);
 
-            Blockbench.setStatusBarText(translate('studio_render.status.preparing', 'Preparing studio render...'));
+            Blockbench.setStatusBarText(
+                translate('studio_render.status.preparing', 'Preparing studio render...') +
+                ' - ' +
+                getGpuClassLabel(gpuProfile)
+            );
             Blockbench.setProgress(0);
+
+            const needsShadowWarmup = studioRenderNeedsShadowWarmup();
+            window.LightManagerStudioRenderSession = true;
+            window.LightManagerStudioRenderPreview = renderPreview;
 
             const renderTiles = async () => {
                 for (let index = 0; index < tiles.length; index++) {
@@ -1102,12 +1426,23 @@
                         translate('studio_render.status.tile', 'Rendering tile') + ' ' + (index + 1) + ' / ' + tiles.length
                     );
                     renderPreview.sa_studio_render_manual_silhouette = true;
+                    renderPreview.sa_studio_render_active = true;
+                    window.LightManagerStudioRenderActive = true;
+                    window.LightManagerStudioRenderPreview = renderPreview;
                     try {
                         prepareRendererForTile(renderPreview, cameraSourcePreview, normalized, tile);
+                        if (needsShadowWarmup) {
+                            renderPreview.render();
+                            if (typeof window.LightManagerPrepareRender === 'function') {
+                                window.LightManagerPrepareRender(renderPreview, { studio: true, force: true });
+                            }
+                        }
                         renderPreview.render();
                         compositeStudioRenderPostEffects(renderPreview, normalized, tile);
                     } finally {
                         delete renderPreview.sa_studio_render_manual_silhouette;
+                        delete renderPreview.sa_studio_render_active;
+                        delete window.LightManagerStudioRenderActive;
                     }
                     drawTile(ctx, renderPreview, tile);
                     Blockbench.setProgress((index + 1) / tiles.length);
@@ -1125,18 +1460,21 @@
             const dataUrl = canvas.toDataURL('image/png');
             await deliverRender(dataUrl, outputSize, normalized);
         } catch (error) {
-            console.error('[Studio Render] Render failed', error);
             Blockbench.showMessageBox({
                 title: translate('studio_render.plugin.title', 'Studio Render'),
                 message: error && error.message ? error.message : String(error),
                 icon: 'error'
             });
         } finally {
+            delete window.LightManagerStudioRenderSession;
+            delete window.LightManagerStudioRenderActive;
+            delete window.LightManagerStudioRenderPreview;
             if (blockbenchShading && typeof oldShading === 'boolean' && blockbenchShading.value !== oldShading) {
                 blockbenchShading.set(oldShading);
             }
             restorePreviewState(renderPreview, previousState);
             clearCameraViewOffset(renderPreview.camera);
+            await recoverPreviewShadowsAfterStudioRender(sourcePreview, renderPreview);
             Blockbench.setProgress();
             Blockbench.setStatusBarText();
         }
@@ -1155,7 +1493,16 @@
             cameraPosition: preview.camera?.position?.clone?.(),
             cameraQuaternion: preview.camera?.quaternion?.clone?.(),
             promotionalRimSampleScale: preview.sa_promotional_rim_sample_scale,
-            hadPromotionalRimSampleScale: Object.prototype.hasOwnProperty.call(preview, 'sa_promotional_rim_sample_scale'),
+            hadPromotionalRimSampleScale: Object.prototype.hasOwnProperty.call(
+                preview,
+                'sa_promotional_rim_sample_scale'
+            ),
+
+            promotionalRimFrameScale: preview.sa_promotional_rim_frame_scale,
+            hadPromotionalRimFrameScale: Object.prototype.hasOwnProperty.call(
+                preview,
+                'sa_promotional_rim_frame_scale'
+            ),
             manualSilhouette: preview.sa_studio_render_manual_silhouette,
             hadManualSilhouette: Object.prototype.hasOwnProperty.call(preview, 'sa_studio_render_manual_silhouette')
         };
@@ -1177,6 +1524,12 @@
             } else {
                 delete preview.sa_promotional_rim_sample_scale;
             }
+            if (state.hadPromotionalRimFrameScale) {
+                preview.sa_promotional_rim_frame_scale =
+                    state.promotionalRimFrameScale;
+            } else {
+                delete preview.sa_promotional_rim_frame_scale;
+            }
             if (state.hadManualSilhouette) {
                 preview.sa_studio_render_manual_silhouette = state.manualSilhouette;
             } else {
@@ -1185,7 +1538,7 @@
             preview.camPers?.updateProjectionMatrix?.();
             preview.camOrtho?.updateProjectionMatrix?.();
         } catch (error) {
-            console.warn('[Studio Render] Could not fully restore offscreen preview', error);
+            // Keep cleanup best-effort if Blockbench changed preview internals.
         }
     }
 
@@ -1602,6 +1955,22 @@
                     3072: 'studio_render.option.tile.3072'
                 }
             },
+            gpu_status: {
+                type: 'buttons',
+                label: 'studio_render.field.gpu',
+                buttons: [
+                    getGpuStatusLabel(
+                        getOffscreenPreview()?.renderer ||
+                        getPreview()?.renderer
+                    )
+                ],
+                click() {
+                    const preview =
+                        getOffscreenPreview() ||
+                        getPreview();
+                    showGpuProfileDetails(preview && preview.renderer);
+                }
+            },
             _frame: '_',
             capture_area: {
                 type: 'select',
@@ -1895,7 +2264,7 @@
     Plugin.register(PLUGIN_ID, {
         title: 'Studio Render',
         icon: 'photo_camera',
-        author: 'MidFord + Codex',
+        author: 'MidFord',
         description: 'Exports professional high resolution model renders with tiled supersampling, 4K/8K-safe output, transparency, and an optional viewport render frame.',
         tags: ['Render', 'Screenshot', 'Export'],
         version: '1.0.0',
@@ -1930,6 +2299,7 @@
 
             resetFrameAction = new Action('studio_render_reset_frame', {
                 name: 'studio_render.action.reset_frame',
+                description: 'studio_render.action.reset_frame.desc',
                 icon: 'center_focus_strong',
                 category: 'view',
                 condition: () => !!getPreview(),
