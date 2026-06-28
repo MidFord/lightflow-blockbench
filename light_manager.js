@@ -60,7 +60,8 @@ const LIGHT_MANAGER_STORAGE_KEYS = {
 const LIGHT_MANAGER_SHADOW_RESOLUTIONS = [256, 512, 1024, 2048, 4096];
 
 const DEFAULT_SHADOW_BIAS = -0.0005;
-const DEFAULT_SHADOW_NORMAL_BIAS = 0.02;
+const DEFAULT_SHADOW_NORMAL_BIAS = 0.01;
+const DEFAULT_SHADOW_SOFTNESS = 1.75;
 
 const LIGHT_MANAGER_BAR_ITEM_IDS = [
     'add_light',
@@ -82,6 +83,7 @@ const LIGHT_MANAGER_BAR_ITEM_IDS = [
     'light_shadow_near_sliderbox',
     'light_shadow_far_sliderbox',
     'light_shadow_bounds_slider',
+    'light_shadow_softness_sliderbox',
     'light_shadow_bias_sliderbox',
     'light_shadow_normal_bias_sliderbox'
 ];
@@ -250,6 +252,7 @@ function getLightManagerShadowSignature() {
                 lightManagerShadowValue(element.studio_shadow_resolution),
                 lightManagerShadowValue(element.shadow_bias),
                 lightManagerShadowValue(element.shadow_normal_bias),
+                lightManagerShadowValue(element.shadow_softness),
                 lightManagerShadowValue(element.shadow_near),
                 lightManagerShadowValue(element.shadow_far),
                 lightManagerShadowValue(element.shadow_bounds)
@@ -295,6 +298,7 @@ const LIGHT_MANAGER_PROFILES = {
         shadow_resolution: 1024,
         shadow_bias: DEFAULT_SHADOW_BIAS,
         shadow_normal_bias: DEFAULT_SHADOW_NORMAL_BIAS,
+        shadow_softness: 2.25,
         shadow_near: 0.05,
         shadow_far: 24,
         shadow_bounds: 35
@@ -309,6 +313,7 @@ const LIGHT_MANAGER_PROFILES = {
         shadow_resolution: 1024,
         shadow_bias: DEFAULT_SHADOW_BIAS,
         shadow_normal_bias: DEFAULT_SHADOW_NORMAL_BIAS,
+        shadow_softness: 2,
         shadow_near: 0.1,
         shadow_far: 32,
         shadow_bounds: 35
@@ -323,6 +328,7 @@ const LIGHT_MANAGER_PROFILES = {
         shadow_resolution: 2048,
         shadow_bias: DEFAULT_SHADOW_BIAS,
         shadow_normal_bias: DEFAULT_SHADOW_NORMAL_BIAS,
+        shadow_softness: DEFAULT_SHADOW_SOFTNESS,
         shadow_near: 0.1,
         shadow_far: 240,
         shadow_bounds: 48
@@ -334,22 +340,23 @@ const LIGHT_MANAGER_PROFILES = {
         angle: 45,
         penumbra: 0,
         has_shadow: true,
-        shadow_resolution: 2048,
-        shadow_bias: -0.0005,
-        shadow_normal_bias: 0.02,
+        shadow_resolution: 4096,
+        shadow_bias: -0.00035,
+        shadow_normal_bias: 0.008,
+        shadow_softness: 1.35,
         shadow_near: 0.1,
         shadow_far: 200,
-        shadow_bounds: 64
+        shadow_bounds: 48
     }
 };
 
 const LIGHT_MANAGER_SHADOW_PRESETS = {
     custom: null,
     off: { has_shadow: false },
-    preview: { has_shadow: true, shadow_resolution: 512, shadow_bias: -0.0005, shadow_normal_bias: 0.02 },
-    balanced: { has_shadow: true, shadow_resolution: 1024, shadow_bias: -0.0005, shadow_normal_bias: 0.02 },
-    crisp: { has_shadow: true, shadow_resolution: 2048, shadow_bias: -0.0005, shadow_normal_bias: 0.02 },
-    minecraft: { has_shadow: true, shadow_resolution: 2048, shadow_bias: -0.0005, shadow_normal_bias: 0.02, shadow_near: 0.1, shadow_far: 200, shadow_bounds: 64 },
+    preview: { has_shadow: true, shadow_resolution: 512, shadow_bias: -0.0005, shadow_normal_bias: 0.012, shadow_softness: 2.5 },
+    balanced: { has_shadow: true, shadow_resolution: 1024, shadow_bias: -0.0005, shadow_normal_bias: 0.01, shadow_softness: 2 },
+    crisp: { has_shadow: true, shadow_resolution: 4096, shadow_bias: -0.00035, shadow_normal_bias: 0.008, shadow_softness: 1.35 },
+    minecraft: { has_shadow: true, shadow_resolution: 4096, shadow_bias: -0.00035, shadow_normal_bias: 0.008, shadow_softness: 1.35, shadow_near: 0.1, shadow_far: 200, shadow_bounds: 48 },
 };
 
 function lightManagerSafeGet(key, fallback) {
@@ -405,6 +412,10 @@ const LightManagerUtils = {
     shadowResolution(value) {
         const parsed = this.int(value, 1024, 1);
         return LIGHT_MANAGER_SHADOW_RESOLUTIONS.includes(parsed) ? parsed : 1024;
+    },
+
+    shadowSoftness(value) {
+        return this.num(value, DEFAULT_SHADOW_SOFTNESS, 0, 16);
     },
 
     studioShadowResolution(value) {
@@ -474,6 +485,7 @@ const LightManagerUtils = {
             studio_shadow_resolution: formResult.studio_shadow_resolution,
             shadow_bias: formResult.shadow_bias,
             shadow_normal_bias: formResult.shadow_normal_bias,
+            shadow_softness: formResult.shadow_softness,
             shadow_near: formResult.shadow_near,
             shadow_far: formResult.shadow_far,
             shadow_bounds: formResult.shadow_bounds
@@ -507,6 +519,7 @@ const LightManagerUtils = {
             studio_shadow_resolution: this.studioShadowResolution(config.studio_shadow_resolution),
             shadow_bias: this.num(config.shadow_bias, DEFAULT_SHADOW_BIAS, -1, 1),
             shadow_normal_bias: this.num(config.shadow_normal_bias, DEFAULT_SHADOW_NORMAL_BIAS, -1, 1),
+            shadow_softness: this.shadowSoftness(config.shadow_softness),
             shadow_near,
             shadow_far,
             shadow_bounds: this.num(config.shadow_bounds, 35, 0.001, 100000)
@@ -558,7 +571,8 @@ function configureLightManagerRendererShadows(renderer) {
         changed = true;
     }
 
-    const shadowType = THREE.PCFSoftShadowMap || THREE.PCFShadowMap || renderer.shadowMap.type;
+    // PCFShadowMap uses LightShadow.radius; PCFSoft can ignore it in older Three builds.
+    const shadowType = THREE.PCFShadowMap || THREE.PCFSoftShadowMap || renderer.shadowMap.type;
     if (shadowType !== undefined && renderer.shadowMap.type !== shadowType) {
         renderer.shadowMap.type = shadowType;
         changed = true;
@@ -682,8 +696,8 @@ function getLightManagerShadowDebugStages(config) {
         return new Set(config.stages.map(stage => String(stage)));
     }
     if (config.verbose || config.prepareAll) return null;
-    if (config.prepare) return new Set(['prepare-start', 'prepare-end', 'three-light-sync', 'resolution-change', 'shadow-flag-repair']);
-    return new Set(['three-light-sync', 'resolution-change', 'shadow-flag-repair', 'warning']);
+    if (config.prepare) return new Set(['prepare-start', 'prepare-end', 'three-light-sync', 'resolution-change', 'shadow-quality-change', 'shadow-flag-repair']);
+    return new Set(['three-light-sync', 'resolution-change', 'shadow-quality-change', 'shadow-flag-repair', 'warning']);
 }
 
 function shouldLogLightManagerPrepareDebug(stage, snapshot, options = {}, extra = {}, config = {}) {
@@ -946,7 +960,9 @@ function collectLightManagerShadowDebug(preview, options = {}) {
                 ),
                 shadowNeedsUpdate: shadow ? shadow.needsUpdate : undefined,
                 bias: shadow ? shadow.bias : undefined,
-                normalBias: shadow ? shadow.normalBias : undefined
+                normalBias: shadow ? shadow.normalBias : undefined,
+                radius: shadow ? shadow.radius : undefined,
+                elementSoftness: LightManagerUtils.shadowSoftness(element.shadow_softness)
             });
         });
     }
@@ -1216,6 +1232,105 @@ function syncLightManagerRenderShadowResolution(options = {}) {
     return changed;
 }
 
+function syncLightManagerSingleShadowSettings(light, element) {
+    if (!light || !light.shadow || !element) return false;
+
+    const shadow = light.shadow;
+    const camera = shadow.camera;
+    let changed = false;
+    let cameraChanged = false;
+
+    const bias = LightManagerUtils.num(element.shadow_bias, DEFAULT_SHADOW_BIAS, -1, 1);
+    if (shadow.bias !== bias) {
+        shadow.bias = bias;
+        changed = true;
+    }
+
+    const normalBias = LightManagerUtils.num(element.shadow_normal_bias, DEFAULT_SHADOW_NORMAL_BIAS, -1, 1);
+    if (shadow.normalBias !== normalBias) {
+        shadow.normalBias = normalBias;
+        changed = true;
+    }
+
+    const radius = LightManagerUtils.shadowSoftness(element.shadow_softness);
+    if (shadow.radius !== radius) {
+        shadow.radius = radius;
+        changed = true;
+    }
+
+    if (camera) {
+        const near = LightManagerUtils.num(element.shadow_near, 0.1, 0, 99999);
+        const far = Math.max(near + 0.001, LightManagerUtils.num(element.shadow_far, 200, 0.001, 100000));
+
+        if (camera.near !== near || camera.far !== far) {
+            camera.near = near;
+            camera.far = far;
+            cameraChanged = true;
+        }
+
+        if (element.light_type === 'directional') {
+            const bounds = LightManagerUtils.num(element.shadow_bounds, 35, 0.001, 100000);
+            if (
+                camera.top !== bounds ||
+                camera.bottom !== -bounds ||
+                camera.left !== -bounds ||
+                camera.right !== bounds
+            ) {
+                camera.top = bounds;
+                camera.bottom = -bounds;
+                camera.left = -bounds;
+                camera.right = bounds;
+                cameraChanged = true;
+            }
+        }
+
+        if (cameraChanged && typeof camera.updateProjectionMatrix === 'function') {
+            camera.updateProjectionMatrix();
+        }
+    }
+
+    if (changed || cameraChanged) {
+        shadow.needsUpdate = true;
+        return true;
+    }
+
+    return false;
+}
+
+function syncLightManagerShadowQuality(options = {}) {
+    let changed = false;
+    const qualityChanges = [];
+
+    if (!window.LightElement || !Array.isArray(LightElement.all)) return false;
+
+    LightElement.all.forEach(element => {
+        if (!element || element.has_shadow === false) return;
+        const light = window.three_lights && window.three_lights[element.uuid];
+        if (!light || !light.shadow) return;
+
+        if (!syncLightManagerSingleShadowSettings(light, element)) return;
+
+        qualityChanges.push({
+            name: element.name || element.uuid,
+            uuid: element.uuid,
+            bias: light.shadow.bias,
+            normalBias: light.shadow.normalBias,
+            radius: light.shadow.radius,
+            near: light.shadow.camera?.near,
+            far: light.shadow.camera?.far,
+            bounds: element.light_type === 'directional' ? element.shadow_bounds : undefined
+        });
+        changed = true;
+    });
+
+    if (changed) {
+        markLightManagerShadowsDirty();
+        logLightManagerShadowDebug('shadow-quality-change', options.preview || null, options, { qualityChanges });
+    }
+
+    return changed;
+}
+
 function invalidateLightManagerShadowMaps(options = {}) {
     if (typeof options === 'boolean') options = { force: options };
     const force = !!options.force;
@@ -1366,8 +1481,9 @@ window.LightManagerSyncLights = function LightManagerSyncLights(options = {}) {
     const lightObjectsChanged = ensureLightManagerThreeLights(updateOptions);
     const shadowFlagsChanged = syncLightManagerThreeLightShadowFlags(updateOptions);
     const resolutionChanged = syncLightManagerRenderShadowResolution(updateOptions);
+    const qualityChanged = syncLightManagerShadowQuality(updateOptions);
     invalidateLightManagerShadowMaps({
-        force: lightObjectsChanged || shadowFlagsChanged || resolutionChanged
+        force: lightObjectsChanged || shadowFlagsChanged || resolutionChanged || qualityChanged
     });
     if (lightObjectsChanged || shadowFlagsChanged) {
         notifyLightManagerShadowStateRepaired(updateOptions);
@@ -1377,6 +1493,7 @@ window.LightManagerSyncLights = function LightManagerSyncLights(options = {}) {
         lightObjectsChanged,
         shadowFlagsChanged,
         resolutionChanged,
+        qualityChanged,
         ...snapshot
     }));
     return snapshot;
@@ -1459,15 +1576,19 @@ window.LightManagerPrepareRender = function LightManagerPrepareRender(preview, o
         ...renderOptions,
         preview: renderPreview
     });
+    const qualityChanged = syncLightManagerShadowQuality({
+        ...renderOptions,
+        preview: renderPreview
+    });
     invalidateLightManagerShadowMaps({
-        force: force || lightObjectsChanged || shadowFlagsChanged || resolutionChanged,
+        force: force || lightObjectsChanged || shadowFlagsChanged || resolutionChanged || qualityChanged,
         preview: renderPreview
     });
     if (lightObjectsChanged || shadowFlagsChanged) {
         notifyLightManagerShadowStateRepaired(renderOptions);
     }
-    logLightManagerShadowDebug('prepare-end', renderPreview, renderOptions, { lightObjectsChanged, shadowFlagsChanged, resolutionChanged, studioAutoUpdateChanged });
-    logLightManagerShadowDebugIssues(renderPreview, renderOptions, { lightObjectsChanged, shadowFlagsChanged, resolutionChanged, studioAutoUpdateChanged });
+    logLightManagerShadowDebug('prepare-end', renderPreview, renderOptions, { lightObjectsChanged, shadowFlagsChanged, resolutionChanged, qualityChanged, studioAutoUpdateChanged });
+    logLightManagerShadowDebugIssues(renderPreview, renderOptions, { lightObjectsChanged, shadowFlagsChanged, resolutionChanged, qualityChanged, studioAutoUpdateChanged });
 };
 
 function cancelLightManagerElementUpdate() {
@@ -2238,32 +2359,8 @@ function runLightManagerElementUpdate(options = LIGHT_MANAGER_DEFAULT_UPDATE_OPT
                     });
                 }
 
-                light.shadow.bias = LightManagerUtils.num(element.shadow_bias, DEFAULT_SHADOW_BIAS, -1, 1);
-                light.shadow.normalBias = LightManagerUtils.num(element.shadow_normal_bias, DEFAULT_SHADOW_NORMAL_BIAS, -1, 1);
-
-                let shouldUpdateCamera = false;
-                let near = LightManagerUtils.num(element.shadow_near, 0.1, 0, 99999);
-                let far = Math.max(near + 0.001, LightManagerUtils.num(element.shadow_far, 200, 0.001, 100000));
-
-                if (light.shadow.camera.near !== near || light.shadow.camera.far !== far) {
-                    light.shadow.camera.near = near;
-                    light.shadow.camera.far = far;
-                    shouldUpdateCamera = true;
-                }
-
-                if (element.light_type === 'directional') {
-                    let bounds = LightManagerUtils.num(element.shadow_bounds, 35, 0.001, 100000);
-                    if (light.shadow.camera.top !== bounds) {
-                        light.shadow.camera.top = bounds;
-                        light.shadow.camera.bottom = -bounds;
-                        light.shadow.camera.left = -bounds;
-                        light.shadow.camera.right = bounds;
-                        shouldUpdateCamera = true;
-                    }
-                }
-
-                if (shouldUpdateCamera) {
-                    light.shadow.camera.updateProjectionMatrix();
+                if (syncLightManagerSingleShadowSettings(light, element)) {
+                    markLightManagerShadowsDirty();
                 }
             }
 
@@ -2460,14 +2557,16 @@ function initialize_light_plugin() {
         'property.shadow_bounds': 'Bounds',
         'property.shadow_clip': 'Clip',
         'property.shadow_area': 'Shadow Area',
-        'property.shadow_biases': 'Shadow Bias',
+        'property.shadow_biases': 'Shadow Tuning',
         'property.shadow_resolution': 'Resolution',
         'property.studio_shadow_resolution': 'Studio Shadow',
         'property.studio_shadow_resolution.desc': 'Shadow size used only while Studio Render captures. Same keeps the viewport resolution.',
+        'property.shadow_softness': 'Softness',
+        'property.shadow_softness.desc': 'Softens shadow edges in shadow-map texels. Higher values reduce jagged edges; 0 keeps hard shadows.',
         'property.shadow_bias': 'Bias',
-        'property.shadow_bias.desc': 'Adjusts shadow depth to reduce artifacts. Positive values can reduce shadow acne but may cause peter-panning. Default: 0.001',
+        'property.shadow_bias.desc': 'Adjusts shadow depth to reduce artifacts. Positive values can reduce shadow acne but may cause peter-panning. Default: -0.0005',
         'property.shadow_normal_bias': 'Normal Bias',
-        'property.shadow_normal_bias.desc': 'Adjusts bias based on surface normal. Reduces shadow acne on angled surfaces. Default: 0.02',
+        'property.shadow_normal_bias.desc': 'Adjusts bias based on surface normal. Reduces shadow acne on angled surfaces. Default: 0.01',
         'action.edit_light_properties': 'Edit Light Properties',
         'action.fit_light_bounds_to_selection': 'Fit Light Bounds to Selection',
         'light_manager.plugin.title': 'Light Entity Manager',
@@ -2552,6 +2651,7 @@ function initialize_light_plugin() {
         'light_manager.undo.change_penumbra': 'Change light penumbra',
         'light_manager.undo.change_shadow_clip': 'Change shadow clip',
         'light_manager.undo.change_shadow_bounds': 'Change shadow bounds',
+        'light_manager.undo.change_shadow_softness': 'Change shadow softness',
         'light_manager.undo.change_shadow_bias': 'Change shadow bias',
         'light_manager.undo.change_shadow_normal_bias': 'Change shadow normal bias'
     });
@@ -2586,14 +2686,16 @@ function initialize_light_plugin() {
         'property.shadow_bounds': 'Area',
         'property.shadow_clip': 'Recorte',
         'property.shadow_area': 'Area de sombra',
-        'property.shadow_biases': 'Bias de sombra',
+        'property.shadow_biases': 'Ajuste de sombra',
         'property.shadow_resolution': 'Resolucion',
         'property.studio_shadow_resolution': 'Sombra Studio',
         'property.studio_shadow_resolution.desc': 'Tamano de sombra usado solo durante capturas de Studio Render. Igual conserva la resolucion del preview.',
+        'property.shadow_softness': 'Suavidad',
+        'property.shadow_softness.desc': 'Suaviza los bordes de sombra en texeles del shadow map. Valores mas altos reducen bordes serrados; 0 mantiene sombras duras.',
         'property.shadow_bias': 'Bias',
-        'property.shadow_bias.desc': 'Ajusta la profundidad de sombra para reducir artefactos. Valores positivos pueden reducir acne, pero pueden separar sombras. Por defecto: 0.001',
+        'property.shadow_bias.desc': 'Ajusta la profundidad de sombra para reducir artefactos. Valores positivos pueden reducir acne, pero pueden separar sombras. Por defecto: -0.0005',
         'property.shadow_normal_bias': 'Bias normal',
-        'property.shadow_normal_bias.desc': 'Ajusta el bias segun la normal de la superficie. Reduce acne en superficies inclinadas. Por defecto: 0.02',
+        'property.shadow_normal_bias.desc': 'Ajusta el bias segun la normal de la superficie. Reduce acne en superficies inclinadas. Por defecto: 0.01',
         'action.edit_light_properties': 'Editar propiedades de luz',
         'action.fit_light_bounds_to_selection': 'Ajustar luces a seleccion',
         'light_manager.plugin.title': 'Light Entity Manager',
@@ -2678,6 +2780,7 @@ function initialize_light_plugin() {
         'light_manager.undo.change_penumbra': 'Cambiar penumbra de luz',
         'light_manager.undo.change_shadow_clip': 'Cambiar recorte de sombra',
         'light_manager.undo.change_shadow_bounds': 'Cambiar area de sombra',
+        'light_manager.undo.change_shadow_softness': 'Cambiar suavidad de sombra',
         'light_manager.undo.change_shadow_bias': 'Cambiar bias de sombra',
         'light_manager.undo.change_shadow_normal_bias': 'Cambiar bias normal de sombra'
     });
@@ -5622,6 +5725,7 @@ function initialize_light_plugin() {
             new Property(LightElement, 'number', 'studio_shadow_resolution', { default: 0 });
             new Property(LightElement, 'number', 'shadow_bias', { default: DEFAULT_SHADOW_BIAS });
             new Property(LightElement, 'number', 'shadow_normal_bias', { default: DEFAULT_SHADOW_NORMAL_BIAS, description: 'property.shadow_normal_bias.desc' });
+            new Property(LightElement, 'number', 'shadow_softness', { default: DEFAULT_SHADOW_SOFTNESS, min: 0, description: 'property.shadow_softness.desc' });
             new Property(LightElement, 'number', 'shadow_near', { default: 0.1, min: 0 });
             new Property(LightElement, 'number', 'shadow_far', { default: 200, min: 0 });
             new Property(LightElement, 'number', 'shadow_bounds', { default: 35, min: 0 });
@@ -6179,6 +6283,15 @@ function initialize_light_plugin() {
                                 value: firstLight.studio_shadow_resolution ? firstLight.studio_shadow_resolution.toString() : '0',
                                 description: translateLightManager('property.studio_shadow_resolution.desc')
                             },
+                            shadow_softness: {
+                                label: translateLightManager('property.shadow_softness'),
+                                type: 'number',
+                                value: firstLight.shadow_softness !== undefined ? firstLight.shadow_softness : DEFAULT_SHADOW_SOFTNESS,
+                                min: 0,
+                                max: 16,
+                                step: 0.05,
+                                description: translateLightManager('property.shadow_softness.desc')
+                            },
                             shadow_bias: { label: translateLightManager('property.shadow_bias'), type: 'number', value: firstLight.shadow_bias !== undefined ? firstLight.shadow_bias : DEFAULT_SHADOW_BIAS, step: 0.0001, description: translateLightManager('property.shadow_bias.desc') },
                             shadow_normal_bias: { label: translateLightManager('property.shadow_normal_bias'), type: 'number', value: firstLight.shadow_normal_bias !== undefined ? firstLight.shadow_normal_bias : DEFAULT_SHADOW_NORMAL_BIAS, step: 0.0001, description: translateLightManager('property.shadow_normal_bias.desc') },
                             shadow_near: { label: translateLightManager('light_manager.property.shadow_near'), type: 'number', value: firstLight.shadow_near !== undefined ? firstLight.shadow_near : 0.1, min: 0, step: 0.1 },
@@ -6234,6 +6347,7 @@ function initialize_light_plugin() {
             let light_shadow_near_sliderbox;
             let light_shadow_far_sliderbox;
             let light_shadow_bounds_slider;
+            let light_shadow_softness_sliderbox;
             let light_shadow_bias_sliderbox;
             let light_shadow_normal_bias_sliderbox;
 
@@ -6321,6 +6435,8 @@ function initialize_light_plugin() {
                         return LightManagerUtils.num(value, light.shadow_bias ?? DEFAULT_SHADOW_BIAS, -1, 1);
                     case 'shadow_normal_bias':
                         return LightManagerUtils.num(value, light.shadow_normal_bias ?? DEFAULT_SHADOW_NORMAL_BIAS, -1, 1);
+                    case 'shadow_softness':
+                        return LightManagerUtils.shadowSoftness(value);
                     case 'shadow_near':
                         return LightManagerUtils.num(value, light.shadow_near ?? 0.1, 0, 99999);
                     case 'shadow_far':
@@ -6357,6 +6473,14 @@ function initialize_light_plugin() {
                     };
                 }
 
+                if (['shadow_bias', 'shadow_normal_bias', 'shadow_softness'].includes(property)) {
+                    return {
+                        shadows: true,
+                        scene: false,
+                        gizmos: false
+                    };
+                }
+
                 return {};
             };
 
@@ -6382,6 +6506,7 @@ function initialize_light_plugin() {
                     setNumControl(light_shadow_near_sliderbox, light.shadow_near);
                     setNumControl(light_shadow_far_sliderbox, light.shadow_far);
                     setNumControl(light_shadow_bounds_slider, light.shadow_bounds);
+                    setNumControl(light_shadow_softness_sliderbox, light.shadow_softness);
                     setNumControl(light_shadow_bias_sliderbox, light.shadow_bias);
                     setNumControl(light_shadow_normal_bias_sliderbox, light.shadow_normal_bias);
                 } finally {
@@ -6713,6 +6838,22 @@ function initialize_light_plugin() {
                 children: ['light_shadow_near_sliderbox', 'light_shadow_far_sliderbox', 'light_shadow_bounds_slider']
             });
 
+            light_shadow_softness_sliderbox = new ComboSlider('light_shadow_softness_sliderbox', {
+                label: tl('property.shadow_softness'),
+                title: 'property.shadow_softness.desc',
+                color: 'var(--color-accent)',
+                grow: true,
+                value: DEFAULT_SHADOW_SOFTNESS,
+                reset_value: DEFAULT_SHADOW_SOFTNESS,
+                min: 0, max: 8, step: 0.05,
+                condition: shadowLightCondition,
+                onBefore: () => beginLightEdit(translateLightManager('light_manager.undo.change_shadow_softness')),
+                onChange: function () {
+                    applyLightPanelValue('shadow_softness', this.value);
+                },
+                onAfter: () => finishLightEdit(translateLightManager('light_manager.undo.change_shadow_softness'))
+            });
+
             light_shadow_bias_sliderbox = new ComboSlider('light_shadow_bias_sliderbox', {
                 label: tl('property.shadow_bias'),
                 color: 'var(--color-axis-z)',
@@ -6749,7 +6890,7 @@ function initialize_light_plugin() {
                 name: 'property.shadow_biases',
                 label: true,
                 condition: shadowLightCondition,
-                children: ['light_shadow_bias_sliderbox', '#', 'light_shadow_normal_bias_sliderbox']
+                children: ['light_shadow_softness_sliderbox', '#', 'light_shadow_bias_sliderbox', '#', 'light_shadow_normal_bias_sliderbox']
             });
 
             Object.assign(LIGHT_SETTINGS_GROUP, {
@@ -6775,6 +6916,7 @@ function initialize_light_plugin() {
                 light_shadow_clip_settings_toolbar,
                 light_shadow_bounds_slider,
 
+                light_shadow_softness_sliderbox,
                 light_shadow_bias_sliderbox,
                 light_shadow_normal_bias_sliderbox,
                 light_shadow_bias_settings_toolbar

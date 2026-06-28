@@ -951,24 +951,32 @@
         );
 
         /*
-            El RIM vive en screen-space. Para que conserve el mismo grosor
-            visual que en el viewport, su radio debe crecer con la resolucion
-            final y, si hay Render Frame, con el zoom de ese encuadre.
+            El RIM debe escalar con los píxeles finales por cada píxel del
+            área realmente capturada.
+
+            No se separa en "output scale" y "frame zoom scale", porque al
+            usar Math.max() en ambos factores se pueden mezclar ejes distintos
+            y el resultado queda ligeramente más grueso de lo debido.
+
+            La media geométrica mantiene una escala isotrópica estable para un
+            efecto circular de dilatación screen-space. Si el aspecto coincide,
+            scaleX y scaleY son iguales y el resultado es exacto.
         */
-        const outputPixelScale = Math.max(
-            size.width / sourceWidth,
-            size.height / sourceHeight,
-            1.0
+        const rimReferenceWidth = useFrame
+            ? Math.max(frameRect.width, 1)
+            : sourceWidth;
+
+        const rimReferenceHeight = useFrame
+            ? Math.max(frameRect.height, 1)
+            : sourceHeight;
+
+        const rimScaleX = size.width / rimReferenceWidth;
+        const rimScaleY = size.height / rimReferenceHeight;
+
+        const promotionalRimFrameScale = Math.max(
+            1.0,
+            Math.sqrt(rimScaleX * rimScaleY)
         );
-
-        const frameZoomScale = useFrame
-            ? Math.max(
-                sourceWidth / Math.max(frameRect.width, 1),
-                sourceHeight / Math.max(frameRect.height, 1)
-            )
-            : 1.0;
-
-        const promotionalRimFrameScale = outputPixelScale * frameZoomScale;
 
         /*
             Margen compartido entre tiles.
@@ -1128,13 +1136,18 @@
     function prepareRendererForTile(renderPreview, sourcePreview, settings, tile) {
         const renderWidth = tile.renderWidth || tile.sampleWidth;
         const renderHeight = tile.renderHeight || tile.sampleHeight;
+        const renderer = renderPreview.renderer;
+
+        /*
+            El canvas físico debe coincidir con las unidades con las que se
+            calcula el tile y el RIM; no debe heredar DPI del monitor.
+        */
+        if (renderer && typeof renderer.setPixelRatio === 'function') {
+            renderer.setPixelRatio(1);
+        }
 
         renderPreview.resize(renderWidth, renderHeight);
         configureTileCamera(renderPreview, sourcePreview, settings, tile);
-
-        if (typeof renderPreview.renderer?.setPixelRatio === 'function') {
-            renderPreview.renderer.setPixelRatio(1);
-        }
         if (typeof renderPreview.renderer?.setClearColor === 'function') {
             renderPreview.renderer.setClearColor(0x000000, 0);
         }
