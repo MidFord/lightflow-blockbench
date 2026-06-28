@@ -11992,6 +11992,19 @@ ${lumaForgeLightflowHelpers}`
 
                 if (!window.Preview || !Array.isArray(Preview.all)) return;
 
+                /*
+                 * Studio Render owns the offscreen preview and renders every
+                 * tile itself. A queued Shader Architect preview refresh must
+                 * never render main_preview (or any other preview) while the
+                 * global Light.shadow.map is temporarily resized for Studio.
+                 * Light uniforms were already updated synchronously before
+                 * this scheduling point, so dropping this visual refresh does
+                 * not leave materials stale.
+                 */
+                if (window.LightManagerStudioRenderSession) {
+                    return;
+                }
+
                 this.currentPreviewRenderLightOnly = renderLightOnly;
                 try {
                     Preview.all.forEach(preview => {

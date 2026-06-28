@@ -565,12 +565,12 @@ function configureLightManagerRendererShadows(renderer) {
     }
 
     /*
-    * Después de cambiar resolución, shadow.map se elimina y debe ser recreado
-    * y rellenado con un shadow pass real antes de ser muestreado.
-    *
-    * autoUpdate = false permite que un preview normal use un mapa recién creado
-    * sin profundidad válida, produciendo oclusión total.
-    */
+     * A resolution change disposes shadow.map and creates a fresh GPU target.
+     * Do not lock WebGLShadowMap in manual mode here: with autoUpdate = false,
+     * a later normal preview render can sample the newly allocated-but-empty
+     * target before a shadow pass has populated it, which makes the whole
+     * scene look fully occluded.
+     */
     if (renderer.shadowMap.autoUpdate !== true) {
         renderer.shadowMap.autoUpdate = true;
         changed = true;
@@ -731,11 +731,15 @@ function getLightManagerShadowTargetDebug(shadow) {
     if (!shadow || !shadow.map) return null;
 
     return {
+        targetUuid: shadow.map.uuid || null,
+        textureUuid: shadow.map.texture?.uuid || null,
         width: shadow.map.width,
         height: shadow.map.height,
         textureWidth: shadow.map.texture?.image?.width,
         textureHeight: shadow.map.texture?.image?.height,
-        hasMapPass: !!shadow.mapPass
+        hasMapPass: !!shadow.mapPass,
+        mapPassWidth: shadow.mapPass?.width,
+        mapPassHeight: shadow.mapPass?.height
     };
 }
 
@@ -761,11 +765,7 @@ function getLightManagerShadowTargetLayout(light) {
 }
 
 function getLightManagerExpectedShadowTargetSize(light, resolution) {
-    const safeResolution = Math.max(
-        1,
-        Math.round(Number(resolution) || 1)
-    );
-
+    const safeResolution = Math.max(1, Math.round(Number(resolution) || 1));
     const layout = getLightManagerShadowTargetLayout(light);
 
     return {
@@ -791,10 +791,9 @@ function disposeLightManagerShadowTargets(shadow) {
         }
     });
 
-    shadow.map = null;
-
-    if ('mapPass' in shadow) {
-        shadow.mapPass = null;
+    if (shadow) {
+        shadow.map = null;
+        if ('mapPass' in shadow) shadow.mapPass = null;
     }
 
     return {
@@ -804,49 +803,107 @@ function disposeLightManagerShadowTargets(shadow) {
     };
 }
 
+/*
+ * IMPORTANT: keep the WebGLRenderTarget and its Texture object alive when a
+ * shadow resolution changes.
+ *
+ * ShaderMaterial light uniforms hold references to pointShadowMap[]. Replacing
+ * shadow.map with null creates a new Texture object. In Three r129, programs
+ * can keep the previous sampler binding while light counts remain unchanged,
+ * making getPointShadow() compare against an invalid/empty texture. The result
+ * is a direct-light factor of zero across the model.
+ *
+ * WebGLRenderTarget.setSize() is the correct path. It updates the backing GPU
+ * allocation through the target's dispose event but preserves the target and
+ * texture JS identities already referenced by the shader uniforms.
+ */
 function resizeLightManagerShadowMap(light, targetResolution) {
     const shadow = light?.shadow;
     if (!shadow) return { changed: false };
 
-    const safeResolution = Math.max(
-        1,
-        Math.round(Number(targetResolution) || 1)
-    );
-
+    const safeResolution = Math.max(1, Math.round(Number(targetResolution) || 1));
+    const expectedTarget = getLightManagerExpectedShadowTargetSize(light, safeResolution);
     const fromWidth = Number(shadow.mapSize?.width) || 0;
     const fromHeight = Number(shadow.mapSize?.height) || 0;
+    const mapBefore = getLightManagerShadowTargetDebug(shadow);
 
-    if (
+    const resolutionAlreadyMatches = (
         fromWidth === safeResolution &&
         fromHeight === safeResolution
-    ) {
+    );
+
+    const targetAlreadyMatches = !shadow.map || (
+        Number(shadow.map.width) === expectedTarget.width &&
+        Number(shadow.map.height) === expectedTarget.height
+    );
+
+    if (resolutionAlreadyMatches && targetAlreadyMatches && shadow.map) {
         return { changed: false };
     }
 
-    /*
-     * CRÍTICO:
-     * WebGLShadowMap solo crea un target nuevo si shadow.map es null.
-     * Cambiar mapSize sin liberar el target anterior rompe el atlas de
-     * PointLight y deja el tamaño lógico desincronizado del tamaño GPU.
-     */
-    const reset = disposeLightManagerShadowTargets(shadow);
+    const errors = [];
+    let resizeStrategy = 'await-first-allocation';
+    let targetReused = false;
+    let mapPassResized = false;
+    let fallbackReset = null;
 
-    shadow.mapSize.width = safeResolution;
-    shadow.mapSize.height = safeResolution;
+    if (shadow.map && typeof shadow.map.setSize === 'function') {
+        try {
+            shadow.map.setSize(expectedTarget.width, expectedTarget.height);
+            targetReused = true;
+            resizeStrategy = 'in-place-render-target-resize';
+
+            if (
+                shadow.mapPass &&
+                shadow.mapPass !== shadow.map &&
+                typeof shadow.mapPass.setSize === 'function'
+            ) {
+                shadow.mapPass.setSize(expectedTarget.width, expectedTarget.height);
+                mapPassResized = true;
+            }
+        } catch (error) {
+            errors.push(error?.message || String(error));
+        }
+    }
+
+    if (shadow.map && !targetReused) {
+        /*
+         * Conservative fallback for an unexpected non-WebGLRenderTarget.
+         * Normal Three r129 shadows always take the in-place branch above.
+         */
+        fallbackReset = disposeLightManagerShadowTargets(shadow);
+        resizeStrategy = 'fallback-target-replacement';
+    }
+
+    if (shadow.mapSize && typeof shadow.mapSize.set === 'function') {
+        shadow.mapSize.set(safeResolution, safeResolution);
+    } else if (shadow.mapSize) {
+        shadow.mapSize.width = safeResolution;
+        shadow.mapSize.height = safeResolution;
+    }
+
     shadow.needsUpdate = true;
+
+    const mapAfter = getLightManagerShadowTargetDebug(shadow);
 
     return {
         changed: true,
-        from: {
-            width: fromWidth,
-            height: fromHeight
-        },
+        from: { width: fromWidth, height: fromHeight },
         to: safeResolution,
-        expectedTarget: getLightManagerExpectedShadowTargetSize(
-            light,
-            safeResolution
+        expectedTarget,
+        resizeStrategy,
+        targetReused,
+        mapPassResized,
+        textureIdentityPreserved: !!(
+            mapBefore &&
+            mapAfter &&
+            mapBefore.targetUuid === mapAfter.targetUuid &&
+            mapBefore.textureUuid === mapAfter.textureUuid
         ),
-        ...reset
+        mapBefore,
+        mapAfter,
+        fallbackReset,
+        resizeErrors: errors
     };
 }
 
@@ -859,21 +916,9 @@ function collectLightManagerShadowDebug(preview, options = {}) {
             if (!element) return;
             const light = window.three_lights && window.three_lights[element.uuid];
             const shadow = light && light.shadow;
-
-            const targetResolution =
-                LightManagerUtils.getRenderShadowResolution(
-                    element,
-                    renderOptions
-                );
-
+            const targetResolution = LightManagerUtils.getRenderShadowResolution(element, renderOptions);
             const map = getLightManagerShadowTargetDebug(shadow);
-
-            const expectedTarget =
-                getLightManagerExpectedShadowTargetSize(
-                    light,
-                    targetResolution
-                );
-
+            const expectedTarget = getLightManagerExpectedShadowTargetSize(light, targetResolution);
             lights.push({
                 name: element.name || element.uuid,
                 uuid: element.uuid,
@@ -906,12 +951,23 @@ function collectLightManagerShadowDebug(preview, options = {}) {
         });
     }
 
+    const studioSessionActive = !!window.LightManagerStudioRenderSession;
+    const studioPreviewName = getLightManagerPreviewDebugName(window.LightManagerStudioRenderPreview);
+    const previewName = getLightManagerPreviewDebugName(preview);
+
     return {
-        preview: getLightManagerPreviewDebugName(preview),
+        preview: previewName,
         mode: renderOptions.studio ? 'studio' : 'preview',
         force: !!options.force,
         dirty: LIGHT_MANAGER_SHADOW_STATE.dirty,
         sceneDirty: LIGHT_MANAGER_SHADOW_STATE.sceneDirty,
+        studioSessionActive,
+        studioPreview: studioPreviewName,
+        previewRestoreDeferred: !!(
+            studioSessionActive &&
+            !renderOptions.studio &&
+            previewName !== studioPreviewName
+        ),
         renderer: getLightManagerRendererShadowDebug(preview && preview.renderer),
         activeShadowLights: lightManagerHasActiveShadowLights(),
         lights
@@ -981,13 +1037,24 @@ function logLightManagerShadowDebug(stage, preview, options = {}, extra = {}) {
 
 function getLightManagerShadowDebugIssues(snapshot) {
     const issues = [];
+    const previewRestoreDeferred = !!snapshot.previewRestoreDeferred;
 
     if (snapshot.activeShadowLights && !snapshot.renderer) {
         issues.push('active shadow lights but no preview renderer shadowMap was found');
     } else if (snapshot.activeShadowLights && snapshot.renderer && !snapshot.renderer.enabled) {
         issues.push('active shadow lights but renderer.shadowMap.enabled is false');
     }
-    const previewRestoreDeferred = !!snapshot.previewRestoreDeferred;
+
+    if (
+        snapshot.activeShadowLights &&
+        snapshot.renderer &&
+        snapshot.renderer.autoUpdate === false &&
+        snapshot.renderer.needsUpdate !== true &&
+        snapshot.lights.some(light => light.visible && light.elementShadow && !light.map)
+    ) {
+        issues.push('a shadow target is missing while renderer.shadowMap.autoUpdate is false; the next scene render cannot rebuild it');
+    }
+
     snapshot.lights.forEach(light => {
         if (!light.visible || !light.elementShadow) return;
         if (!light.hasThreeLight) {
@@ -1010,7 +1077,6 @@ function getLightManagerShadowDebugIssues(snapshot) {
         ) {
             issues.push(`${light.name}: shadow mapSize ${light.mapSize.width}x${light.mapSize.height} expected ${light.targetResolution}`);
         }
-
         if (light.map && !light.mapMatchesExpected) {
             issues.push(
                 `${light.name}: GPU shadow target ${light.map.width}x${light.map.height} ` +
@@ -1066,15 +1132,13 @@ function syncLightManagerThreeLightShadowFlags(options = {}) {
             repaired = true;
         }
 
-
         /*
-        * No marcar needsUpdate en cada frame.
-        * La invalidación real ya se realiza cuando cambia resolución,
-        * flags, transformaciones, cámara de sombra o escena.
-        */
-        /*if (desiredCastShadow && light.shadow) {
-            light.shadow.needsUpdate = true;
-        }*/
+         * Do not set shadow.needsUpdate on every prepare call. That left every
+         * point-light map permanently invalidated while a normal renderer was
+         * still configured for manual updates. Actual changes are already
+         * handled by the repaired branch, signature invalidation, and the
+         * resolution-resize path.
+         */
 
         if (repaired) {
             repairs.push({
@@ -1114,10 +1178,7 @@ function syncLightManagerRenderShadowResolution(options = {}) {
     let changed = false;
     const resolutionChanges = [];
 
-    if (!window.LightElement || !Array.isArray(LightElement.all)) {
-        return false;
-    }
-
+    if (!window.LightElement || !Array.isArray(LightElement.all)) return false;
     if (
         window.LightManagerStudioRenderSession &&
         !renderOptions.studio &&
@@ -1125,30 +1186,18 @@ function syncLightManagerRenderShadowResolution(options = {}) {
     ) {
         logLightManagerShadowDebug('resolution-skip', preview, renderOptions, {
             reason: 'studio-session-preview-restore-blocked',
-            studioPreview: getLightManagerPreviewDebugName(
-                window.LightManagerStudioRenderPreview
-            )
+            studioPreview: getLightManagerPreviewDebugName(window.LightManagerStudioRenderPreview)
         });
         return false;
     }
 
     LightElement.all.forEach(element => {
         if (!element || element.has_shadow === false) return;
+        const light = window.three_lights && window.three_lights[element.uuid];
+        if (!light || !light.shadow) return;
 
-        const light = window.three_lights?.[element.uuid];
-        if (!light?.shadow) return;
-
-        const targetResolution =
-            LightManagerUtils.getRenderShadowResolution(
-                element,
-                renderOptions
-            );
-
-        const resize = resizeLightManagerShadowMap(
-            light,
-            targetResolution
-        );
-
+        const targetResolution = LightManagerUtils.getRenderShadowResolution(element, renderOptions);
+        const resize = resizeLightManagerShadowMap(light, targetResolution);
         if (!resize.changed) return;
 
         resolutionChanges.push({
@@ -1157,21 +1206,13 @@ function syncLightManagerRenderShadowResolution(options = {}) {
             mode: renderOptions.studio ? 'studio' : 'preview',
             ...resize
         });
-
         changed = true;
     });
 
     if (changed) {
         markLightManagerShadowsDirty();
-
-        logLightManagerShadowDebug(
-            'resolution-change',
-            preview,
-            renderOptions,
-            { resolutionChanges }
-        );
+        logLightManagerShadowDebug('resolution-change', preview, renderOptions, { resolutionChanges });
     }
-
     return changed;
 }
 
@@ -1343,6 +1384,35 @@ window.LightManagerSyncLights = function LightManagerSyncLights(options = {}) {
 
 window.LightManagerPrepareRender = function LightManagerPrepareRender(preview, options = {}) {
     const studioPreview = window.LightManagerStudioRenderPreview || null;
+
+    /*
+     * A Three.Light owns one shared shadow object, including shadow.map.
+     * While Studio Render temporarily switches that map to the Studio
+     * resolution, a normal preview must not configure, invalidate, or render
+     * against the same shadow object. Previously only the resolution switch
+     * was blocked; the rest of this function still invalidated the shared map.
+     * That is why main_preview appeared in the logs with 256 mapSize while
+     * Studio was rendering at 256, even though main_preview expects 1024.
+     */
+    const foreignPreviewDuringStudioSession = !!(
+        window.LightManagerStudioRenderSession &&
+        studioPreview &&
+        preview &&
+        preview !== studioPreview &&
+        !preview.sa_studio_render_active
+    );
+
+    if (foreignPreviewDuringStudioSession) {
+        logLightManagerShadowDebug('studio-foreign-preview-skip', preview, options, {
+            reason: 'studio-session-owns-shared-light-shadow-state',
+            studioPreview: getLightManagerPreviewDebugName(studioPreview)
+        });
+        return {
+            skipped: true,
+            reason: 'studio-session-owns-shared-light-shadow-state'
+        };
+    }
+
     const previewIsStudioRender = !!(
         preview &&
         (
@@ -1367,7 +1437,7 @@ window.LightManagerPrepareRender = function LightManagerPrepareRender(preview, o
         )
     };
     const force = !!renderOptions.force;
-    const renderPreview = preview || (renderOptions.studio ? window.LightManagerStudioRenderPreview : null);
+    const renderPreview = preview || (renderOptions.studio ? studioPreview : null);
     logLightManagerShadowDebug('prepare-start', renderPreview, renderOptions);
 
     if (renderPreview?.renderer) {
@@ -1376,13 +1446,10 @@ window.LightManagerPrepareRender = function LightManagerPrepareRender(preview, o
         configureLightManagerRenderers();
     }
 
+    // ensureLightManagerThreeLights can run the element updater. Re-enable
+    // automatic updates on the Studio renderer afterwards so the newly
+    // allocated target is populated before the final tile is sampled.
     const lightObjectsChanged = ensureLightManagerThreeLights(renderOptions);
-
-    /*
-     * ensureLightManagerThreeLights puede ejecutar el updater interno,
-     * el cual vuelve a poner los renderers en autoUpdate = false.
-     * Studio debe reactivarlo después para asegurar el primer shadow pass.
-     */
     const studioAutoUpdateChanged = renderOptions.studio && renderPreview?.renderer
         ? prepareLightManagerStudioShadowRenderer(renderPreview.renderer)
         : false;
@@ -2156,34 +2223,19 @@ function runLightManagerElementUpdate(options = LIGHT_MANAGER_DEFAULT_UPDATE_OPT
 
             // Sync dynamic shadow properties
             if (updateOptions.shadows && light.shadow) {
-                const targetResolution =
-                    LightManagerUtils.getRenderShadowResolution(
-                        element,
-                        updateOptions
-                    );
-
-                const resize = resizeLightManagerShadowMap(
-                    light,
-                    targetResolution
-                );
-
+                const targetResolution = LightManagerUtils.getRenderShadowResolution(element, updateOptions);
+                const resize = resizeLightManagerShadowMap(light, targetResolution);
                 if (resize.changed) {
                     markLightManagerShadowsDirty();
-
-                    logLightManagerShadowDebug(
-                        'resolution-change',
-                        null,
-                        updateOptions,
-                        {
-                            source: 'element-update',
-                            resolutionChanges: [{
-                                name: element.name || element.uuid,
-                                uuid: element.uuid,
-                                mode: updateOptions.studio ? 'studio' : 'preview',
-                                ...resize
-                            }]
-                        }
-                    );
+                    logLightManagerShadowDebug('resolution-change', null, updateOptions, {
+                        source: 'element-update',
+                        resolutionChanges: [{
+                            name: element.name || element.uuid,
+                            uuid: element.uuid,
+                            mode: updateOptions.studio ? 'studio' : 'preview',
+                            ...resize
+                        }]
+                    });
                 }
 
                 light.shadow.bias = LightManagerUtils.num(element.shadow_bias, DEFAULT_SHADOW_BIAS, -1, 1);

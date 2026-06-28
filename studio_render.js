@@ -1186,6 +1186,28 @@
         });
     }
 
+    function synchronizeStudioRenderLighting(renderPreview) {
+        /*
+         * Fancy Shader materials calculate their direct light and shadow index
+         * uniforms manually. Keep them synchronized immediately before the
+         * tile's warmup/final renders, rather than waiting for a queued preview
+         * refresh which is intentionally suppressed during the Studio session.
+         */
+        if (typeof window.UpdateShaderArchitectLights === 'function') {
+            window.UpdateShaderArchitectLights({
+                studio: true,
+                preview: renderPreview,
+                source: 'studio_render_pre_tile'
+            });
+        } else if (typeof window.updateLights === 'function') {
+            window.updateLights({
+                studio: true,
+                preview: renderPreview,
+                source: 'studio_render_pre_tile'
+            });
+        }
+    }
+
     function compositeStudioRenderPostEffects(renderPreview, settings, tile) {
         const manager = window.MinecraftPromotionalSilhouetteManager;
         if (!manager || typeof manager.renderSilhouette !== 'function') return;
@@ -1415,8 +1437,16 @@
             );
             Blockbench.setProgress(0);
 
-            const needsShadowWarmup = studioRenderNeedsShadowWarmup();
+            /*
+             * Keep the Studio ownership flags active for the complete async
+             * session, including waitForFrame() gaps between tiles. Before
+             * this, LightManagerStudioRenderActive was deleted after every
+             * tile, which allowed queued preview refreshes to enter the normal
+             * main_preview path while the shared shadow map still had the
+             * Studio resolution.
+             */
             window.LightManagerStudioRenderSession = true;
+            window.LightManagerStudioRenderActive = true;
             window.LightManagerStudioRenderPreview = renderPreview;
 
             const renderTiles = async () => {
@@ -1427,22 +1457,22 @@
                     );
                     renderPreview.sa_studio_render_manual_silhouette = true;
                     renderPreview.sa_studio_render_active = true;
-                    window.LightManagerStudioRenderActive = true;
-                    window.LightManagerStudioRenderPreview = renderPreview;
                     try {
                         prepareRendererForTile(renderPreview, cameraSourcePreview, normalized, tile);
-                        if (needsShadowWarmup) {
-                            renderPreview.render();
-                            if (typeof window.LightManagerPrepareRender === 'function') {
-                                window.LightManagerPrepareRender(renderPreview, { studio: true, force: true });
-                            }
-                        }
+                        synchronizeStudioRenderLighting(renderPreview);
+
+                        /*
+                         * One synchronous render is enough: Three r129 updates
+                         * WebGLShadowMap before drawing the scene. A second
+                         * render plus force:true here repeatedly invalidated
+                         * the same map for every tile and made the final tile
+                         * race the shadow refresh.
+                         */
                         renderPreview.render();
                         compositeStudioRenderPostEffects(renderPreview, normalized, tile);
                     } finally {
                         delete renderPreview.sa_studio_render_manual_silhouette;
                         delete renderPreview.sa_studio_render_active;
-                        delete window.LightManagerStudioRenderActive;
                     }
                     drawTile(ctx, renderPreview, tile);
                     Blockbench.setProgress((index + 1) / tiles.length);
