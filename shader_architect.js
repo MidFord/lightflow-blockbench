@@ -406,6 +406,7 @@
     // =========================================================================
     Language.addTranslations('en', {
         'panel.global_renderer_properties': 'WORLD',
+        'panel.material_instance_manager': 'OVERRIDES',
         'panel.material_properties': 'MATERIAL',
 
         'shader_architect.material_panel.no_selected': 'Select a single cube or multiple cubes to edit their material instance properties.',
@@ -431,6 +432,14 @@
         'shader_architect.material_panel.instance.desc': 'Assign a project material instance to the selected cubes, or use the global render material.',
         'shader_architect.material_panel.instance_name': 'Instance Name',
         'shader_architect.material_panel.new_instance_name': 'New Material Instance',
+        'shader_architect.material_panel.instance_details': 'Instance Details',
+        'shader_architect.material_panel.instance_icon': 'Icon',
+        'shader_architect.material_panel.instance_icon.desc': 'Material icon name used in Shader Architect selectors.',
+        'shader_architect.material_panel.instance_icon_color': 'Marker Color',
+        'shader_architect.material_panel.instance_icon_color.desc': 'Native Blockbench marker color used for this instance icon in selector menus.',
+        'shader_architect.material_panel.select_instance': 'Override',
+        'shader_architect.material_panel.select_instance.desc': 'Select any project material override to edit its details.',
+        'shader_architect.material_panel.no_instances': 'Create a material override from the MATERIAL panel to edit it here.',
         'shader_architect.material_panel.create_instance': 'Create Material Instance',
         'shader_architect.material_panel.create_instance.desc': 'Create a project material instance from a base material and assign it to the selected cubes.',
         'shader_architect.material_panel.delete_instance': 'Delete Material Instance',
@@ -467,8 +476,55 @@
         "shader_architect.toast.exported": "Material Exported successfully.",
         "shader_architect.toast.imported": "Material Imported successfully.",
         "shader_architect.toast.deleted": "Material deleted.",
+        "shader_architect.toast.glsl_formatted": "GLSL formatted.",
+        "shader_architect.toast.material_duplicated": "Material duplicated.",
+        "shader_architect.toast.validation_ok": "GLSL program compiles and links successfully.",
         "shader_architect.message.import_failed": "Failed to parse .samat file.",
-        "shader_architect.message.light_manager_required": "Shader Architect requires Light Manager. Please install and enable the Light Manager plugin.",
+        "shader_architect.message.light_manager_required": "Shader Architect requires Light Manager. Install and enable Light Manager first so Lightflow materials can receive lights and shadows.",
+        "shader_architect.message.instance_save_failed": "Material instance was created, but Shader Architect could not save it into the project data.",
+        "shader_architect.message.instance_not_persistent": "Material overrides are temporary in this format. Save as .bbmodel to keep them.",
+        "shader_architect.message.instance_name_adjusted": "Material instance name was adjusted to stay unique.",
+        "shader_architect.message.delete_material_confirm": "Delete this material?",
+        "shader_architect.message.validation_webgl_unavailable": "WebGL is not available for validation.",
+        "shader_architect.message.link_failed": "Failed to link shaders.",
+        "shader_architect.world.brightness": "Brightness",
+        "shader_architect.world.brightness.desc": "Global Blockbench viewport brightness.",
+        "shader_architect.world.shading": "Shading",
+        "shader_architect.world.grids": "Grid",
+        "shader_architect.world.ground": "Ground",
+        "shader_architect.material.new_material": "New Material",
+        "shader_architect.ui.quick_tweaks": "Quick Tweaks",
+        "shader_architect.ui.quick_tweaks.desc": "Adjust exposed uniforms and properties in real time.",
+        "shader_architect.ui.no_exposed_properties": "No exposed properties. Turn on Expose in the Uniforms tab.",
+        "shader_architect.ui.select_or_create_material": "Select or create a material to edit.",
+        "shader_architect.ui.new_material": "New Material",
+        "shader_architect.ui.import_samat": "Import .samat",
+        "shader_architect.ui.material_library": "Material Library",
+        "shader_architect.ui.read_only": "Read Only",
+        "shader_architect.ui.add_custom_uniform": "Add Custom Uniform",
+        "shader_architect.ui.expose": "Expose",
+        "shader_architect.ui.expose_to_ui": "Expose to UI",
+        "shader_architect.ui.advanced": "Advanced",
+        "shader_architect.ui.native": "Native:",
+        "shader_architect.ui.added": "added",
+        "shader_architect.ui.add_native": "Add Native",
+        "shader_architect.ui.active_uniforms": "Active Uniforms",
+        "shader_architect.ui.no_uniforms": "No uniforms defined.",
+        "shader_architect.ui.edit_metadata": "Edit Metadata",
+        "shader_architect.ui.remove_uniform": "Remove Uniform",
+        "shader_architect.ui.is_color": "Is Color",
+        "shader_architect.ui.tooltip_placeholder": "Tooltip description",
+        "shader_architect.ui.enabled": "Enabled",
+        "shader_architect.ui.repeat_tiling": "Repeat (Tiling)",
+        "shader_architect.ui.per_channel_range": "Per-channel range (optional):",
+        "shader_architect.ui.description_tooltip": "Description (Tooltip):",
+        "shader_architect.ui.custom_translations": "Custom Translations:",
+        "shader_architect.ui.remove_translation": "Remove Translation",
+        "shader_architect.ui.translation_language": "Language (e.g. en, es)",
+        "shader_architect.ui.translation_label": "Label translation",
+        "shader_architect.ui.add": "Add",
+        "shader_architect.ui.allow_higher": "Allow Higher",
+        "shader_architect.ui.allow_lower": "Allow Lower",
 
         "shader_architect.preset.classic": "Classic Shader",
         "shader_architect.preset.pbr_metallic_roughness": "PBR Metallic/Roughness",
@@ -783,6 +839,10 @@
         "shader_architect.uniform.shadowPixelResolution.desc": "Size of the pixelated shadow grid",
         "shader_architect.uniform.shadowThreshold": "Cutoff",
         "shader_architect.uniform.shadowThreshold.desc": "Shadow threshold for the pixelated shadow mask",
+        "shader_architect.uniform.shadowFilterScale": "Filter Scale",
+        "shader_architect.uniform.shadowFilterScale.desc": "Multiplies the light shadow softness used by pixelated shadows",
+        "shader_architect.uniform.shadowFeather": "Feather",
+        "shader_architect.uniform.shadowFeather.desc": "Softens the pixelated shadow threshold instead of making it fully binary",
         "shader_architect.uniform.AUTO_TILE": "Auto Tile",
         "shader_architect.uniform.AUTO_TILE.desc": "Scale texture tiling from face size",
         "shader_architect.uniform.TILING": "Tiling",
@@ -821,6 +881,7 @@
 
     Language.addTranslations('es', {
         'panel.global_renderer_properties': 'MUNDO',
+        'panel.material_instance_manager': 'OVERRIDES',
         'panel.material_properties': 'MATERIAL',
         'shader_architect.material_panel.no_selected': 'Selecciona uno o varios cubos para editar sus instancias de material.',
         'shader_architect.material_panel.no_instance': 'Crea una instancia de material para sobrescribir el material global en este cubo.',
@@ -844,6 +905,14 @@
         'shader_architect.material_panel.instance.desc': 'Asigna una instancia de material del proyecto a los cubos seleccionados, o usa el material global.',
         'shader_architect.material_panel.instance_name': 'Nombre de instancia',
         'shader_architect.material_panel.new_instance_name': 'Nueva instancia de material',
+        'shader_architect.material_panel.instance_details': 'Detalles de instancia',
+        'shader_architect.material_panel.instance_icon': 'Icono',
+        'shader_architect.material_panel.instance_icon.desc': 'Nombre de icono usado en los selectores de Shader Architect.',
+        'shader_architect.material_panel.instance_icon_color': 'Marker Color',
+        'shader_architect.material_panel.instance_icon_color.desc': 'Color marker nativo de Blockbench usado para el icono de esta instancia en menus.',
+        'shader_architect.material_panel.select_instance': 'Override',
+        'shader_architect.material_panel.select_instance.desc': 'Selecciona cualquier override del proyecto para editar sus detalles.',
+        'shader_architect.material_panel.no_instances': 'Crea un override desde el panel MATERIAL para editarlo aqui.',
         'shader_architect.material_panel.create_instance': 'Crear instancia de material',
         'shader_architect.material_panel.create_instance.desc': 'Crea una instancia de material del proyecto desde un material base y la asigna a los cubos seleccionados.',
         'shader_architect.material_panel.delete_instance': 'Eliminar instancia de material',
@@ -880,8 +949,55 @@
         "shader_architect.toast.exported": "Material Exportado exitosamente.",
         "shader_architect.toast.imported": "Material Importado exitosamente.",
         "shader_architect.toast.deleted": "Material eliminado.",
+        "shader_architect.toast.glsl_formatted": "GLSL formateado.",
+        "shader_architect.toast.material_duplicated": "Material duplicado.",
+        "shader_architect.toast.validation_ok": "El programa GLSL compila y vincula correctamente.",
         "shader_architect.message.import_failed": "No se pudo leer el archivo .samat.",
-        "shader_architect.message.light_manager_required": "Shader Architect requiere Light Manager. Instala y activa el plugin Light Manager.",
+        "shader_architect.message.light_manager_required": "Shader Architect requiere Light Manager. Instala y activa Light Manager primero para que los materiales Lightflow reciban luces y sombras.",
+        "shader_architect.message.instance_save_failed": "La instancia se creo, pero Shader Architect no pudo guardarla en los datos del proyecto.",
+        "shader_architect.message.instance_not_persistent": "Los overrides son temporales en este formato. Guarda como .bbmodel para conservarlos.",
+        "shader_architect.message.instance_name_adjusted": "El nombre de la instancia se ajusto para mantenerse unico.",
+        "shader_architect.message.delete_material_confirm": "Eliminar este material?",
+        "shader_architect.message.validation_webgl_unavailable": "WebGL no esta disponible para validar.",
+        "shader_architect.message.link_failed": "No se pudieron vincular los shaders.",
+        "shader_architect.world.brightness": "Brillo",
+        "shader_architect.world.brightness.desc": "Brillo global del viewport de Blockbench.",
+        "shader_architect.world.shading": "Sombreado",
+        "shader_architect.world.grids": "Grid",
+        "shader_architect.world.ground": "Suelo",
+        "shader_architect.material.new_material": "Material nuevo",
+        "shader_architect.ui.quick_tweaks": "Ajustes rapidos",
+        "shader_architect.ui.quick_tweaks.desc": "Ajusta uniforms y propiedades expuestas en tiempo real.",
+        "shader_architect.ui.no_exposed_properties": "No hay propiedades expuestas. Activa Expose en la pestana Uniforms.",
+        "shader_architect.ui.select_or_create_material": "Selecciona o crea un material para editar.",
+        "shader_architect.ui.new_material": "Material nuevo",
+        "shader_architect.ui.import_samat": "Importar .samat",
+        "shader_architect.ui.material_library": "Biblioteca de materiales",
+        "shader_architect.ui.read_only": "Solo lectura",
+        "shader_architect.ui.add_custom_uniform": "Agregar uniform personalizado",
+        "shader_architect.ui.expose": "Expose",
+        "shader_architect.ui.expose_to_ui": "Exponer en UI",
+        "shader_architect.ui.advanced": "Avanzado",
+        "shader_architect.ui.native": "Nativo:",
+        "shader_architect.ui.added": "agregado",
+        "shader_architect.ui.add_native": "Agregar nativo",
+        "shader_architect.ui.active_uniforms": "Uniforms activos",
+        "shader_architect.ui.no_uniforms": "No hay uniforms definidos.",
+        "shader_architect.ui.edit_metadata": "Editar metadata",
+        "shader_architect.ui.remove_uniform": "Eliminar uniform",
+        "shader_architect.ui.is_color": "Es color",
+        "shader_architect.ui.tooltip_placeholder": "Descripcion de tooltip",
+        "shader_architect.ui.enabled": "Activado",
+        "shader_architect.ui.repeat_tiling": "Repetir (Tiling)",
+        "shader_architect.ui.per_channel_range": "Rango por canal (opcional):",
+        "shader_architect.ui.description_tooltip": "Descripcion (Tooltip):",
+        "shader_architect.ui.custom_translations": "Traducciones personalizadas:",
+        "shader_architect.ui.remove_translation": "Eliminar traduccion",
+        "shader_architect.ui.translation_language": "Idioma (ej. en, es)",
+        "shader_architect.ui.translation_label": "Traduccion de etiqueta",
+        "shader_architect.ui.add": "Agregar",
+        "shader_architect.ui.allow_higher": "Permitir mayor",
+        "shader_architect.ui.allow_lower": "Permitir menor",
 
         "shader_architect.preset.classic": "Shader Clásico",
         "shader_architect.preset.pbr_metallic_roughness": "PBR Metálico/Rugosidad",
@@ -1200,6 +1316,10 @@
         "shader_architect.uniform.shadowPixelResolution.desc": "Tamano del pixel de sombra",
         "shader_architect.uniform.shadowThreshold": "Corte",
         "shader_architect.uniform.shadowThreshold.desc": "Umbral de sombra pixelada",
+        "shader_architect.uniform.shadowFilterScale": "Escala de filtro",
+        "shader_architect.uniform.shadowFilterScale.desc": "Multiplica la suavidad de sombra de la luz usada por sombras pixeladas",
+        "shader_architect.uniform.shadowFeather": "Pluma",
+        "shader_architect.uniform.shadowFeather.desc": "Suaviza el umbral de sombra pixelada en vez de hacerlo completamente binario",
         "shader_architect.uniform.uShadowStrength": "Sombra",
         "shader_architect.uniform.uShadowStrength.desc": "Intensidad de las sombras proyectadas",
         "shader_architect.uniform.uShadowFloor": "Min Sombra",
@@ -1235,6 +1355,7 @@
     // =========================================================================
     const PLUGIN_STYLE_ID = 'shader-architect-styles';
     const PROJECT_MATERIAL_INSTANCES_PROP = 'sa_material_instances_json';
+    const CUBE_MATERIAL_INSTANCES_FALLBACK_PROP = 'sa_material_instances_registry_json';
     const MATERIAL_INSTANCES_UNDO_ASPECT = 'sa_material_instances';
     const GLOBAL_MATERIAL_LIST_EVENT = 'update_global_material_list';
     const FACE_MATERIAL_INSTANCES_PROP = 'sa_face_material_instance_ids';
@@ -1291,6 +1412,144 @@ vec4 saSampleBaseMap(vec2 uv) {
             /uniform\s+sampler2D\s+map\s*;/,
             match => `${match}\n${BLOCKBENCH_LAYERED_TEXTURE_FRAGMENT}`
         );
+    }
+
+    const NATIVE_PBR_FRAGMENT = `
+uniform bool uUseNativePBR;
+uniform vec3 uBaseColor;
+uniform float uBaseAlpha;
+uniform float uMetallic;
+uniform float uRoughness;
+uniform vec3 uEmissiveColor;
+uniform float uEmissiveStrength;
+uniform bool uUseMetallicRoughnessMap;
+uniform bool uUseBlockbenchMERMap;
+uniform bool uUseNormalMap;
+uniform bool uUseHeightMap;
+uniform bool uUseEmissiveMap;
+uniform sampler2D uMetallicRoughnessMap;
+uniform sampler2D uNormalMap;
+uniform sampler2D uHeightMap;
+uniform sampler2D uEmissiveMap;
+uniform vec2 uMetallicRoughnessMapScale;
+uniform vec2 uNormalMapScale;
+uniform vec2 uHeightMapScale;
+uniform vec2 uEmissiveMapScale;
+uniform float uNormalScale;
+uniform float uNormalYSign;
+uniform float uHeightScale;
+uniform float uNativePBRSpecularStrength;
+
+vec3 saNativePBRSafeNormalize(vec3 v, vec3 fallback) {
+    float lenSq = dot(v, v);
+    if (lenSq <= 1e-8) return fallback;
+    return v * inversesqrt(lenSq);
+}
+
+vec4 saApplyNativePBRBaseColor(vec4 texel) {
+    if (!uUseNativePBR) return texel;
+    texel.rgb *= uBaseColor;
+    texel.a *= clamp(uBaseAlpha, 0.0, 1.0);
+    return texel;
+}
+
+vec3 saApplyNativePBRNormal(vec3 normal, vec2 uv, vec3 worldPos) {
+    if (!uUseNativePBR) return normal;
+    vec3 result = saNativePBRSafeNormalize(normal, vec3(0.0, 1.0, 0.0));
+
+    if (uUseNormalMap) {
+        vec3 nTex = texture2D(uNormalMap, uv * uNormalMapScale).xyz * 2.0 - 1.0;
+        nTex.y *= uNormalYSign;
+        vec3 axisX = saNativePBRSafeNormalize(cross(vec3(0.0, 1.0, 0.0), result), vec3(1.0, 0.0, 0.0));
+        vec3 axisY = saNativePBRSafeNormalize(cross(result, axisX), vec3(0.0, 1.0, 0.0));
+        result = saNativePBRSafeNormalize(result + (axisX * nTex.x + axisY * nTex.y) * clamp(uNormalScale, -4.0, 4.0), result);
+    }
+
+    if (uUseHeightMap) {
+        float height = texture2D(uHeightMap, uv * uHeightMapScale).r;
+        float heightDx = dFdx(height);
+        float heightDy = dFdy(height);
+        vec3 dpdx = dFdx(worldPos);
+        vec3 dpdy = dFdy(worldPos);
+        vec3 r1 = cross(dpdy, result);
+        vec3 r2 = cross(result, dpdx);
+        float det = dot(dpdx, r1);
+        vec3 gradient = (heightDx * r1 + heightDy * r2) * sign(det);
+        result = saNativePBRSafeNormalize(abs(det) * result - gradient * clamp(uHeightScale, -8.0, 8.0), result);
+    }
+
+    return result;
+}
+
+float saGetNativePBRMetallic(vec2 uv) {
+    float metallic = uMetallic;
+    if (uUseMetallicRoughnessMap) {
+        metallic *= texture2D(uMetallicRoughnessMap, uv * uMetallicRoughnessMapScale).r;
+    }
+    return clamp(metallic, 0.0, 1.0);
+}
+
+float saGetNativePBRRoughness(vec2 uv) {
+    float roughness = uRoughness;
+    if (uUseMetallicRoughnessMap) {
+        vec4 mer = texture2D(uMetallicRoughnessMap, uv * uMetallicRoughnessMapScale);
+        roughness *= uUseBlockbenchMERMap ? mer.b : mer.g;
+    }
+    return clamp(roughness, 0.035, 1.0);
+}
+
+vec3 saGetNativePBREmissive(vec2 uv, vec3 baseColor) {
+    if (!uUseNativePBR) return vec3(0.0);
+    float strength = max(uEmissiveStrength, 0.0);
+    vec3 emissive = uEmissiveColor * strength;
+
+    if (uUseEmissiveMap) {
+        emissive += texture2D(uEmissiveMap, uv * uEmissiveMapScale).rgb * strength;
+    }
+
+    if (uUseMetallicRoughnessMap && uUseBlockbenchMERMap) {
+        float merEmissive = texture2D(uMetallicRoughnessMap, uv * uMetallicRoughnessMapScale).g;
+        emissive += baseColor * merEmissive * strength;
+    }
+
+    return emissive;
+}
+
+vec3 saApplyBlockbenchRenderModeEmission(vec3 litColor, vec3 baseColor, float alpha, vec3 lightColor, vec3 lightValue) {
+    vec3 shadedLight = max(lightColor * lightValue, vec3(0.0));
+    vec3 missingLight = max(vec3(1.0) - shadedLight, vec3(0.0));
+    float alphaEmission = 1.0 - clamp(alpha, 0.0, 1.0);
+    return litColor + baseColor * missingLight * alphaEmission;
+}
+`;
+
+    function createNativePBRUniforms() {
+        return {
+            uUseNativePBR: { type: 'bool', value: false, expose: false },
+            uBaseColor: { type: 'vec3', value: new THREE.Vector3(1, 1, 1), hexValue: '#ffffff', expose: false, is_color: true },
+            uBaseAlpha: { type: 'float', value: 1.0, expose: false },
+            uMetallic: { type: 'float', value: 0.0, expose: false, min: 0.0, max: 1.0, step: 0.05 },
+            uRoughness: { type: 'float', value: 0.5, expose: false, min: 0.0, max: 1.0, step: 0.05 },
+            uEmissiveColor: { type: 'vec3', value: new THREE.Vector3(1, 1, 1), hexValue: '#ffffff', expose: false, is_color: true },
+            uEmissiveStrength: { type: 'float', value: 0.0, expose: false, min: 0.0, max: 10.0, step: 0.1 },
+            uUseMetallicRoughnessMap: { type: 'bool', value: false, expose: false },
+            uUseBlockbenchMERMap: { type: 'bool', value: false, expose: false },
+            uUseNormalMap: { type: 'bool', value: false, expose: false },
+            uUseHeightMap: { type: 'bool', value: false, expose: false },
+            uUseEmissiveMap: { type: 'bool', value: false, expose: false },
+            uMetallicRoughnessMap: { type: 'sampler2D', value: null, expose: false },
+            uNormalMap: { type: 'sampler2D', value: null, expose: false },
+            uHeightMap: { type: 'sampler2D', value: null, expose: false },
+            uEmissiveMap: { type: 'sampler2D', value: null, expose: false },
+            uMetallicRoughnessMapScale: { type: 'vec2', value: new THREE.Vector2(1, 1), expose: false },
+            uNormalMapScale: { type: 'vec2', value: new THREE.Vector2(1, 1), expose: false },
+            uHeightMapScale: { type: 'vec2', value: new THREE.Vector2(1, 1), expose: false },
+            uEmissiveMapScale: { type: 'vec2', value: new THREE.Vector2(1, 1), expose: false },
+            uNormalScale: { type: 'float', value: 1.0, expose: false },
+            uNormalYSign: { type: 'float', value: 1.0, expose: false },
+            uHeightScale: { type: 'float', value: 0.4, expose: false },
+            uNativePBRSpecularStrength: { type: 'float', value: 0.35, expose: false }
+        };
     }
 
     function cloneUniformValue(value) {
@@ -1478,7 +1737,7 @@ vec4 saSampleBaseMap(vec2 uv) {
     }
 
     function createNativeMaterialUniforms() {
-        return Object.assign(createMaterialLightingUniforms(), {
+        return Object.assign(createMaterialLightingUniforms(), createNativePBRUniforms(), {
             SHADE: { type: 'bool', value: true, expose: true },
             LIGHTSIDE: { type: 'int', value: 0, expose: true, min: 0, max: 5, step: 1, allow_higher: false, allow_lower: false },
             EMISSIVE: { type: 'bool', value: false, expose: true },
@@ -2408,7 +2667,9 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
         constructor(props = {}) {
             this.id = props.id || guid();
             this.name = props.name || "Material Instance";
+            this.autoName = props.autoName !== undefined ? !!props.autoName : !!props.auto_name;
             this.icon = props.icon || "texture";
+            this.iconColor = props.iconColor || props.icon_color || props.color || '';
             this.baseMaterialId = props.baseMaterialId || props.materialId || 'classic';
             this.uniforms = props.uniforms || {};
             this.isMaterialInstance = true;
@@ -2419,7 +2680,9 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
                 sa_format_version: "2.1-instance",
                 id: this.id,
                 name: this.name,
+                autoName: !!this.autoName,
                 icon: this.icon,
+                iconColor: this.iconColor || '',
                 baseMaterialId: this.baseMaterialId,
                 uniforms: MaterialManager.serializeUniformMap(this.uniforms)
             };
@@ -2429,7 +2692,9 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
             return new FancyShaderMaterialInstance({
                 id: data.id,
                 name: data.name,
+                autoName: data.autoName !== undefined ? data.autoName : data.auto_name,
                 icon: data.icon,
+                iconColor: data.iconColor || data.icon_color || data.color || '',
                 baseMaterialId: data.baseMaterialId || data.materialId || 'classic',
                 uniforms: MaterialManager.deserializeUniformMap(data.uniforms || data.uniformOverrides || {})
             });
@@ -2441,6 +2706,7 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
         instances: {}, // Registry of material instances that only override uniforms
         projectMaterialInstancesProperty: null,
         materialInstancesUndoHooks: null,
+        materialInstancePersistenceWarningShown: false,
 
         get materialInstances() {
             return this.instances;
@@ -2861,6 +3127,57 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
             return project[PROJECT_MATERIAL_INSTANCES_PROP] || '';
         },
 
+        isBBModelProject(project = this.getActiveProject()) {
+            if (!project) return false;
+            const savePath = typeof project.save_path === 'string' ? project.save_path : '';
+            if (savePath.toLowerCase().endsWith('.bbmodel')) return true;
+            if (typeof Format !== 'undefined' && Format && Format.id === 'free') return true;
+            if (project.format && project.format.id === 'free') return true;
+            return false;
+        },
+
+        warnMaterialInstancesAreTemporary() {
+            if (this.materialInstancePersistenceWarningShown || typeof Blockbench === 'undefined') return;
+            this.materialInstancePersistenceWarningShown = true;
+            Blockbench.showQuickMessage(tl('shader_architect.message.instance_not_persistent'), 4200);
+        },
+
+        getCubeMaterialInstancesFallbackJSON() {
+            if (typeof Cube === 'undefined' || !Array.isArray(Cube.all)) return '';
+
+            for (const cube of Cube.all) {
+                if (cube && cube[CUBE_MATERIAL_INSTANCES_FALLBACK_PROP]) {
+                    return cube[CUBE_MATERIAL_INSTANCES_FALLBACK_PROP];
+                }
+            }
+
+            return '';
+        },
+
+        saveCubeMaterialInstancesFallbackJSON(json) {
+            if (typeof Cube === 'undefined' || !Array.isArray(Cube.all) || Cube.all.length === 0) {
+                return false;
+            }
+
+            const assignedCube = Cube.all.find(cube => !!(
+                cube &&
+                (
+                    cube.sa_material_instance_id ||
+                    cube[FACE_MATERIAL_INSTANCES_PROP]
+                )
+            ));
+            const anchorCube = assignedCube || Cube.selected && Cube.selected[0] || Cube.all[0];
+
+            if (!anchorCube) return false;
+
+            Cube.all.forEach(cube => {
+                if (!cube) return;
+                cube[CUBE_MATERIAL_INSTANCES_FALLBACK_PROP] = cube === anchorCube ? (json || '') : '';
+            });
+
+            return true;
+        },
+
         setProjectMaterialInstancesJSON(json, project = this.getActiveProject(), options = {}) {
             if (!project) return false;
             project[PROJECT_MATERIAL_INSTANCES_PROP] = json || '';
@@ -2872,10 +3189,20 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
 
         saveMaterialInstances(options = {}) {
             try {
+                this.registerProjectMaterialInstanceProperty();
                 const project = options.project || this.getActiveProject();
                 if (!project) return false;
                 const json = JSON.stringify(this.serializeMaterialInstances());
+                if (!this.isBBModelProject(project)) {
+                    this.setProjectMaterialInstancesJSON(json, project, options);
+                    this.warnMaterialInstancesAreTemporary();
+                    if (options.dispatch !== false && typeof Blockbench !== 'undefined') {
+                        Blockbench.dispatchEvent('shader_architect_material_instances_changed', { cause: options.cause ? options.cause : 'save_instances' });
+                    }
+                    return false;
+                }
                 const saved = this.setProjectMaterialInstancesJSON(json, project, options);
+                this.saveCubeMaterialInstancesFallbackJSON(json);
                 if (saved && options.dispatch !== false && typeof Blockbench !== 'undefined') {
                     Blockbench.dispatchEvent('shader_architect_material_instances_changed', { cause: options.cause ? options.cause : 'save_instances' });
                 }
@@ -2889,7 +3216,8 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
             this.instances = {};
 
             try {
-                let data = this.getProjectMaterialInstancesJSON(project);
+                let data = this.getProjectMaterialInstancesJSON(project)
+                    || this.getCubeMaterialInstancesFallbackJSON();
                 if (!data) return this.instances;
 
                 let parsed = typeof data === 'string' ? JSON.parse(data) : data;
@@ -2907,6 +3235,9 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
         syncMaterialInstancesFromProject(project = this.getActiveProject()) {
             const instances = this.loadMaterialInstances(project);
             this.revalidateAllMaterialInstances({ save: false });
+            if (typeof Blockbench !== 'undefined') {
+                Blockbench.dispatchEvent('shader_architect_material_instances_changed', { cause: 'sync_instances' });
+            }
             return instances;
         },
 
@@ -2920,6 +3251,143 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
             return instanceOrId.isMaterialInstance ? instanceOrId : null;
         },
 
+        getMaterialDisplayName(materialOrId) {
+            const material = typeof materialOrId === 'string'
+                ? this.materials[materialOrId]
+                : materialOrId;
+            return material && material.name ? tl(material.name) : tl('shader_architect.preset.classic');
+        },
+
+        getSuggestedMaterialInstanceName(baseMaterialId = 'classic', options = {}) {
+            const base = this.materials[baseMaterialId] || this.materials['classic'];
+            const baseName = this.getMaterialDisplayName(base);
+            const rawName = `${baseName} Override`;
+            return options.unique === false
+                ? rawName
+                : this.getUniqueMaterialInstanceName(rawName, options);
+        },
+
+        normalizeMaterialInstanceName(name, baseMaterialId = 'classic') {
+            const rawName = typeof name === 'string' ? name.trim() : '';
+            if (rawName) return rawName;
+            return this.getSuggestedMaterialInstanceName(baseMaterialId, { unique: false });
+        },
+
+        getUniqueMaterialInstanceName(name, options = {}) {
+            const baseName = this.normalizeMaterialInstanceName(name, options.baseMaterialId || 'classic');
+            const excludeId = options.excludeId || '';
+            const usedNames = new Set();
+
+            for (let id in this.instances) {
+                if (id === excludeId) continue;
+                const existingName = this.instances[id] && this.instances[id].name;
+                if (existingName) usedNames.add(String(existingName).trim().toLowerCase());
+            }
+
+            if (!usedNames.has(baseName.toLowerCase())) return baseName;
+
+            for (let index = 2; index < 1000; index++) {
+                const candidate = `${baseName} ${index}`;
+                if (!usedNames.has(candidate.toLowerCase())) return candidate;
+            }
+
+            return `${baseName} ${guid().slice(0, 4)}`;
+        },
+
+        normalizeMaterialInstanceIcon(icon, fallbackIcon = 'texture') {
+            const normalized = typeof icon === 'string' ? icon.trim() : '';
+            return normalized || fallbackIcon || 'texture';
+        },
+
+        getMaterialInstanceMarkerColors() {
+            if (typeof markerColors !== 'undefined' && Array.isArray(markerColors) && markerColors.length) {
+                return markerColors;
+            }
+
+            return [
+                { id: 'red', name: 'Red', standard: '#ff4a4a', pastel: '#ff9696' },
+                { id: 'orange', name: 'Orange', standard: '#ff9f1a', pastel: '#ffc878' },
+                { id: 'yellow', name: 'Yellow', standard: '#ffd43b', pastel: '#ffe58a' },
+                { id: 'green', name: 'Green', standard: '#51cf66', pastel: '#9be7aa' },
+                { id: 'blue', name: 'Blue', standard: '#339af0', pastel: '#8cc8f7' },
+                { id: 'purple', name: 'Purple', standard: '#845ef7', pastel: '#b8a2ff' }
+            ];
+        },
+
+        getMaterialInstanceMarkerColor(color) {
+            const value = typeof color === 'string' ? color.trim() : '';
+            if (!value) return null;
+
+            const lowerValue = value.toLowerCase();
+            return this.getMaterialInstanceMarkerColors().find(marker => {
+                if (!marker || !marker.id) return false;
+                return String(marker.id).toLowerCase() === lowerValue
+                    || String(marker.standard || '').toLowerCase() === lowerValue
+                    || String(marker.pastel || '').toLowerCase() === lowerValue;
+            }) || null;
+        },
+
+        getMaterialInstanceMarkerColorOptions() {
+            const options = {
+                '': {
+                    name: 'Default',
+                    icon: 'radio_button_unchecked',
+                    color: 'var(--color-text)'
+                }
+            };
+
+            this.getMaterialInstanceMarkerColors().forEach(marker => {
+                if (!marker || !marker.id) return;
+                options[marker.id] = {
+                    name: marker.name || marker.id,
+                    icon: 'radio_button_checked',
+                    color: marker.standard || marker.pastel || undefined
+                };
+            });
+
+            return options;
+        },
+
+        normalizeMaterialInstanceColor(color) {
+            if (!color) return '';
+            const value = typeof color === 'string'
+                ? color.trim()
+                : typeof color.toHexString === 'function'
+                    ? color.toHexString()
+                    : typeof color.toHex === 'function'
+                        ? `#${color.toHex()}`
+                        : '';
+            const marker = this.getMaterialInstanceMarkerColor(value);
+            return marker ? marker.id : '';
+        },
+
+        getMaterialInstanceIconColorCSS(color) {
+            const marker = this.getMaterialInstanceMarkerColor(color);
+            if (marker) return marker.standard || marker.pastel || '';
+            return '';
+        },
+
+        ensureMaterialInstanceIdentity(instance, options = {}) {
+            if (!instance) return null;
+            const base = this.materials[instance.baseMaterialId] || this.materials['classic'];
+            if (base) instance.baseMaterialId = base.id;
+
+            if (!instance.id || (this.instances[instance.id] && this.instances[instance.id] !== instance && !options.overwrite)) {
+                instance.id = guid();
+            }
+
+            instance.name = this.getUniqueMaterialInstanceName(
+                instance.name,
+                {
+                    baseMaterialId: instance.baseMaterialId,
+                    excludeId: instance.id
+                }
+            );
+            instance.icon = this.normalizeMaterialInstanceIcon(instance.icon, base && base.icon);
+            instance.iconColor = this.normalizeMaterialInstanceColor(instance.iconColor);
+            return instance;
+        },
+
         createMaterialInstance(baseMaterialIdOrProps = 'classic', props = {}) {
             const data = typeof baseMaterialIdOrProps === 'string'
                 ? Object.assign({}, props, { baseMaterialId: baseMaterialIdOrProps })
@@ -2930,17 +3398,29 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
 
             const instance = new FancyShaderMaterialInstance({
                 id: data.id,
-                name: data.name || `${base.name} Instance`,
+                name: data.name || this.getSuggestedMaterialInstanceName(base.id, { unique: false }),
+                autoName: data.autoName !== undefined ? !!data.autoName : !data.name,
                 icon: data.icon || base.icon,
+                iconColor: data.iconColor || data.icon_color || '',
                 baseMaterialId: base.id,
                 uniforms: data.uniforms
                     ? this.cloneUniformMap(data.uniforms)
                     : this.cloneUniformMap(base.uniforms || {})
             });
 
+            this.ensureMaterialInstanceIdentity(instance);
             this.revalidateMaterialInstance(instance, { save: false });
             this.instances[instance.id] = instance;
-            this.saveMaterialInstances();
+            if (data.save !== false) {
+                const saved = this.saveMaterialInstances({ cause: data.cause || 'create_instance' });
+                if (!saved && typeof Blockbench !== 'undefined') {
+                    Blockbench.showToastNotification({
+                        text: tl('shader_architect.message.instance_save_failed'),
+                        icon: 'warning',
+                        expire: 6000
+                    });
+                }
+            }
             return instance;
         },
 
@@ -2955,14 +3435,14 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
             const base = this.materials[instance.baseMaterialId] || this.materials['classic'];
             if (!base) return null;
 
-            instance.baseMaterialId = base.id;
+            this.ensureMaterialInstanceIdentity(instance);
             if (!instance.uniforms || Object.keys(instance.uniforms).length === 0) {
                 instance.uniforms = this.cloneUniformMap(base.uniforms || {});
             }
 
             this.revalidateMaterialInstance(instance, { save: false });
             this.instances[instance.id] = instance;
-            this.saveMaterialInstances();
+            this.saveMaterialInstances({ cause: 'register_instance' });
             return instance;
         },
 
@@ -3303,13 +3783,58 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
             return this.duplicateMaterialInstance(instanceOrId, props);
         },
 
-        setMaterialInstanceBase(instanceOrId, baseMaterialId) {
+        renameMaterialInstance(instanceOrId, name, options = {}) {
+            const instance = this.getMaterialInstance(instanceOrId);
+            if (!instance) return null;
+
+            const nextName = this.getUniqueMaterialInstanceName(name, {
+                baseMaterialId: instance.baseMaterialId,
+                excludeId: instance.id
+            });
+
+            if (instance.name === nextName) return instance;
+            instance.name = nextName;
+            instance.autoName = !!options.autoGenerated;
+
+            if (options.save !== false) {
+                this.saveMaterialInstances({ cause: options.cause || 'rename_instance' });
+            }
+
+            if (options.apply !== false) {
+                ShaderEngine.updateAllCubes(options.cause || 'rename_instance');
+            }
+
+            return instance;
+        },
+
+        setMaterialInstanceIcon(instanceOrId, icon, iconColor, options = {}) {
+            const instance = this.getMaterialInstance(instanceOrId);
+            if (!instance) return null;
+
+            const nextIcon = this.normalizeMaterialInstanceIcon(icon, 'texture');
+            const nextColor = this.normalizeMaterialInstanceColor(iconColor);
+            const changed = instance.icon !== nextIcon || (instance.iconColor || '') !== nextColor;
+
+            instance.icon = nextIcon;
+            instance.iconColor = nextColor;
+
+            if (changed && options.save !== false) {
+                this.saveMaterialInstances({ cause: options.cause || 'set_instance_icon' });
+            }
+
+            return instance;
+        },
+
+        setMaterialInstanceBase(instanceOrId, baseMaterialId, options = {}) {
             const instance = this.getMaterialInstance(instanceOrId);
             const base = this.materials[baseMaterialId];
             if (!instance || !base) return null;
 
+            const previousBaseMaterialId = instance.baseMaterialId;
             instance.baseMaterialId = base.id;
-            instance.icon = instance.icon || base.icon;
+            if (options.syncIcon !== false && (!instance.icon || instance.icon === 'texture')) {
+                instance.icon = base.icon || instance.icon || 'texture';
+            }
             this.revalidateMaterialInstance(instance, { save: false });
 
             Cube.all.forEach(cube => {
@@ -3318,8 +3843,37 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
                 }
             });
 
-            this.saveMaterialInstances();
-            ShaderEngine.updateAllCubes('set_material_instance_base');
+            if (options.renameIfGenerated) {
+                const previousBase = this.materials[previousBaseMaterialId] || this.materials['classic'];
+                const previousGeneratedName = this.getSuggestedMaterialInstanceName(
+                    previousBase ? previousBase.id : previousBaseMaterialId,
+                    {
+                        unique: false
+                    }
+                );
+                if (
+                    instance.autoName !== false ||
+                    !instance.name ||
+                    instance.name === previousGeneratedName ||
+                    /^.+ Override( \d+)?$/.test(instance.name)
+                ) {
+                    instance.name = this.getUniqueMaterialInstanceName(
+                        this.getSuggestedMaterialInstanceName(base.id, { unique: false }),
+                        {
+                            baseMaterialId: base.id,
+                            excludeId: instance.id
+                        }
+                    );
+                    instance.autoName = true;
+                }
+            }
+
+            if (options.save !== false) {
+                this.saveMaterialInstances({ cause: options.cause || 'set_material_instance_base' });
+            }
+            if (options.apply !== false) {
+                ShaderEngine.updateAllCubes(options.cause || 'set_material_instance_base');
+            }
             return instance;
         },
 
@@ -3522,6 +4076,7 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
                 id: base.id,
                 name: instance.name || base.name,
                 icon: instance.icon || base.icon,
+                iconColor: this.getMaterialInstanceIconColorCSS(instance.iconColor),
                 vertex: base.vertex,
                 fragment: base.fragment,
                 uniforms: this.getMaterialInstanceUniforms(instance),
@@ -3770,11 +4325,13 @@ ${SCREEN_SPACE_REFLECTIONS_PARS_FRAGMENT}
 
 uniform sampler2D map;
 uniform vec3 LIGHTCOLOR;
+uniform bool EMISSIVE;
 
 // -------------------------------------------------------------------------
 // PBR material properties
 // -------------------------------------------------------------------------
 uniform vec3 uBaseColor;
+uniform float uBaseAlpha;
 uniform float uMetallic;
 uniform float uRoughness;
 uniform float uAO;
@@ -3808,51 +4365,29 @@ uniform float uEmissiveStrength;
 // -------------------------------------------------------------------------
 uniform bool uUseBaseColorMap;
 uniform bool uUseMetallicRoughnessMap;
+uniform bool uUseBlockbenchMERMap;
 uniform bool uUseNormalMap;
+uniform bool uUseHeightMap;
 uniform bool uUseAOMap;
 uniform bool uUseEmissiveMap;
-uniform bool uUseClearcoatMap;
-uniform bool uUseClearcoatRoughnessMap;
-uniform bool uUseAnisotropyMap;
-uniform bool uUseSheenColorMap;
-uniform bool uUseSheenRoughnessMap;
-uniform bool uUseTransmissionMap;
-uniform bool uUseThicknessMap;
-uniform bool uUseIridescenceMap;
-uniform bool uUseIridescenceThicknessMap;
 
 uniform sampler2D uBaseColorMap;
 uniform sampler2D uMetallicRoughnessMap;
 uniform sampler2D uNormalMap;
+uniform sampler2D uHeightMap;
 uniform sampler2D uAOMap;
 uniform sampler2D uEmissiveMap;
-uniform sampler2D uClearcoatMap;
-uniform sampler2D uClearcoatRoughnessMap;
-uniform sampler2D uClearcoatNormalMap;
-uniform sampler2D uAnisotropyMap;
-uniform sampler2D uSheenColorMap;
-uniform sampler2D uSheenRoughnessMap;
-uniform sampler2D uTransmissionMap;
-uniform sampler2D uThicknessMap;
-uniform sampler2D uIridescenceMap;
-uniform sampler2D uIridescenceThicknessMap;
 
 uniform vec2 uBaseColorMapScale;
 uniform vec2 uMetallicRoughnessMapScale;
 uniform vec2 uNormalMapScale;
+uniform vec2 uHeightMapScale;
 uniform vec2 uAOMapScale;
 uniform vec2 uEmissiveMapScale;
-uniform vec2 uClearcoatMapScale;
-uniform vec2 uClearcoatRoughnessMapScale;
-uniform vec2 uAnisotropyMapScale;
-uniform vec2 uSheenColorMapScale;
-uniform vec2 uSheenRoughnessMapScale;
-uniform vec2 uTransmissionMapScale;
-uniform vec2 uThicknessMapScale;
-uniform vec2 uIridescenceMapScale;
-uniform vec2 uIridescenceThicknessMapScale;
 
 uniform float uNormalScale;
+uniform float uNormalYSign;
+uniform float uHeightScale;
 uniform float uEnvSpecularStrength;
 uniform float uSpecularIntensity;
 
@@ -4221,6 +4756,7 @@ vec3 applyCheapNormalMap(vec3 normal) {
     if (!uUseNormalMap) return normal;
 
     vec3 nTex = texture2D(uNormalMap, vUv * uNormalMapScale).xyz * 2.0 - 1.0;
+    nTex.y *= uNormalYSign;
 
     // Blockbench meshes usually do not provide tangents. This is a safe stylized
     // perturbation, not a full tangent-space normal map. It stays optional.
@@ -4234,8 +4770,29 @@ vec3 applyCheapNormalMap(vec3 normal) {
     return bumped;
 }
 
+vec3 applyHeightMap(vec3 normal) {
+    if (!uUseHeightMap) return normal;
+
+    float height = texture2D(uHeightMap, vUv * uHeightMapScale).r;
+    float heightDx = dFdx(height);
+    float heightDy = dFdy(height);
+
+    vec3 dpdx = dFdx(vWorldPos);
+    vec3 dpdy = dFdy(vWorldPos);
+    vec3 r1 = cross(dpdy, normal);
+    vec3 r2 = cross(normal, dpdx);
+    float det = dot(dpdx, r1);
+    vec3 gradient = (heightDx * r1 + heightDy * r2) * sign(det);
+
+    return safeNormalize(
+        abs(det) * normal - gradient * clamp(uHeightScale, -8.0, 8.0),
+        normal
+    );
+}
+
 void main() {
     vec4 texel = texture2D(map, vUv);
+    texel.a *= clamp(uBaseAlpha, 0.0, 1.0);
 
     if (texel.a < 0.01) discard;
 
@@ -4262,7 +4819,10 @@ void main() {
     if (uUseMetallicRoughnessMap) {
         vec4 mr = texture2D(uMetallicRoughnessMap, vUv * uMetallicRoughnessMapScale);
         metallic *= mr.r;
-        roughness *= mr.g;
+        roughness *= uUseBlockbenchMERMap ? mr.b : mr.g;
+        if (uUseBlockbenchMERMap) {
+            emissive += baseColor * mr.g * max(uEmissiveStrength, 0.0);
+        }
     }
 
     if (uUseAOMap) {
@@ -4270,47 +4830,7 @@ void main() {
     }
 
     if (uUseEmissiveMap) {
-        emissive += texture2D(uEmissiveMap, vUv * uEmissiveMapScale).rgb * max(uEmissiveStrength, 1.0);
-    }
-
-    if (uUseClearcoatMap) {
-        clearcoat *= texture2D(uClearcoatMap, vUv * uClearcoatMapScale).r;
-    }
-
-    if (uUseClearcoatRoughnessMap) {
-        clearcoatRoughness *= texture2D(uClearcoatRoughnessMap, vUv * uClearcoatRoughnessMapScale).g;
-    }
-
-    if (uUseAnisotropyMap) {
-        anisotropy *= texture2D(uAnisotropyMap, vUv * uAnisotropyMapScale).r * 2.0 - 1.0;
-    }
-
-    if (uUseSheenColorMap) {
-        sheenColor *= texture2D(uSheenColorMap, vUv * uSheenColorMapScale).rgb;
-    }
-
-    if (uUseSheenRoughnessMap) {
-        sheenRoughness *= texture2D(uSheenRoughnessMap, vUv * uSheenRoughnessMapScale).a;
-    }
-
-    if (uUseTransmissionMap) {
-        transmission *= texture2D(uTransmissionMap, vUv * uTransmissionMapScale).r;
-    }
-
-    if (uUseThicknessMap) {
-        thickness *= texture2D(uThicknessMap, vUv * uThicknessMapScale).r;
-    }
-
-    if (uUseIridescenceMap) {
-        iridescence *= texture2D(uIridescenceMap, vUv * uIridescenceMapScale).r;
-    }
-
-    if (uUseIridescenceThicknessMap) {
-        iridescenceThickness = mix(
-            uIridescenceThicknessMin,
-            uIridescenceThicknessMax,
-            texture2D(uIridescenceThicknessMap, vUv * uIridescenceThicknessMapScale).r
-        );
+        emissive += texture2D(uEmissiveMap, vUv * uEmissiveMapScale).rgb * max(uEmissiveStrength, 0.0);
     }
 
     metallic = clamp(metallic, 0.0, 1.0);
@@ -4327,6 +4847,7 @@ void main() {
 
     vec3 N = safeNormalize(vWorldNormal, vec3(0.0, 1.0, 0.0));
     N = applyCheapNormalMap(N);
+    N = applyHeightMap(N);
 
     vec3 V = safeNormalize(vViewDir, vec3(0.0, 0.0, 1.0));
     float NdotV = max(dot(N, V), 0.001);
@@ -4420,6 +4941,12 @@ void main() {
     color += vec3(lift);
     color *= LIGHTCOLOR;
 
+    if (EMISSIVE) {
+        vec3 baseSafe = max(baseColor, vec3(0.001));
+        vec3 missingLight = max(vec3(1.0) - color / baseSafe, vec3(0.0));
+        color += baseColor * missingLight * (1.0 - clamp(texel.a, 0.0, 1.0));
+    }
+
     if (lift > 0.2) {
         color.rg *= vec2(0.6, 0.7);
     }
@@ -4438,6 +4965,7 @@ void main() {
                 uniforms: Object.assign({
                     // Base PBR Properties
                     "uBaseColor": { type: "vec3", value: new THREE.Vector3(1, 1, 1), hexValue: "#ffffff", expose: true, is_color: true },
+                    "uBaseAlpha": { type: "float", value: 1.0, expose: false },
                     "uMetallic": { type: "float", value: 0.0, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
                     "uRoughness": { type: "float", value: 0.5, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
                     "uAO": { type: "float", value: 1.0, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
@@ -4475,54 +5003,33 @@ void main() {
                     // Texture enable flags. Set these to true only when a real texture exists.
                     "uUseBaseColorMap": { type: "bool", value: false, expose: true, advanced: true },
                     "uUseMetallicRoughnessMap": { type: "bool", value: false, expose: true, advanced: true },
+                    "uUseBlockbenchMERMap": { type: "bool", value: false, expose: false },
                     "uUseNormalMap": { type: "bool", value: false, expose: true, advanced: true },
+                    "uUseHeightMap": { type: "bool", value: false, expose: false },
                     "uUseAOMap": { type: "bool", value: false, expose: true, advanced: true },
                     "uUseEmissiveMap": { type: "bool", value: false, expose: true, advanced: true },
-                    "uUseClearcoatMap": { type: "bool", value: false, expose: true, advanced: true },
-                    "uUseClearcoatRoughnessMap": { type: "bool", value: false, expose: true, advanced: true },
-                    "uUseAnisotropyMap": { type: "bool", value: false, expose: true, advanced: true },
-                    "uUseSheenColorMap": { type: "bool", value: false, expose: true, advanced: true },
-                    "uUseSheenRoughnessMap": { type: "bool", value: false, expose: true, advanced: true },
-                    "uUseTransmissionMap": { type: "bool", value: false, expose: true, advanced: true },
-                    "uUseThicknessMap": { type: "bool", value: false, expose: true, advanced: true },
-                    "uUseIridescenceMap": { type: "bool", value: false, expose: true, advanced: true },
-                    "uUseIridescenceThicknessMap": { type: "bool", value: false, expose: true, advanced: true },
 
                     // Texture Maps
                     "uBaseColorMap": { type: "sampler2D", value: null, expose: false },
                     "uMetallicRoughnessMap": { type: "sampler2D", value: null, expose: false },
                     "uNormalMap": { type: "sampler2D", value: null, expose: false },
+                    "uHeightMap": { type: "sampler2D", value: null, expose: false },
                     "uAOMap": { type: "sampler2D", value: null, expose: false },
                     "uEmissiveMap": { type: "sampler2D", value: null, expose: false },
-                    "uClearcoatMap": { type: "sampler2D", value: null, expose: false },
-                    "uClearcoatRoughnessMap": { type: "sampler2D", value: null, expose: false },
-                    "uClearcoatNormalMap": { type: "sampler2D", value: null, expose: false },
-                    "uAnisotropyMap": { type: "sampler2D", value: null, expose: false },
-                    "uSheenColorMap": { type: "sampler2D", value: null, expose: false },
-                    "uSheenRoughnessMap": { type: "sampler2D", value: null, expose: false },
-                    "uTransmissionMap": { type: "sampler2D", value: null, expose: false },
-                    "uThicknessMap": { type: "sampler2D", value: null, expose: false },
-                    "uIridescenceMap": { type: "sampler2D", value: null, expose: false },
-                    "uIridescenceThicknessMap": { type: "sampler2D", value: null, expose: false },
 
                     // Texture Scales
                     "uBaseColorMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true, advanced: true },
                     "uMetallicRoughnessMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true, advanced: true },
                     "uNormalMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true, advanced: true },
+                    "uHeightMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: false },
                     "uAOMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true, advanced: true },
                     "uEmissiveMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true, advanced: true },
-                    "uClearcoatMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true, advanced: true },
-                    "uClearcoatRoughnessMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true, advanced: true },
-                    "uAnisotropyMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true, advanced: true },
-                    "uSheenColorMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true, advanced: true },
-                    "uSheenRoughnessMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true, advanced: true },
-                    "uTransmissionMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true, advanced: true },
-                    "uThicknessMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true, advanced: true },
-                    "uIridescenceMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true, advanced: true },
-                    "uIridescenceThicknessMapScale": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true, advanced: true },
 
                     // Rendering controls
+                    "EMISSIVE": { type: "bool", value: false, expose: true },
                     "uNormalScale": { type: "float", value: 1.0, expose: true, min: -2.0, max: 2.0, step: 0.1, allow_higher: true, allow_lower: true },
+                    "uNormalYSign": { type: "float", value: 1.0, expose: false },
+                    "uHeightScale": { type: "float", value: 0.4, expose: false },
                     "uEnvSpecularStrength": { type: "float", value: 0.35, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: true, allow_lower: false },
                     "uSpecularIntensity": { type: "float", value: 1.0, expose: true, min: 0.0, max: 2.0, step: 0.05, allow_higher: true, allow_lower: false },
 
@@ -4879,6 +5386,8 @@ void main() {
                     }
                 };
 
+                Object.assign(uniforms, createNativePBRUniforms());
+
                 if (config.shadows) {
                     uniforms["uLightCastShadow"] = {
                         type: "intv",
@@ -5005,6 +5514,7 @@ void main() {
 }`,
                 fragment: `uniform sampler2D map;
 uniform vec3 LIGHTCOLOR;
+uniform bool EMISSIVE;
 uniform vec2 TILING;
 uniform bool AUTO_TILE;
 uniform vec2 TEXTURE_SIZE;
@@ -5038,6 +5548,8 @@ uniform float uAOFaceNormalWeight;
 
 // Checkbox option to clamp lighting
 uniform bool uClampLighting;
+
+${NATIVE_PBR_FRAGMENT}
 
 varying vec2 vUv;
 varying vec2 v_normalizedFaceUv;
@@ -5259,6 +5771,7 @@ void main() {
         tiling_value = v_faceSize / TEXTURE_SIZE;
     }
     vec4 texel = texture2D(map, vUv * tiling_value);
+    texel = saApplyNativePBRBaseColor(texel);
 
     if (texel.a < 0.01) discard;
 
@@ -5267,6 +5780,7 @@ void main() {
     texel.rgb = pow(max(texel.rgb, vec3(0.0)), vec3(2.2));
 
     vec3 normal = safeNormalize(vWorldNormal, vec3(0.0, 1.0, 0.0));
+    normal = saApplyNativePBRNormal(normal, vUv * tiling_value, vWorldPos);
 
     vec3 directLight = vec3(0.0);
 
@@ -5293,11 +5807,27 @@ void main() {
         }
     }
 
+    float nativeMetallic = saGetNativePBRMetallic(vUv * tiling_value);
+    float nativeRoughness = saGetNativePBRRoughness(vUv * tiling_value);
+    vec3 nativeEmissive = saGetNativePBREmissive(vUv * tiling_value, texel.rgb);
+
     vec3 finalColor = texel.rgb * lighting;
+    finalColor += texel.rgb * lighting * nativeMetallic * (1.0 - nativeRoughness) * uNativePBRSpecularStrength * 0.35;
+    finalColor += nativeEmissive;
 
     // Apply lift uniform (keep values near 0.0 to prevent washing out dark tones)
     finalColor += vec3(lift);
     finalColor *= LIGHTCOLOR;
+
+    if (EMISSIVE) {
+        finalColor = saApplyBlockbenchRenderModeEmission(
+            finalColor,
+            texel.rgb,
+            texel.a,
+            LIGHTCOLOR,
+            lighting
+        );
+    }
 
     if (lift > 0.2) {
         finalColor.rg *= vec2(0.6, 0.7);
@@ -5423,6 +5953,7 @@ ${SCREEN_SPACE_REFLECTIONS_PARS_FRAGMENT}
 
 uniform sampler2D map;
 uniform vec3 LIGHTCOLOR;
+uniform bool EMISSIVE;
 uniform vec2 TILING;
 uniform bool AUTO_TILE;
 uniform vec2 TEXTURE_SIZE;
@@ -5460,6 +5991,8 @@ uniform float uAOFaceNormalWeight;
 
 // Checkbox option to clamp lighting
 uniform bool uClampLighting;
+
+${NATIVE_PBR_FRAGMENT}
 
 uniform float uShadowStrength;
 uniform float uShadowFloor;
@@ -5783,6 +6316,7 @@ void main() {
         tiling_value = v_faceSize / TEXTURE_SIZE;
     }
     vec4 texel = texture2D(map, vUv * tiling_value);
+    texel = saApplyNativePBRBaseColor(texel);
 
     if (texel.a < 0.01) discard;
 
@@ -5795,6 +6329,7 @@ void main() {
     #endif
 
     vec3 normal = safeNormalize(vWorldNormal, vec3(0.0, 1.0, 0.0));
+    normal = saApplyNativePBRNormal(normal, vUv * tiling_value, vWorldPos);
 
     vec3 directLight = vec3(0.0);
 
@@ -5824,13 +6359,29 @@ void main() {
         }
     }
 
+    float nativeMetallic = saGetNativePBRMetallic(vUv * tiling_value);
+    float nativeRoughness = saGetNativePBRRoughness(vUv * tiling_value);
+    vec3 nativeEmissive = saGetNativePBREmissive(vUv * tiling_value, texel.rgb);
+
     vec3 finalColor = texel.rgb * lighting;
+    finalColor += texel.rgb * lighting * nativeMetallic * (1.0 - nativeRoughness) * uNativePBRSpecularStrength * 0.35;
+    finalColor += nativeEmissive;
 
     // --- HANDLE LIFT INTENSITY ---
     // Applying flat offsets directly in linear space can destroy dark areas.
     // If lift is high, apply a soft tint reduction to preserve midtones.
     finalColor += vec3(lift);
     finalColor *= LIGHTCOLOR;
+
+    if (EMISSIVE) {
+        finalColor = saApplyBlockbenchRenderModeEmission(
+            finalColor,
+            texel.rgb,
+            texel.a,
+            LIGHTCOLOR,
+            lighting
+        );
+    }
 
     if (lift > 0.2) {
         finalColor.rg *= vec2(0.6, 0.7);
@@ -5962,6 +6513,7 @@ void main() {
 
 uniform sampler2D map;
 uniform vec3 LIGHTCOLOR;
+uniform bool EMISSIVE;
 uniform vec2 TILING;
 uniform bool AUTO_TILE;
 uniform vec2 TEXTURE_SIZE;
@@ -5987,6 +6539,8 @@ uniform int uToneMapping;
 uniform float uLightWrap;
 uniform bool uClampLighting;
 
+${NATIVE_PBR_FRAGMENT}
+
 /* Voxel AO */
 uniform bool uAOEnabled;
 uniform float uAOStrength;
@@ -5999,17 +6553,18 @@ uniform float uAOCornerWeight;
 uniform float uAOFaceNormalWeight;
 
 /*
-    Controles de sombra de Lightflow.
-    Se aplican DESPUÉS del threshold pixelado.
+    Lightflow shadow controls are applied after the pixelated threshold.
 */
 uniform float uShadowStrength;
 uniform float uShadowFloor;
 
 /*
-    Controles del sistema legacy de sombras pixeladas.
+    Legacy pixelated-shadow controls.
 */
 uniform float shadowPixelResolution;
 uniform float shadowThreshold;
+uniform float shadowFilterScale;
+uniform float shadowFeather;
 
 varying vec2 vUv;
 varying vec2 vNormalizedFaceUv;
@@ -6157,8 +6712,8 @@ vec3 computeLightContribution(
 
 /* ------------------------------------------------------------
    PIXELATED LEGACY SHADOWS
-   Esta ruta se conserva independiente de uLightShadowIndex.
-   No usar sombras por luz aquí: rompería el comportamiento legacy.
+   Keep this path independent from uLightShadowIndex to preserve
+   the legacy pixelated behavior.
 ------------------------------------------------------------ */
 
 vec2 getPixelCenterUV(vec2 localUV, vec2 gridSize) {
@@ -6232,22 +6787,22 @@ vec4 snapShadowCoordToTexel(
     vec4 shadowCoord,
     vec2 shadowMapSize
 ) {
-    /*
-        Protección contra shadow maps aún no inicializados.
-        No modifica nada mientras shadowMapSize sea válido.
-    */
+    if (abs(shadowCoord.w) < 1e-6) {
+        return shadowCoord;
+    }
+
     vec2 safeShadowMapSize = max(
         shadowMapSize,
         vec2(1.0)
     );
 
-    vec2 texelSize = 1.0 / safeShadowMapSize;
+    vec3 projected = shadowCoord.xyz / shadowCoord.w;
 
-    shadowCoord.xy =
-        floor(shadowCoord.xy / texelSize + 0.5) *
-        texelSize;
+    projected.xy = (
+        floor(projected.xy * safeShadowMapSize) + 0.5
+    ) / safeShadowMapSize;
 
-    shadowCoord.z -= 0.0005;
+    shadowCoord.xy = projected.xy * shadowCoord.w;
 
     return shadowCoord;
 }
@@ -6283,7 +6838,10 @@ vec4 getProjectedShadowCoordAtUV(
         }
     }
 
-    return currentShadowCoord;
+    return snapShadowCoordToTexel(
+        currentShadowCoord,
+        shadowMapSize
+    );
 }
 
 vec4 getPointShadowCoordAtUV(
@@ -6314,6 +6872,21 @@ vec4 getPointShadowCoordAtUV(
     }
 
     return currentShadowCoord;
+}
+
+float pixelShadowMask(float visibility) {
+    float threshold = clamp(shadowThreshold, 0.0, 1.0);
+    float feather = clamp(shadowFeather, 0.0, 0.49);
+
+    if (feather <= 0.0001) {
+        return step(threshold, visibility);
+    }
+
+    return smoothstep(
+        max(0.0, threshold - feather),
+        min(1.0, threshold + feather),
+        visibility
+    );
 }
 
 float getPixelatedShadowAtUV(
@@ -6350,14 +6923,11 @@ float getPixelatedShadowAtUV(
                     directionalShadowMap[i],
                     safeShadowMapSize,
                     directionalLight.shadowBias,
-                    0.0,
+                    max(0.0, directionalLight.shadowRadius * shadowFilterScale),
                     shadowCoord
                 );
 
-                shadow *= step(
-                    clamp(shadowThreshold, 0.0, 1.0),
-                    rawShadow
-                );
+                shadow *= pixelShadowMask(rawShadow);
             }
         }
         #pragma unroll_loop_end
@@ -6387,14 +6957,11 @@ float getPixelatedShadowAtUV(
                     spotShadowMap[i],
                     safeShadowMapSize,
                     spotLight.shadowBias,
-                    0.0,
+                    max(0.0, spotLight.shadowRadius * shadowFilterScale),
                     shadowCoord
                 );
 
-                shadow *= step(
-                    clamp(shadowThreshold, 0.0, 1.0),
-                    rawShadow
-                );
+                shadow *= pixelShadowMask(rawShadow);
             }
         }
         #pragma unroll_loop_end
@@ -6424,16 +6991,13 @@ float getPixelatedShadowAtUV(
                     pointShadowMap[i],
                     safeShadowMapSize,
                     pointLight.shadowBias,
-                    0.0,
+                    max(0.0, pointLight.shadowRadius * shadowFilterScale),
                     shadowCoord,
                     pointLight.shadowCameraNear,
                     pointLight.shadowCameraFar
                 );
 
-                shadow *= step(
-                    clamp(shadowThreshold, 0.0, 1.0),
-                    rawShadow
-                );
+                shadow *= pixelShadowMask(rawShadow);
             }
         }
         #pragma unroll_loop_end
@@ -6442,6 +7006,187 @@ float getPixelatedShadowAtUV(
     #endif
 
     return shadow;
+}
+
+float getPixelatedDirectionalShadowByIndex(
+    int shadowIndex,
+    vec2 targetUV,
+    vec2 currentUV
+) {
+    float result = 1.0;
+
+    #ifdef USE_SHADOWMAP
+    #if NUM_DIR_LIGHT_SHADOWS > 0
+        DirectionalLightShadow directionalLight;
+
+        #pragma unroll_loop_start
+        for (int i = 0; i < NUM_DIR_LIGHT_SHADOWS; i++) {
+            directionalLight = directionalLightShadows[i];
+
+            if (UNROLLED_LOOP_INDEX == shadowIndex) {
+                vec2 safeShadowMapSize = max(
+                    directionalLight.shadowMapSize,
+                    vec2(1.0)
+                );
+
+                vec4 shadowCoord = getProjectedShadowCoordAtUV(
+                    vDirectionalShadowCoord[i],
+                    targetUV,
+                    currentUV,
+                    safeShadowMapSize
+                );
+
+                result = receiveShadow ? pixelShadowMask(getShadow(
+                    directionalShadowMap[i],
+                    safeShadowMapSize,
+                    directionalLight.shadowBias,
+                    max(0.0, directionalLight.shadowRadius * shadowFilterScale),
+                    shadowCoord
+                )) : 1.0;
+            }
+        }
+        #pragma unroll_loop_end
+    #endif
+    #endif
+
+    return result;
+}
+
+float getPixelatedSpotShadowByIndex(
+    int shadowIndex,
+    vec2 targetUV,
+    vec2 currentUV
+) {
+    float result = 1.0;
+
+    #ifdef USE_SHADOWMAP
+    #if NUM_SPOT_LIGHT_SHADOWS > 0
+        SpotLightShadow spotLight;
+
+        #pragma unroll_loop_start
+        for (int i = 0; i < NUM_SPOT_LIGHT_SHADOWS; i++) {
+            spotLight = spotLightShadows[i];
+
+            if (UNROLLED_LOOP_INDEX == shadowIndex) {
+                vec2 safeShadowMapSize = max(
+                    spotLight.shadowMapSize,
+                    vec2(1.0)
+                );
+
+                vec4 shadowCoord = getProjectedShadowCoordAtUV(
+                    vSpotShadowCoord[i],
+                    targetUV,
+                    currentUV,
+                    safeShadowMapSize
+                );
+
+                result = receiveShadow ? pixelShadowMask(getShadow(
+                    spotShadowMap[i],
+                    safeShadowMapSize,
+                    spotLight.shadowBias,
+                    max(0.0, spotLight.shadowRadius * shadowFilterScale),
+                    shadowCoord
+                )) : 1.0;
+            }
+        }
+        #pragma unroll_loop_end
+    #endif
+    #endif
+
+    return result;
+}
+
+float getPixelatedPointShadowByIndex(
+    int shadowIndex,
+    vec2 targetUV,
+    vec2 currentUV
+) {
+    float result = 1.0;
+
+    #ifdef USE_SHADOWMAP
+    #if NUM_POINT_LIGHT_SHADOWS > 0
+        PointLightShadow pointLight;
+
+        #pragma unroll_loop_start
+        for (int i = 0; i < NUM_POINT_LIGHT_SHADOWS; i++) {
+            pointLight = pointLightShadows[i];
+
+            if (UNROLLED_LOOP_INDEX == shadowIndex) {
+                vec2 safeShadowMapSize = max(
+                    pointLight.shadowMapSize,
+                    vec2(1.0)
+                );
+
+                vec4 shadowCoord = getPointShadowCoordAtUV(
+                    vPointShadowCoord[i],
+                    targetUV,
+                    currentUV,
+                    safeShadowMapSize
+                );
+
+                result = receiveShadow ? pixelShadowMask(getPointShadow(
+                    pointShadowMap[i],
+                    safeShadowMapSize,
+                    pointLight.shadowBias,
+                    max(0.0, pointLight.shadowRadius * shadowFilterScale),
+                    shadowCoord,
+                    pointLight.shadowCameraNear,
+                    pointLight.shadowCameraFar
+                )) : 1.0;
+            }
+        }
+        #pragma unroll_loop_end
+    #endif
+    #endif
+
+    return result;
+}
+
+float getPixelatedLightShadow(
+    int lightIndex,
+    vec2 targetUV,
+    vec2 currentUV
+) {
+    if (uLightCastShadow[lightIndex] == 0) {
+        return 1.0;
+    }
+
+    int shadowIndex = uLightShadowIndex[lightIndex];
+    if (shadowIndex < 0) {
+        return 1.0;
+    }
+
+    int type = uLightType[lightIndex];
+    float shadow = 1.0;
+
+    if (type == SA_LIGHT_DIRECTIONAL) {
+        shadow = getPixelatedDirectionalShadowByIndex(
+            shadowIndex,
+            targetUV,
+            currentUV
+        );
+    } else if (type == SA_LIGHT_SPOT) {
+        shadow = getPixelatedSpotShadowByIndex(
+            shadowIndex,
+            targetUV,
+            currentUV
+        );
+    } else {
+        shadow = getPixelatedPointShadowByIndex(
+            shadowIndex,
+            targetUV,
+            currentUV
+        );
+    }
+
+    shadow = clamp(shadow, 0.0, 1.0);
+    shadow = max(shadow, clamp(uShadowFloor, 0.0, 1.0));
+
+    return mix(
+        1.0,
+        shadow,
+        clamp(uShadowStrength, 0.0, 1.0)
+    );
 }
 
 /* ------------------------------------------------------------
@@ -6624,10 +7369,11 @@ void main() {
         tiling_value = vfaceSize / TEXTURE_SIZE;
     }
     vec4 texel = texture2D(map, vUv * tiling_value);
+    texel = saApplyNativePBRBaseColor(texel);
 
     /*
-        Esta parte mantiene exactamente el flujo visual de tu shader legacy:
-        UV de cara -> centro de píxel -> shadow map extrapolado y snap.
+        Preserve the legacy visual flow:
+        face UV -> pixel center -> extrapolated shadow-map snap.
     */
     vec2 shadowCurrentUV = vNormalizedFaceUv;
 
@@ -6637,38 +7383,7 @@ void main() {
     );
 
     /*
-        Debe ejecutarse antes del discard.
-        dFdx/dFdy necesita derivadas válidas incluso con transparencia.
-    */
-    float rawPixelatedShadow = getPixelatedShadowAtUV(
-        shadowTargetUV,
-        shadowCurrentUV
-    );
-
-    /*
-        Valores por defecto:
-        uShadowStrength = 1.0
-        uShadowFloor = 0.0
-
-        Con esos valores se conserva el resultado binario legacy.
-    */
-    float pixelatedShadow = max(
-        rawPixelatedShadow,
-        clamp(uShadowFloor, 0.0, 1.0)
-    );
-
-    pixelatedShadow = mix(
-        1.0,
-        pixelatedShadow,
-        clamp(uShadowStrength, 0.0, 1.0)
-    );
-
-    if (texel.a < 0.01) {
-        discard;
-    }
-
-    /*
-        Lightflow trabaja en lineal.
+        Lightflow evaluates lighting in linear color space.
     */
     texel.rgb = pow(
         max(texel.rgb, vec3(0.0)),
@@ -6678,6 +7393,11 @@ void main() {
     vec3 normal = safeNormalize(
         vWorldNormal,
         vec3(0.0, 1.0, 0.0)
+    );
+    normal = saApplyNativePBRNormal(
+        normal,
+        vUv * tiling_value,
+        vWorldPos
     );
 
     vec3 directLight = vec3(0.0);
@@ -6691,11 +7411,22 @@ void main() {
             continue;
         }
 
-        directLight += computeLightContribution(
+        vec3 lightContribution = computeLightContribution(
             i,
             normal,
             vWorldPos
         );
+        float shadow = getPixelatedLightShadow(
+            i,
+            shadowTargetUV,
+            shadowCurrentUV
+        );
+
+        directLight += lightContribution * shadow;
+    }
+
+    if (texel.a < 0.01) {
+        discard;
     }
 
     float ambientOcclusion = computeVoxelAO(
@@ -6716,14 +7447,12 @@ void main() {
     );
 
     /*
-        La sombra pixelada solo oscurece iluminación directa.
-        El ambient/AO sigue visible dentro de las sombras.
+        Pixelated shadows only darken direct light. Ambient and AO remain
+        visible inside shadowed areas.
     */
     vec3 lighting =
         ambientLight +
-        directLight *
-        pixelatedShadow *
-        directAO;
+        directLight * directAO;
 
     if (uClampLighting) {
         float maxChannel = max(
@@ -6736,10 +7465,32 @@ void main() {
         }
     }
 
+    float nativeMetallic = saGetNativePBRMetallic(vUv * tiling_value);
+    float nativeRoughness = saGetNativePBRRoughness(vUv * tiling_value);
+    vec3 nativeEmissive = saGetNativePBREmissive(vUv * tiling_value, texel.rgb);
+
     vec3 finalColor = texel.rgb * lighting;
+    finalColor +=
+        texel.rgb *
+        lighting *
+        nativeMetallic *
+        (1.0 - nativeRoughness) *
+        uNativePBRSpecularStrength *
+        0.35;
+    finalColor += nativeEmissive;
 
     finalColor += vec3(lift);
     finalColor *= LIGHTCOLOR;
+
+    if (EMISSIVE) {
+        finalColor = saApplyBlockbenchRenderModeEmission(
+            finalColor,
+            texel.rgb,
+            texel.a,
+            LIGHTCOLOR,
+            lighting
+        );
+    }
 
     if (lift > 0.2) {
         finalColor.rg *= vec2(0.6, 0.7);
@@ -6773,13 +7524,31 @@ void main() {
 
                     "shadowThreshold": {
                         type: "float",
-                        value: 0.75,
+                        value: 0.55,
                         expose: true,
                         min: 0.0,
                         max: 1.0,
                         step: 0.05,
                         allow_higher: false,
                         allow_lower: false
+                    },
+
+                    "shadowFilterScale": {
+                        type: "float",
+                        value: 1.0,
+                        expose: true,
+                        min: 0.0,
+                        max: 3.0,
+                        step: 0.05
+                    },
+
+                    "shadowFeather": {
+                        type: "float",
+                        value: 0.10,
+                        expose: true,
+                        min: 0.0,
+                        max: 0.49,
+                        step: 0.01
                     }
                 },
 
@@ -7000,6 +7769,8 @@ uniform float PROMO_RIM_DIRECTION_SOFTNESS;
 uniform int PROMO_RIM_GROUP;
 uniform bool PROMO_RIM_OCCLUSION_ENABLED;
 uniform float PROMO_RIM_DEPTH_EPSILON;
+
+${NATIVE_PBR_FRAGMENT}
 
 varying vec2 vPromoMapUv;
 varying vec2 vPromoElementUv;
@@ -7520,13 +8291,13 @@ vec4 promoGetAlphaBands(
         vec2(0.00001)
     );
 
-    // 1. Calculamos las distancias en cruz (Norte, Sur, Este, Oeste)
+    // Cross-neighbor alpha sampling.
     vec2 mStepL = validJacobian ? elementToMapJacobian * vec2(-localStep.x, 0.0) : vec2(-fallbackMapStep.x, 0.0);
     vec2 mStepR = validJacobian ? elementToMapJacobian * vec2(localStep.x, 0.0) : vec2(fallbackMapStep.x, 0.0);
     vec2 mStepB = validJacobian ? elementToMapJacobian * vec2(0.0, -localStep.y) : vec2(0.0, -fallbackMapStep.y);
     vec2 mStepT = validJacobian ? elementToMapJacobian * vec2(0.0, localStep.y) : vec2(0.0, fallbackMapStep.y);
 
-    // 2. Calculamos las distancias en diagonal (Esquinas)
+    // Diagonal-neighbor alpha sampling.
     vec2 stepTL = vec2(-localStep.x, localStep.y);
     vec2 mStepTL = validJacobian ? elementToMapJacobian * stepTL : vec2(-fallbackMapStep.x, fallbackMapStep.y);
     
@@ -7539,26 +8310,23 @@ vec4 promoGetAlphaBands(
     vec2 stepBR = vec2(localStep.x, -localStep.y);
     vec2 mStepBR = validJacobian ? elementToMapJacobian * stepBR : vec2(fallbackMapStep.x, -fallbackMapStep.y);
 
-    // 3. Muestreamos la transparencia en cruz
     float aL = promoSampleNeighborAlpha(vec2(-localStep.x, 0.0), mStepL, sourceAlpha, true);
     float aR = promoSampleNeighborAlpha(vec2(localStep.x, 0.0), mStepR, sourceAlpha, true);
     float aB = promoSampleNeighborAlpha(vec2(0.0, -localStep.y), mStepB, sourceAlpha, true);
     float aT = promoSampleNeighborAlpha(vec2(0.0, localStep.y), mStepT, sourceAlpha, true);
 
-    // 4. Muestreamos la transparencia en las esquinas
     float aTL = promoSampleNeighborAlpha(stepTL, mStepTL, sourceAlpha, true);
     float aTR = promoSampleNeighborAlpha(stepTR, mStepTR, sourceAlpha, true);
     float aBL = promoSampleNeighborAlpha(stepBL, mStepBL, sourceAlpha, true);
     float aBR = promoSampleNeighborAlpha(stepBR, mStepBR, sourceAlpha, true);
 
-    // 5. Detección de esquinas internas: 
-    // Se activa (1.0) solo si el pixel está flanqueado por lados sólidos, pero la esquina diagonal está vacía.
+    // Internal corners are active when solid side neighbors flank an empty diagonal.
     float innerTL = aL * aT * (1.0 - aTL);
     float innerTR = aR * aT * (1.0 - aTR);
     float innerBL = aL * aB * (1.0 - aBL);
     float innerBR = aR * aB * (1.0 - aBR);
 
-    // 6. Añadimos el peso de las esquinas internas a las bandas correspondientes para conectarlas
+    // Add internal-corner weight to connect adjacent outline bands.
     float leftBand = (sourceAlpha - aL) + innerTL + innerBL;
     float rightBand = (sourceAlpha - aR) + innerTR + innerBR;
     float bottomBand = (sourceAlpha - aB) + innerBL + innerBR;
@@ -7827,39 +8595,37 @@ vec3 promoApplyBevel(
             vPromoElementUv.y
         );
 
-        // NUEVA LÓGICA DE CONEXIÓN DE ESQUINAS
-            // Si el borde adyacente está encendido (> 0.01), fuerza la esquina sólida (1.0).
-            // Si está apagado, usa el gap para desvanecer suavemente.
-            float adjT = max(glowGapT, step(0.01, glowTypeT));
-            float adjB = max(glowGapB, step(0.01, glowTypeB));
-            float adjL = max(glowGapL, step(0.01, glowTypeL));
-            float adjR = max(glowGapR, step(0.01, glowTypeR));
+        // Preserve solid corners when adjacent glow bands are active.
+        float adjT = max(glowGapT, step(0.01, glowTypeT));
+        float adjB = max(glowGapB, step(0.01, glowTypeB));
+        float adjL = max(glowGapL, step(0.01, glowTypeL));
+        float adjR = max(glowGapR, step(0.01, glowTypeR));
 
-            float glowL =
-                glowBands.x *
-                glowTypeL *
-                adjT *
-                adjB;
+        float glowL =
+            glowBands.x *
+            glowTypeL *
+            adjT *
+            adjB;
 
-            float glowR =
-                glowBands.y *
-                glowTypeR *
-                adjT *
-                adjB;
+        float glowR =
+            glowBands.y *
+            glowTypeR *
+            adjT *
+            adjB;
 
-            float glowB =
-                glowBands.z *
-                glowTypeB *
-                adjL *
-                adjR;
+        float glowB =
+            glowBands.z *
+            glowTypeB *
+            adjL *
+            adjR;
 
-            float glowT =
-                glowBands.w *
-                glowTypeT *
-                adjL *
-                adjR;
+        float glowT =
+            glowBands.w *
+            glowTypeT *
+            adjL *
+            adjR;
 
-            innerGlowMask = clamp(
+        innerGlowMask = clamp(
             max(
                 max(glowL, glowR),
                 max(glowB, glowT)
@@ -8215,6 +8981,7 @@ void main() {
         map,
         vPromoMapUv
     );
+    sampledColor = saApplyNativePBRBaseColor(sampledColor);
 
     if (sampledColor.a < 0.01) {
         discard;
@@ -8406,10 +9173,10 @@ void main() {
                     */
                     BEVEL_WIDTH: {
                         type: 'float',
-                        value: 0.12, // Grosor por defecto correcto (fino y global)
+                        value: 0.12,
                         expose: true,
                         min: 0.0,
-                        max: 1.0,  // Rango máximo más lógico
+                        max: 1.0,
                         step: 0.01,
                         allow_higher: true,
                         allow_lower: false
@@ -8442,7 +9209,7 @@ void main() {
                         value: 1.0,
                         expose: true,
                         min: 0.0,
-                        max: 1.0,    // 1.0 = todo el lado de la cara, 0.5 = mitad de la cara
+                        max: 1.0,
                         step: 0.01,
                         allow_higher: false,
                         allow_lower: false
@@ -8540,8 +9307,7 @@ void main() {
                         expose: true
                     },
 
-                    // Controla qué tan directo debe mirar la cara a la luz para tener glow.
-                    // 0.0 = Cualquier cara que roce la luz. 0.5 = Solo caras muy iluminadas.
+                    // Higher values require the face to point more directly at the light.
                     BEVEL_GLOW_FACE_THRESHOLD: {
                         type: 'float',
                         value: 0.25,
@@ -8566,7 +9332,7 @@ void main() {
 
                     BEVEL_GLOW_SOFTNESS: {
                         type: 'float',
-                        value: 0.0, // Reducido drásticamente para que no sea tan borroso
+                        value: 0.0,
                         expose: true,
                         min: 0.0,
                         max: 5.0,
@@ -8575,7 +9341,7 @@ void main() {
                         allow_lower: false
                     },
 
-                    // Controla la distancia de las esquinas para este glow independiente
+                    // Corner distance for the independent inner glow.
                     BEVEL_GLOW_CORNER_FADE: {
                         type: 'float',
                         value: 0.35,
@@ -8913,6 +9679,7 @@ ${lumaForgeLightflowHelpers}`
         map,
         vPromoMapUv
     );
+    sampledColor = saApplyNativePBRBaseColor(sampledColor);
 
     if (sampledColor.a < 0.01) {
         discard;
@@ -8951,6 +9718,11 @@ ${lumaForgeLightflowHelpers}`
         vec3 normal = safeNormalize(
             surfaceNormal,
             vec3(0.0, 1.0, 0.0)
+        );
+        normal = saApplyNativePBRNormal(
+            normal,
+            vPromoMapUv,
+            vPromoWorldPosition
         );
 
         vec3 directLight = vec3(0.0);
@@ -8993,9 +9765,31 @@ ${lumaForgeLightflowHelpers}`
             }
         }
 
+        float nativeMetallic = saGetNativePBRMetallic(vPromoMapUv);
+        float nativeRoughness = saGetNativePBRRoughness(vPromoMapUv);
+        vec3 nativeEmissive = saGetNativePBREmissive(vPromoMapUv, texel.rgb);
+
         finalColor = texel.rgb * lighting;
+        finalColor +=
+            texel.rgb *
+            lighting *
+            nativeMetallic *
+            (1.0 - nativeRoughness) *
+            uNativePBRSpecularStrength *
+            0.35;
+        finalColor += nativeEmissive;
         finalColor += vec3(vPromoHighlightLift);
         finalColor *= LIGHTCOLOR;
+
+        if (EMISSIVE) {
+            finalColor = saApplyBlockbenchRenderModeEmission(
+                finalColor,
+                texel.rgb,
+                texel.a,
+                LIGHTCOLOR,
+                lighting
+            );
+        }
 
         if (vPromoHighlightLift > 0.2) {
             finalColor.rg *= vec2(0.6, 0.7);
@@ -9549,7 +10343,8 @@ ${lumaForgeLightflowHelpers}`
         hasActiveReflectiveMaterials() {
             if (this.disposed || !window.Cube || !Array.isArray(Cube.all)) return false;
             for (const cube of Cube.all) {
-                if (cube && this.meshUsesActiveSSR(cube.mesh)) return true;
+                const mesh = ShaderEngine.getCubeMesh(cube);
+                if (mesh && this.meshUsesActiveSSR(mesh)) return true;
             }
             return false;
         },
@@ -9560,8 +10355,9 @@ ${lumaForgeLightflowHelpers}`
             if (!window.Cube || !Array.isArray(Cube.all)) return materials;
 
             Cube.all.forEach(cube => {
-                if (!cube || !cube.mesh) return;
-                ShaderEngine.forEachMeshMaterial(cube.mesh, (material) => {
+                const mesh = ShaderEngine.getCubeMesh(cube);
+                if (!mesh) return;
+                ShaderEngine.forEachMeshMaterial(mesh, (material) => {
                     if (!this.materialIsActive(material)) return;
                     const key = material.uuid || material.id || material;
                     if (seen.has(key)) return;
@@ -9578,7 +10374,7 @@ ${lumaForgeLightflowHelpers}`
             if (!window.Cube || !Array.isArray(Cube.all)) return changed;
 
             Cube.all.forEach(cube => {
-                const mesh = cube && cube.mesh;
+                const mesh = ShaderEngine.getCubeMesh(cube);
                 if (!mesh || !this.meshUsesActiveSSR(mesh)) return;
                 changed.push({ mesh, visible: mesh.visible });
                 mesh.visible = visible;
@@ -9701,14 +10497,12 @@ ${lumaForgeLightflowHelpers}`
         disposed: false,
 
         /*
-            Radio máximo por pasada GLSL.
-            No lo subas: el shader está compilado con un loop máximo de 12.
+            Maximum radius per GLSL pass. The shader loop is compiled for 12.
         */
         MAX_RIM_RADIUS: 12.0,
 
         /*
-            Radio total máximo:
-            12 px por pasada x 16 pasadas = 192 px.
+            Maximum total radius: 12 px per pass x 16 passes = 192 px.
         */
         MAX_RIM_DILATION_PASSES: 16,
 
@@ -9898,8 +10692,8 @@ ${lumaForgeLightflowHelpers}`
                 format: THREE.RGBAFormat,
                 type: this.getIntermediateTargetType(),
 
-                // Solo sceneDepthTarget necesita depth buffer para conservar
-                // la profundidad del fragmento frontal durante MeshDepthMaterial.
+                // Only sceneDepthTarget needs a depth buffer to preserve the
+                // front fragment depth while MeshDepthMaterial renders.
                 depthBuffer: !!withDepthBuffer,
                 stencilBuffer: false
             };
@@ -9909,10 +10703,8 @@ ${lumaForgeLightflowHelpers}`
             target.texture.generateMipmaps = false;
 
             /*
-                No adjuntar THREE.DepthTexture.
-
-                La profundidad autoritativa será el color RGBA que escribe
-                MeshDepthMaterial con THREE.RGBADepthPacking.
+                Do not attach THREE.DepthTexture. The authoritative depth is the
+                RGBA color written by MeshDepthMaterial with RGBADepthPacking.
             */
             return target;
         },
@@ -10189,7 +10981,7 @@ ${lumaForgeLightflowHelpers}`
                             clamp(uDirectionality, 0.0, 1.0)
                         );
 
-                        // CÁLCULO DE ALPHA BASE (Mascara geométrica pura)
+                        // Base alpha from the pure geometric mask.
                         float baseAlpha = clamp(
                             rimMask *
                             visibility *
@@ -10202,9 +10994,9 @@ ${lumaForgeLightflowHelpers}`
                         vec3 finalRimColor = uRimColor;
 
                         if (uTextureBlend == 1) {
-                            // Mantenemos la opacidad sólida para conectar perfecto con el Inner Glow, 
-                            // y aplicamos uRimIntensity al color sumado, exactamente igual que el Inner Glow.
-                            // Solo desvanecemos el alpha a 0 si la intensidad es menor a 0.05 para evitar un borde gordo si Rim Power = 0.
+                            // Keep solid opacity so the rim connects cleanly
+                            // with the inner glow. Fade alpha only near zero
+                            // intensity to avoid a thick edge at Rim Power 0.
                             alpha *= smoothstep(0.0, 0.05, uRimIntensity);
 
                             vec3 additiveBlend = expandedMaskSample.rgb + (uRimColor * max(uRimIntensity, 0.0));
@@ -10215,7 +11007,7 @@ ${lumaForgeLightflowHelpers}`
                             
                             finalRimColor = promoHsvToRgb(hsv);
                         } else {
-                            // Modo clásico de color sólido: la intensidad sí debe controlar la transparencia global.
+                            // Solid-color mode uses intensity as global alpha.
                             alpha *= clamp(uRimIntensity, 0.0, 1.0);
                         }
 
@@ -10330,8 +11122,8 @@ ${lumaForgeLightflowHelpers}`
             );
 
             /*
-                El límite alto evita valores corruptos. El radio final queda
-                protegido también por MAX_RIM_DILATION_PASSES.
+                The upper bound guards corrupt values; the final radius is also
+                capped by MAX_RIM_DILATION_PASSES.
             */
             return Number.isFinite(scale)
                 ? Math.max(1.0, Math.min(scale, 64.0))
@@ -10941,11 +11733,21 @@ ${lumaForgeLightflowHelpers}`
         getPromotionalRimConfig(material) {
             const shaderId = material && material.sa_shader_id;
             const hasPromotionalShaderId = ['minecraft_promotional_bevel', 'luma_forge'].includes(shaderId);
+            const shaderSourceHasPromotionalRim =
+                material &&
+                typeof material.fragmentShader === 'string' &&
+                material.fragmentShader.indexOf('PROMO_RIM_ENABLED') !== -1;
 
             if (
                 !material ||
                 !material.uniforms ||
-                (!hasPromotionalShaderId && !this.materialHasPromotionalRimUniforms(material))
+                (
+                    !hasPromotionalShaderId &&
+                    !(
+                        shaderSourceHasPromotionalRim &&
+                        this.materialHasPromotionalRimUniforms(material)
+                    )
+                )
             ) {
                 return null;
             }
@@ -11084,7 +11886,7 @@ ${lumaForgeLightflowHelpers}`
             }
 
             Cube.all.forEach(cube => {
-                const mesh = cube && cube.mesh;
+                const mesh = ShaderEngine.getCubeMesh(cube);
 
                 if (!mesh) {
                     return;
@@ -11389,10 +12191,9 @@ ${lumaForgeLightflowHelpers}`
             );
 
             /*
-                No se aumenta el loop GLSL de 12.
-                En su lugar, cada pasada extiende hasta 12 píxeles y el resultado
-                pasa a la siguiente iteración. Esto conserva rendimiento estable
-                y permite radios grandes al usar Render Frame.
+                Keep the GLSL loop at 12. Each pass dilates up to 12 pixels and
+                feeds the result into the next pass, keeping performance stable
+                while allowing large Render Frame radii.
             */
             let remainingRadius = totalRadius;
             let sourceTexture = state.maskTarget.texture;
@@ -11438,8 +12239,7 @@ ${lumaForgeLightflowHelpers}`
                 );
 
                 /*
-                    La siguiente pasada continúa dilatando desde el resultado de la
-                    pasada vertical anterior.
+                    The next pass continues dilation from the previous vertical pass.
                 */
                 sourceTexture = state.verticalTarget.texture;
                 remainingRadius -= passRadius;
@@ -11733,6 +12533,15 @@ ${lumaForgeLightflowHelpers}`
         animationUniformTargetCacheDirty: true,
         clock: new THREE.Clock(),
 
+        getCubeMesh(cube) {
+            if (!cube) return null;
+            try {
+                return cube.mesh || null;
+            } catch (error) {
+                return null;
+            }
+        },
+
         startAnimationLoop() {
             const self = this;
             function tick() {
@@ -11771,7 +12580,7 @@ ${lumaForgeLightflowHelpers}`
             }
 
             Cube.all.forEach(cube => {
-                const mesh = cube && cube.mesh;
+                const mesh = this.getCubeMesh(cube);
                 if (!mesh) return;
 
                 this.forEachMeshMaterial(mesh, mat => {
@@ -11817,7 +12626,7 @@ ${lumaForgeLightflowHelpers}`
                 const cube = target && target.cube;
                 const mat = target && target.material;
 
-                if (!cube || !cube.mesh || !mat || !mat.uniforms) {
+                if (!cube || !this.getCubeMesh(cube) || !mat || !mat.uniforms) {
                     return;
                 }
 
@@ -11891,11 +12700,23 @@ ${lumaForgeLightflowHelpers}`
             return priority.find(cause => causes.includes(cause)) || causes[0] || 'batched_update';
         },
 
-        requestSceneUpdate(cause = 'default') {
+        requestSceneUpdate(cause = 'default', options = {}) {
             if (!this.pendingSceneUpdateCauses) {
                 this.pendingSceneUpdateCauses = new Set();
             }
             this.pendingSceneUpdateCauses.add(cause);
+
+            if (options && Array.isArray(options.cubes) && options.cubes.length) {
+                if (!this.pendingSceneUpdateCubes) {
+                    this.pendingSceneUpdateCubes = new Set();
+                }
+                options.cubes.forEach(cube => {
+                    if (cube) this.pendingSceneUpdateCubes.add(cube);
+                });
+            }
+            if (options && options.partial) {
+                this.pendingSceneUpdatePartial = true;
+            }
 
             if (this.pendingSceneUpdateFrame !== null) return;
 
@@ -11919,12 +12740,30 @@ ${lumaForgeLightflowHelpers}`
             const causes = this.pendingSceneUpdateCauses
                 ? Array.from(this.pendingSceneUpdateCauses)
                 : [];
+            const pendingCubes = this.pendingSceneUpdateCubes
+                ? Array.from(this.pendingSceneUpdateCubes)
+                : [];
+            const partialUpdateRequested = !!this.pendingSceneUpdatePartial;
 
             if (this.pendingSceneUpdateCauses) {
                 this.pendingSceneUpdateCauses.clear();
             }
+            if (this.pendingSceneUpdateCubes) {
+                this.pendingSceneUpdateCubes.clear();
+            }
+            this.pendingSceneUpdatePartial = false;
 
             if (!causes.length || !this.isSceneUpdateReady()) return;
+
+            const isSelectionOnlyUpdate =
+                causes.length === 1 &&
+                causes[0] === 'update_selection' &&
+                partialUpdateRequested;
+
+            if (isSelectionOnlyUpdate) {
+                this.updateCubes(pendingCubes, 'update_selection', { causes });
+                return;
+            }
 
             this.updateAllCubes(this.pickSceneUpdateCause(causes), { causes });
         },
@@ -11937,6 +12776,10 @@ ${lumaForgeLightflowHelpers}`
             if (this.pendingSceneUpdateCauses) {
                 this.pendingSceneUpdateCauses.clear();
             }
+            if (this.pendingSceneUpdateCubes) {
+                this.pendingSceneUpdateCubes.clear();
+            }
+            this.pendingSceneUpdatePartial = false;
         },
 
         requestLightUniformUpdate(cause = 'light_update') {
@@ -12104,6 +12947,159 @@ ${lumaForgeLightflowHelpers}`
             return null;
         },
 
+        getBlockbenchTextureOwnMaterial(texture) {
+            if (!texture) return null;
+
+            if (typeof texture.getOwnMaterial === 'function') {
+                const material = texture.getOwnMaterial();
+                if (material) return material;
+            }
+
+            if (texture.material) return texture.material;
+            return this.getBlockbenchTextureMaterial(texture);
+        },
+
+        getBlockbenchTextureMap(texture) {
+            if (!texture) return null;
+
+            const ownMaterial = this.getBlockbenchTextureOwnMaterial(texture);
+            const map =
+                this.getTextureFromMaterial(ownMaterial) ||
+                this.getTextureFromMaterialList(ownMaterial);
+
+            if (map && map.isTexture) {
+                map.needsUpdate = true;
+                return map;
+            }
+
+            const candidates = [
+                texture.map,
+                texture.texture,
+                texture.three_texture,
+                texture.display_texture
+            ];
+
+            for (const candidate of candidates) {
+                if (candidate && candidate.isTexture) {
+                    candidate.needsUpdate = true;
+                    return candidate;
+                }
+            }
+
+            if (texture.img || texture.canvas) {
+                const sourceImage = texture.canvas || texture.img;
+                if (!texture._shaderArchitectTexture) {
+                    texture._shaderArchitectTexture = new THREE.Texture(sourceImage);
+                    texture._shaderArchitectTexture.magFilter = THREE.NearestFilter;
+                    texture._shaderArchitectTexture.minFilter = THREE.NearestFilter;
+                    texture._shaderArchitectTexture.needsUpdate = true;
+                }
+                return texture._shaderArchitectTexture;
+            }
+
+            return null;
+        },
+
+        getMaterialTextureGroup(blockbenchTexture) {
+            if (!blockbenchTexture || typeof blockbenchTexture.getGroup !== 'function') {
+                return null;
+            }
+
+            const group = blockbenchTexture.getGroup();
+            return group && group.is_material ? group : null;
+        },
+
+        getTextureFromGroupByPBRChannel(textureGroup, channels) {
+            if (!textureGroup || typeof textureGroup.getTextures !== 'function') return null;
+
+            const channelSet = new Set([].concat(channels).map(channel => String(channel).toLowerCase()));
+            return textureGroup.getTextures().find(texture => (
+                texture &&
+                channelSet.has(String(texture.pbr_channel || '').toLowerCase())
+            )) || null;
+        },
+
+        getNativePBRSourceState(blockbenchTexture, fallbackTexture) {
+            const textureGroup = this.getMaterialTextureGroup(blockbenchTexture);
+            if (!textureGroup) return null;
+
+            const textures = typeof textureGroup.getTextures === 'function'
+                ? textureGroup.getTextures()
+                : [];
+            const colorTexture =
+                this.getTextureFromGroupByPBRChannel(textureGroup, 'color') ||
+                (blockbenchTexture && String(blockbenchTexture.pbr_channel || '').toLowerCase() === 'color'
+                    ? blockbenchTexture
+                    : null);
+            const normalTexture = this.getTextureFromGroupByPBRChannel(textureGroup, 'normal');
+            const heightTexture = this.getTextureFromGroupByPBRChannel(textureGroup, 'height');
+            const merTexture = this.getTextureFromGroupByPBRChannel(textureGroup, ['mer', 'mer_subsurface']);
+            const emissiveTexture = this.getTextureFromGroupByPBRChannel(textureGroup, ['emissive', 'emission', 'emit']);
+            const materialConfig = textureGroup.material_config || {};
+
+            const colorValue = Array.isArray(materialConfig.color_value)
+                ? materialConfig.color_value
+                : [255, 255, 255, 255];
+            const merValue = Array.isArray(materialConfig.mer_value)
+                ? materialConfig.mer_value
+                : [0, 0, 128];
+
+            const baseColorMap = this.getBlockbenchTextureMap(colorTexture);
+            const normalMap = this.getBlockbenchTextureMap(normalTexture);
+            const heightMap = this.getBlockbenchTextureMap(heightTexture);
+            const merMap = this.getBlockbenchTextureMap(merTexture);
+            const emissiveMap = this.getBlockbenchTextureMap(emissiveTexture);
+            const whiteFallback = fallbackTexture || this.getFallbackTexture();
+            const transparentFallback = this.getTransparentFallbackTexture();
+
+            const baseColor = baseColorMap
+                ? new THREE.Vector3(1, 1, 1)
+                : new THREE.Vector3(
+                    Math.clamp((Number(colorValue[0]) || 0) / 255, 0, 1),
+                    Math.clamp((Number(colorValue[1]) || 0) / 255, 0, 1),
+                    Math.clamp((Number(colorValue[2]) || 0) / 255, 0, 1)
+                );
+            const baseAlpha = baseColorMap
+                ? 1.0
+                : Math.clamp((Number(colorValue[3]) || 255) / 255, 0, 1);
+
+            const isBedrock = !!(
+                typeof Project !== 'undefined' &&
+                Project.format &&
+                Project.format.id &&
+                String(Project.format.id).includes('bedrock')
+            );
+
+            return {
+                enabled: true,
+                textureGroup,
+                materialConfig,
+                textures,
+                colorTexture,
+                normalTexture,
+                heightTexture,
+                merTexture,
+                emissiveTexture,
+                baseColorMap: baseColorMap || whiteFallback,
+                normalMap: normalMap || transparentFallback,
+                heightMap: heightMap || transparentFallback,
+                merMap: merMap || transparentFallback,
+                emissiveMap: emissiveMap || null,
+                baseColor,
+                baseAlpha,
+                metallic: merMap ? 1.0 : Math.clamp((Number(merValue[0]) || 0) / 255, 0, 1),
+                emissiveStrength: (merMap || emissiveMap) ? 1.0 : Math.clamp((Number(merValue[1]) || 0) / 255, 0, 1),
+                roughness: merMap ? 1.0 : Math.clamp((Number(merValue[2]) || 0) / 255, 0, 1),
+                normalYSign: isBedrock ? -1.0 : 1.0,
+                useBaseColorMap: !!baseColorMap,
+                useNormalMap: !!normalMap,
+                useHeightMap: !!heightMap && !normalMap,
+                useMERMap: !!merMap,
+                useEmissiveMap: !!emissiveMap || !!merMap || (!!baseColorMap && Number(merValue[1]) > 0),
+                subsurface: Math.clamp((Number(materialConfig.subsurface_value) || 0) / 255, 0, 1)
+            };
+        },
+
         isBlockbenchLayeredTextureModeActive() {
             return !!(
                 typeof Texture !== 'undefined' &&
@@ -12113,6 +13109,17 @@ ${lumaForgeLightflowHelpers}`
                 (Format.single_texture || Format.single_texture_default) &&
                 Texture.all.find(texture => texture && texture.render_mode === 'layered')
             );
+        },
+
+        getFallbackTexture() {
+            if (!this._fallbackMap) {
+                const data = new Uint8Array([255, 255, 255, 255]);
+                this._fallbackMap = new THREE.DataTexture(data, 1, 1, THREE.RGBAFormat);
+                this._fallbackMap.magFilter = THREE.NearestFilter;
+                this._fallbackMap.minFilter = THREE.NearestFilter;
+                this._fallbackMap.needsUpdate = true;
+            }
+            return this._fallbackMap;
         },
 
         getTransparentFallbackTexture() {
@@ -12154,6 +13161,9 @@ ${lumaForgeLightflowHelpers}`
         getBlockbenchTextureSourceState(cube, faceName, sourceMaterial, fallbackTexture) {
             const blockbenchTexture = getBlockbenchTextureForCube(cube, faceName);
             const layered = this.isBlockbenchLayeredTextureModeActive();
+            const nativePBR = layered
+                ? null
+                : this.getNativePBRSourceState(blockbenchTexture, fallbackTexture);
 
             let nativeMaterial = sourceMaterial || null;
             let layeredTextures = null;
@@ -12163,6 +13173,8 @@ ${lumaForgeLightflowHelpers}`
                     nativeMaterial = Canvas.getLayeredMaterial() || nativeMaterial;
                 }
                 layeredTextures = this.getBlockbenchLayeredTextures(fallbackTexture);
+            } else if (nativePBR && nativePBR.colorTexture) {
+                nativeMaterial = this.getBlockbenchTextureMaterial(nativePBR.colorTexture) || nativeMaterial;
             } else {
                 nativeMaterial = this.getBlockbenchTextureMaterial(blockbenchTexture) || nativeMaterial;
             }
@@ -12170,6 +13182,8 @@ ${lumaForgeLightflowHelpers}`
             const nativeMap =
                 layered
                     ? (layeredTextures && layeredTextures[0]) || fallbackTexture
+                    : nativePBR
+                    ? nativePBR.baseColorMap || fallbackTexture
                     : (
                         this.getTextureFromMaterial(nativeMaterial) ||
                         this.getTextureFromMaterialList(nativeMaterial) ||
@@ -12192,18 +13206,23 @@ ${lumaForgeLightflowHelpers}`
                 side = Canvas.getRenderSide(blockbenchTexture);
             }
 
-            const textureSize = getBlockbenchTextureSize(blockbenchTexture);
+            const textureSize = getBlockbenchTextureSize(
+                (nativePBR && nativePBR.colorTexture) || blockbenchTexture
+            );
 
             return {
                 blockbenchTexture,
                 faceName,
                 nativeMaterial,
                 map: nativeMap,
+                nativePBR,
                 renderMode,
                 layered,
                 layeredTextures,
                 textureSize,
-                transparent: nativeMaterial && nativeMaterial.transparent !== undefined ? nativeMaterial.transparent : true,
+                transparent: nativePBR && nativePBR.baseAlpha < 1.0
+                    ? true
+                    : (nativeMaterial && nativeMaterial.transparent !== undefined ? nativeMaterial.transparent : true),
                 alphaTest: layered
                     ? 0.05
                     : (nativeMaterial && nativeMaterial.alphaTest !== undefined ? nativeMaterial.alphaTest : 0.01),
@@ -12241,9 +13260,14 @@ ${lumaForgeLightflowHelpers}`
             }
 
             const shaderAlreadyHandlesEmissive = /\bEMISSIVE\b/.test(fragmentShader);
+            const shaderHandlesNativePBREmissive = !!(
+                sourceState.nativePBR &&
+                /\bsaGetNativePBREmissive\b/.test(fragmentShader)
+            );
             const needsEmissiveFallback =
-                sourceState.renderMode === 'emissive' &&
-                !shaderAlreadyHandlesEmissive;
+                (sourceState.renderMode === 'emissive' || sourceState.renderMode === 'additive') &&
+                !shaderAlreadyHandlesEmissive &&
+                !shaderHandlesNativePBREmissive;
 
             if (needsEmissiveFallback) {
                 const sampleMatch = result.match(
@@ -12268,6 +13292,86 @@ ${lumaForgeLightflowHelpers}`
             }
 
             return prefix ? `${prefix}\n${result}` : result;
+        },
+
+        syncNativePBRUniforms(targetMaterial, sourceState, activeShader, fallbackTexture) {
+            if (!targetMaterial || !targetMaterial.uniforms) return;
+
+            const shaderUniforms = activeShader && activeShader.uniforms ? activeShader.uniforms : {};
+            const hasUniform = (name) => !!targetMaterial.uniforms[name] || !!shaderUniforms[name];
+            const ensureUniform = (name, value, type) => {
+                if (!hasUniform(name)) return;
+                if (!targetMaterial.uniforms[name]) {
+                    targetMaterial.uniforms[name] = { type, value };
+                } else {
+                    targetMaterial.uniforms[name].value = value;
+                }
+            };
+
+            const nativePBR = sourceState && sourceState.nativePBR;
+            if (!nativePBR || !nativePBR.enabled) {
+                ensureUniform('uUseNativePBR', false, 'bool');
+                return;
+            }
+
+            const whiteFallback = fallbackTexture || this.getFallbackTexture();
+            const transparentFallback = this.getTransparentFallbackTexture();
+            const vec2One = new THREE.Vector2(1, 1);
+            const mapRepeatDef = shaderUniforms.map || { repeat: false };
+
+            ensureUniform('uUseNativePBR', true, 'bool');
+            ensureUniform('uBaseColor', nativePBR.baseColor.clone(), 'vec3');
+            ensureUniform('uBaseAlpha', nativePBR.baseAlpha, 'float');
+            ensureUniform('uMetallic', nativePBR.metallic, 'float');
+            ensureUniform('uRoughness', nativePBR.roughness, 'float');
+            ensureUniform(
+                'uEmissiveColor',
+                (nativePBR.useMERMap || nativePBR.useEmissiveMap)
+                    ? new THREE.Vector3(0, 0, 0)
+                    : new THREE.Vector3(1, 1, 1),
+                'vec3'
+            );
+            ensureUniform('uEmissiveStrength', nativePBR.emissiveStrength, 'float');
+            ensureUniform('uUseBaseColorMap', false, 'bool');
+            ensureUniform('uUseMetallicRoughnessMap', nativePBR.useMERMap, 'bool');
+            ensureUniform('uUseBlockbenchMERMap', nativePBR.useMERMap, 'bool');
+            ensureUniform('uUseNormalMap', nativePBR.useNormalMap, 'bool');
+            ensureUniform('uUseHeightMap', nativePBR.useHeightMap, 'bool');
+            ensureUniform('uUseEmissiveMap', nativePBR.useEmissiveMap, 'bool');
+            ensureUniform('uBaseColorMap', nativePBR.baseColorMap || whiteFallback, 'sampler2D');
+            ensureUniform('uMetallicRoughnessMap', nativePBR.merMap || transparentFallback, 'sampler2D');
+            ensureUniform('uNormalMap', nativePBR.normalMap || transparentFallback, 'sampler2D');
+            ensureUniform('uHeightMap', nativePBR.heightMap || transparentFallback, 'sampler2D');
+            ensureUniform(
+                'uEmissiveMap',
+                nativePBR.emissiveMap || (nativePBR.useMERMap ? transparentFallback : (nativePBR.baseColorMap || whiteFallback)),
+                'sampler2D'
+            );
+            ensureUniform('uBaseColorMapScale', vec2One.clone(), 'vec2');
+            ensureUniform('uMetallicRoughnessMapScale', vec2One.clone(), 'vec2');
+            ensureUniform('uNormalMapScale', vec2One.clone(), 'vec2');
+            ensureUniform('uHeightMapScale', vec2One.clone(), 'vec2');
+            ensureUniform('uEmissiveMapScale', vec2One.clone(), 'vec2');
+            ensureUniform('uNormalScale', 1.0, 'float');
+            ensureUniform('uNormalYSign', nativePBR.normalYSign, 'float');
+            ensureUniform('uHeightScale', 0.4, 'float');
+            ensureUniform('uNativePBRSpecularStrength', 0.35, 'float');
+
+            if (hasUniform('uTransmission') && nativePBR.subsurface > 0) {
+                ensureUniform('uTransmission', nativePBR.subsurface, 'float');
+            }
+
+            [
+                nativePBR.baseColorMap,
+                nativePBR.merMap,
+                nativePBR.normalMap,
+                nativePBR.heightMap,
+                nativePBR.emissiveMap
+            ].forEach(texture => {
+                if (texture && texture.isTexture) {
+                    this.configureTextureWrap(texture, mapRepeatDef, { forceUpdate: true });
+                }
+            });
         },
 
         applyBlockbenchTextureModeUniforms(targetMaterial, sourceState) {
@@ -12306,7 +13410,7 @@ ${lumaForgeLightflowHelpers}`
             };
             targetMaterial.uniforms.EMISSIVE.value = !!(
                 sourceState &&
-                sourceState.renderMode === 'emissive'
+                (sourceState.renderMode === 'emissive' || sourceState.renderMode === 'additive')
             );
         },
 
@@ -12423,11 +13527,12 @@ ${lumaForgeLightflowHelpers}`
                 const posB = new THREE.Vector3();
                 const posC = new THREE.Vector3();
 
-                if (cube?.mesh?.isObject3D) {
-                    if (typeof cube.mesh.updateMatrixWorld === 'function') {
-                        cube.mesh.updateMatrixWorld(true);
+                const cubeMesh = this.getCubeMesh(cube);
+                if (cubeMesh && cubeMesh.isObject3D) {
+                    if (typeof cubeMesh.updateMatrixWorld === 'function') {
+                        cubeMesh.updateMatrixWorld(true);
                     }
-                    cube.mesh.getWorldScale(worldScale);
+                    cubeMesh.getWorldScale(worldScale);
                     worldScale.set(
                         Math.abs(worldScale.x) || 1,
                         Math.abs(worldScale.y) || 1,
@@ -12592,13 +13697,42 @@ ${lumaForgeLightflowHelpers}`
             return geometry;
         },
 
+        isShaderArchitectManagedUniformKey(key) {
+            return (
+                /^PROMO_RIM_/.test(key) ||
+                /^BEVEL_/.test(key) ||
+                /^OUTLINE_/.test(key) ||
+                /^uSSR/.test(key) ||
+                /^uSA_SSR/.test(key)
+            );
+        },
+
+        cleanupStaleShaderArchitectUniforms(targetMaterial, activeShader) {
+            if (!targetMaterial || !targetMaterial.uniforms) return;
+
+            const activeUniforms = activeShader && activeShader.uniforms
+                ? activeShader.uniforms
+                : {};
+
+            Object.keys(targetMaterial.uniforms).forEach(key => {
+                if (activeUniforms[key]) return;
+                if (this.isShaderArchitectManagedUniformKey(key)) {
+                    delete targetMaterial.uniforms[key];
+                }
+            });
+
+            if (!MaterialManager.hasScreenSpaceReflectionSupport(activeShader)) {
+                targetMaterial.sa_uses_screen_space_reflections = false;
+            }
+        },
+
         /**
          * @param {Cube} cube
          * @param {FancyShaderMaterial} shader
          */
         applyToMesh(cube, shader) {
             shader = MaterialManager.getRenderMaterial(shader);
-            const mesh = cube.mesh;
+            const mesh = this.getCubeMesh(cube);
             if (!mesh || !mesh.material || !mesh.geometry || !shader) return;
 
             const wasMaterialArray = Array.isArray(mesh.material);
@@ -12796,6 +13930,7 @@ ${lumaForgeLightflowHelpers}`
                 targetMaterial.extensions.derivatives = true;
 
                 targetMaterial.uniforms = targetMaterial.uniforms || {};
+                this.cleanupStaleShaderArchitectUniforms(targetMaterial, activeShader);
 
                 if (activeShader.enableShadows && !targetMaterial.uniforms.directionalLights) {
                     targetMaterial.uniforms = THREE.UniformsUtils.merge([
@@ -12847,17 +13982,17 @@ ${lumaForgeLightflowHelpers}`
 
                 const mapDef = activeShader.uniforms.map;
                 if (resolvedMap && mapDef) {
-                    if (!sourceState.blockbenchTexture) {
-                        this.configureTextureWrap(resolvedMap, mapDef, { forceUpdate: true });
-                    } else {
-                        resolvedMap.needsUpdate = true;
-                    }
+                    this.configureTextureWrap(resolvedMap, mapDef, { forceUpdate: true });
                 }
 
                 targetMaterial.uniforms.map = targetMaterial.uniforms.map || { value: resolvedMap };
                 targetMaterial.uniforms.map.value = resolvedMap;
                 targetMaterial.map = resolvedMap;
+                if (targetMaterial.map && mapDef) {
+                    this.configureTextureWrap(targetMaterial.map, mapDef, { forceUpdate: true });
+                }
                 this.applyBlockbenchTextureModeUniforms(targetMaterial, sourceState);
+                this.syncNativePBRUniforms(targetMaterial, sourceState, activeShader, getFallbackTexture());
 
                 if (!targetMaterial.uniforms.uWorldNormalMatrix) {
                     targetMaterial.uniforms.uWorldNormalMatrix = {
@@ -13029,9 +14164,10 @@ ${lumaForgeLightflowHelpers}`
             this.invalidateAnimationUniformTargetCache();
 
             Cube.all.forEach(cube => {
-                if (cube.mesh) {
-                    cube.mesh.castShadow = true;
-                    cube.mesh.receiveShadow = true;
+                const mesh = this.getCubeMesh(cube);
+                if (mesh) {
+                    mesh.castShadow = true;
+                    mesh.receiveShadow = true;
                     let shader = MaterialManager.resolveCubeMaterial(cube, this.globalRenderMode);
                     if (!shader) shader = MaterialManager.materials['classic'];
 
@@ -13054,6 +14190,82 @@ ${lumaForgeLightflowHelpers}`
 
         },
 
+        getCubesFromOutlinerItems(items, result = new Set()) {
+            if (!items || !items.length) return result;
+
+            items.forEach(item => {
+                if (!item) return;
+                if (typeof Cube !== 'undefined' && item instanceof Cube) {
+                    result.add(item);
+                    return;
+                }
+                if (typeof Group !== 'undefined' && item instanceof Group && item.children) {
+                    this.getCubesFromOutlinerItems(item.children, result);
+                }
+            });
+
+            return result;
+        },
+
+        getSelectedSceneCubes() {
+            const cubes = new Set();
+
+            if (typeof Cube !== 'undefined' && Array.isArray(Cube.selected)) {
+                Cube.selected.forEach(cube => {
+                    if (cube) cubes.add(cube);
+                });
+            }
+
+            if (typeof Group !== 'undefined' && Array.isArray(Group.selected)) {
+                this.getCubesFromOutlinerItems(Group.selected, cubes);
+            }
+
+            return Array.from(cubes);
+        },
+
+        updateCubes(cubes, cause = 'partial_update', options = {}) {
+            if (!options.keepPending) {
+                this.cancelPendingSceneUpdate();
+            }
+
+            const targetCubes = Array.from(new Set((cubes || []).filter(Boolean)));
+            if (!targetCubes.length) return;
+
+            this.invalidateLightUniformMaterialCache();
+            this.invalidateAnimationUniformTargetCache();
+
+            targetCubes.forEach(cube => {
+                const mesh = this.getCubeMesh(cube);
+                if (!mesh) return;
+
+                mesh.castShadow = true;
+                mesh.receiveShadow = true;
+
+                let shader = MaterialManager.resolveCubeMaterial(cube, this.globalRenderMode);
+                if (!shader) shader = MaterialManager.materials['classic'];
+
+                this.applyToMesh(cube, shader);
+            });
+
+            const targetSet = new Set(targetCubes);
+            const animationTargets = this.getAnimationUniformTargets()
+                .filter(target => target && targetSet.has(target.cube));
+
+            this.updateWorldNormalMatrices(animationTargets);
+            this.updateLightUniforms();
+            MinecraftPromotionalSilhouetteManager.invalidateGroups();
+
+            const eventData = {
+                cause,
+                partial: true,
+                cube_count: targetCubes.length
+            };
+            if (options.causes && options.causes.length) {
+                eventData.causes = options.causes;
+            }
+            Blockbench.dispatchEvent('shader_update_complete', eventData);
+        },
+
         updateAllUniforms(cause = 'default') {
             this.invalidateLightUniformMaterialCache();
             this.invalidateAnimationUniformTargetCache();
@@ -13065,7 +14277,7 @@ ${lumaForgeLightflowHelpers}`
             };
 
             Cube.all.forEach(cube => {
-                const mesh = cube.mesh;
+                const mesh = this.getCubeMesh(cube);
                 if (!mesh || !mesh.material) return;
 
                 let shader = MaterialManager.resolveCubeMaterial(cube, this.globalRenderMode);
@@ -13080,6 +14292,8 @@ ${lumaForgeLightflowHelpers}`
                             ? MaterialManager.resolveCubeFaceMaterial(cube, faceName, shader)
                             : shader;
                         const renderShader = MaterialManager.getRenderMaterial(activeShader) || shader;
+
+                        this.cleanupStaleShaderArchitectUniforms(mat, renderShader);
 
                         for (const key in renderShader.uniforms) {
                             const def = renderShader.uniforms[key];
@@ -13124,12 +14338,24 @@ ${lumaForgeLightflowHelpers}`
                         const mapDef = renderShader.uniforms.map;
                         const activeMap = mat.uniforms.map && mat.uniforms.map.value;
                         if (mapDef && activeMap && activeMap.isTexture) {
-                            if (!mat.sa_source_texture_uuid) {
-                                this.configureTextureWrap(activeMap, mapDef);
-                            } else {
-                                activeMap.needsUpdate = true;
-                            }
+                            this.configureTextureWrap(activeMap, mapDef);
                         }
+
+                        const sourceState = this.getBlockbenchTextureSourceState(
+                            cube,
+                            faceName,
+                            mat,
+                            this.getFallbackTexture()
+                        );
+                        if (sourceState && sourceState.map && mat.uniforms.map) {
+                            mat.uniforms.map.value = sourceState.map;
+                            mat.map = sourceState.map;
+                        }
+                        if (mapDef && mat.map && mat.map.isTexture) {
+                            this.configureTextureWrap(mat.map, mapDef, { forceUpdate: true });
+                        }
+                        this.applyBlockbenchTextureModeUniforms(mat, sourceState);
+                        this.syncNativePBRUniforms(mat, sourceState, renderShader, this.getFallbackTexture());
 
                         ScreenSpaceReflectionManager.configureMaterial(mat, renderShader);
                         mat.uniformsNeedUpdate = true;
@@ -13154,7 +14380,7 @@ ${lumaForgeLightflowHelpers}`
             sourceTargets.forEach(target => {
                 if (!target || !target.hasWorldNormalMatrix) return;
 
-                const mesh = target.mesh || (target.cube && target.cube.mesh);
+                const mesh = target.mesh || this.getCubeMesh(target.cube);
                 const mat = target.material;
 
                 if (!mesh || !mat || !mat.uniforms || !mat.uniforms.uWorldNormalMatrix) return;
@@ -13211,7 +14437,7 @@ ${lumaForgeLightflowHelpers}`
 
             if (window.Cube && Array.isArray(Cube.all)) {
                 Cube.all.forEach(cube => {
-                    const mesh = cube && cube.mesh;
+                    const mesh = this.getCubeMesh(cube);
                     if (!mesh || !mesh.material) return;
 
                     this.forEachMeshMaterial(mesh, (mat) => {
@@ -13722,7 +14948,7 @@ ${lumaForgeLightflowHelpers}`
                     },
                     formatCode() {
                         this.currentShaderCode = formatGLSL(this.currentShaderCode);
-                        Blockbench.showToastNotification({ text: 'GLSL Formatted', expire: 1500 });
+                        Blockbench.showToastNotification({ text: tl('shader_architect.toast.glsl_formatted'), expire: 1500 });
                         this.$nextTick(() => {
                             this.debounceValidate();
                         });
@@ -13788,7 +15014,7 @@ ${lumaForgeLightflowHelpers}`
                     },
                     createNewMaterial() {
                         let m = new FancyShaderMaterial({
-                            name: "New Material",
+                            name: tl('shader_architect.material.new_material'),
                             vertex: MaterialManager.materials['classic'].vertex,
                             fragment: MaterialManager.materials['classic'].fragment,
                             uniforms: MaterialManager.cloneUniformMap(MaterialManager.materials['classic'].uniforms)
@@ -13813,10 +15039,10 @@ ${lumaForgeLightflowHelpers}`
                         this.$set(this.materials, m.id, m);
                         MaterialManager.register(m);
                         this.selectMaterial(m.id);
-                        Blockbench.showToastNotification({ text: 'Material duplicated successfully', expire: 1500 });
+                        Blockbench.showToastNotification({ text: tl('shader_architect.toast.material_duplicated'), expire: 1500 });
                     },
                     deleteActiveMaterial() {
-                        if (this.activeMat && this.activeMat.isCustom && confirm("Delete material?")) {
+                        if (this.activeMat && this.activeMat.isCustom && confirm(tl('shader_architect.message.delete_material_confirm'))) {
                             MaterialManager.deleteMaterial(this.activeMat.id);
                             this.$delete(this.materials, this.activeMat.id);
                             this.selectedId = 'classic';
@@ -13994,7 +15220,7 @@ ${lumaForgeLightflowHelpers}`
                         try {
                             const canvas = document.createElement('canvas');
                             const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
-                            if (!gl) throw new Error("WebGL not supported for validation.");
+                            if (!gl) throw new Error(tl('shader_architect.message.validation_webgl_unavailable'));
 
                             let errors = [];
 
@@ -14053,7 +15279,7 @@ ${lumaForgeLightflowHelpers}`
                                     errors.push({
                                         type: 'linker',
                                         line: null,
-                                        message: log || "Failed to link shaders.",
+                                        message: log || tl('shader_architect.message.link_failed'),
                                         severity: 'error'
                                     });
                                 }
@@ -14063,7 +15289,7 @@ ${lumaForgeLightflowHelpers}`
                             this.validationErrors = errors;
 
                             if (errors.length === 0 && showFeedback) {
-                                Blockbench.showToastNotification({ text: 'GLSL program compiles and links successfully!', expire: 2000 });
+                                Blockbench.showToastNotification({ text: tl('shader_architect.toast.validation_ok'), expire: 2000 });
                             }
 
                             gl.deleteShader(vs);
@@ -15022,16 +16248,16 @@ ${lumaForgeLightflowHelpers}`
 
                         <!-- Left Sidebar: Materials Library -->
                         <div class="sa-studio-sidebar sa-left" :class="{collapsed: !showLeftSidebar}" style="padding: 12px 10px;">
-                            <button class="sa-left-btn" @click="createNewMaterial()"><i class="material-icons">add</i> New Material</button>
-                            <button class="sa-left-btn" @click="importMaterial()"><i class="material-icons">file_upload</i> Import .samat</button>
-                            <div style="font-size: 0.85em; font-weight: bold; opacity: 0.6; text-transform: uppercase; margin: 12px 0 6px 4px; letter-spacing: 0.5px;">Material Library</div>
+                            <button class="sa-left-btn" @click="createNewMaterial()"><i class="material-icons">add</i> {{ tl('shader_architect.ui.new_material') }}</button>
+                            <button class="sa-left-btn" @click="importMaterial()"><i class="material-icons">file_upload</i> {{ tl('shader_architect.ui.import_samat') }}</button>
+                            <div style="font-size: 0.85em; font-weight: bold; opacity: 0.6; text-transform: uppercase; margin: 12px 0 6px 4px; letter-spacing: 0.5px;">{{ tl('shader_architect.ui.material_library') }}</div>
                             <div style="flex-grow: 1;">
                                 <div v-for="(m, mid) in materials" :key="mid"
                                      class="sa-materiel-list-item" :class="{selected: selectedId === mid}"
                                      @click="selectMaterial(mid)">
                                      <i class="material-icons">{{m.icon}}</i>
                                      <div style="flex-grow:1; font-weight: bold; font-size:1.05em; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{m.name}}</div>
-                                     <i v-if="!m.isCustom" class="material-icons" style="opacity:0.5; font-size:0.9em;" title="Read Only">lock</i>
+                                     <i v-if="!m.isCustom" class="material-icons" style="opacity:0.5; font-size:0.9em;" :title="tl('shader_architect.ui.read_only')">lock</i>
                                 </div>
                             </div>
                         </div>
@@ -15126,7 +16352,7 @@ ${lumaForgeLightflowHelpers}`
                                 <!-- Uniforms panel inside main area (Full settings schema editor) -->
                                 <div v-if="editingMode === 'uniforms'" style="flex: 1; overflow-y: auto; padding: 16px;">
                                     <div style="margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid var(--color-border);">
-                                        <h3 style="margin-top:0;">Add Custom Uniform</h3>
+                                        <h3 style="margin-top:0;">{{ tl('shader_architect.ui.add_custom_uniform') }}</h3>
                                         <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
                                             <input v-model="newUniformName" type="text" placeholder="u_myProperty" :disabled="!activeMat.isCustom" class="dark_bordered" style="padding: 6px;">
                                             <select v-model="newUniformType" :disabled="!activeMat.isCustom">
@@ -15139,25 +16365,25 @@ ${lumaForgeLightflowHelpers}`
                                                 <option value="color">color (vec3)</option>
                                             </select>
                                             <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
-                                                <input type="checkbox" v-model="newUniformExpose" :disabled="!activeMat.isCustom"> Expose
+                                                <input type="checkbox" v-model="newUniformExpose" :disabled="!activeMat.isCustom"> {{ tl('shader_architect.ui.expose') }}
                                             </label>
                                             <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
-                                                <input type="checkbox" v-model="newUniformAdvanced" :disabled="!activeMat.isCustom"> Advanced
+                                                <input type="checkbox" v-model="newUniformAdvanced" :disabled="!activeMat.isCustom"> {{ tl('shader_architect.ui.advanced') }}
                                             </label>
-                                            <button @click="addUniform()" :disabled="!activeMat.isCustom"><i class="material-icons" style="font-size:1.1em; vertical-align:middle;">add_box</i> Add</button>
+                                            <button @click="addUniform()" :disabled="!activeMat.isCustom"><i class="material-icons" style="font-size:1.1em; vertical-align:middle;">add_box</i> {{ tl('shader_architect.ui.add') }}</button>
                                         </div>
                                         <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: 10px;">
-                                            <span style="opacity: 0.75;">Native:</span>
+                                            <span style="opacity: 0.75;">{{ tl('shader_architect.ui.native') }}</span>
                                             <select v-model="selectedNativeUniformName" :disabled="!activeMat.isCustom">
                                                 <option v-for="option in nativeUniformOptions" :key="option.name" :value="option.name" :disabled="activeMat.uniforms && activeMat.uniforms[option.name]">
-                                                    {{ option.name }} ({{ option.type }}){{ activeMat.uniforms && activeMat.uniforms[option.name] ? ' - added' : '' }}
+                                                    {{ option.name }} ({{ option.type }}){{ activeMat.uniforms && activeMat.uniforms[option.name] ? ' - ' + tl('shader_architect.ui.added') : '' }}
                                                 </option>
                                             </select>
                                             <span v-if="selectedNativeUniformOption" style="opacity: 0.65; font-size: 0.9em;">
                                                 {{ getUniformLabel(null, selectedNativeUniformOption.name) || selectedNativeUniformOption.type }}
                                             </span>
                                             <button @click="addNativeUniform()" :disabled="!activeMat.isCustom || (activeMat.uniforms && activeMat.uniforms[selectedNativeUniformName])">
-                                                <i class="material-icons" style="font-size:1.1em; vertical-align:middle;">playlist_add</i> Add Native
+                                                <i class="material-icons" style="font-size:1.1em; vertical-align:middle;">playlist_add</i> {{ tl('shader_architect.ui.add_native') }}
                                             </button>
                                         </div>
                                         <div v-if="(newUniformType === 'float' || newUniformType === 'int') && activeMat.isCustom" style="display: flex; gap: 12px; align-items: center; margin-top: 8px; flex-wrap: wrap;">
@@ -15171,10 +16397,10 @@ ${lumaForgeLightflowHelpers}`
                                                 Step: <input type="number" placeholder="None" v-model.number="newUniformStep" class="dark_bordered" style="width: 70px; padding: 2px 4px;">
                                             </label>
                                             <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
-                                                <input type="checkbox" v-model="newUniformAllowHigher"> Allow Higher
+                                                <input type="checkbox" v-model="newUniformAllowHigher"> {{ tl('shader_architect.ui.allow_higher') }}
                                             </label>
                                             <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
-                                                <input type="checkbox" v-model="newUniformAllowLower"> Allow Lower
+                                                <input type="checkbox" v-model="newUniformAllowLower"> {{ tl('shader_architect.ui.allow_lower') }}
                                             </label>
                                         </div>
                                         <!-- Per-channel range for vec2 / vec3 -->
@@ -15194,18 +16420,18 @@ ${lumaForgeLightflowHelpers}`
                                                         Step: <input type="number" placeholder="None" v-model.number="newUniformChannels[axis].step" class="dark_bordered" style="width: 65px; padding: 2px 4px;">
                                                     </label>
                                                     <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
-                                                        <input type="checkbox" v-model="newUniformChannels[axis].allow_higher"> Allow Higher
+                                                        <input type="checkbox" v-model="newUniformChannels[axis].allow_higher"> {{ tl('shader_architect.ui.allow_higher') }}
                                                     </label>
                                                     <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
-                                                        <input type="checkbox" v-model="newUniformChannels[axis].allow_lower"> Allow Lower
+                                                        <input type="checkbox" v-model="newUniformChannels[axis].allow_lower"> {{ tl('shader_architect.ui.allow_lower') }}
                                                     </label>
                                                 </template>
                                             </div>
                                         </div>
                                     </div>
 
-                                    <h3 style="margin-top:0;">Active Uniforms</h3>
-                                    <div v-if="!activeMat.uniforms || Object.keys(activeMat.uniforms).length === 0" style="opacity: 0.5;">No uniforms defined.</div>
+                                    <h3 style="margin-top:0;">{{ tl('shader_architect.ui.active_uniforms') }}</h3>
+                                    <div v-if="!activeMat.uniforms || Object.keys(activeMat.uniforms).length === 0" style="opacity: 0.5;">{{ tl('shader_architect.ui.no_uniforms') }}</div>
 
                                     <div v-for="(uni, key) in activeMat.uniforms" :key="key" class="sa-uniform-row">
                                         <div class="sa-uniform-row-header">
@@ -15223,7 +16449,7 @@ ${lumaForgeLightflowHelpers}`
                                             <div v-if="uni.type==='sampler2D'" style="display: flex; gap: 8px; align-items: center;">
                                                 <label style="display: flex; align-items: center; gap: 4px; font-weight: normal; cursor: pointer; font-size:0.9em;">
                                                     <input type="checkbox" v-model="uni.repeat" @change="applyLive()">
-                                                    Repeat (Tiling)
+                                                    {{ tl('shader_architect.ui.repeat_tiling') }}
                                                 </label>
                                             </div>
 
@@ -15249,23 +16475,23 @@ ${lumaForgeLightflowHelpers}`
                                             <div v-if="uni.type==='intv'" style="opacity:0.6; font-style:italic;">[Array Data: {{uni.value.length}} items]</div>
 
                                             <div style="flex-grow:1"></div>
-                                            <button v-if="key !== 'map'" @click="expandUniform(key)" style="background: transparent; border: none; padding: 2px 4px; cursor: pointer; color: var(--color-text); margin-right: 4px;" title="Edit Metadata">
+                                            <button v-if="key !== 'map'" @click="expandUniform(key)" style="background: transparent; border: none; padding: 2px 4px; cursor: pointer; color: var(--color-text); margin-right: 4px;" :title="tl('shader_architect.ui.edit_metadata')">
                                                 <i class="material-icons" :style="{color: expandedUniforms[key] ? 'var(--color-accent)' : ''}" style="font-size: 1.2em;">settings</i>
                                             </button>
-                                            <i v-if="activeMat.isCustom && key !== 'map'" class="material-icons" @click="removeUniform(key)" style="color: #fc2f40; cursor: pointer;" title="Remove Uniform">close</i>
+                                            <i v-if="activeMat.isCustom && key !== 'map'" class="material-icons" @click="removeUniform(key)" style="color: #fc2f40; cursor: pointer;" :title="tl('shader_architect.ui.remove_uniform')">close</i>
                                         </div>
 
                                         <!-- Expanded Metadata Editor -->
                                         <div v-if="expandedUniforms[key]" style="margin-top: 8px; padding-top: 8px; border-top: 1px dashed rgba(255,255,255,0.1); display: flex; flex-direction: column; gap: 6px; font-size: 0.9em; opacity: 0.9;">
                                             <div style="display: flex; gap: 15px; align-items: center;">
                                                 <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
-                                                    <input type="checkbox" v-model="uni.expose" :disabled="!activeMat.isCustom"> Expose to UI
+                                                    <input type="checkbox" v-model="uni.expose" :disabled="!activeMat.isCustom"> {{ tl('shader_architect.ui.expose_to_ui') }}
                                                 </label>
                                                 <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
-                                                    <input type="checkbox" v-model="uni.advanced" :disabled="!activeMat.isCustom"> Advanced
+                                                    <input type="checkbox" v-model="uni.advanced" :disabled="!activeMat.isCustom"> {{ tl('shader_architect.ui.advanced') }}
                                                 </label>
                                                 <label v-if="uni.type === 'vec3' || uni.type === 'vec4' || uni.type === 'color'" style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
-                                                    <input type="checkbox" v-model="uni.is_color" :disabled="!activeMat.isCustom" @change="uni.is_color ? setUniformColorHex(uni, getUniformColorHex(uni)) : null"> Is Color
+                                                    <input type="checkbox" v-model="uni.is_color" :disabled="!activeMat.isCustom" @change="uni.is_color ? setUniformColorHex(uni, getUniformColorHex(uni)) : null"> {{ tl('shader_architect.ui.is_color') }}
                                                 </label>
                                             </div>
                                             <div v-if="uni.type === 'float' || uni.type === 'int'" style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center;">
@@ -15279,15 +16505,15 @@ ${lumaForgeLightflowHelpers}`
                                                     Step: <input type="number" v-model.number="uni.step" placeholder="None" :disabled="!activeMat.isCustom" class="dark_bordered" style="width: 70px; padding: 2px 4px;">
                                                 </label>
                                                 <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
-                                                    <input type="checkbox" v-model="uni.allow_higher" :disabled="!activeMat.isCustom"> Allow Higher
+                                                    <input type="checkbox" v-model="uni.allow_higher" :disabled="!activeMat.isCustom"> {{ tl('shader_architect.ui.allow_higher') }}
                                                 </label>
                                                 <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
-                                                    <input type="checkbox" v-model="uni.allow_lower" :disabled="!activeMat.isCustom"> Allow Lower
+                                                    <input type="checkbox" v-model="uni.allow_lower" :disabled="!activeMat.isCustom"> {{ tl('shader_architect.ui.allow_lower') }}
                                                 </label>
                                             </div>
                                             <!-- Per-channel range for vector uniforms in expanded metadata -->
                                             <div v-if="uni.type === 'vec2' || uni.type === 'vec3' || uni.type === 'vec4'" style="display: flex; flex-direction: column; gap: 5px; margin-top: 4px;">
-                                                <div style="font-size: 0.85em; opacity: 0.7; margin-bottom: 2px;">Per-channel range (optional):</div>
+                                                <div style="font-size: 0.85em; opacity: 0.7; margin-bottom: 2px;">{{ tl('shader_architect.ui.per_channel_range') }}</div>
                                                 <div v-for="axis in (uni.type === 'vec2' ? ['x','y'] : (uni.type === 'vec3' ? ['x','y','z'] : ['x','y','z','w']))" :key="axis" style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 4px 6px; background: rgba(255,255,255,0.03); border-radius: 4px;">
                                                     <label style="min-width: 110px; display: flex; align-items: center; gap: 4px; cursor: pointer; font-weight: bold;">
                                                         <input type="checkbox"
@@ -15307,10 +16533,10 @@ ${lumaForgeLightflowHelpers}`
                                                             Step: <input type="number" v-model.number="uni.channels[axis].step" placeholder="None" :disabled="!activeMat.isCustom" class="dark_bordered" style="width: 65px; padding: 2px 4px;">
                                                         </label>
                                                         <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
-                                                            <input type="checkbox" v-model="uni.channels[axis].allow_higher" :disabled="!activeMat.isCustom"> Allow Higher
+                                                            <input type="checkbox" v-model="uni.channels[axis].allow_higher" :disabled="!activeMat.isCustom"> {{ tl('shader_architect.ui.allow_higher') }}
                                                         </label>
                                                         <label style="display: flex; align-items: center; gap: 4px; cursor: pointer;">
-                                                            <input type="checkbox" v-model="uni.channels[axis].allow_lower" :disabled="!activeMat.isCustom"> Allow Lower
+                                                            <input type="checkbox" v-model="uni.channels[axis].allow_lower" :disabled="!activeMat.isCustom"> {{ tl('shader_architect.ui.allow_lower') }}
                                                         </label>
                                                     </template>
                                                 </div>
@@ -15318,28 +16544,28 @@ ${lumaForgeLightflowHelpers}`
 
                                             <!-- Description -->
                                             <div style="display: flex; flex-direction: column; gap: 2px; margin-top: 4px;">
-                                                <label style="font-weight: bold;">Description (Tooltip):</label>
-                                                <input type="text" v-model="uni.description" placeholder="Tooltip description" :disabled="!activeMat.isCustom" class="dark_bordered" style="padding: 4px;">
+                                                <label style="font-weight: bold;">{{ tl('shader_architect.ui.description_tooltip') }}</label>
+                                                <input type="text" v-model="uni.description" :placeholder="tl('shader_architect.ui.tooltip_placeholder')" :disabled="!activeMat.isCustom" class="dark_bordered" style="padding: 4px;">
                                             </div>
 
                                             <!-- Translations -->
                                             <div style="display: flex; flex-direction: column; gap: 4px; margin-top: 4px;">
-                                                <label style="font-weight: bold;">Custom Translations:</label>
+                                                <label style="font-weight: bold;">{{ tl('shader_architect.ui.custom_translations') }}</label>
 
                                                 <!-- List existing translations -->
                                                 <div v-for="(transVal, langCode) in uni.translations" :key="langCode" style="display: flex; gap: 5px; align-items: center; margin-bottom: 2px;">
                                                     <span style="font-family: monospace; width: 30px; text-transform: uppercase; opacity: 0.8;">{{langCode}}:</span>
                                                     <input type="text" v-model="uni.translations[langCode]" :disabled="!activeMat.isCustom" class="dark_bordered" style="flex-grow: 1; padding: 2px 4px;">
-                                                    <button v-if="activeMat.isCustom" @click="$delete(uni.translations, langCode)" style="background: transparent; border: none; color: #fc2f40; cursor: pointer; padding: 0 4px;" title="Remove Translation">
+                                                    <button v-if="activeMat.isCustom" @click="$delete(uni.translations, langCode)" style="background: transparent; border: none; color: #fc2f40; cursor: pointer; padding: 0 4px;" :title="tl('shader_architect.ui.remove_translation')">
                                                         <i class="material-icons" style="font-size: 1.1em;">close</i>
                                                     </button>
                                                 </div>
 
                                                 <!-- Add new translation -->
                                                 <div v-if="activeMat.isCustom" style="display: flex; gap: 5px; align-items: center;">
-                                                    <input type="text" placeholder="Language (e.g. en, es)" v-model="newTransLang[key]" class="dark_bordered" style="width: 100px; padding: 2px 4px;">
-                                                    <input type="text" placeholder="Label translation" v-model="newTransVal[key]" class="dark_bordered" style="flex-grow: 1; padding: 2px 4px;">
-                                                    <button @click="addCustomTranslation(uni, key)" style="padding: 2px 8px; cursor: pointer;">Add</button>
+                                                    <input type="text" :placeholder="tl('shader_architect.ui.translation_language')" v-model="newTransLang[key]" class="dark_bordered" style="width: 100px; padding: 2px 4px;">
+                                                    <input type="text" :placeholder="tl('shader_architect.ui.translation_label')" v-model="newTransVal[key]" class="dark_bordered" style="flex-grow: 1; padding: 2px 4px;">
+                                                    <button @click="addCustomTranslation(uni, key)" style="padding: 2px 8px; cursor: pointer;">{{ tl('shader_architect.ui.add') }}</button>
                                                 </div>
                                             </div>
                                         </div>
@@ -15352,7 +16578,7 @@ ${lumaForgeLightflowHelpers}`
 
                         </div>
                         <div v-else style="flex-grow: 1; display:flex; align-items:center; justify-content:center; opacity:0.5; font-size:1.5em; background:var(--color-back);">
-                            Select or create a material to edit.
+                            {{ tl('shader_architect.ui.select_or_create_material') }}
                         </div>
 
                         <!-- Right Sidebar: Properties and Active Uniforms Quick Tweaks -->
@@ -15360,11 +16586,11 @@ ${lumaForgeLightflowHelpers}`
                             <div v-if="activeMat">
                                 <h3 style="margin-top:0; border-bottom: 1px solid var(--color-border); padding-bottom:6px; display:flex; align-items:center; gap:6px;">
                                     <i class="material-icons" style="color:var(--color-accent)">tune</i>
-                                    Quick Tweaks
+                                    {{ tl('shader_architect.ui.quick_tweaks') }}
                                 </h3>
 
                                 <div style="font-size:0.85em; opacity:0.6; margin-bottom:12px;">
-                                    Adjust exposed uniforms and properties in real-time to preview in the viewport.
+                                    {{ tl('shader_architect.ui.quick_tweaks.desc') }}
                                 </div>
 
                                 <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size:0.9em; font-weight:normal; margin-bottom:12px;">
@@ -15372,7 +16598,7 @@ ${lumaForgeLightflowHelpers}`
                                 </label>
 
                                 <div v-if="!activeMat.uniforms || Object.keys(activeMat.uniforms).filter(k => isUniformVisibleInQuickTweaks(activeMat.uniforms[k], k)).length === 0" style="opacity: 0.5; font-style:italic;">
-                                    No exposed properties. Turn on "Expose" in Uniforms tab settings.
+                                    {{ tl('shader_architect.ui.no_exposed_properties') }}
                                 </div>
 
                                 <div v-for="(uni, key) in activeMat.uniforms" :key="key" v-if="isUniformVisibleInQuickTweaks(uni, key)" class="sa-uniform-row" style="margin-bottom:10px; padding: 8px;">
@@ -15398,14 +16624,14 @@ ${lumaForgeLightflowHelpers}`
                                     <!-- Bool check -->
                                     <div v-if="uni.type==='bool'">
                                         <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:0.9em; font-weight:normal;">
-                                            <input type="checkbox" v-model="uni.value" @change="applyLive()"> Enabled
+                                            <input type="checkbox" v-model="uni.value" @change="applyLive()"> {{ tl('shader_architect.ui.enabled') }}
                                         </label>
                                     </div>
 
                                     <!-- sampler2D -->
                                     <div v-if="uni.type==='sampler2D'">
                                         <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:0.9em; font-weight:normal;">
-                                            <input type="checkbox" v-model="uni.repeat" @change="applyLive()"> Repeat (Tiling)
+                                            <input type="checkbox" v-model="uni.repeat" @change="applyLive()"> {{ tl('shader_architect.ui.repeat_tiling') }}
                                         </label>
                                     </div>
 
@@ -15612,6 +16838,8 @@ ${lumaForgeLightflowHelpers}`
     let renderModeSelector;
 
     let material_properties;
+    let material_instance_manager;
+    let activeMaterialInstanceManagerId = '';
     let materialPropertiesShowAdvanced = false;
     let materialPropertiesUniformGroupsOpen = {};
 
@@ -15679,11 +16907,11 @@ ${lumaForgeLightflowHelpers}`
 
 
     Plugin.register('shader_architect', {
-        title: 'Shader Architect V2',
-        icon: 'gradient',
-        author: 'MidFord',
-        description: 'Professional material and render workflow with shader presets, material instances, Light Manager integration, and full GLSL editing.',
-        tags: ['Shader', 'Material', 'Render'],
+        title: 'Shader Architect',
+        icon: 'architecture',
+        author: 'MidFord327',
+        description: 'Build advanced Blockbench materials with real-time Lightflow presets, editable GLSL, material instances, and deep Light Manager integration. Requires Light Manager for lights and shadows.',
+        tags: ['Lightflow', 'Shaders', 'Materials', 'Rendering', 'GLSL', 'Lighting'],
         version: '2.0.0',
         min_version: '4.9.0',
         variant: 'both',
@@ -15718,6 +16946,8 @@ ${lumaForgeLightflowHelpers}`
             deletables.push(saMatProp);
             let saMatInstanceProp = new Property(Cube, 'string', 'sa_material_instance_id', { default: '', exposed: true });
             deletables.push(saMatInstanceProp);
+            let saMatInstanceRegistryProp = new Property(Cube, 'string', CUBE_MATERIAL_INSTANCES_FALLBACK_PROP, { default: '', exposed: false });
+            deletables.push(saMatInstanceRegistryProp);
             let saFaceMatInstancesProp = new Property(Cube, 'string', FACE_MATERIAL_INSTANCES_PROP, { default: '', exposed: false });
             deletables.push(saFaceMatInstancesProp);
 
@@ -15909,6 +17139,130 @@ ${lumaForgeLightflowHelpers}`
                     renderModeSelector.delete();
                 }
             });
+
+            const getWorldSettingValue = (key, fallback) => {
+                if (typeof settings !== 'undefined' && settings[key]) {
+                    return settings[key].value;
+                }
+                if (typeof Settings !== 'undefined' && typeof Settings.get === 'function') {
+                    const value = Settings.get(key);
+                    return value !== undefined ? value : fallback;
+                }
+                return fallback;
+            };
+
+            const setWorldSettingValue = (key, value) => {
+                if (typeof settings !== 'undefined' && settings[key]) {
+                    const setting = settings[key];
+                    if (typeof setting.set === 'function') {
+                        setting.set(value);
+                    } else {
+                        setting.value = value;
+                        if (typeof setting.onChange === 'function') {
+                            setting.onChange(value);
+                        }
+                        if (typeof Settings !== 'undefined' && typeof Settings.saveLocalStorages === 'function') {
+                            Settings.saveLocalStorages();
+                        }
+                    }
+                } else if (typeof Settings !== 'undefined' && typeof Settings.set === 'function') {
+                    Settings.set(key, value);
+                }
+            };
+
+            const refreshWorldRenderSettings = (cause = 'world_settings') => {
+                if (typeof Canvas !== 'undefined' && typeof Canvas.updateShading === 'function') {
+                    Canvas.updateShading();
+                }
+                ShaderEngine.updateAllUniforms(cause);
+                ShaderEngine.requestPreviewRender({ cause });
+            };
+
+            const worldBrightnessSlider = new window.ComboSlider('sa_world_brightness', {
+                label: 'shader_architect.world.brightness',
+                title: 'shader_architect.world.brightness.desc',
+                icon: 'brightness_6',
+                grow: true,
+                color: 'var(--color-axis-w)',
+                value: Number.isFinite(Number(getWorldSettingValue('brightness', 50)))
+                    ? Number(getWorldSettingValue('brightness', 50))
+                    : 50,
+                reset_value: 50,
+                min: 0,
+                max: 100,
+                step: 1,
+                allow_higher: false,
+                allow_lower: false,
+                onChange: function () {
+                    setWorldSettingValue('brightness', Number(this.value) || 0);
+                    refreshWorldRenderSettings('world_brightness_change');
+                }
+            });
+
+            const worldShadingToggle = new Toggle('sa_world_shading', {
+                name: 'shader_architect.world.shading',
+                icon: 'wb_sunny',
+                category: 'render',
+                linked_setting: 'shading',
+                onChange: () => refreshWorldRenderSettings('world_shading_change')
+            });
+
+            const worldGridsToggle = new Toggle('sa_world_grids', {
+                name: 'shader_architect.world.grids',
+                icon: 'grid_on',
+                category: 'render',
+                linked_setting: 'grids',
+                onChange: () => ShaderEngine.requestPreviewRender({ cause: 'world_grid_change' })
+            });
+
+            const worldGroundToggle = new Toggle('sa_world_ground', {
+                name: 'shader_architect.world.ground',
+                icon: 'icon-format_free',
+                category: 'render',
+                linked_setting: 'ground_plane',
+                onChange: () => ShaderEngine.requestPreviewRender({ cause: 'world_ground_change' })
+            });
+
+            const syncWorldToolbarControls = () => {
+                worldBrightnessSlider.set(Number(getWorldSettingValue('brightness', 50)) || 0);
+                [
+                    ['shading', worldShadingToggle],
+                    ['grids', worldGridsToggle],
+                    ['ground_plane', worldGroundToggle]
+                ].forEach(([settingKey, toggle]) => {
+                    if (!toggle) return;
+                    toggle.value = !!getWorldSettingValue(settingKey, toggle.value);
+                    if (typeof toggle.updateEnabledState === 'function') {
+                        toggle.updateEnabledState();
+                    }
+                });
+            };
+
+            const worldSettingsToolbar = new Toolbar({
+                id: 'sa_world_settings',
+                name: 'panel.global_renderer_properties',
+                label: false,
+                condition: () => Project,
+                children: [
+                    'sa_world_brightness',
+                    '#',
+                    'sa_world_shading',
+                    'sa_world_grids',
+                    'sa_world_ground'
+                ]
+            });
+
+            const worldSettingsListener = Blockbench.on('update_scene_shading', syncWorldToolbarControls);
+            syncWorldToolbarControls();
+            deletables.push(
+                worldBrightnessSlider,
+                worldShadingToggle,
+                worldGridsToggle,
+                worldGroundToggle,
+                worldSettingsToolbar,
+                worldSettingsListener
+            );
+
             let renderWorkspaceMode = new Mode('render', {
                 name: 'Render',
                 icon: 'hangout_video',
@@ -15964,6 +17318,7 @@ ${lumaForgeLightflowHelpers}`
                     }
                 },
                 toolbars: [
+                    worldSettingsToolbar
                 ]
             });
 
@@ -16123,7 +17478,11 @@ ${lumaForgeLightflowHelpers}`
                     : { name: 'shader_architect.material_panel.global_material', icon: 'globe' };
                 for (let id in MaterialManager.instances) {
                     let inst = MaterialManager.instances[id];
-                    material_instances_options[id] = { name: inst.name, icon: inst.icon };
+                    material_instances_options[id] = {
+                        name: inst.name,
+                        icon: inst.icon,
+                        color: MaterialManager.getMaterialInstanceIconColorCSS(inst.iconColor) || undefined
+                    };
                 }
 
                 if (isMultiple && !sameMaterialInstance) {
@@ -16451,6 +17810,29 @@ ${lumaForgeLightflowHelpers}`
                 category: 'render',
                 condition: cubeSelectedCondition,
                 click() {
+                    const normalizeCreateDialogBaseId = (value) => {
+                        const selectedBase = typeof value === 'string'
+                            ? value
+                            : 'sa_' + ShaderEngine.globalRenderMode;
+                        return selectedBase.indexOf('sa_') === 0
+                            ? selectedBase.slice(3)
+                            : selectedBase;
+                    };
+                    const initialBaseId = MaterialManager.materials[ShaderEngine.globalRenderMode]
+                        ? ShaderEngine.globalRenderMode
+                        : 'classic';
+                    const initialName = MaterialManager.getSuggestedMaterialInstanceName(initialBaseId);
+                    const initialIcon = MaterialManager.materials[initialBaseId] && MaterialManager.materials[initialBaseId].icon
+                        ? MaterialManager.materials[initialBaseId].icon
+                        : 'texture';
+                    let autoName = true;
+                    let autoIcon = true;
+                    let lastBaseId = initialBaseId;
+                    let lastName = initialName;
+                    let lastAutoName = initialName;
+                    let lastIcon = initialIcon;
+                    let lastAutoIcon = initialIcon;
+
                     const dialog = new Dialog({
                         id: 'sa_create_material_instance_dialog',
                         title: 'shader_architect.material_panel.create_instance',
@@ -16460,10 +17842,69 @@ ${lumaForgeLightflowHelpers}`
                                 label: 'shader_architect.material_panel.base_material',
                                 type: 'select',
                                 options: getGlobalMaterialMenuOptions(),
-                                value: 'sa_' + ShaderEngine.globalRenderMode,
+                                value: 'sa_' + initialBaseId,
                                 description: 'shader_architect.material_panel.base_material.desc'
                             },
-                            name: { label: 'shader_architect.material_panel.instance_name', type: 'text', value: tl('shader_architect.material_panel.new_instance_name') }
+                            name: {
+                                label: 'shader_architect.material_panel.instance_name',
+                                type: 'text',
+                                value: initialName
+                            },
+                            icon: {
+                                label: 'shader_architect.material_panel.instance_icon',
+                                type: 'text',
+                                value: initialIcon,
+                                placeholder: 'texture',
+                                description: 'shader_architect.material_panel.instance_icon.desc'
+                            },
+                            icon_color: {
+                                label: 'shader_architect.material_panel.instance_icon_color',
+                                type: 'select',
+                                options: MaterialManager.getMaterialInstanceMarkerColorOptions(),
+                                value: '',
+                                description: 'shader_architect.material_panel.instance_icon_color.desc'
+                            }
+                        },
+                        onFormChange(formResult) {
+                            const currentName = String(formResult.name || '');
+                            const currentIcon = String(formResult.icon || '');
+
+                            if (currentName !== lastName && currentName !== lastAutoName) {
+                                autoName = false;
+                            }
+                            if (currentIcon !== lastIcon && currentIcon !== lastAutoIcon) {
+                                autoIcon = false;
+                            }
+
+                            const baseMaterialId = normalizeCreateDialogBaseId(formResult.material_base);
+                            if (baseMaterialId !== lastBaseId && MaterialManager.materials[baseMaterialId]) {
+                                const nextValues = {};
+
+                                if (autoName) {
+                                    const nextName = MaterialManager.getSuggestedMaterialInstanceName(baseMaterialId);
+                                    nextValues.name = nextName;
+                                    lastAutoName = nextName;
+                                    lastName = nextName;
+                                }
+
+                                if (autoIcon) {
+                                    const nextIcon = MaterialManager.materials[baseMaterialId].icon || 'texture';
+                                    nextValues.icon = nextIcon;
+                                    lastAutoIcon = nextIcon;
+                                    lastIcon = nextIcon;
+                                }
+
+                                lastBaseId = baseMaterialId;
+                                if (Object.keys(nextValues).length) {
+                                    this.setFormValues(nextValues, false);
+                                }
+                                if (!autoName) lastName = currentName;
+                                if (!autoIcon) lastIcon = currentIcon;
+                            } else {
+                                lastBaseId = baseMaterialId;
+                                lastName = currentName;
+                                lastIcon = currentIcon;
+                            }
                         },
                         onConfirm: function (formResult) {
                             const cubes = getSelectedCubes();
@@ -16472,14 +17913,20 @@ ${lumaForgeLightflowHelpers}`
                             const isFaceScope = isFaceMaterialScope(activeScope);
 
                             runMaterialInstanceUndo('shader_architect.material_panel.undo.create_instance', cubes, () => {
-                                const selectedBase = typeof formResult.material_base === 'string'
-                                    ? formResult.material_base
-                                    : 'sa_' + ShaderEngine.globalRenderMode;
-                                const baseMaterialId = selectedBase.indexOf('sa_') === 0
-                                    ? selectedBase.slice(3)
-                                    : selectedBase;
-                                const materialInstance = MaterialManager.createInstance(baseMaterialId, { name: formResult.name });
+                                const baseMaterialId = normalizeCreateDialogBaseId(formResult.material_base);
+                                const requestedName = typeof formResult.name === 'string' ? formResult.name.trim() : '';
+                                const materialInstance = MaterialManager.createInstance(baseMaterialId, {
+                                    name: requestedName,
+                                    autoName: autoName,
+                                    icon: formResult.icon,
+                                    iconColor: formResult.icon_color,
+                                    save: false
+                                });
                                 if (!materialInstance) return;
+                                activeMaterialInstanceManagerId = materialInstance.id;
+                                if (requestedName && materialInstance.name !== requestedName) {
+                                    Blockbench.showQuickMessage(tl('shader_architect.message.instance_name_adjusted'), 1800);
+                                }
 
                                 cubes.forEach(cube => {
                                     if (isFaceScope) {
@@ -16488,10 +17935,20 @@ ${lumaForgeLightflowHelpers}`
                                         MaterialManager.assignInstanceToCube(cube, materialInstance, { apply: false });
                                     }
                                 });
+
+                                const saved = MaterialManager.saveMaterialInstances({ cause: 'create_instance' });
+                                if (!saved && MaterialManager.isBBModelProject()) {
+                                    Blockbench.showToastNotification({
+                                        text: tl('shader_architect.message.instance_save_failed'),
+                                        icon: 'warning',
+                                        expire: 6000
+                                    });
+                                }
                             });
+                            Blockbench.dispatchEvent('shader_architect_material_instances_changed', { cause: 'create_instance_assigned' });
                             ShaderEngine.updateAllCubes('create_material_instance');
                             updateMaterialInstancePanel();
-                            dialog.hide()
+                            dialog.hide();
                         }
                     })
                     dialog.show()
@@ -16578,37 +18035,31 @@ ${lumaForgeLightflowHelpers}`
                     },
                     north: {
                         name: 'N',
-                        icon: 'north',
                         color: 'var(--color-axis-x)',
                         description: 'shader_architect.material_panel.face_scope.north'
                     },
                     south: {
                         name: 'S',
-                        icon: 'south',
                         color: 'var(--color-axis-z)',
                         description: 'shader_architect.material_panel.face_scope.south'
                     },
                     east: {
                         name: 'E',
-                        icon: 'east',
                         color: 'var(--color-axis-y)',
                         description: 'shader_architect.material_panel.face_scope.east'
                     },
                     west: {
                         name: 'W',
-                        icon: 'west',
                         color: 'var(--color-axis-v)',
                         description: 'shader_architect.material_panel.face_scope.west'
                     },
                     up: {
-                        //name: 'U',
-                        icon: 'arrow_circle_up',
+                        name: 'U',
                         color: 'var(--color-axis-w)',
                         description: 'shader_architect.material_panel.face_scope.up'
                     },
                     down: {
-                        //name: 'D',
-                        icon: 'arrow_circle_down',
+                        name: 'D',
                         color: 'var(--color-axis-u)',
                         description: 'shader_architect.material_panel.face_scope.down'
                     }
@@ -16652,8 +18103,15 @@ ${lumaForgeLightflowHelpers}`
                     const instance = MaterialManager.instances[instanceId];
                     if (instance && instance.name !== text) {
                         runMaterialInstanceUndo('shader_architect.material_panel.undo.rename_instance', [], () => {
-                            instance.name = text;
-                            MaterialManager.saveMaterialInstances();
+                            const requestedName = typeof text === 'string' ? text.trim() : '';
+                            MaterialManager.renameMaterialInstance(instance, requestedName, {
+                                save: false,
+                                apply: false
+                            });
+                            if (requestedName && instance.name !== requestedName) {
+                                Blockbench.showQuickMessage(tl('shader_architect.message.instance_name_adjusted'), 1800);
+                            }
+                            MaterialManager.saveMaterialInstances({ cause: 'rename_instance' });
                         });
                         updateMaterialInstancePanel();
                     }
@@ -16679,7 +18137,7 @@ ${lumaForgeLightflowHelpers}`
 
             const getEventCause = (event) => event && typeof event === 'object' ? event.cause : event;
             const isProjectSwitching = () => !Project.parsed || Blockbench.hasFlag('switching_project');
-            const skipMaterialPanelRefreshCauses = new Set(['project_update', 'select_project', 'rename_instance', 'update_form', 'sanitize_instances']);
+            const skipMaterialPanelRefreshCauses = new Set(['project_update', 'select_project', 'rename_instance', 'update_form', 'update_instance_meta', 'sanitize_instances']);
 
             let materialPanelRenderListener = Blockbench.on('shader_update_complete', (event) => {
                 if (isProjectSwitching()) return;
@@ -16699,10 +18157,255 @@ ${lumaForgeLightflowHelpers}`
             let materialInstancesListener = Blockbench.on('shader_architect_material_instances_changed', (event) => {
                 if (isProjectSwitching()) return;
                 const cause = getEventCause(event);
-                if (cause === 'update_form' || cause === 'select_project' || cause === 'project_update') return;
+                if (cause === 'update_form' || cause === 'update_instance_meta' || cause === 'select_project' || cause === 'project_update') return;
                 updateMaterialInstancePanel();
             });
             deletables.push(materialInstancesListener);
+
+            const getMaterialInstanceManagerOptions = () => {
+                const options = {};
+                for (let id in MaterialManager.instances) {
+                    const instance = MaterialManager.instances[id];
+                    options[id] = {
+                        name: instance.name || id,
+                        icon: instance.icon || 'texture',
+                        color: MaterialManager.getMaterialInstanceIconColorCSS(instance.iconColor) || undefined
+                    };
+                }
+                return options;
+            };
+
+            const getActiveMaterialInstanceManagerId = () => {
+                const ids = Object.keys(MaterialManager.instances);
+                if (ids.length === 0) {
+                    activeMaterialInstanceManagerId = '';
+                    return '';
+                }
+                if (!activeMaterialInstanceManagerId || !MaterialManager.instances[activeMaterialInstanceManagerId]) {
+                    activeMaterialInstanceManagerId = ids[0];
+                }
+                return activeMaterialInstanceManagerId;
+            };
+
+            const buildMaterialInstanceManagerForm = () => {
+                if (!material_instance_manager || !material_instance_manager.form) return;
+
+                const activeId = getActiveMaterialInstanceManagerId();
+                const instance = activeId ? MaterialManager.instances[activeId] : null;
+
+                if (!instance) {
+                    material_instance_manager.form.form_config = {
+                        no_instances: {
+                            type: 'bar_display',
+                            value: tl('shader_architect.material_panel.no_instances'),
+                            icon: 'deployed_code_alert',
+                            paragraph: false,
+                            expand: true,
+                            color: 'var(--color-text)'
+                        }
+                    };
+                    material_instance_manager.form.buildForm();
+                    return;
+                }
+
+                const baseMat = MaterialManager.materials[instance.baseMaterialId] || MaterialManager.materials['classic'];
+                material_instance_manager.form.form_config = {
+                    manager_instance_id: {
+                        type: 'select',
+                        label: 'shader_architect.material_panel.select_instance',
+                        value: activeId,
+                        options: getMaterialInstanceManagerOptions(),
+                        description: 'shader_architect.material_panel.select_instance.desc'
+                    },
+                    manager_details_label: {
+                        type: 'bar_display',
+                        value: tl('shader_architect.material_panel.instance_details'),
+                        icon: instance.icon || (baseMat && baseMat.icon) || 'texture',
+                        paragraph: false,
+                        expand: true,
+                        color: MaterialManager.getMaterialInstanceIconColorCSS(instance.iconColor) || 'var(--color-text)'
+                    },
+                    manager_instance_name: {
+                        type: 'text',
+                        label: 'shader_architect.material_panel.instance_name',
+                        value: instance.name || '',
+                        placeholder: tl('shader_architect.material_panel.instance_name')
+                    },
+                    manager_base_material: {
+                        type: 'select',
+                        label: 'shader_architect.material_panel.base_material',
+                        value: 'sa_' + (instance.baseMaterialId || 'classic'),
+                        options: getGlobalMaterialMenuOptions(),
+                        description: 'shader_architect.material_panel.base_material.desc'
+                    },
+                    manager_instance_icon: {
+                        type: 'text',
+                        label: 'shader_architect.material_panel.instance_icon',
+                        value: instance.icon || (baseMat && baseMat.icon) || 'texture',
+                        placeholder: 'texture',
+                        description: 'shader_architect.material_panel.instance_icon.desc'
+                    },
+                    manager_instance_icon_color: {
+                        type: 'select',
+                        label: 'shader_architect.material_panel.instance_icon_color',
+                        options: MaterialManager.getMaterialInstanceMarkerColorOptions(),
+                        value: MaterialManager.normalizeMaterialInstanceColor(instance.iconColor),
+                        description: 'shader_architect.material_panel.instance_icon_color.desc'
+                    }
+                };
+                material_instance_manager.form.buildForm();
+            };
+
+            material_instance_manager = new Panel('material_instance_manager', {
+                icon: 'category',
+                growable: true,
+                resizable: true,
+                condition: { modes: ['render'] },
+                default_position: {
+                    slot: "left_bar",
+                    float_position: [
+                        1322,
+                        57
+                    ],
+                    float_size: [
+                        314,
+                        300
+                    ],
+                    height: 300,
+                    folded: false,
+                    fixed_height: false,
+                    attached_to: "global_renderer_properties",
+                    attached_index: 1,
+                    sidebar_index: 1
+                },
+                mode_positions: {
+                    render: {
+                        slot: "left_bar",
+                        float_position: [
+                            1322,
+                            57
+                        ],
+                        float_size: [
+                            314,
+                            300
+                        ],
+                        height: 300,
+                        folded: false,
+                        fixed_height: false,
+                        attached_to: "global_renderer_properties",
+                        attached_index: 1,
+                        sidebar_index: 1
+                    }
+                },
+                form: {
+                    no_instances: {
+                        type: 'bar_display',
+                        value: tl('shader_architect.material_panel.no_instances'),
+                        icon: 'deployed_code_alert',
+                        paragraph: false,
+                        expand: true,
+                        color: 'var(--color-text)'
+                    }
+                }
+            });
+
+            material_instance_manager.form.on('change', ({ result, changed_keys }) => {
+                if (isProjectSwitching()) return;
+
+                const keys = Array.isArray(changed_keys) && changed_keys.length
+                    ? changed_keys
+                    : Object.keys(result || {});
+
+                if (keys.includes('manager_instance_id')) {
+                    activeMaterialInstanceManagerId = result.manager_instance_id || '';
+                    buildMaterialInstanceManagerForm();
+                    return;
+                }
+
+                const instanceId = getActiveMaterialInstanceManagerId();
+                const instance = instanceId ? MaterialManager.instances[instanceId] : null;
+                if (!instance) return;
+
+                let changed = false;
+                let sceneChanged = false;
+                let rebuild = false;
+
+                if (keys.includes('manager_instance_name')) {
+                    const requestedName = result && result.manager_instance_name !== undefined
+                        ? String(result.manager_instance_name)
+                        : instance.name;
+                    const previousName = instance.name;
+                    MaterialManager.renameMaterialInstance(instance, requestedName, {
+                        save: false,
+                        apply: false
+                    });
+                    if (instance.name !== previousName) {
+                        changed = true;
+                        if (requestedName.trim() && instance.name !== requestedName.trim()) {
+                            Blockbench.showQuickMessage(tl('shader_architect.message.instance_name_adjusted'), 1800);
+                            rebuild = true;
+                        }
+                    }
+                }
+
+                if (keys.includes('manager_base_material')) {
+                    const selectedBase = typeof result.manager_base_material === 'string'
+                        ? result.manager_base_material
+                        : 'sa_' + (instance.baseMaterialId || 'classic');
+                    const baseMaterialId = selectedBase.indexOf('sa_') === 0
+                        ? selectedBase.slice(3)
+                        : selectedBase;
+                    if (baseMaterialId && MaterialManager.materials[baseMaterialId] && instance.baseMaterialId !== baseMaterialId) {
+                        MaterialManager.setMaterialInstanceBase(instance, baseMaterialId, {
+                            save: false,
+                            apply: false,
+                            syncIcon: false,
+                            renameIfGenerated: true,
+                            cause: 'update_instance_meta'
+                        });
+                        changed = true;
+                        sceneChanged = true;
+                        rebuild = true;
+                    }
+                }
+
+                if (keys.includes('manager_instance_icon') || keys.includes('manager_instance_icon_color')) {
+                    const previousIcon = instance.icon;
+                    const previousColor = instance.iconColor || '';
+                    MaterialManager.setMaterialInstanceIcon(
+                        instance,
+                        result.manager_instance_icon,
+                        result.manager_instance_icon_color,
+                        { save: false }
+                    );
+                    if (instance.icon !== previousIcon || (instance.iconColor || '') !== previousColor) {
+                        changed = true;
+                        rebuild = keys.includes('manager_instance_icon');
+                    }
+                }
+
+                if (!changed) return;
+
+                MaterialManager.saveMaterialInstances({ cause: 'update_instance_meta' });
+                updateMaterialInstancePanel();
+                if (sceneChanged) {
+                    ShaderEngine.updateAllCubes('update_instance_meta');
+                }
+                if (rebuild) {
+                    buildMaterialInstanceManagerForm();
+                }
+            });
+
+            buildMaterialInstanceManagerForm();
+            deletables.push(material_instance_manager);
+
+            let materialInstanceManagerListener = Blockbench.on('shader_architect_material_instances_changed', (event) => {
+                if (isProjectSwitching()) return;
+                const cause = getEventCause(event);
+                if (cause === 'update_form' || cause === 'update_instance_meta') return;
+                buildMaterialInstanceManagerForm();
+            });
+            deletables.push(materialInstanceManagerListener);
 
             material_properties = new Panel('material_properties', {
                 icon: 'motion_mode',
@@ -16893,6 +18596,16 @@ ${lumaForgeLightflowHelpers}`
                 });
                 deletables.push(textureUpdateMaterialEvent);
 
+                if (typeof TextureGroup !== 'undefined' && TextureGroup.prototype && TextureGroup.prototype.updateMaterial) {
+                    registerNativeMethodEvent(TextureGroup.prototype, 'updateMaterial', 'texture_group_update_material', { mode: 'after' });
+                    let textureGroupUpdateMaterialEvent = Blockbench.on('texture_group_update_material', () => {
+                        if (!Project.parsed) return;
+                        if (Blockbench.hasFlag('switching_project')) return;
+                        ShaderEngine.requestSceneUpdate('texture_group_update_material');
+                    });
+                    deletables.push(textureGroupUpdateMaterialEvent);
+                }
+
                 registerNativeMethodEvent(Texture.prototype, 'apply', 'texture_apply', { mode: 'after' });
                 let textureApplyEvent = Blockbench.on('texture_apply', () => {
                     if (!Project.parsed) return;
@@ -16949,7 +18662,7 @@ ${lumaForgeLightflowHelpers}`
                 let addCubeEvent = Blockbench.on('add_cube', (event) => {
                     if (!Project.parsed) return;
                     if (Blockbench.hasFlag('switching_project')) return;
-                    if (event.object && event.object.mesh) {
+                    if (event.object && ShaderEngine.getCubeMesh(event.object)) {
                         let shader = MaterialManager.resolveCubeMaterial(event.object, ShaderEngine.globalRenderMode);
                         ShaderEngine.applyToMesh(event.object, shader || MaterialManager.materials['classic']);
                         ShaderEngine.updateLightUniforms();
@@ -16963,8 +18676,9 @@ ${lumaForgeLightflowHelpers}`
                 deletables.push(transformEvent);
 
                 const updateProjectEvent = (project) => {
-                    if (!Project.parsed) return;
                     if (!project) project = MaterialManager.getActiveProject();
+                    if (!project) return;
+                    Project.parsed = true;
                     MaterialManager.syncMaterialInstancesFromProject(project);
                     ShaderEngine.requestSceneUpdate('project_update');
                 };
@@ -16992,10 +18706,25 @@ ${lumaForgeLightflowHelpers}`
 
                 deletables.push(selectProjectEvent);
 
+                let loadGenericProjectEvent = Blockbench.on('load_project', (args) => {
+                    const project = args && args.project || MaterialManager.getActiveProject();
+                    updateProjectEvent(project);
+                });
+                deletables.push(loadGenericProjectEvent);
+
+                let newProjectEvent = Blockbench.on('new_project', () => {
+                    MaterialManager.materialInstancePersistenceWarningShown = false;
+                    updateProjectEvent(MaterialManager.getActiveProject());
+                });
+                deletables.push(newProjectEvent);
+
                 let updateSelectionEvent = Blockbench.on('update_selection', () => {
                     if (!Project.parsed) return;
                     if (Blockbench.hasFlag('switching_project')) return;
-                    ShaderEngine.requestSceneUpdate('update_selection');
+                    ShaderEngine.requestSceneUpdate('update_selection', {
+                        partial: true,
+                        cubes: ShaderEngine.getSelectedSceneCubes()
+                    });
                 });
 
                 deletables.push(updateSelectionEvent);
@@ -17031,8 +18760,9 @@ ${lumaForgeLightflowHelpers}`
             disposeTrackedResources();
 
             Cube.all.forEach(cube => {
-                if (cube.mesh && cube.mesh.material) {
-                    ShaderEngine.getMaterialList(cube.mesh.material).forEach(mat => {
+                const mesh = ShaderEngine.getCubeMesh(cube);
+                if (mesh && mesh.material) {
+                    ShaderEngine.getMaterialList(mesh.material).forEach(mat => {
                         mat.vertexShader = undefined;
                         mat.fragmentShader = undefined;
                         mat.needsUpdate = true;
@@ -17049,6 +18779,7 @@ ${lumaForgeLightflowHelpers}`
 
             styleEl = undefined;
             renderModeSelector = undefined;
+            material_instance_manager = undefined;
             material_properties = undefined;
             cube_material_instance = undefined;
             cube_material_instance_name = undefined;

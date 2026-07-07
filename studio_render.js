@@ -40,6 +40,7 @@
     };
 
     let exportAction;
+    let quickRenderAction;
     let frameAction;
     let resetFrameAction;
     let stylesheet;
@@ -198,7 +199,7 @@
         const profile = getGpuProfile(renderer);
         return truncateText(
             `${getGpuClassLabel(profile)} - ${getGpuDisplayName(profile)}`,
-            72
+            32
         );
     }
 
@@ -262,9 +263,11 @@
     function addTranslations() {
         Language.addTranslations('en', {
             'studio_render.plugin.title': 'Studio Render',
-            'studio_render.plugin.description': 'Exports high resolution studio stills with tiled supersampling, transparent backgrounds, and an optional render frame.',
+            'studio_render.plugin.description': 'Export clean, high-resolution studio renders with tiled supersampling, transparent backgrounds, GPU guidance, and an adjustable capture frame. Complements Light Manager and Shader Architect in the Lightflow suite.',
             'studio_render.action.export': 'Studio Render',
-            'studio_render.action.export.desc': 'Render the selected preview as a production still with tiled supersampling.',
+            'studio_render.action.export.desc': 'Open the adjustable Studio Render frame and capture controls.',
+            'studio_render.action.quick': 'Quick Studio Render',
+            'studio_render.action.quick.desc': 'Render the current preview immediately with polished 4K studio defaults.',
             'studio_render.action.frame': 'Studio Render Frame',
             'studio_render.action.frame.desc': 'Show or hide the adjustable capture frame for Studio Render.',
             'studio_render.action.reset_frame': 'Reset Studio Render Frame',
@@ -351,9 +354,11 @@
 
         Language.addTranslations('es', {
             'studio_render.plugin.title': 'Render de Estudio',
-            'studio_render.plugin.description': 'Exporta renders de estudio en alta resolucion con supersampling por tiles, fondos transparentes y un marco opcional.',
+            'studio_render.plugin.description': 'Exporta renders de estudio en alta resolucion con supersampling por tiles, fondos transparentes y un marco opcional. Complementa Light Manager y Shader Architect dentro de la suite Lightflow.',
             'studio_render.action.export': 'Render de Estudio',
-            'studio_render.action.export.desc': 'Renderiza la vista seleccionada como imagen de produccion con supersampling por tiles.',
+            'studio_render.action.export.desc': 'Abre el marco ajustable y los controles de captura de Studio Render.',
+            'studio_render.action.quick': 'Render Rapido de Estudio',
+            'studio_render.action.quick.desc': 'Renderiza el preview actual de inmediato con defaults de estudio 4K pulidos.',
             'studio_render.action.frame': 'Marco de Render de Estudio',
             'studio_render.action.frame.desc': 'Muestra u oculta el marco ajustable de captura para Render de Estudio.',
             'studio_render.action.reset_frame': 'Reiniciar Marco de Render',
@@ -484,6 +489,31 @@
         saveSettings(currentSettings);
         StudioRenderFrame.show(getPreview(), currentSettings);
         syncFrameAction();
+    }
+
+    function getQuickRenderSettings() {
+        const saved = loadSettings();
+        const useVisibleFrame = !!StudioRenderFrame.node;
+        return normalizeForm({
+            ...saved,
+            resolution_preset: 'uhd',
+            resolution: RESOLUTION_PRESETS.uhd.slice(),
+            output_scale: 1,
+            destination: 'preview',
+            samples: '4',
+            tile_size: 'auto',
+            capture_area: useVisibleFrame ? 'frame' : 'full',
+            match_frame_ratio: true,
+            background_mode: 'transparent',
+            shading: true,
+            show_gizmos: false,
+            show_tile_grid: false
+        });
+    }
+
+    function quickStudioRender() {
+        currentSettings = getQuickRenderSettings();
+        renderWithSettings(currentSettings, { save: false });
     }
 
     function closeActiveDialog() {
@@ -787,9 +817,8 @@
 
     function resolveTileBleed(sampleFactor, tileSize) {
         /*
-            El RIM puede alcanzar hasta 192 px internos despues de aplicar
-            el zoom del Render Frame. Este margen evita cortes en los bordes
-            del Frame y uniones visibles entre tiles.
+            The rim can reach up to 192 internal pixels after Render Frame zoom.
+            This margin prevents cropped frame edges and visible tile seams.
         */
         const requiredBleed = Math.max(
             32,
@@ -951,16 +980,9 @@
         );
 
         /*
-            El RIM debe escalar con los píxeles finales por cada píxel del
-            área realmente capturada.
-
-            No se separa en "output scale" y "frame zoom scale", porque al
-            usar Math.max() en ambos factores se pueden mezclar ejes distintos
-            y el resultado queda ligeramente más grueso de lo debido.
-
-            La media geométrica mantiene una escala isotrópica estable para un
-            efecto circular de dilatación screen-space. Si el aspecto coincide,
-            scaleX y scaleY son iguales y el resultado es exacto.
+            The rim scales from final output pixels to the actually captured
+            area. The geometric mean keeps circular screen-space dilation
+            stable when the frame aspect ratio differs from the viewport.
         */
         const rimReferenceWidth = useFrame
             ? Math.max(frameRect.width, 1)
@@ -979,10 +1001,8 @@
         );
 
         /*
-            Margen compartido entre tiles.
-
-            También se usa como overscan exterior del frame. Es mayor que
-            MAX_RIM_RADIUS y protege efectos de dilatación screen-space.
+            Shared tile bleed also acts as outer frame overscan. It is larger
+            than the maximum rim radius so screen-space dilation has source data.
         */
         const bleed = resolveTileBleed(sampleFactor, tileSize);
 
@@ -999,7 +1019,7 @@
                 );
 
                 /*
-                    Bleed normal entre tiles vecinos.
+                    Shared bleed between neighboring tiles.
                 */
                 const sharedBleedLeft = Math.min(bleed, x);
                 const sharedBleedTop = Math.min(bleed, y);
@@ -1013,8 +1033,8 @@
                 );
 
                 /*
-                    Overscan adicional fuera del Render Frame.
-                    Solo existe en los límites externos del frame.
+                    Extra overscan outside the render frame, only on the outer
+                    frame edges.
                 */
                 const frameBleedLeft =
                     useFrame && x === 0 ? bleed : 0;
@@ -1074,10 +1094,9 @@
                     fullViewHeight = sourceHeight;
 
                     /*
-                        renderX/renderY pueden quedar negativos en los bordes
-                        del frame. Eso es intencional: la cámara renderiza
-                        temporalmente fuera del encuadre final para que el RIM
-                        tenga información suficiente.
+                        renderX/renderY can go negative on frame edges. That is
+                        intentional: the camera renders beyond the final crop so
+                        the rim pass has enough source pixels.
                     */
                     viewX =
                         frameRect.x +
@@ -1139,8 +1158,8 @@
         const renderer = renderPreview.renderer;
 
         /*
-            El canvas físico debe coincidir con las unidades con las que se
-            calcula el tile y el RIM; no debe heredar DPI del monitor.
+            The physical canvas must match tile and rim units instead of
+            inheriting monitor DPI.
         */
         if (renderer && typeof renderer.setPixelRatio === 'function') {
             renderer.setPixelRatio(1);
@@ -1293,18 +1312,51 @@
         }
     }
 
-    function drawTile(ctx, renderPreview, tile) {
+    function drawTile(ctx, renderPreview, tile, sampleFactor) {
+        const scale = Math.max(1, Number(sampleFactor) || 1);
+
+        const cropLeft = Number(tile.cropX || 0);
+        const cropTop = Number(tile.cropY || 0);
+
+        const sourceWidth = Number(
+            tile.renderWidth ||
+            (tile.sampleWidth + cropLeft + Number(tile.cropRight || 0))
+        );
+
+        const sourceHeight = Number(
+            tile.renderHeight ||
+            (tile.sampleHeight + cropTop + Number(tile.cropBottom || 0))
+        );
+
+        const destinationX = tile.outputX - cropLeft / scale;
+        const destinationY = tile.outputY - cropTop / scale;
+        const destinationWidth = sourceWidth / scale;
+        const destinationHeight = sourceHeight / scale;
+
+        ctx.save();
+
+        ctx.beginPath();
+        ctx.rect(
+            tile.outputX,
+            tile.outputY,
+            tile.outputWidth,
+            tile.outputHeight
+        );
+        ctx.clip();
+
         ctx.drawImage(
             renderPreview.canvas,
-            Math.round(tile.cropX || 0),
-            Math.round(tile.cropY || 0),
-            tile.sampleWidth,
-            tile.sampleHeight,
-            Math.round(tile.outputX),
-            Math.round(tile.outputY),
-            Math.ceil(tile.outputWidth),
-            Math.ceil(tile.outputHeight)
+            0,
+            0,
+            sourceWidth,
+            sourceHeight,
+            destinationX,
+            destinationY,
+            destinationWidth,
+            destinationHeight
         );
+
+        ctx.restore();
     }
 
     async function waitForFrame() {
@@ -1392,7 +1444,7 @@
         Blockbench.showQuickMessage(translate('studio_render.message.rendered', 'Studio render complete'));
     }
 
-    async function renderWithSettings(inputSettings) {
+    async function renderWithSettings(inputSettings, options = {}) {
         const sourcePreview = getPreview();
         if (!sourcePreview) {
             Blockbench.showQuickMessage(translate('studio_render.message.no_preview', 'No preview is available to render.'));
@@ -1405,7 +1457,11 @@
         }
 
         const normalized = normalizeForm(inputSettings);
-        saveSettings(normalized);
+        if (options.save !== false) {
+            saveSettings(normalized);
+        } else {
+            currentSettings = Object.assign({}, normalized);
+        }
         const anglePreset = getAnglePreset(normalized.angle_preset);
         const frameRect = normalized.capture_area === 'frame' && !anglePreset
             ? getFrameRectForPreview(sourcePreview, normalized)
@@ -1442,6 +1498,7 @@
 
             const tileSize = resolveTileSize(normalized, renderPreview.renderer, sampleFactor);
             const tiles = buildTileList(outputSize, sampleFactor, tileSize, cameraSourcePreview, normalized, frameRect);
+            StudioRenderFrame.prepareTileProgress(tiles, outputSize, normalized);
 
             Blockbench.setStatusBarText(
                 translate('studio_render.status.preparing', 'Preparing studio render...') +
@@ -1465,6 +1522,7 @@
             const renderTiles = async () => {
                 for (let index = 0; index < tiles.length; index++) {
                     const tile = tiles[index];
+                    StudioRenderFrame.setTileProgress(index, 'rendering');
                     Blockbench.setStatusBarText(
                         translate('studio_render.status.tile', 'Rendering tile') + ' ' + (index + 1) + ' / ' + tiles.length
                     );
@@ -1487,7 +1545,8 @@
                         delete renderPreview.sa_studio_render_manual_silhouette;
                         delete renderPreview.sa_studio_render_active;
                     }
-                    drawTile(ctx, renderPreview, tile);
+                    drawTile(ctx, renderPreview, tile, sampleFactor);
+                    StudioRenderFrame.setTileProgress(index, 'done');
                     Blockbench.setProgress((index + 1) / tiles.length);
                     if (index % 3 === 0) await waitForFrame();
                 }
@@ -1512,6 +1571,7 @@
             delete window.LightManagerStudioRenderSession;
             delete window.LightManagerStudioRenderActive;
             delete window.LightManagerStudioRenderPreview;
+            StudioRenderFrame.clearTileProgress();
             if (blockbenchShading && typeof oldShading === 'boolean' && blockbenchShading.value !== oldShading) {
                 blockbenchShading.set(oldShading);
             }
@@ -1591,6 +1651,7 @@
         toolbar: null,
         tileGrid: null,
         tileButton: null,
+        tileProgressNodes: [],
         preview: null,
         state: null,
 
@@ -1711,11 +1772,10 @@
             toolbar.append(
                 this.createButton(
                     'studio_render_capture_button',
-                    'fiber_manual_record',
+                    'photo_camera',
                     'studio_render.action.capture',
                     'Render Now',
-                    () => renderWithSettings(getFrameSettings()),
-                    'var(--color-close)'
+                    () => renderWithSettings(getFrameSettings())
                 ),
                 this.createButton(
                     'studio_render_settings_button',
@@ -1726,7 +1786,7 @@
                 ),
                 this.createButton(
                     'studio_render_reset_button',
-                    'stop',
+                    'center_focus_strong',
                     'studio_render.button.reset_frame',
                     'Reset Frame',
                     () => this.reset(getPreview(), currentSettings)
@@ -1734,7 +1794,7 @@
             );
             this.tileButton = this.createButton(
                 'studio_render_tile_button',
-                'grid_on',
+                'grid_view',
                 'studio_render.action.tile_grid',
                 'Tile Grid',
                 () => this.toggleTileGrid()
@@ -1781,6 +1841,7 @@
             this.toolbar = null;
             this.tileGrid = null;
             this.tileButton = null;
+            this.tileProgressNodes = [];
             this.preview = null;
             syncFrameAction();
         },
@@ -1806,6 +1867,7 @@
             this.node.style.height = rect.height + 'px';
             this.updateLabel();
             this.updateTileGrid();
+            this.updateToolbarLayout(rect);
             this.updateToolbarState();
             this.saveState();
         },
@@ -1814,7 +1876,7 @@
             if (!this.label || !this.preview) return;
             const rect = this.getPixelRect();
             const size = computeOutputSize(getFrameSettings(), rect);
-            this.label.textContent = 'Studio - ' + size.width + ' x ' + size.height;
+            this.label.textContent = /*'Studio - ' + */size.width + ' x ' + size.height;
         },
 
         updateToolbarState() {
@@ -1825,9 +1887,37 @@
             }
         },
 
+        updateToolbarLayout(rect = this.getPixelRect()) {
+            if (!this.node || !this.toolbar || !this.preview || !rect) return;
+            const previewWidth = Math.max(1, this.preview.width || this.preview.node?.clientWidth || 1);
+            const previewHeight = Math.max(1, this.preview.height || this.preview.node?.clientHeight || 1);
+            const controlsWidth = 118;
+            const controlsHeight = 28;
+            const controlsGap = 8;
+            const availableBelow = previewHeight - (rect.y + rect.height);
+            const centerLeft = rect.x + rect.width / 2 - controlsWidth / 2;
+            const centerRight = centerLeft + controlsWidth;
+            const overflowsHorizontally = centerLeft < 0 || centerRight > previewWidth;
+            const vertical = rect.width < controlsWidth || previewWidth < 260 || overflowsHorizontally;
+            const side = vertical && previewWidth - (rect.x + rect.width) >= controlsHeight + controlsGap;
+            const outside = !vertical && availableBelow >= controlsHeight + controlsGap + 4;
+            const localLeft = clamp(
+                rect.width / 2,
+                controlsWidth / 2 - rect.x,
+                previewWidth - rect.x - controlsWidth / 2
+            );
+
+            this.node.classList.toggle('controls_outside', outside);
+            this.node.classList.toggle('controls_side', side);
+            this.node.classList.toggle('controls_inside', !outside && !side);
+            this.node.classList.toggle('controls_vertical', vertical);
+            this.toolbar.style.left = (!vertical && (outside || !side)) ? localLeft + 'px' : '';
+        },
+
         updateTileGrid() {
             if (!this.tileGrid || !this.preview) return;
             this.tileGrid.innerHTML = '';
+            this.tileProgressNodes = [];
             if (!currentSettings.show_tile_grid) return;
 
             const rect = this.getPixelRect();
@@ -1855,6 +1945,40 @@
                 line.style.top = (y / sampleHeight * 100) + '%';
                 this.tileGrid.append(line);
             }
+        },
+
+        prepareTileProgress(tiles, outputSize, settings) {
+            this.clearTileProgress();
+            if (!this.tileGrid || !this.node || !settings?.show_tile_grid || settings.capture_area !== 'frame') return;
+            if (!Array.isArray(tiles) || !tiles.length || !outputSize?.width || !outputSize?.height) return;
+
+            this.tileProgressNodes = tiles.map((tile, index) => {
+                const cell = Interface.createElement('div', {
+                    class: 'studio_render_tile_progress pending'
+                });
+                cell.style.left = (tile.outputX / outputSize.width * 100) + '%';
+                cell.style.top = (tile.outputY / outputSize.height * 100) + '%';
+                cell.style.width = (tile.outputWidth / outputSize.width * 100) + '%';
+                cell.style.height = (tile.outputHeight / outputSize.height * 100) + '%';
+                cell.dataset.tileIndex = String(index);
+                this.tileGrid.append(cell);
+                return cell;
+            });
+        },
+
+        setTileProgress(index, state) {
+            const cell = this.tileProgressNodes?.[index];
+            if (!cell) return;
+            cell.classList.toggle('rendering', state === 'rendering');
+            cell.classList.toggle('done', state === 'done');
+            cell.classList.toggle('pending', state !== 'rendering' && state !== 'done');
+        },
+
+        clearTileProgress() {
+            if (this.tileProgressNodes?.length) {
+                this.tileProgressNodes.forEach(node => node?.parentNode?.removeChild(node));
+            }
+            this.tileProgressNodes = [];
         },
 
         startDrag(event) {
@@ -2154,7 +2278,7 @@
             .studio_render_frame_label {
                 position: absolute;
                 left: 50%;
-                top: 6px;
+                top: 0px;
                 transform: translateX(-50%);
                 display: flex;
                 align-items: center;
@@ -2165,14 +2289,15 @@
                 box-sizing: border-box;
                 background: rgba(18, 22, 29, 0.86);
                 color: var(--color-light);
-                border: 1px solid rgba(45, 143, 255, 0.70);
+                //border: 1px solid rgba(45, 143, 255, 0.70);
                 border-radius: 3px;
-                font-size: 12px;
+                //font-size: 12px;
                 line-height: 16px;
                 white-space: nowrap;
                 overflow: hidden;
                 text-overflow: ellipsis;
                 user-select: none;
+                font-family: var(--font-code);
             }
             .studio_render_frame_handle {
                 position: absolute;
@@ -2216,52 +2341,86 @@
             .studio_render_frame_controls {
                 position: absolute;
                 left: 50%;
-                bottom: 10px;
                 transform: translateX(-50%);
                 display: flex;
                 align-items: center;
                 justify-content: center;
-                gap: 8px;
-                min-height: 34px;
-                padding: 5px 10px;
+                gap: 3px;
+                min-height: 26px;
+                padding: 2px;
                 box-sizing: border-box;
-                background: rgba(30, 35, 45, 0.93);
-                border: 1px solid rgba(255, 255, 255, 0.07);
-                border-radius: 4px;
-                box-shadow: 0 8px 24px rgba(0, 0, 0, 0.38);
+                background: rgba(20, 24, 32, 0.70);
+                border: 0;
+                border-radius: 3px;
+                box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28);
                 cursor: default;
             }
+            #studio_render_frame.controls_inside .studio_render_frame_controls {
+                bottom: 8px;
+            }
+            #studio_render_frame.controls_outside .studio_render_frame_controls {
+                top: calc(100% + 8px);
+            }
+            #studio_render_frame.controls_vertical .studio_render_frame_controls {
+                flex-direction: column;
+            }
+            #studio_render_frame.controls_side .studio_render_frame_controls {
+                left: calc(100% + 8px);
+                top: 50%;
+                bottom: auto;
+                transform: translateY(-50%);
+            }
+            #studio_render_frame.controls_vertical.controls_inside .studio_render_frame_controls {
+                left: auto;
+                right: 8px;
+                bottom: 8px;
+                transform: none;
+            }
             .studio_render_frame_button {
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                width: 24px;
-                height: 24px;
+                display: grid;
+                place-items: center;
+                position: relative;
+                width: 36px;
+                min-width: 36px;
+                max-width: 36px;
+                height: 36px;
+                min-height: 36px;
+                max-height: 36px;
                 margin: 0;
                 padding: 0;
                 box-sizing: border-box;
                 background: transparent;
                 color: var(--color-light);
                 border: 0;
-                border-radius: 3px;
+                border-radius: 2px;
                 cursor: pointer;
             }
             .studio_render_frame_button:hover,
             .studio_render_frame_button.active {
-                background: rgba(45, 143, 255, 0.22);
+                background: var(--color-accent);
                 color: #ffffff;
             }
-            .studio_render_frame_button i {
-                font-size: 19px;
+            .studio_render_frame_button > * {
+                display: block;
+                margin: 0;
+                padding: 0;
+            }
+            .studio_render_frame_button i,
+            .studio_render_frame_button svg,
+            .studio_render_frame_button .icon {
+                display: block;
+                width: 22px;
+                height: 22px;
+                font-size: 22px;
                 line-height: 1;
+                text-align: center;
                 pointer-events: none;
             }
             .studio_render_capture_button i {
-                color: var(--color-close);
-                font-size: 17px;
+                font-size: 22px;
             }
             .studio_render_reset_button i {
-                font-size: 16px;
+                font-size: 22px;
             }
             .studio_render_tile_grid {
                 position: absolute;
@@ -2275,18 +2434,49 @@
             }
             .studio_render_tile_line {
                 position: absolute;
-                background: rgba(66, 170, 255, 0.46);
-                box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.22);
+                opacity: 0.72;
             }
             .studio_render_tile_line.vertical {
                 top: 0;
                 bottom: 0;
                 width: 1px;
+                background: repeating-linear-gradient(
+                    to bottom,
+                    rgba(66, 170, 255, 0.36) 0,
+                    rgba(66, 170, 255, 0.36) 7px,
+                    transparent 7px,
+                    transparent 13px
+                );
             }
             .studio_render_tile_line.horizontal {
                 left: 0;
                 right: 0;
                 height: 1px;
+                background: repeating-linear-gradient(
+                    to right,
+                    rgba(66, 170, 255, 0.36) 0,
+                    rgba(66, 170, 255, 0.36) 7px,
+                    transparent 7px,
+                    transparent 13px
+                );
+            }
+            .studio_render_tile_progress {
+                position: absolute;
+                box-sizing: border-box;
+                border: 1px solid transparent;
+                background: transparent;
+                pointer-events: none;
+                transition: background-color 140ms ease, border-color 140ms ease, box-shadow 140ms ease;
+            }
+            .studio_render_tile_progress.rendering {
+                border-color: rgba(255, 255, 255, 0.42);
+                background: rgba(255, 255, 255, 0.06);
+                box-shadow: inset 0 0 0 1px rgba(45, 143, 255, 0.38);
+            }
+            .studio_render_tile_progress.done {
+                border-color: rgba(72, 210, 125, 0.42);
+                background: rgba(72, 210, 125, 0.12);
+                box-shadow: inset 0 0 0 1px rgba(72, 210, 125, 0.24);
             }
         `);
     }
@@ -2298,6 +2488,7 @@
             activeDialog = null;
         }
         if (exportAction) exportAction.delete();
+        if (quickRenderAction) quickRenderAction.delete();
         if (frameAction) frameAction.delete();
         if (resetFrameAction) resetFrameAction.delete();
         if (stylesheet && typeof stylesheet.delete === 'function') stylesheet.delete();
@@ -2306,10 +2497,10 @@
 
     Plugin.register(PLUGIN_ID, {
         title: 'Studio Render',
-        icon: 'photo_camera',
-        author: 'MidFord',
-        description: 'Exports professional high resolution model renders with tiled supersampling, 4K/8K-safe output, transparency, and an optional viewport render frame.',
-        tags: ['Render', 'Screenshot', 'Export'],
+        icon: 'photo_camera_back',
+        author: 'MidFord327',
+        description: 'Export polished Blockbench studio renders with tiled supersampling, 4K/8K-safe output, transparency, GPU guidance, and an adjustable frame. Complements Light Manager and Shader Architect in the Lightflow suite.',
+        tags: ['Lightflow', 'Rendering', 'Export', 'Screenshots', 'Studio', 'Presentation'],
         version: '1.0.0',
         min_version: '4.9.0',
         variant: 'both',
@@ -2325,6 +2516,15 @@
                 category: 'file',
                 condition: () => !!getPreview(),
                 click: openStudioRenderFrame
+            });
+
+            quickRenderAction = new Action('studio_render_quick', {
+                name: 'studio_render.action.quick',
+                description: 'studio_render.action.quick.desc',
+                icon: 'bolt',
+                category: 'file',
+                condition: () => !!getPreview(),
+                click: quickStudioRender
             });
 
             frameAction = new Toggle('studio_render_toggle_frame', {
@@ -2353,13 +2553,16 @@
             });
 
             MenuBar.addAction(exportAction, 'file.export');
+            MenuBar.addAction(quickRenderAction, 'file.export');
             MenuBar.addAction(exportAction, 'view');
+            MenuBar.addAction(quickRenderAction, 'view');
             MenuBar.addAction(frameAction, 'view');
             MenuBar.addAction(resetFrameAction, 'view');
 
             window.StudioRender = {
                 open: openStudioRenderDialog,
                 render: renderWithSettings,
+                quickRender: quickStudioRender,
                 showFrame: () => StudioRenderFrame.show(getPreview(), currentSettings),
                 hideFrame: () => StudioRenderFrame.remove(true),
                 resetFrame: () => StudioRenderFrame.reset(getPreview(), currentSettings)
