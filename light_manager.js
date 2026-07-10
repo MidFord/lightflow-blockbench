@@ -3833,7 +3833,7 @@ function initialize_light_plugin() {
         author: 'MidFord327',
         description: 'Add production-ready point, spot, and directional lights to Blockbench with viewport gizmos, animation support, shadows, and Studio Render controls. Provides the Lightflow lighting foundation for Shader Architect and Studio Render.',
         tags: ['Lightflow', 'Lighting', 'Shadows', 'Animation', 'Rendering', 'Studio'],
-        version: '1.3.0',
+        version: '1.3.1',
         min_version: '4.9.0',
         variant: 'both',
 
@@ -4350,7 +4350,7 @@ function initialize_light_plugin() {
                         text_node.style.lineHeight = '1.4';
                         text_node.style.maxWidth = '250px';
                     }
-                    text_node.innerHTML = this.text;
+                    text_node.textContent = String(this.text ?? '');
                     this.node.append(text_node);
                 }
 
@@ -4361,7 +4361,7 @@ function initialize_light_plugin() {
                     this.text = text;
                     this.nodes.forEach(node => {
                         let content = node.querySelector('.bar_display_content');
-                        if (content) content.innerHTML = text;
+                        if (content) content.textContent = String(text ?? '');
                     });
                     return this;
                 }
@@ -5620,7 +5620,7 @@ function initialize_light_plugin() {
                         this.content_node.style.alignItems = 'center';
                     }
 
-                    this.content_node.innerHTML = this.text;
+                    this.content_node.textContent = String(this.text ?? '');
                     this.node.append(this.content_node);
                 }
 
@@ -5631,7 +5631,7 @@ function initialize_light_plugin() {
                 setValue(value) {
                     this.text = value;
                     if (this.content_node) {
-                        this.content_node.innerHTML = value;
+                        this.content_node.textContent = String(value ?? '');
                     }
                 }
 
@@ -7608,14 +7608,22 @@ function initialize_light_plugin() {
                     light.render_intensity = light.intensity;
                 }
 
-                light.updateLightIcon();
-                LightElement.preview_controller?.updateSelection(light);
-                window.update_light_element_callback?.(getLightPanelUpdateOptions(property));
-                window.LightManagerViewportControls?.updateAll();
+                if (property === 'light_type') {
+                    light.updateLightIcon();
+                    LightElement.preview_controller?.updateSelection(light);
+                }
 
-                if (!['color', 'temperature', 'intensity'].includes(property)) {
+                const updateOptions = getLightPanelUpdateOptions(property);
+                window.update_light_element_callback?.(updateOptions);
+                if (updateOptions.gizmos !== false) {
+                    window.LightManagerViewportControls?.updateAll();
+                }
+
+                if (['light_type', 'has_shadow'].includes(property)) {
                     syncLightSettingsPanel(light);
-                } else {
+                } else if (normalBiasNeedsAutoUpdate) {
+                    setNumControl(light_shadow_normal_bias_sliderbox, light.shadow_normal_bias);
+                } else if (['shadow_resolution', 'studio_shadow_resolution'].includes(property)) {
                     updateConditionalLightToolbars();
                 }
 
