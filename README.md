@@ -1,8 +1,8 @@
 # Lightflow for Blockbench
 
-> **An in-development rendering suite for Blockbench** — animatable lights, advanced shader materials, and clean studio-quality image exports without leaving the editor.
+> **A production-oriented rendering suite for Blockbench** — animatable lights, advanced shader materials, and studio-quality image exports without leaving the editor.
 
-**Status:** Open Alpha / actively developed  
+**Status:** Release Candidate / final compatibility testing  
 **Minimum Blockbench version:** `4.9.0`  
 **Recommended environment:** Blockbench Desktop with a WebGL-capable dedicated GPU
 
@@ -39,9 +39,9 @@ The plugins work independently where possible, but they are designed to be used 
 
 | Plugin | Current version | Purpose | Dependency |
 | --- | ---: | --- | --- |
-| **Light Manager** | `1.3.0` | Adds production-oriented point, spot, and directional lights with shadows, gizmos, animation support, and lighting profiles. | None |
-| **Shader Architect** | `2.0.0` | Builds and assigns advanced materials, exposes shader controls, supports editable GLSL, material instances, and `.samat` material files. | **Light Manager required** |
-| **Studio Render** | `1.0.0` | Exports clean images with tiled supersampling, adjustable render framing, transparency, and 4K/8K-safe output controls. | Works alone; integrates with the other two plugins |
+| **Light Manager** | `1.3.1` | Adds production-oriented point, spot, and directional lights with shadows, gizmos, animation support, and lighting profiles. | None |
+| **Shader Architect** | `2.1.0` | Builds and assigns advanced materials, exposes shader controls, supports editable GLSL, material instances, and `.samat` material files. | **Light Manager required** |
+| **Studio Render** | `1.1.0` | Exports clean images with tiled supersampling, adjustable framing, optional final Bloom, transparency, and 4K/8K-safe output controls. | Works alone; integrates with the other two plugins |
 
 ### Why Lightflow exists
 
@@ -127,9 +127,9 @@ With **Light Manager** enabled:
 With **Shader Architect** enabled:
 
 1. Open **Material Studio**.
-2. Choose a built-in material such as **Shaded Lightflow**, **LumaForge**, or **RealView PBR**.
+2. Choose a built-in material such as **Lightflow**, **LumaForge**, or **PBR Metallic/Roughness**.
 3. Apply it globally, to selected cubes, or to selected faces.
-4. Use exposed controls to tune lighting, ambient contribution, shadows, bevels, outlines, rim light, AO, or reflections as appropriate.
+4. Use exposed controls to tune lighting, ambient contribution, shadows, bevels, outlines, rim light, AO, or reflections as appropriate. Lightflow's **Shadows** toggle switches cast shadows without changing presets.
 5. Create a **Material Instance** when different parts of the same model need different values without duplicating the shader code.
 
 ### 4. Render the image
@@ -208,6 +208,8 @@ Studio Render is the export layer. It is intended for portfolio images, social-m
 - Preview, PNG save, clipboard, and load-as-texture destinations.
 - GPU diagnostics showing the detected renderer and relevant WebGL limits.
 - Temporary Studio Render sessions that coordinate with Light Manager so final shadow settings do not permanently disturb the viewport.
+- Optional final-image Bloom with a simple strength control and advanced threshold/radius controls.
+- A compact default form; tile size, GPU diagnostics, resolution scaling, and technical effect controls stay under **Advanced Controls**.
 
 ---
 
@@ -219,11 +221,9 @@ The current built-in preset library includes:
 | --- | --- |
 | **Classic Shader** | Familiar Blockbench-like rendering with simple controls. |
 | **PBR Metallic/Roughness** | A more technical material workflow with metallic/roughness-style behavior. |
-| **Unshaded Lightflow** | Clean texture presentation with minimal lighting influence. |
-| **Shaded Lightflow** | General-purpose Lightflow material for real scene lights and stylized shadows. |
-| **Pixelated Shaded Lightflow** | A deliberately stepped or pixel-oriented shaded response. |
+| **Lightflow** | General-purpose stylized lighting. Use its **Shadows** toggle for shadowed or shadow-free rendering without switching materials. |
+| **Pixelated Lightflow** | A deliberately stepped or pixel-oriented shaded response. |
 | **LumaForge** | A more stylized studio material with artistic Lightflow features. |
-| **RealView PBR** | A presentation-oriented PBR-style material. |
 | **Minecraft Promotional Bevel** | A specialized promotional bevel treatment for blocky, illustrated presentation renders. |
 
 Use the preset name as a starting point, not as a guarantee of a specific visual style. A good render comes from the interaction between the preset, texture content, cube scale, lighting, camera angle, and export settings.
