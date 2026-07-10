@@ -34,6 +34,11 @@
         shading: true,
         show_gizmos: false,
         show_tile_grid: false,
+        show_advanced: false,
+        bloom_enabled: false,
+        bloom_threshold: 0.72,
+        bloom_strength: 0.8,
+        bloom_radius: 18,
         zoom: null,
         destination: 'preview',
         file_name: 'studio_render'
@@ -293,6 +298,11 @@
             'studio_render.field.shading': 'Use Shading',
             'studio_render.field.show_gizmos': 'Show Gizmos',
             'studio_render.field.show_tile_grid': 'Show Tile Grid',
+            'studio_render.field.show_advanced': 'Advanced Controls',
+            'studio_render.field.bloom_enabled': 'Bloom',
+            'studio_render.field.bloom_threshold': 'Bloom Threshold',
+            'studio_render.field.bloom_strength': 'Bloom Strength',
+            'studio_render.field.bloom_radius': 'Bloom Radius',
             'studio_render.field.zoom': 'Focal Length',
             'studio_render.field.gpu': 'GPU',
             'studio_render.field.gpu_renderer': 'Renderer',
@@ -302,6 +312,7 @@
             'studio_render.group.output': 'Output',
             'studio_render.group.frame': 'Frame',
             'studio_render.group.look': 'Look',
+            'studio_render.group.effects': 'Final Effects',
             'studio_render.group.export': 'Export',
             'studio_render.option.camera.view': 'Current View',
             'studio_render.option.resolution.hd': 'HD - 1920 x 1080',
@@ -384,6 +395,11 @@
             'studio_render.field.shading': 'Usar Sombreado',
             'studio_render.field.show_gizmos': 'Mostrar Gizmos',
             'studio_render.field.show_tile_grid': 'Mostrar Tiles',
+            'studio_render.field.show_advanced': 'Controles Avanzados',
+            'studio_render.field.bloom_enabled': 'Bloom',
+            'studio_render.field.bloom_threshold': 'Umbral de Bloom',
+            'studio_render.field.bloom_strength': 'Fuerza de Bloom',
+            'studio_render.field.bloom_radius': 'Radio de Bloom',
             'studio_render.field.zoom': 'Distancia Focal',
             'studio_render.field.gpu': 'GPU',
             'studio_render.field.gpu_renderer': 'Renderer',
@@ -393,6 +409,7 @@
             'studio_render.group.output': 'Salida',
             'studio_render.group.frame': 'Marco',
             'studio_render.group.look': 'Aspecto',
+            'studio_render.group.effects': 'Efectos Finales',
             'studio_render.group.export': 'Exportacion',
             'studio_render.option.camera.view': 'Vista Actual',
             'studio_render.option.resolution.hd': 'HD - 1920 x 1080',
@@ -462,6 +479,11 @@
             : !!settings.shading;
         settings.show_gizmos = !!settings.show_gizmos;
         settings.show_tile_grid = !!settings.show_tile_grid;
+        settings.show_advanced = !!settings.show_advanced;
+        settings.bloom_enabled = !!settings.bloom_enabled;
+        settings.bloom_threshold = clamp(toNumber(settings.bloom_threshold, 0.72), 0, 1);
+        settings.bloom_strength = clamp(toNumber(settings.bloom_strength, 0.8), 0, 3);
+        settings.bloom_radius = clamp(toNumber(settings.bloom_radius, 18), 1, 96);
         delete settings.gpu_status;
         return settings;
     }
@@ -714,6 +736,11 @@
         settings.shading = !!settings.shading;
         settings.show_gizmos = !!settings.show_gizmos;
         settings.show_tile_grid = !!settings.show_tile_grid;
+        settings.show_advanced = !!settings.show_advanced;
+        settings.bloom_enabled = !!settings.bloom_enabled;
+        settings.bloom_threshold = clamp(toNumber(settings.bloom_threshold, 0.72), 0, 1);
+        settings.bloom_strength = clamp(toNumber(settings.bloom_strength, 0.8), 0, 3);
+        settings.bloom_radius = clamp(toNumber(settings.bloom_radius, 18), 1, 96);
         settings.zoom = settings.zoom === null || settings.zoom === undefined || settings.zoom === ''
             ? null
             : toNumber(settings.zoom, DEFAULT_ZOOM);
@@ -1413,6 +1440,53 @@
         return true;
     }
 
+    function applyFinalBloom(canvas, settings) {
+        if (!canvas || !settings?.bloom_enabled) return canvas;
+
+        const maxMaskDimension = 2048;
+        const scale = Math.min(
+            1,
+            maxMaskDimension / Math.max(canvas.width || 1, canvas.height || 1)
+        );
+        const width = Math.max(1, Math.round(canvas.width * scale));
+        const height = Math.max(1, Math.round(canvas.height * scale));
+        const threshold = clamp(toNumber(settings.bloom_threshold, 0.72), 0, 1);
+        const strength = clamp(toNumber(settings.bloom_strength, 0.8), 0, 3);
+        const radius = clamp(toNumber(settings.bloom_radius, 18), 1, 96) * scale;
+
+        const mask = document.createElement('canvas');
+        mask.width = width;
+        mask.height = height;
+        const maskContext = mask.getContext('2d', { willReadFrequently: true });
+        maskContext.drawImage(canvas, 0, 0, width, height);
+
+        const image = maskContext.getImageData(0, 0, width, height);
+        const pixels = image.data;
+        for (let index = 0; index < pixels.length; index += 4) {
+            const alpha = pixels[index + 3] / 255;
+            const luminance = (
+                pixels[index] * 0.2126 +
+                pixels[index + 1] * 0.7152 +
+                pixels[index + 2] * 0.0722
+            ) / 255;
+            const contribution = clamp((luminance - threshold) / Math.max(0.001, 1 - threshold), 0, 1);
+            pixels[index + 3] = Math.round(255 * alpha * contribution);
+        }
+        maskContext.putImageData(image, 0, 0);
+
+        const output = canvas.getContext('2d');
+        output.save();
+        output.globalCompositeOperation = 'lighter';
+        output.globalAlpha = Math.min(1, strength * 0.32);
+        output.filter = `blur(${Math.max(1, radius * 2.25)}px)`;
+        output.drawImage(mask, 0, 0, canvas.width, canvas.height);
+        output.globalAlpha = Math.min(1, strength * 0.68);
+        output.filter = `blur(${Math.max(1, radius)}px)`;
+        output.drawImage(mask, 0, 0, canvas.width, canvas.height);
+        output.restore();
+        return canvas;
+    }
+
     async function deliverRender(dataUrl, size, settings) {
         const name = settings.file_name.replace(/[\\/:*?"<>|]+/g, '_') || DEFAULT_SETTINGS.file_name;
         if (settings.destination === 'save') {
@@ -1559,6 +1633,7 @@
             }
 
             Blockbench.setStatusBarText(translate('studio_render.status.downsample', 'Compositing final image...'));
+            applyFinalBloom(canvas, normalized);
             const dataUrl = canvas.toDataURL('image/png');
             await deliverRender(dataUrl, outputSize, normalized);
         } catch (error) {
@@ -2095,7 +2170,8 @@
                 value: settings.output_scale,
                 min: 0.1,
                 max: 8,
-                step: 0.25
+                step: 0.25,
+                condition: form => !!form.show_advanced
             },
             samples: {
                 type: 'select',
@@ -2110,6 +2186,11 @@
                     8: 'studio_render.option.samples.8'
                 }
             },
+            show_advanced: {
+                type: 'checkbox',
+                label: 'studio_render.field.show_advanced',
+                value: settings.show_advanced
+            },
             tile_size: {
                 type: 'select',
                 label: 'studio_render.field.tile_size',
@@ -2120,7 +2201,8 @@
                     1536: 'studio_render.option.tile.1536',
                     2048: 'studio_render.option.tile.2048',
                     3072: 'studio_render.option.tile.3072'
-                }
+                },
+                condition: form => !!form.show_advanced
             },
             gpu_status: {
                 type: 'buttons',
@@ -2136,7 +2218,8 @@
                         getOffscreenPreview() ||
                         getPreview();
                     showGpuProfileDetails(preview && preview.renderer);
-                }
+                },
+                condition: form => !!form.show_advanced
             },
             _frame: '_',
             capture_area: {
@@ -2195,12 +2278,47 @@
             show_gizmos: {
                 type: 'checkbox',
                 label: 'studio_render.field.show_gizmos',
-                value: settings.show_gizmos
+                value: settings.show_gizmos,
+                condition: form => !!form.show_advanced
             },
             show_tile_grid: {
                 type: 'checkbox',
                 label: 'studio_render.field.show_tile_grid',
-                value: settings.show_tile_grid
+                value: settings.show_tile_grid,
+                condition: form => !!form.show_advanced
+            },
+            _effects: '_',
+            bloom_enabled: {
+                type: 'checkbox',
+                label: 'studio_render.field.bloom_enabled',
+                value: settings.bloom_enabled
+            },
+            bloom_threshold: {
+                type: 'range',
+                label: 'studio_render.field.bloom_threshold',
+                value: settings.bloom_threshold,
+                min: 0,
+                max: 1,
+                step: 0.01,
+                condition: form => !!form.bloom_enabled && !!form.show_advanced
+            },
+            bloom_strength: {
+                type: 'range',
+                label: 'studio_render.field.bloom_strength',
+                value: settings.bloom_strength,
+                min: 0,
+                max: 3,
+                step: 0.05,
+                condition: form => !!form.bloom_enabled
+            },
+            bloom_radius: {
+                type: 'range',
+                label: 'studio_render.field.bloom_radius',
+                value: settings.bloom_radius,
+                min: 1,
+                max: 96,
+                step: 1,
+                condition: form => !!form.bloom_enabled && !!form.show_advanced
             },
             _export: '_',
             destination: {
@@ -2501,7 +2619,7 @@
         author: 'MidFord327',
         description: 'Export polished Blockbench studio renders with tiled supersampling, 4K/8K-safe output, transparency, GPU guidance, and an adjustable frame. Complements Light Manager and Shader Architect in the Lightflow suite.',
         tags: ['Lightflow', 'Rendering', 'Export', 'Screenshots', 'Studio', 'Presentation'],
-        version: '1.0.0',
+        version: '1.1.0',
         min_version: '4.9.0',
         variant: 'both',
         onload() {
