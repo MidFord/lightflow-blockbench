@@ -528,9 +528,9 @@
 
         "shader_architect.preset.classic": "Classic Shader",
         "shader_architect.preset.pbr_metallic_roughness": "PBR Metallic/Roughness",
-        "shader_architect.preset.lightflow": "Unshaded Lightflow",
-        "shader_architect.preset.shaded_lightflow": "Shaded Lightflow",
-        "shader_architect.preset.pixelated_shaded_lightflow": "Pixelated Shaded Lightflow",
+        "shader_architect.preset.lightflow": "Lightflow",
+        "shader_architect.preset.shaded_lightflow": "Lightflow (Legacy)",
+        "shader_architect.preset.pixelated_shaded_lightflow": "Pixelated Lightflow",
         "shader_architect.preset.luma_forge": "LumaForge",
         "shader_architect.preset.realview_pbr": "RealView PBR",
 
@@ -855,10 +855,6 @@
         "shader_architect.uniform.uAOCornerWeight.desc": "Strength of corner contact occlusion",
         "shader_architect.uniform.uAOFaceNormalWeight": "AO Face",
         "shader_architect.uniform.uAOFaceNormalWeight.desc": "Normal based contact occlusion influence",
-        "shader_architect.uniform.uShadowStrength": "Shadow",
-        "shader_architect.uniform.uShadowStrength.desc": "Darkness intensity of cast shadows",
-        "shader_architect.uniform.uShadowFloor": "Shadow Floor",
-        "shader_architect.uniform.uShadowFloor.desc": "Minimum ambient shadow value (shadow brightness floor)",
         "shader_architect.ui.toggle_left": "Toggle Material Library (Ctrl+B)",
         "shader_architect.ui.toggle_right": "Toggle Properties Sidebar",
         "shader_architect.ui.format": "Format GLSL Code (Shift+Alt+F)",
@@ -1001,9 +997,9 @@
 
         "shader_architect.preset.classic": "Shader Clásico",
         "shader_architect.preset.pbr_metallic_roughness": "PBR Metálico/Rugosidad",
-        "shader_architect.preset.lightflow": "Luces Sin Sombra",
-        "shader_architect.preset.shaded_lightflow": "Luces con Sombra",
-        "shader_architect.preset.pixelated_shaded_lightflow": "Luces con Sombra Pixeladas",
+        "shader_architect.preset.lightflow": "Lightflow",
+        "shader_architect.preset.shaded_lightflow": "Lightflow (Compatibilidad)",
+        "shader_architect.preset.pixelated_shaded_lightflow": "Lightflow Pixelado",
         "shader_architect.preset.luma_forge": "LumaForge",
         "shader_architect.preset.realview_pbr": "RealView PBR",
 
@@ -1366,9 +1362,9 @@
     const ANIMATION_SYSTEM_UNIFORM_KEYS = ['SHADE', 'LIGHTSIDE', 'LIGHTCOLOR', 'uAmbientColor', 'uAmbient', 'EMISSIVE', 'TEXTURE_SIZE'];
     const MATERIAL_UNIFORM_GROUPS = {
         core: { label: 'shader_architect.uniform_group.core', icon: 'tune', order: 10, defaultOpen: true },
-        texture: { label: 'shader_architect.uniform_group.texture', icon: 'texture', order: 20, defaultOpen: true },
-        surface: { label: 'shader_architect.uniform_group.surface', icon: 'deblur', order: 30, defaultOpen: true },
-        lighting: { label: 'shader_architect.uniform_group.lighting', icon: 'lightbulb', order: 40, defaultOpen: true },
+        texture: { label: 'shader_architect.uniform_group.texture', icon: 'texture', order: 20, defaultOpen: false },
+        surface: { label: 'shader_architect.uniform_group.surface', icon: 'deblur', order: 30, defaultOpen: false },
+        lighting: { label: 'shader_architect.uniform_group.lighting', icon: 'lightbulb', order: 40, defaultOpen: false },
         ao: { label: 'shader_architect.uniform_group.ao', icon: 'grain', order: 50, defaultOpen: false },
         shadows: { label: 'shader_architect.uniform_group.shadows', icon: 'ev_shadow', order: 60, defaultOpen: false },
         reflections: { label: 'shader_architect.uniform_group.reflections', icon: 'water_drop', order: 70, defaultOpen: false },
@@ -1651,7 +1647,7 @@ vec3 saApplyBlockbenchRenderModeEmission(vec3 litColor, vec3 baseColor, float al
         if (/^(BEVEL_|EDGE_FALLBACK_LIGHT_DIRECTION)/.test(name)) return 'bevel';
         if (/^OUTLINE_/.test(name)) return 'outline';
         if (/^PROMO_RIM_/.test(name)) return 'rim';
-        if (/^(uShadow|shadowPixelResolution|shadowThreshold)/.test(name)) return 'shadows';
+        if (name === 'SHADOWS' || /^(uShadow|shadowPixelResolution|shadowThreshold)/.test(name)) return 'shadows';
         if (/^uAO/.test(name)) return 'ao';
         if (name === 'map' || name === 'AUTO_TILE' || name === 'TILING' || /Map|TEXTURE_SIZE/.test(name)) {
             return 'texture';
@@ -3989,8 +3985,7 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
             if (!this.areUniformsCompatible(baseDef, nextDef)) return null;
             instance.uniforms[uniformName] = nextDef;
             this.saveMaterialInstances();
-            ShaderEngine.updateAllUniforms();
-            ShaderEngine.updateAllCubes('set_material_instance_uniform');
+            ShaderEngine.updateAllUniforms('set_material_instance_uniform');
             return nextDef;
         },
 
@@ -4008,8 +4003,7 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
 
             instance.uniforms[uniformName] = this.cloneUniformDefinition(baseDef);
             this.saveMaterialInstances();
-            ShaderEngine.updateAllUniforms();
-            ShaderEngine.updateAllCubes('reset_material_instance_uniform');
+            ShaderEngine.updateAllUniforms('reset_material_instance_uniform');
             return instance.uniforms[uniformName];
         },
 
@@ -4026,8 +4020,7 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
 
             instance.uniforms = this.cloneUniformMap(base.uniforms || {});
             this.saveMaterialInstances();
-            ShaderEngine.updateAllUniforms();
-            ShaderEngine.updateAllCubes('reset_material_instance_uniforms');
+            ShaderEngine.updateAllUniforms('reset_material_instance_uniforms');
             return instance;
         },
 
@@ -4145,7 +4138,7 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
             let classic = new FancyShaderMaterial({
                 id: 'classic',
                 name: tl('shader_architect.preset.classic'),
-                icon: 'deployed_code',
+                icon: 'grid_view',
                 isCustom: false,
                 vertex: `
                     //Classic
@@ -4222,7 +4215,7 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
             let pbr_metallic_roughness = new FancyShaderMaterial({
                 id: 'pbr_metallic_roughness',
                 name: tl('shader_architect.preset.pbr_metallic_roughness'),
-                icon: 'diamond',
+                icon: 'hexagon',
                 isCustom: false,
                 vertex: `#include <common>
 #include <shadowmap_pars_vertex>
@@ -5130,6 +5123,12 @@ void main() {
                         value: true,
                         expose: true
                     },
+                    "SHADOWS": {
+                        type: "bool",
+                        value: true,
+                        expose: true,
+                        advanced: false
+                    },
                     "LIGHTSIDE": {
                         type: "int",
                         value: 0,
@@ -5434,7 +5433,7 @@ void main() {
             let lightflow = new FancyShaderMaterial({
                 id: 'lightflow',
                 name: tl('shader_architect.preset.lightflow'),
-                icon: 'wb_iridescent',
+                icon: 'wb_sunny',
                 isCustom: false,
                 vertex: `attribute float highlight;
 uniform bool SHADE;
@@ -5847,7 +5846,7 @@ void main() {
             let shaded_lightflow = new FancyShaderMaterial({
                 id: 'shaded_lightflow',
                 name: tl('shader_architect.preset.shaded_lightflow'),
-                icon: 'brightness_5',
+                icon: 'flare',
                 isCustom: false,
                 vertex: `#include <common>
 #include <shadowmap_pars_vertex>
@@ -5954,6 +5953,7 @@ ${SCREEN_SPACE_REFLECTIONS_PARS_FRAGMENT}
 uniform sampler2D map;
 uniform vec3 LIGHTCOLOR;
 uniform bool EMISSIVE;
+uniform bool SHADOWS;
 uniform vec2 TILING;
 uniform bool AUTO_TILE;
 uniform vec2 TEXTURE_SIZE;
@@ -6338,7 +6338,14 @@ void main() {
         if (uLightIntensity[i] <= 0.0) continue;
 
         vec3 lightContribution = computeLightContribution(i, normal, vWorldPos);
-        float shadow = getCustomLightShadow(i);
+
+        float shadow = 1.0;
+
+        if (SHADOWS) {
+            if (uLightCastShadow[i] != 0) {
+                shadow = getCustomLightShadow(i);
+            }
+        }
 
         directLight += lightContribution * shadow;
     }
@@ -6414,7 +6421,7 @@ void main() {
             let pixelated_shaded_lightflow = new FancyShaderMaterial({
                 id: 'pixelated_shaded_lightflow',
                 name: tl('shader_architect.preset.pixelated_shaded_lightflow'),
-                icon: 'gradient',
+                icon: 'blur_on',
                 isCustom: false,
 
                 vertex: `#include <common>
@@ -7559,7 +7566,7 @@ void main() {
             let minecraft_promotional_bevel = new FancyShaderMaterial({
                 id: 'minecraft_promotional_bevel',
                 name: 'Minecraft Promotional Bevel',
-                icon: 'auto_awesome',
+                icon: 'star_shine',
                 isCustom: false,
                 enableShadows: true,
 
@@ -9998,8 +10005,21 @@ ${lumaForgeLightflowHelpers}`
             });
 
             this.materials['classic'] = classic;
-            this.materials['lightflow'] = lightflow;
-            this.materials['shaded_lightflow'] = shaded_lightflow;
+
+            /* One public Lightflow preset. SHADOWS is a cheap uniform branch,
+             * so disabling shadows no longer requires changing material or
+             * recompiling the scene. The legacy id stays readable for older
+             * .bbmodel files but is hidden from enumerable UI lists. */
+            shaded_lightflow.id = 'lightflow';
+            shaded_lightflow.name = tl('shader_architect.preset.lightflow');
+            shaded_lightflow.icon = 'light_mode';
+            this.materials['lightflow'] = shaded_lightflow;
+            Object.defineProperty(this.materials, 'shaded_lightflow', {
+                value: shaded_lightflow,
+                configurable: true,
+                writable: true,
+                enumerable: false
+            });
             this.materials['pbr_metallic_roughness'] = pbr_metallic_roughness;
             this.materials['pixelated_shaded_lightflow'] = pixelated_shaded_lightflow;
             this.materials['minecraft_promotional_bevel'] = minecraft_promotional_bevel;
@@ -12030,8 +12050,8 @@ ${lumaForgeLightflowHelpers}`
                 const key = `saLayeredTexture${i}`;
                 maskMaterial.uniforms[key].value =
                     sourceUniforms[key] &&
-                    sourceUniforms[key].value &&
-                    sourceUniforms[key].value.isTexture
+                        sourceUniforms[key].value &&
+                        sourceUniforms[key].value.isTexture
                         ? sourceUniforms[key].value
                         : transparentFallback;
             }
@@ -12755,13 +12775,23 @@ ${lumaForgeLightflowHelpers}`
 
             if (!causes.length || !this.isSceneUpdateReady()) return;
 
-            const isSelectionOnlyUpdate =
-                causes.length === 1 &&
-                causes[0] === 'update_selection' &&
-                partialUpdateRequested;
+            const fullSceneCauses = new Set([
+                'project_update',
+                'global_mode_change',
+                'canvas_update_all_faces',
+                'canvas_update_layered_textures',
+                'canvas_update_render_sides',
+                'texture_update_material',
+                'texture_group_update_material',
+                'texture_apply'
+            ]);
+            const canUsePartialUpdate =
+                partialUpdateRequested &&
+                pendingCubes.length > 0 &&
+                !causes.some(cause => fullSceneCauses.has(cause));
 
-            if (isSelectionOnlyUpdate) {
-                this.updateCubes(pendingCubes, 'update_selection', { causes });
+            if (canUsePartialUpdate) {
+                this.updateCubes(pendingCubes, this.pickSceneUpdateCause(causes), { causes });
                 return;
             }
 
@@ -12967,10 +12997,7 @@ ${lumaForgeLightflowHelpers}`
                 this.getTextureFromMaterial(ownMaterial) ||
                 this.getTextureFromMaterialList(ownMaterial);
 
-            if (map && map.isTexture) {
-                map.needsUpdate = true;
-                return map;
-            }
+            if (map && map.isTexture) return map;
 
             const candidates = [
                 texture.map,
@@ -12980,10 +13007,7 @@ ${lumaForgeLightflowHelpers}`
             ];
 
             for (const candidate of candidates) {
-                if (candidate && candidate.isTexture) {
-                    candidate.needsUpdate = true;
-                    return candidate;
-                }
+                if (candidate && candidate.isTexture) return candidate;
             }
 
             if (texture.img || texture.canvas) {
@@ -13183,12 +13207,12 @@ ${lumaForgeLightflowHelpers}`
                 layered
                     ? (layeredTextures && layeredTextures[0]) || fallbackTexture
                     : nativePBR
-                    ? nativePBR.baseColorMap || fallbackTexture
-                    : (
-                        this.getTextureFromMaterial(nativeMaterial) ||
-                        this.getTextureFromMaterialList(nativeMaterial) ||
-                        fallbackTexture
-                    );
+                        ? nativePBR.baseColorMap || fallbackTexture
+                        : (
+                            this.getTextureFromMaterial(nativeMaterial) ||
+                            this.getTextureFromMaterialList(nativeMaterial) ||
+                            fallbackTexture
+                        );
 
             const renderMode = layered
                 ? 'layered'
@@ -13870,17 +13894,17 @@ ${lumaForgeLightflowHelpers}`
                     sourceState.alphaTest !== undefined
                         ? Math.max(sourceState.alphaTest, 0.01)
                         : sourceMaterial.alphaTest !== undefined
-                        ? Math.max(sourceMaterial.alphaTest, 0.01)
-                        : 0.01;
+                            ? Math.max(sourceMaterial.alphaTest, 0.01)
+                            : 0.01;
 
                 const side =
                     sourceState.shadowSide !== undefined
                         ? sourceState.shadowSide
                         : sourceState.side !== undefined
-                        ? sourceState.side
-                        : sourceMaterial.shadowSide !== undefined
-                        ? sourceMaterial.shadowSide
-                        : (sourceMaterial.side !== undefined ? sourceMaterial.side : THREE.FrontSide);
+                            ? sourceState.side
+                            : sourceMaterial.shadowSide !== undefined
+                                ? sourceMaterial.shadowSide
+                                : (sourceMaterial.side !== undefined ? sourceMaterial.side : THREE.FrontSide);
 
                 texture.needsUpdate = true;
 
@@ -14079,15 +14103,32 @@ ${lumaForgeLightflowHelpers}`
                     getFallbackTexture();
 
                 if (resolvedMap) {
-                    if (resolvedMap.magFilter !== undefined) resolvedMap.magFilter = THREE.NearestFilter;
-                    if (resolvedMap.minFilter !== undefined) resolvedMap.minFilter = THREE.NearestFilter;
-                    resolvedMap.needsUpdate = true;
+                    let textureSamplingChanged = false;
+                    if (resolvedMap.magFilter !== undefined && resolvedMap.magFilter !== THREE.NearestFilter) {
+                        resolvedMap.magFilter = THREE.NearestFilter;
+                        textureSamplingChanged = true;
+                    }
+                    if (resolvedMap.minFilter !== undefined && resolvedMap.minFilter !== THREE.NearestFilter) {
+                        resolvedMap.minFilter = THREE.NearestFilter;
+                        textureSamplingChanged = true;
+                    }
+                    if (textureSamplingChanged) resolvedMap.needsUpdate = true;
                 }
 
                 let targetMaterial = sourceMaterial;
+                const targetShaderId = activeShader.baseMaterialId || activeShader.id || activeShader.name || 'material';
+                const targetVertexShader = activeShader.vertex;
+                const targetFragmentShader = this.getFragmentShaderForTextureSource(
+                    activeShader.fragment,
+                    sourceState
+                );
                 const shouldCreateSlotMaterial =
                     !sourceMaterial.is_sa_cloned ||
-                    (useMaterialArray && sourceMaterial.sa_material_index !== materialIndex);
+                    (useMaterialArray && sourceMaterial.sa_material_index !== materialIndex) ||
+                    sourceMaterial.sa_shader_id !== targetShaderId ||
+                    sourceMaterial.vertexShader !== targetVertexShader ||
+                    sourceMaterial.fragmentShader !== targetFragmentShader ||
+                    !!sourceMaterial.lights !== !!activeShader.enableShadows;
 
                 if (shouldCreateSlotMaterial) {
                     const existingUniforms = sourceMaterial.uniforms
@@ -14102,11 +14143,8 @@ ${lumaForgeLightflowHelpers}`
 
                     targetMaterial = new THREE.ShaderMaterial({
                         uniforms: baseUniforms,
-                        vertexShader: activeShader.vertex,
-                        fragmentShader: this.getFragmentShaderForTextureSource(
-                            activeShader.fragment,
-                            sourceState
-                        ),
+                        vertexShader: targetVertexShader,
+                        fragmentShader: targetFragmentShader,
                         lights: !!activeShader.enableShadows,
                         transparent: sourceState.transparent !== undefined ? sourceState.transparent : true,
                         alphaTest: sourceState.alphaTest !== undefined ? sourceState.alphaTest : 0.01,
@@ -14120,7 +14158,7 @@ ${lumaForgeLightflowHelpers}`
                     });
 
                     targetMaterial.is_sa_cloned = true;
-                    targetMaterial.sa_shader_id = activeShader.baseMaterialId || activeShader.id || activeShader.name || 'material';
+                    targetMaterial.sa_shader_id = targetShaderId;
                     if (activeShader.materialInstanceId) {
                         targetMaterial.sa_material_instance_id = activeShader.materialInstanceId;
                     }
@@ -14134,6 +14172,18 @@ ${lumaForgeLightflowHelpers}`
             });
 
             mesh.material = useMaterialArray ? newMaterialSlots : newMaterialSlots[0];
+
+            const retainedMaterials = new Set(newMaterialSlots);
+            sourceSlots.forEach(oldMaterial => {
+                if (
+                    oldMaterial &&
+                    oldMaterial.is_sa_cloned &&
+                    !retainedMaterials.has(oldMaterial) &&
+                    typeof oldMaterial.dispose === 'function'
+                ) {
+                    oldMaterial.dispose();
+                }
+            });
 
             const meshUsesShadows = slotShaders.some(slotShader => slotShader && slotShader.enableShadows);
             mesh.castShadow = meshUsesShadows;
@@ -14352,7 +14402,7 @@ ${lumaForgeLightflowHelpers}`
                             mat.map = sourceState.map;
                         }
                         if (mapDef && mat.map && mat.map.isTexture) {
-                            this.configureTextureWrap(mat.map, mapDef, { forceUpdate: true });
+                            this.configureTextureWrap(mat.map, mapDef);
                         }
                         this.applyBlockbenchTextureModeUniforms(mat, sourceState);
                         this.syncNativePBRUniforms(mat, sourceState, renderShader, this.getFallbackTexture());
@@ -16912,7 +16962,7 @@ ${lumaForgeLightflowHelpers}`
         author: 'MidFord327',
         description: 'Build advanced Blockbench materials with real-time Lightflow presets, editable GLSL, material instances, and deep Light Manager integration. Requires Light Manager for lights and shadows.',
         tags: ['Lightflow', 'Shaders', 'Materials', 'Rendering', 'GLSL', 'Lighting'],
-        version: '2.0.0',
+        version: '2.1.0',
         min_version: '4.9.0',
         variant: 'both',
 
@@ -17069,7 +17119,7 @@ ${lumaForgeLightflowHelpers}`
                                 cube.sa_material_instance_id = '';
                             });
 
-                            ShaderEngine.updateAllCubes('apply_material');
+                            ShaderEngine.updateCubes(Array.from(getSelectedCubeSet()), 'apply_material');
                             this.hide();
                         }
                     }).show();
@@ -17084,7 +17134,7 @@ ${lumaForgeLightflowHelpers}`
                         MaterialManager.clearCubeMaterialAssignment(cube);
                     });
 
-                    ShaderEngine.updateAllCubes('clear_material');
+                    ShaderEngine.updateCubes(Array.from(getSelectedCubeSet()), 'clear_material');
                 }
             });
 
@@ -17433,7 +17483,7 @@ ${lumaForgeLightflowHelpers}`
                         }
                     });
                 });
-                if (changed) ShaderEngine.updateAllCubes('sanitize_instances');
+                if (changed) ShaderEngine.updateCubes(cubes, 'sanitize_instances');
             };
 
             const updateMaterialInstancePanel = () => {
@@ -17946,7 +17996,7 @@ ${lumaForgeLightflowHelpers}`
                                 }
                             });
                             Blockbench.dispatchEvent('shader_architect_material_instances_changed', { cause: 'create_instance_assigned' });
-                            ShaderEngine.updateAllCubes('create_material_instance');
+                            ShaderEngine.updateCubes(cubes, 'create_material_instance');
                             updateMaterialInstancePanel();
                             dialog.hide();
                         }
@@ -18014,7 +18064,7 @@ ${lumaForgeLightflowHelpers}`
                         });
                     });
 
-                    ShaderEngine.updateAllCubes('update_instance');
+                    ShaderEngine.updateCubes(cubes, 'update_instance');
                     updateMaterialInstancePanel();
                 }
             });
@@ -18389,7 +18439,10 @@ ${lumaForgeLightflowHelpers}`
                 MaterialManager.saveMaterialInstances({ cause: 'update_instance_meta' });
                 updateMaterialInstancePanel();
                 if (sceneChanged) {
-                    ShaderEngine.updateAllCubes('update_instance_meta');
+                    ShaderEngine.updateCubes(
+                        getCubesUsingMaterialInstanceId(instanceId),
+                        'update_instance_meta'
+                    );
                 }
                 if (rebuild) {
                     buildMaterialInstanceManagerForm();
