@@ -3895,7 +3895,7 @@ function initialize_light_plugin() {
         author: 'MidFord327',
         description: 'Add production-ready point, spot, and directional lights to Blockbench with viewport gizmos, animation support, shadows, and Studio Render controls. Provides the Lightflow lighting foundation for Shader Architect and Studio Render.',
         tags: ['Lightflow', 'Lighting', 'Shadows', 'Animation', 'Rendering', 'Studio'],
-        version: '1.5.1',
+        version: '1.5.2',
         min_version: '4.9.0',
         variant: 'both',
 
@@ -7449,11 +7449,6 @@ function initialize_light_plugin() {
             let light_shadow_softness_sliderbox;
             let light_shadow_bias_sliderbox;
             let light_shadow_normal_bias_sliderbox;
-            let lightPropertiesPanel;
-            const lightPanelTemplateState = { revision: 0 };
-            const refreshLightPanelTemplate = () => {
-                lightPanelTemplateState.revision += 1;
-            };
 
             const getSelectedLight = () => LightElement.selected.length === 1 ? LightElement.selected[0] : null;
             const singleLightCondition = () => !!getSelectedLight();
@@ -7627,7 +7622,6 @@ function initialize_light_plugin() {
                     syncingLightSettings = false;
                 }
                 updateConditionalLightToolbars();
-                refreshLightPanelTemplate();
             };
 
             const applyLightPanelValue = (property, value, undoLabel) => {
@@ -7699,7 +7693,6 @@ function initialize_light_plugin() {
                 }
 
                 if (directUndo) Undo.finishEdit(undoLabel);
-                refreshLightPanelTemplate();
                 return true;
             };
 
@@ -8099,7 +8092,7 @@ function initialize_light_plugin() {
                 light_shadow_bias_settings_toolbar
             });
 
-            lightPropertiesPanel = new Panel('light_properties', {
+            let lightPropertiesPanel = new Panel('light_properties', {
                 icon: 'lightbulb',
                 growable: true,
                 resizable: true,
@@ -8141,118 +8134,15 @@ function initialize_light_plugin() {
                         sidebar_index: 1
                     }
                 },
-                component: {
-                    data() {
-                        return { state: lightPanelTemplateState };
-                    },
-                    methods: {
-                        currentLight() {
-                            this.state.revision;
-                            return getSelectedLight();
-                        },
-                        color(light) {
-                            return light ? LightManagerUtils.colorHex(light.color) : '#ffffff';
-                        },
-                        set(property, event) {
-                            const target = event && event.target;
-                            const value = target
-                                ? (target.type === 'checkbox' ? target.checked : target.value)
-                                : event;
-                            applyLightPanelValue(property, value);
-                            refreshLightPanelTemplate();
-                        },
-                        begin(label) {
-                            beginLightEdit(label);
-                        },
-                        finish(label) {
-                            finishLightEdit(label);
-                            refreshLightPanelTemplate();
-                        },
-                        reset(property) {
-                            const light = this.currentLight();
-                            if (!light) return;
-                            const values = {
-                                intensity: 1,
-                                distance: 0,
-                                angle: 45,
-                                penumbra: 0,
-                                shadow_near: 0.1,
-                                shadow_far: 200,
-                                shadow_bounds: 35,
-                                shadow_softness: DEFAULT_SHADOW_SOFTNESS,
-                                shadow_bias: LightManagerUtils.defaultShadowBias(light),
-                                shadow_normal_bias: LightManagerUtils.defaultShadowNormalBias(light)
-                            };
-                            if (Object.prototype.hasOwnProperty.call(values, property)) {
-                                applyLightPanelValue(property, values[property], translateLightManager('light_manager.undo.edit_properties'));
-                            }
-                            refreshLightPanelTemplate();
-                        }
-                    },
-                    template: `
-                        <div class="lf-light-panel" v-if="currentLight()" :key="state.revision">
-                            <section class="lf-light-identity">
-                                <i class="material-icons">lightbulb</i>
-                                <div>
-                                    <strong>{{ currentLight().name || 'Light' }}</strong>
-                                    <span>{{ currentLight().light_type }} light</span>
-                                </div>
-                            </section>
-
-                            <section class="lf-light-section">
-                                <h3>Light</h3>
-                                <div class="lf-light-grid two">
-                                    <label>Type
-                                        <select :value="currentLight().light_type" @change="set('light_type', $event)">
-                                            <option value="point">Point</option><option value="directional">Directional</option><option value="spot">Spot</option>
-                                        </select>
-                                    </label>
-                                    <label>Color
-                                        <input type="color" :value="color(currentLight())" @input="set('color', $event)">
-                                    </label>
-                                </div>
-                                <label class="lf-light-range">Temperature <output>{{ currentLight().temperature || 6500 }} K</output>
-                                    <input type="range" min="2700" max="6500" step="100" :value="currentLight().temperature || 6500" @mousedown="begin('Change temperature')" @input="set('temperature', $event)" @change="finish('Change temperature')">
-                                </label>
-                                <label class="lf-light-range">Intensity <output>{{ Number(currentLight().intensity || 0).toFixed(2) }}</output>
-                                    <input type="range" min="0" max="10" step="0.05" :value="currentLight().intensity" @mousedown="begin('Change intensity')" @input="set('intensity', $event)" @change="finish('Change intensity')">
-                                </label>
-                                <label class="lf-light-range" v-if="currentLight().light_type !== 'directional'">Range <output>{{ Number(currentLight().distance || 0).toFixed(1) }}</output>
-                                    <input type="range" min="0" max="256" step="0.5" :value="currentLight().distance" @mousedown="begin('Change range')" @input="set('distance', $event)" @change="finish('Change range')">
-                                </label>
-                                <div class="lf-light-grid two" v-if="currentLight().light_type === 'spot'">
-                                    <label>Cone <input type="number" min="0.1" max="89.9" step="0.1" :value="currentLight().angle" @change="set('angle', $event)"></label>
-                                    <label>Soft edge <input type="number" min="0" max="1" step="0.01" :value="currentLight().penumbra" @change="set('penumbra', $event)"></label>
-                                </div>
-                            </section>
-
-                            <section class="lf-light-section">
-                                <div class="lf-light-section-title"><h3>Shadows</h3><label class="lf-light-switch"><input type="checkbox" :checked="currentLight().has_shadow !== false" @change="set('has_shadow', $event)"><span></span></label></div>
-                                <template v-if="currentLight().has_shadow !== false">
-                                    <div class="lf-light-grid two">
-                                        <label>Preview quality
-                                            <select :value="String(currentLight().shadow_resolution || 1024)" @change="set('shadow_resolution', $event)"><option value="256">256</option><option value="512">512</option><option value="1024">1024</option><option value="2048">2048</option><option value="4096">4096</option></select>
-                                        </label>
-                                        <label>Final render
-                                            <select :value="String(currentLight().studio_shadow_resolution || 0)" @change="set('studio_shadow_resolution', $event)"><option value="0">Same as preview</option><option value="1024">1024</option><option value="2048">2048</option><option value="4096">4096</option><option value="8192">8192 Pro</option><option value="16384">16384 Ultra</option></select>
-                                        </label>
-                                    </div>
-                                    <div class="lf-light-grid two">
-                                        <label>Near <input type="number" min="0" step="0.01" :value="currentLight().shadow_near" @change="set('shadow_near', $event)"></label>
-                                        <label>Far <input type="number" min="0.01" step="1" :value="currentLight().shadow_far" @change="set('shadow_far', $event)"></label>
-                                    </div>
-                                    <label v-if="currentLight().light_type === 'directional'">Directional bounds <input type="number" min="0.01" step="1" :value="currentLight().shadow_bounds" @change="set('shadow_bounds', $event)"></label>
-                                    <label class="lf-light-range">Softness <output>{{ Number(currentLight().shadow_softness || 0).toFixed(2) }}</output><input type="range" min="0" max="6" step="0.05" :value="currentLight().shadow_softness" @input="set('shadow_softness', $event)"></label>
-                                    <div class="lf-light-grid two lf-light-tuning">
-                                        <label>Bias <input type="number" step="0.00001" :value="currentLight().shadow_bias" @change="set('shadow_bias', $event)"></label>
-                                        <label>Normal bias <input type="number" step="0.00001" :value="currentLight().shadow_normal_bias" @change="set('shadow_normal_bias', $event)"></label>
-                                    </div>
-                                </template>
-                            </section>
-                        </div>
-                        <div class="lf-light-empty" v-else><i class="material-icons">lightbulb</i><span>Select one light to edit it.</span></div>
-                    `
-                }
+                toolbars: [
+                    light_gizmo_tools_toolbar,
+                    light_quickbuttons_toolbar,
+                    light_shadow_quality_toolbar,
+                    light_settings_toolbar,
+                    light_shadow_clip_settings_toolbar,
+                    light_shadow_bounds_settings_toolbar,
+                    light_shadow_bias_settings_toolbar
+                ]
             });
             window.light_properties_panel = lightPropertiesPanel;
             window.LIGHT_SETTINGS_GROUP = LIGHT_SETTINGS_GROUP;
