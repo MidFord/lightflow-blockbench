@@ -52,6 +52,11 @@
     let activeDialog;
     let currentSettings = Object.assign({}, DEFAULT_SETTINGS);
     let gpuGuidanceShown = false;
+    const BLOOM_MASK_STATE = {
+        emissiveMaterials: new WeakMap(),
+        occluderMaterials: new WeakMap(),
+        resources: new Set()
+    };
 
     function clamp(value, min, max) {
         return Math.max(min, Math.min(max, value));
@@ -662,6 +667,40 @@
             if (typeof window.updateCubeHighlights === 'function') {
                 updateCubeHighlights();
             }
+        }
+    }
+
+    async function withoutStudioRenderHighlights(callback) {
+        const snapshots = [];
+
+        if (window.Cube && Array.isArray(Cube.all)) {
+            Cube.all.forEach(cube => {
+                const mesh = cube && cube.mesh;
+                const attribute = mesh?.geometry?.attributes?.highlight;
+                if (!attribute || !attribute.array) return;
+
+                let hasHighlight = false;
+                for (let index = 0; index < attribute.array.length; index++) {
+                    if (attribute.array[index] !== 0) {
+                        hasHighlight = true;
+                        break;
+                    }
+                }
+                if (!hasHighlight) return;
+
+                snapshots.push({ attribute, values: attribute.array.slice() });
+                attribute.array.fill(0);
+                attribute.needsUpdate = true;
+            });
+        }
+
+        try {
+            return await callback();
+        } finally {
+            snapshots.forEach(snapshot => {
+                snapshot.attribute.array.set(snapshot.values);
+                snapshot.attribute.needsUpdate = true;
+            });
         }
     }
 
@@ -1339,6 +1378,194 @@
         }
     }
 
+    function getMaterialUniformValue(material, name, fallback) {
+        const uniform = material?.uniforms?.[name];
+        return uniform ? uniform.value : fallback;
+    }
+
+    function getMaterialTexture(material, name, fallback = null) {
+        const value = getMaterialUniformValue(material, name, null);
+        if (value && value.isTexture) return value;
+        if (name === 'map' && material?.map?.isTexture) return material.map;
+        return fallback;
+    }
+
+    function getMaterialEmissiveState(material) {
+        if (!material) return { active: false, mode: 0 };
+
+        const renderMode = String(material.sa_source_render_mode || '').toLowerCase();
+        const emissiveMode = renderMode === 'emissive' || getMaterialUniformValue(material, 'EMISSIVE', false) === true;
+        const additiveMode = renderMode === 'additive' || material.blending === THREE.AdditiveBlending;
+        const useMERMap = getMaterialUniformValue(material, 'uUseBlockbenchMERMap', false) === true;
+        const useEmissiveMap = getMaterialUniformValue(material, 'uUseEmissiveMap', false) === true && !useMERMap;
+        const emissiveStrength = Math.max(
+            0,
+            Number(getMaterialUniformValue(material, 'uEmissiveStrength', material.emissiveIntensity || 1)) || 0
+        );
+        const hasStandardEmission = !!(
+            material.emissiveMap ||
+            (material.emissive && typeof material.emissive.getHex === 'function' && material.emissive.getHex() !== 0)
+        );
+
+        return {
+            active: emissiveMode || additiveMode || useMERMap || useEmissiveMap || hasStandardEmission,
+            mode: emissiveMode ? 1 : (additiveMode ? 2 : 0),
+            useMERMap,
+            useEmissiveMap: useEmissiveMap || !!material.emissiveMap,
+            emissiveStrength,
+            baseMap: getMaterialTexture(material, 'map'),
+            emissiveMap: getMaterialTexture(material, 'uEmissiveMap', material.emissiveMap || null),
+            merMap: getMaterialTexture(material, 'uMetallicRoughnessMap'),
+            emissiveColor: getMaterialUniformValue(material, 'uEmissiveColor', material.emissive || null)
+        };
+    }
+
+    function copyColorToVector(target, value) {
+        if (!value) return target.set(1, 1, 1);
+        if (value.isColor) return target.set(value.r, value.g, value.b);
+        if (value.x !== undefined) return target.set(value.x, value.y, value.z);
+        if (value.r !== undefined) return target.set(value.r, value.g, value.b);
+        return target.set(1, 1, 1);
+    }
+
+    function getBloomMaskMaterial(sourceMaterial, emissive) {
+        const cache = emissive
+            ? BLOOM_MASK_STATE.emissiveMaterials
+            : BLOOM_MASK_STATE.occluderMaterials;
+        let material = cache.get(sourceMaterial);
+
+        if (!material) {
+            material = new THREE.ShaderMaterial({
+                uniforms: {
+                    map: { value: null },
+                    uEmissiveMap: { value: null },
+                    uMERMap: { value: null },
+                    uEmissiveColor: { value: new THREE.Vector3(1, 1, 1) },
+                    uMode: { value: 0 },
+                    uUseEmissiveMap: { value: false },
+                    uUseMERMap: { value: false },
+                    uEmissiveStrength: { value: 1 },
+                    uAlphaCutoff: { value: 0.01 },
+                    uEmit: { value: emissive }
+                },
+                vertexShader: `
+                    varying vec2 vUv;
+                    void main() {
+                        vUv = uv;
+                        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                    }
+                `,
+                fragmentShader: `
+                    precision highp float;
+                    uniform sampler2D map;
+                    uniform sampler2D uEmissiveMap;
+                    uniform sampler2D uMERMap;
+                    uniform vec3 uEmissiveColor;
+                    uniform int uMode;
+                    uniform bool uUseEmissiveMap;
+                    uniform bool uUseMERMap;
+                    uniform float uEmissiveStrength;
+                    uniform float uAlphaCutoff;
+                    uniform bool uEmit;
+                    varying vec2 vUv;
+
+                    void main() {
+                        vec4 base = texture2D(map, vUv);
+                        if (uMode != 1 && base.a < uAlphaCutoff) discard;
+
+                        if (!uEmit) {
+                            gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+                            return;
+                        }
+
+                        vec3 emission = vec3(0.0);
+                        if (uMode == 1) {
+                            // Native Blockbench/Minecraft emissive semantics.
+                            emission += base.rgb * (1.0 - base.a);
+                        } else if (uMode == 2) {
+                            emission += base.rgb * base.a;
+                        }
+                        if (uUseEmissiveMap) {
+                            emission += texture2D(uEmissiveMap, vUv).rgb * uEmissiveColor * uEmissiveStrength;
+                        }
+                        if (uUseMERMap) {
+                            emission += base.rgb * texture2D(uMERMap, vUv).g * uEmissiveStrength;
+                        }
+
+                        float energy = max(emission.r, max(emission.g, emission.b));
+                        if (energy <= 0.0005) discard;
+                        gl_FragColor = vec4(max(emission, vec3(0.0)), clamp(energy, 0.0, 1.0));
+                    }
+                `,
+                depthTest: true,
+                depthWrite: true,
+                transparent: false,
+                blending: THREE.NoBlending,
+                side: sourceMaterial.side !== undefined ? sourceMaterial.side : THREE.FrontSide
+            });
+            material.name = emissive ? 'StudioRender_EmissiveMask' : 'StudioRender_BloomOccluder';
+            cache.set(sourceMaterial, material);
+            BLOOM_MASK_STATE.resources.add(material);
+        }
+
+        const state = getMaterialEmissiveState(sourceMaterial);
+        const fallback = sourceMaterial.map || getMaterialTexture(sourceMaterial, 'map');
+        material.uniforms.map.value = state.baseMap || fallback;
+        material.uniforms.uEmissiveMap.value = state.emissiveMap || state.baseMap || fallback;
+        material.uniforms.uMERMap.value = state.merMap || state.baseMap || fallback;
+        material.uniforms.uMode.value = state.mode || 0;
+        material.uniforms.uUseEmissiveMap.value = !!state.useEmissiveMap;
+        material.uniforms.uUseMERMap.value = !!state.useMERMap;
+        material.uniforms.uEmissiveStrength.value = state.emissiveStrength;
+        copyColorToVector(material.uniforms.uEmissiveColor.value, state.emissiveColor);
+        material.uniforms.uAlphaCutoff.value = Math.max(0.001, Number(sourceMaterial.alphaTest) || 0.01);
+        material.uniforms.uEmit.value = !!emissive;
+        material.side = sourceMaterial.side !== undefined ? sourceMaterial.side : THREE.FrontSide;
+        return material;
+    }
+
+    function renderBloomMaskTile(renderPreview, targetContext, tile, sampleFactor) {
+        if (!renderPreview?.renderer || !targetContext || !window.Canvas?.scene) return;
+
+        const scene = Canvas.scene;
+        const renderer = renderPreview.renderer;
+        const changes = [];
+
+        scene.traverse(object => {
+            if (!object || !object.visible || !(object.isMesh || object.isSprite) || !object.material) return;
+            const original = object.material;
+            const sourceMaterials = Array.isArray(original) ? original : [original];
+            const replacements = sourceMaterials.map(source => {
+                const state = getMaterialEmissiveState(source);
+                return getBloomMaskMaterial(source, state.active);
+            });
+            changes.push({ object, material: original });
+            object.material = Array.isArray(original) ? replacements : replacements[0];
+        });
+
+        const previousTarget = renderer.getRenderTarget?.();
+        const previousAutoClear = renderer.autoClear;
+        const previousClearColor = new THREE.Color();
+        const previousClearAlpha = renderer.getClearAlpha?.() ?? 1;
+        renderer.getClearColor?.(previousClearColor);
+
+        try {
+            renderer.autoClear = true;
+            renderer.setRenderTarget?.(null);
+            renderer.setClearColor?.(0x000000, 0);
+            renderer.clear?.(true, true, true);
+            renderer.render(scene, renderPreview.camera);
+            drawTile(targetContext, renderPreview, tile, sampleFactor);
+        } finally {
+            for (let index = changes.length - 1; index >= 0; index--) {
+                changes[index].object.material = changes[index].material;
+            }
+            renderer.setRenderTarget?.(previousTarget || null);
+            renderer.autoClear = previousAutoClear;
+            renderer.setClearColor?.(previousClearColor, previousClearAlpha);
+        }
+    }
+
     function drawTile(ctx, renderPreview, tile, sampleFactor) {
         const scale = Math.max(1, Number(sampleFactor) || 1);
 
@@ -1440,7 +1667,7 @@
         return true;
     }
 
-    function applyFinalBloom(canvas, settings) {
+    function applyFinalBloom(canvas, settings, sourceMaskCanvas) {
         if (!canvas || !settings?.bloom_enabled) return canvas;
 
         const maxMaskDimension = 2048;
@@ -1458,7 +1685,7 @@
         mask.width = width;
         mask.height = height;
         const maskContext = mask.getContext('2d', { willReadFrequently: true });
-        maskContext.drawImage(canvas, 0, 0, width, height);
+        maskContext.drawImage(sourceMaskCanvas || canvas, 0, 0, width, height);
 
         const image = maskContext.getImageData(0, 0, width, height);
         const pixels = image.data;
@@ -1553,6 +1780,15 @@
 
         const sampleFactor = clamp(parseInt(normalized.samples, 10) || 1, 1, 8);
         const { canvas, ctx } = prepareFinalCanvas(outputSize, normalized);
+        const bloomMaskCanvas = normalized.bloom_enabled
+            ? createCanvas(outputSize.width, outputSize.height)
+            : null;
+        const bloomMaskContext = bloomMaskCanvas
+            ? bloomMaskCanvas.getContext('2d', { alpha: true })
+            : null;
+        if (bloomMaskContext) {
+            bloomMaskContext.clearRect(0, 0, outputSize.width, outputSize.height);
+        }
         const blockbenchShading = window.settings && window.settings.shading;
         const oldShading = blockbenchShading ? blockbenchShading.value : undefined;
         const previousState = capturePreviewState(renderPreview);
@@ -1620,20 +1856,25 @@
                         delete renderPreview.sa_studio_render_active;
                     }
                     drawTile(ctx, renderPreview, tile, sampleFactor);
+                    if (bloomMaskContext) {
+                        renderBloomMaskTile(renderPreview, bloomMaskContext, tile, sampleFactor);
+                    }
                     StudioRenderFrame.setTileProgress(index, 'done');
                     Blockbench.setProgress((index + 1) / tiles.length);
                     if (index % 3 === 0) await waitForFrame();
                 }
             };
 
-            if (normalized.show_gizmos) {
-                await renderTiles();
-            } else {
-                await withoutStudioRenderGizmos(renderTiles);
-            }
+            await withoutStudioRenderHighlights(async () => {
+                if (normalized.show_gizmos) {
+                    await renderTiles();
+                } else {
+                    await withoutStudioRenderGizmos(renderTiles);
+                }
+            });
 
             Blockbench.setStatusBarText(translate('studio_render.status.downsample', 'Compositing final image...'));
-            applyFinalBloom(canvas, normalized);
+            applyFinalBloom(canvas, normalized, bloomMaskCanvas);
             const dataUrl = canvas.toDataURL('image/png');
             await deliverRender(dataUrl, outputSize, normalized);
         } catch (error) {
@@ -2345,7 +2586,9 @@
         activeDialog = new Dialog({
             id: 'studio_render',
             title: 'studio_render.dialog.title',
-            width: 620,
+            width: Math.min(820, window.innerWidth - 56),
+            height: Math.min(860, window.innerHeight - 72),
+            resizable: true,
             form: createDialogForm(currentSettings),
             buttons: ['studio_render.button.render', 'dialog.cancel'],
             onFormChange(form) {
@@ -2374,6 +2617,113 @@
 
     function addStyles() {
         stylesheet = Blockbench.addCSS(`
+            #studio_render .dialog_wrapper,
+            #studio_render_dialog .dialog_wrapper {
+                min-width: min(760px, calc(100vw - 56px));
+            }
+            #studio_render .dialog_content,
+            #studio_render_dialog .dialog_content {
+                padding: 12px 14px 8px !important;
+                overflow-y: auto !important;
+                background:
+                    radial-gradient(circle at 100% 0, color-mix(in srgb, var(--color-accent) 9%, transparent), transparent 36%),
+                    var(--color-back);
+            }
+            #studio_render .form,
+            #studio_render_dialog .form {
+                display: grid;
+                grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+                gap: 8px 12px;
+                align-items: start;
+            }
+            #studio_render .dialog_bar,
+            #studio_render_dialog .dialog_bar {
+                min-width: 0;
+                margin: 0 !important;
+                padding: 8px 10px !important;
+                border: 1px solid color-mix(in srgb, var(--color-border) 80%, transparent);
+                border-radius: 7px;
+                background: color-mix(in srgb, var(--color-ui) 86%, transparent);
+            }
+            #studio_render .dialog_bar[class*="form_bar___"],
+            #studio_render_dialog .dialog_bar[class*="form_bar___"] {
+                grid-column: 1 / -1;
+                min-height: 30px;
+                padding: 12px 2px 4px !important;
+                border: 0;
+                border-bottom: 1px solid var(--color-border);
+                border-radius: 0;
+                background: transparent;
+                color: var(--color-text);
+                font-size: 12px;
+                font-weight: 700;
+                letter-spacing: .08em;
+                text-transform: uppercase;
+            }
+            #studio_render .form_bar___camera::before,
+            #studio_render_dialog .form_bar___camera::before { content: "Camera"; }
+            #studio_render .form_bar___output::before,
+            #studio_render_dialog .form_bar___output::before { content: "Output & Quality"; }
+            #studio_render .form_bar___frame::before,
+            #studio_render_dialog .form_bar___frame::before { content: "Composition"; }
+            #studio_render .form_bar___look::before,
+            #studio_render_dialog .form_bar___look::before { content: "Scene"; }
+            #studio_render .form_bar___effects::before,
+            #studio_render_dialog .form_bar___effects::before { content: "Final Effects"; }
+            #studio_render .form_bar___export::before,
+            #studio_render_dialog .form_bar___export::before { content: "Delivery"; }
+            #studio_render .dialog_bar[class*="form_bar___"] > *,
+            #studio_render_dialog .dialog_bar[class*="form_bar___"] > * {
+                display: none !important;
+            }
+            #studio_render .form_bar__frame_tools,
+            #studio_render_dialog .form_bar__frame_tools,
+            #studio_render .form_bar__gpu_status,
+            #studio_render_dialog .form_bar__gpu_status {
+                grid-column: 1 / -1;
+            }
+            #studio_render .dialog_bar label,
+            #studio_render_dialog .dialog_bar label {
+                font-size: 12px;
+                opacity: .86;
+            }
+            #studio_render .dialog_bar input,
+            #studio_render .dialog_bar select,
+            #studio_render_dialog .dialog_bar input,
+            #studio_render_dialog .dialog_bar select {
+                min-height: 30px;
+            }
+            #studio_render .dialog_buttons,
+            #studio_render_dialog .dialog_buttons {
+                padding: 10px 14px !important;
+                border-top: 1px solid var(--color-border);
+                background: var(--color-ui);
+            }
+            #studio_render .dialog_buttons button:first-child,
+            #studio_render_dialog .dialog_buttons button:first-child {
+                min-width: 150px;
+                background: var(--color-accent);
+                color: var(--color-accent_text);
+                font-weight: 650;
+            }
+            @media (max-width: 760px) {
+                #studio_render .dialog_wrapper,
+                #studio_render_dialog .dialog_wrapper {
+                    min-width: calc(100vw - 24px);
+                }
+                #studio_render .form,
+                #studio_render_dialog .form {
+                    grid-template-columns: 1fr;
+                }
+                #studio_render .dialog_bar[class*="form_bar___"],
+                #studio_render_dialog .dialog_bar[class*="form_bar___"],
+                #studio_render .form_bar__frame_tools,
+                #studio_render_dialog .form_bar__frame_tools,
+                #studio_render .form_bar__gpu_status,
+                #studio_render_dialog .form_bar__gpu_status {
+                    grid-column: 1;
+                }
+            }
             #studio_render_frame {
                 position: absolute;
                 z-index: 30;
@@ -2610,6 +2960,10 @@
         if (frameAction) frameAction.delete();
         if (resetFrameAction) resetFrameAction.delete();
         if (stylesheet && typeof stylesheet.delete === 'function') stylesheet.delete();
+        BLOOM_MASK_STATE.resources.forEach(resource => resource?.dispose?.());
+        BLOOM_MASK_STATE.resources.clear();
+        BLOOM_MASK_STATE.emissiveMaterials = new WeakMap();
+        BLOOM_MASK_STATE.occluderMaterials = new WeakMap();
         delete window.StudioRender;
     }
 
@@ -2619,7 +2973,7 @@
         author: 'MidFord327',
         description: 'Export polished Blockbench studio renders with tiled supersampling, 4K/8K-safe output, transparency, GPU guidance, and an adjustable frame. Complements Light Manager and Shader Architect in the Lightflow suite.',
         tags: ['Lightflow', 'Rendering', 'Export', 'Screenshots', 'Studio', 'Presentation'],
-        version: '1.1.0',
+        version: '1.2.0',
         min_version: '4.9.0',
         variant: 'both',
         onload() {
