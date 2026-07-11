@@ -39,8 +39,8 @@ The plugins work independently where possible, but they are designed to be used 
 
 | Plugin | Current version | Purpose | Dependency |
 | --- | ---: | --- | --- |
-| **Light Manager** | `1.5.1` | Adds production-oriented point, spot, and directional lights with adaptive shadows, gizmos, animation support, and lighting profiles. | None |
-| **Shader Architect** | `2.2.1` | Builds and assigns advanced materials, supports Blockbench render modes, depth-aware ambient occlusion, editable GLSL, and material instances. | **Light Manager required** |
+| **Light Manager** | `1.5.2` | Adds production-oriented point, spot, and directional lights with adaptive shadows, gizmos, animation support, and lighting profiles. | None |
+| **Shader Architect** | `2.2.3` | Builds and assigns advanced materials, supports Blockbench render modes, Cube-masked depth-aware ambient occlusion, editable GLSL, and material instances. | **Light Manager required** |
 | **Studio Render** | `1.2.1` | Exports clean images with tiled supersampling, emissive-aware Bloom, adjustable framing, transparency, and 4K/8K-safe output controls. | Works alone; integrates with the other two plugins |
 
 ### Why Lightflow exists
