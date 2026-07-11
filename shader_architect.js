@@ -10533,7 +10533,7 @@ ${lumaForgeLightflowHelpers}`
         states: new Map(),
         patchedPreviews: new Map(),
         disposed: false,
-        settings: { enabled: true, strength: 0.82, radius: 0.55, bias: 0.028, power: 1.15, renderScale: 0.75 },
+        settings: { enabled: true, strength: 0.72, radius: 0.42, bias: 0.035, power: 1.25, renderScale: 1.0 },
 
         init() {
             this.disposed = false;
@@ -10546,7 +10546,8 @@ ${lumaForgeLightflowHelpers}`
             });
             this.patchedPreviews.clear();
             this.states.forEach(state => {
-                state.target?.dispose?.();
+                state.sceneTarget?.dispose?.();
+                state.cubeTarget?.dispose?.();
                 state.material?.dispose?.();
                 state.quad?.geometry?.dispose?.();
             });
@@ -10567,10 +10568,11 @@ ${lumaForgeLightflowHelpers}`
             depthTexture.minFilter = THREE.NearestFilter;
             depthTexture.magFilter = THREE.NearestFilter;
             depthTexture.generateMipmaps = false;
-            const target = new THREE.WebGLRenderTarget(1, 1, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBAFormat, depthBuffer: true, stencilBuffer: false, depthTexture });
-            if (!target.depthTexture) target.depthTexture = depthTexture;
+            const sceneTarget = new THREE.WebGLRenderTarget(1, 1, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBAFormat, depthBuffer: true, stencilBuffer: false });
+            const cubeTarget = new THREE.WebGLRenderTarget(1, 1, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBAFormat, depthBuffer: true, stencilBuffer: false, depthTexture });
+            if (!cubeTarget.depthTexture) cubeTarget.depthTexture = depthTexture;
             const uniforms = {
-                tScene: { value: target.texture }, tDepth: { value: target.depthTexture || depthTexture }, uResolution: { value: new THREE.Vector2(1, 1) },
+                tScene: { value: sceneTarget.texture }, tDepth: { value: cubeTarget.depthTexture || depthTexture }, uResolution: { value: new THREE.Vector2(1, 1) },
                 uProjection: { value: new THREE.Matrix4() }, uInverseProjection: { value: new THREE.Matrix4() },
                 uRadius: { value: this.settings.radius }, uBias: { value: this.settings.bias }, uStrength: { value: this.settings.strength }, uPower: { value: this.settings.power }
             };
@@ -10590,7 +10592,7 @@ ${lumaForgeLightflowHelpers}`
             });
             const postScene = new THREE.Scene(), postCamera = new THREE.OrthographicCamera(-1,1,1,-1,0,1), quad = new THREE.Mesh(new THREE.PlaneGeometry(2,2), material);
             postScene.add(quad);
-            const state = { preview, renderer, target, depthTexture, material, uniforms, postScene, postCamera, quad, width: 1, height: 1, rendering: false };
+            const state = { preview, renderer, sceneTarget, cubeTarget, depthTexture, material, uniforms, postScene, postCamera, quad, width: 1, height: 1, rendering: false };
             this.states.set(preview, state);
             return state;
         },
@@ -10601,12 +10603,15 @@ ${lumaForgeLightflowHelpers}`
             const width = Math.max(2, Math.floor(rect.width * Math.min(state.renderer.getPixelRatio?.() || 1, 1.5) * scale));
             const height = Math.max(2, Math.floor(rect.height * Math.min(state.renderer.getPixelRatio?.() || 1, 1.5) * scale));
             if (width === state.width && height === state.height) return;
-            state.width = width; state.height = height; state.target.setSize(width, height); state.uniforms.uResolution.value.set(width, height);
+            state.width = width; state.height = height; state.sceneTarget.setSize(width, height); state.cubeTarget.setSize(width, height); state.uniforms.uResolution.value.set(width, height);
         },
-        hideEditorObjects() {
-            const changes = [], ignored = new WeakSet(), add = root => root?.traverse ? root.traverse(item => ignored.add(item)) : root && ignored.add(root);
-            (Canvas.gizmos || []).forEach(add); add(Canvas.outlines); add(window.three_grid); add(window.Transformer?.controls);
-            Canvas.scene.traverse(object => { const name=String(object?.name||'').toLowerCase(); if (ignored.has(object) || object?.isLine || object?.isLineSegments || object?.isPoints || object?.isTransformControls || /gizmo|grid|helper|outline|transform/.test(name)) { if(object?.visible){changes.push(object);object.visible=false;} } });
+        hideNonCubeObjects() {
+            const changes = [], cubeObjects = new WeakSet();
+            (Cube.all || []).forEach(cube => { const mesh = ShaderEngine.getCubeMesh(cube); if (mesh?.traverse) mesh.traverse(object => cubeObjects.add(object)); else if (mesh) cubeObjects.add(mesh); });
+            Canvas.scene.traverse(object => {
+                const renderable = object?.isMesh || object?.isSprite || object?.isLine || object?.isLineSegments || object?.isPoints;
+                if (renderable && !cubeObjects.has(object) && object.visible) { changes.push(object); object.visible = false; }
+            });
             return changes;
         },
         composite(preview) {
@@ -10615,7 +10620,7 @@ ${lumaForgeLightflowHelpers}`
             state.rendering = true; this.resize(state);
             const camera = preview.camera, renderer = state.renderer, previousTarget = renderer.getRenderTarget(), previousAutoClear = renderer.autoClear, clear = new THREE.Color(), alpha = renderer.getClearAlpha?.() ?? 1;
             renderer.getClearColor?.(clear);
-            try { state.uniforms.uRadius.value=this.settings.radius; state.uniforms.uBias.value=this.settings.bias; state.uniforms.uStrength.value=this.settings.strength; state.uniforms.uPower.value=this.settings.power; state.uniforms.uProjection.value.copy(camera.projectionMatrix); if(camera.projectionMatrixInverse) state.uniforms.uInverseProjection.value.copy(camera.projectionMatrixInverse); else if(state.uniforms.uInverseProjection.value.invert) state.uniforms.uInverseProjection.value.copy(camera.projectionMatrix).invert(); const hidden=this.hideEditorObjects(); renderer.autoClear=true; renderer.setRenderTarget(state.target); renderer.clear(true,true,true); try{renderer.render(Canvas.scene,camera);}finally{hidden.forEach(object=>object.visible=true);} renderer.setRenderTarget(previousTarget||null); renderer.clear(true,true,true); renderer.render(state.postScene,state.postCamera); } catch(error) { console.warn('[Lightflow SSAO] disabled after render failure',error); this.settings.enabled=false; } finally { renderer.setRenderTarget(previousTarget||null); renderer.autoClear=previousAutoClear; renderer.setClearColor?.(clear,alpha); state.rendering=false; }
+            try { state.uniforms.uRadius.value=this.settings.radius; state.uniforms.uBias.value=this.settings.bias; state.uniforms.uStrength.value=this.settings.strength; state.uniforms.uPower.value=this.settings.power; state.uniforms.uProjection.value.copy(camera.projectionMatrix); if(camera.projectionMatrixInverse) state.uniforms.uInverseProjection.value.copy(camera.projectionMatrixInverse); else if(state.uniforms.uInverseProjection.value.invert) state.uniforms.uInverseProjection.value.copy(camera.projectionMatrix).invert(); renderer.autoClear=true; renderer.setRenderTarget(state.sceneTarget); renderer.clear(true,true,true); renderer.render(Canvas.scene,camera); const hidden=this.hideNonCubeObjects(); renderer.setRenderTarget(state.cubeTarget); renderer.clear(true,true,true); try{renderer.render(Canvas.scene,camera);}finally{hidden.forEach(object=>object.visible=true);} renderer.setRenderTarget(previousTarget||null); renderer.clear(true,true,true); renderer.render(state.postScene,state.postCamera); } catch(error) { console.warn('[Lightflow SSAO] disabled after render failure',error); this.settings.enabled=false; } finally { renderer.setRenderTarget(previousTarget||null); renderer.autoClear=previousAutoClear; renderer.setClearColor?.(clear,alpha); state.rendering=false; }
         },
         patchPreview(preview) { if (!preview?.renderer || this.patchedPreviews.has(preview)) return; const originalRender=preview.render; if(typeof originalRender!=='function')return; const manager=this; const patchedRender=function lightflowSSAORender(){ const result=originalRender.apply(this,arguments); manager.composite(this); return result; }; preview.render=patchedRender; this.patchedPreviews.set(preview,{originalRender,patchedRender}); },
         patchAllPreviews() { collectShaderArchitectRenderPreviews().forEach(preview => this.patchPreview(preview)); }
@@ -17102,7 +17107,7 @@ ${lumaForgeLightflowHelpers}`
         author: 'MidFord327',
         description: 'Build advanced Blockbench materials with real-time Lightflow presets, editable GLSL, material instances, and deep Light Manager integration. Requires Light Manager for lights and shadows.',
         tags: ['Lightflow', 'Shaders', 'Materials', 'Rendering', 'GLSL', 'Lighting'],
-        version: '2.2.1',
+        version: '2.2.2',
         min_version: '4.9.0',
         variant: 'both',
 
@@ -17429,6 +17434,38 @@ ${lumaForgeLightflowHelpers}`
                 }
             });
 
+            const worldAmbientOcclusionSettings = new Action('sa_world_ssao_settings', {
+                name: 'Ambient Occlusion Settings',
+                icon: 'tune',
+                category: 'render',
+                condition: () => Project,
+                click() {
+                    const ao = AmbientOcclusionManager.settings;
+                    new Dialog('sa_ambient_occlusion_settings', {
+                        title: 'Ambient Occlusion',
+                        form: {
+                            quality: {
+                                label: 'Quality', type: 'select', value: String(ao.renderScale),
+                                options: { '0.5': 'Performance (50%)', '0.75': 'Balanced (75%)', '1': 'High (native resolution)' }
+                            },
+                            strength: { label: 'Strength', type: 'range', value: ao.strength, min: 0, max: 2, step: 0.01 },
+                            radius: { label: 'Radius', type: 'range', value: ao.radius, min: 0.05, max: 4, step: 0.01 },
+                            bias: { label: 'Bias', type: 'range', value: ao.bias, min: 0, max: 0.2, step: 0.001 },
+                            power: { label: 'Contrast', type: 'range', value: ao.power, min: 0.25, max: 4, step: 0.05 }
+                        },
+                        onConfirm(result) {
+                            ao.renderScale = Number(result.quality) || 1;
+                            ao.strength = Math.max(0, Math.min(2, Number(result.strength) || 0));
+                            ao.radius = Math.max(0.05, Math.min(4, Number(result.radius) || 0.05));
+                            ao.bias = Math.max(0, Math.min(0.2, Number(result.bias) || 0));
+                            ao.power = Math.max(0.25, Math.min(4, Number(result.power) || 1));
+                            AmbientOcclusionManager.patchAllPreviews();
+                            ShaderEngine.requestPreviewRender({ cause: 'ssao_settings' });
+                        }
+                    }).show();
+                }
+            });
+
             const syncWorldToolbarControls = () => {
                 worldBrightnessSlider.set(Number(getWorldSettingValue('brightness', 50)) || 0);
                 [
@@ -17456,6 +17493,7 @@ ${lumaForgeLightflowHelpers}`
                     '#',
                     'sa_world_shading',
                     'sa_world_ssao',
+                    'sa_world_ssao_settings',
                     'sa_world_grids',
                     'sa_world_ground'
                 ]
@@ -17467,6 +17505,7 @@ ${lumaForgeLightflowHelpers}`
                 worldBrightnessSlider,
                 worldShadingToggle,
                 worldAmbientOcclusionToggle,
+                worldAmbientOcclusionSettings,
                 worldGridsToggle,
                 worldGroundToggle,
                 worldSettingsToolbar,
