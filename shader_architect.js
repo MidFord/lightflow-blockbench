@@ -4050,7 +4050,7 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
         clearMaterialInstanceFromCube(cube) {
             if (!cube) return false;
             this.clearCubeMaterialAssignment(cube);
-            ShaderEngine.updateAllCubes('clear_material_instance');
+            ShaderEngine.updateCubes([cube], 'clear_material_instance');
             return true;
         },
 
