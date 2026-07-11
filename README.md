@@ -39,7 +39,7 @@ The plugins work independently where possible, but they are designed to be used 
 
 | Plugin | Current version | Purpose | Dependency |
 | --- | ---: | --- | --- |
-| **Light Manager** | `1.3.1` | Adds production-oriented point, spot, and directional lights with shadows, gizmos, animation support, and lighting profiles. | None |
+| **Light Manager** | `1.4.0` | Adds production-oriented point, spot, and directional lights with shadows, gizmos, animation support, and lighting profiles. | None |
 | **Shader Architect** | `2.1.0` | Builds and assigns advanced materials, exposes shader controls, supports editable GLSL, material instances, and `.samat` material files. | **Light Manager required** |
 | **Studio Render** | `1.1.0` | Exports clean images with tiled supersampling, adjustable framing, optional final Bloom, transparency, and 4K/8K-safe output controls. | Works alone; integrates with the other two plugins |
 
