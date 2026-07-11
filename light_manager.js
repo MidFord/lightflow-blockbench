@@ -58,6 +58,7 @@ const LIGHT_MANAGER_STORAGE_KEYS = {
 };
 
 const LIGHT_MANAGER_SHADOW_RESOLUTIONS = [256, 512, 1024, 2048, 4096];
+const LIGHT_MANAGER_STUDIO_SHADOW_RESOLUTIONS = [256, 512, 1024, 2048, 4096, 8192, 16384];
 const LIGHT_MANAGER_SHADOW_NORMAL_BIAS_DEFAULTS = {
     256: 0.3,
     512: 0.05,
@@ -66,7 +67,15 @@ const LIGHT_MANAGER_SHADOW_NORMAL_BIAS_DEFAULTS = {
     4096: 0.01
 };
 const LIGHT_MANAGER_SHADOW_NORMAL_BIAS_LEGACY_DEFAULTS = [0.012];
-const LIGHT_MANAGER_AUTO_NORMAL_BIAS_PROPERTIES = ['shadow_resolution', 'shadow_bounds', 'shadow_near', 'shadow_far'];
+const LIGHT_MANAGER_AUTO_NORMAL_BIAS_PROPERTIES = [
+    'light_type',
+    'shadow_resolution',
+    'shadow_bounds',
+    'shadow_near',
+    'shadow_far',
+    'distance',
+    'angle'
+];
 
 const DEFAULT_SHADOW_BIAS = -0.0005;
 const DEFAULT_SHADOW_NORMAL_BIAS = 0.01;
@@ -102,6 +111,7 @@ const LIGHT_MANAGER_BAR_ITEM_IDS = [
 const LIGHT_MANAGER_TOOLBAR_IDS = [
     'light_gizmo_tools',
     'light_quickbuttons',
+    'light_shadow_quality',
     'light_settings',
     'light_shadow_clip_settings',
     'light_shadow_bounds_settings',
@@ -110,7 +120,8 @@ const LIGHT_MANAGER_TOOLBAR_IDS = [
 
 const LIGHT_MANAGER_TOOLBAR_DEFAULT_CHILDREN = {
     light_gizmo_tools: ['light_manager_edit_tool', 'light_manager_free_move'],
-    light_quickbuttons: ['light_type_select', 'light_color_picker', '+', 'cast_shadows', 'light_shadow_resolution_select', 'light_studio_shadow_resolution_select', '#', 'light_temperature_slider'],
+    light_quickbuttons: ['light_type_select', 'light_color_picker', '#', 'light_temperature_slider'],
+    light_shadow_quality: ['cast_shadows', '#', 'light_shadow_resolution_select', 'light_studio_shadow_resolution_select'],
     light_settings: ['light_intensity_slider', '#', 'light_distance_slider', '#', 'light_cone_angle_slider', '#', 'light_cone_penumbra_slider'],
     light_shadow_clip_settings: ['light_shadow_near_sliderbox', 'light_shadow_far_sliderbox'],
     light_shadow_bounds_settings: ['light_shadow_bounds_slider'],
@@ -488,6 +499,8 @@ const LightManagerUtils = {
             light_type: this.lightType(context.light_type),
             shadow_resolution: this.shadowResolution(context.shadow_resolution),
             shadow_bounds: this.num(context.shadow_bounds, 35, 0.001, 100000),
+            distance: this.num(context.distance, 0, 0, 100000),
+            angle: this.num(context.angle, 45, 0.1, 89.9),
             shadow_near,
             shadow_far
         };
@@ -495,18 +508,52 @@ const LightManagerUtils = {
 
     defaultShadowNormalBias(source, overrides = {}) {
         const context = this.shadowNormalBiasContext(source, overrides);
-        const base = LIGHT_MANAGER_SHADOW_NORMAL_BIAS_DEFAULTS[context.shadow_resolution] ?? DEFAULT_SHADOW_NORMAL_BIAS;
-        let bias = base;
+        const resolution = Math.max(256, context.shadow_resolution);
+        const depthRange = Math.max(0.001, context.shadow_far - context.shadow_near);
+        let worldSpan;
 
         if (context.light_type === 'directional') {
-            const referenceBounds = context.shadow_resolution === 512 ? 17.75 : 35;
-            const boundsFactor = Math.pow(Math.max(0.25, context.shadow_bounds / referenceBounds), 2);
-            const depthRange = Math.max(0.001, context.shadow_far - context.shadow_near);
-            const depthFactor = Math.max(0.25, Math.min(2.5, 200 / depthRange));
-            bias *= boundsFactor * depthFactor;
+            worldSpan = Math.max(0.001, context.shadow_bounds * 2);
+        } else if (context.light_type === 'spot') {
+            const usefulDepth = Math.min(
+                depthRange,
+                context.distance > 0 ? context.distance : depthRange
+            );
+            worldSpan = Math.max(
+                0.001,
+                usefulDepth * 2 * Math.tan(THREE.MathUtils.degToRad(context.angle))
+            );
+        } else {
+            worldSpan = Math.max(
+                0.001,
+                Math.min(depthRange, context.distance > 0 ? context.distance : depthRange) * 2
+            );
         }
 
-        return Math.round(Math.max(0.001, Math.min(0.6, bias)) * 10000) / 10000;
+        const worldUnitsPerTexel = worldSpan / resolution;
+        const bias = worldUnitsPerTexel * 0.72;
+        return Math.round(Math.max(0.00025, Math.min(0.12, bias)) * 100000) / 100000;
+    },
+
+    defaultShadowBias(source, overrides = {}) {
+        const context = this.shadowNormalBiasContext(source, overrides);
+        const resolutionFactor = Math.pow(1024 / Math.max(256, context.shadow_resolution), 0.72);
+        const depthRange = Math.max(0.001, context.shadow_far - context.shadow_near);
+        const depthFactor = Math.max(0.35, Math.min(2.5, depthRange / 200));
+        const boundsFactor = context.light_type === 'directional'
+            ? Math.max(0.4, Math.min(3.0, context.shadow_bounds / 35))
+            : 1.0;
+        const bias = -0.0005 * resolutionFactor * depthFactor * boundsFactor;
+        return Math.round(Math.max(-0.005, Math.min(-0.00002, bias)) * 1000000) / 1000000;
+    },
+
+    shadowBias(value, source) {
+        const automaticValues = [DEFAULT_SHADOW_BIAS, -0.00035];
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed) || automaticValues.some(item => Math.abs(parsed - item) <= 0.000001)) {
+            return this.defaultShadowBias(source);
+        }
+        return this.num(parsed, this.defaultShadowBias(source), -1, 1);
     },
 
     isAutomaticShadowNormalBiasValue(value, source = null) {
@@ -544,13 +591,25 @@ const LightManagerUtils = {
     studioShadowResolution(value) {
         const parsed = this.int(value, 0, 0);
         if (parsed === 0) return 0;
-        return LIGHT_MANAGER_SHADOW_RESOLUTIONS.includes(parsed) ? parsed : 0;
+        return LIGHT_MANAGER_STUDIO_SHADOW_RESOLUTIONS.includes(parsed) ? parsed : 0;
     },
 
     getRenderShadowResolution(element, options = {}) {
         if (options && (options.studio || options.studioRender)) {
             const studioResolution = this.studioShadowResolution(element && element.studio_shadow_resolution);
-            if (studioResolution > 0) return studioResolution;
+            if (studioResolution > 0) {
+                const preview = options.preview || window.LightManagerStudioRenderPreview;
+                const gpuMaximum = Number(
+                    preview?.renderer?.capabilities?.maxTextureSize ||
+                    preview?.renderer?.getContext?.()?.getParameter?.(
+                        preview.renderer.getContext().MAX_TEXTURE_SIZE
+                    )
+                );
+                if (Number.isFinite(gpuMaximum) && gpuMaximum > 0) {
+                    return Math.min(studioResolution, gpuMaximum);
+                }
+                return studioResolution;
+            }
         }
         return this.shadowResolution(element && element.shadow_resolution);
     },
@@ -1375,20 +1434,21 @@ function syncLightManagerSingleShadowSettings(light, element, options = {}) {
     let changed = false;
     let cameraChanged = false;
 
-    const bias = LightManagerUtils.num(element.shadow_bias, DEFAULT_SHADOW_BIAS, -1, 1);
+    const activeResolution = LightManagerUtils.getRenderShadowResolution(
+        element,
+        options
+    );
+    const shadowContext = {
+        ...element,
+        shadow_resolution: activeResolution
+    };
+    const bias = LightManagerUtils.shadowBias(element.shadow_bias, shadowContext);
     if (shadow.bias !== bias) {
         shadow.bias = bias;
         changed = true;
     }
 
-    const activeResolution = LightManagerUtils.getRenderShadowResolution(
-        element,
-        options
-    );
-    const normalBias = LightManagerUtils.shadowNormalBias(element.shadow_normal_bias, {
-        ...element,
-        shadow_resolution: activeResolution
-    });
+    const normalBias = LightManagerUtils.shadowNormalBias(element.shadow_normal_bias, shadowContext);
     if (shadow.normalBias !== normalBias) {
         shadow.normalBias = normalBias;
         changed = true;
@@ -3835,7 +3895,7 @@ function initialize_light_plugin() {
         author: 'MidFord327',
         description: 'Add production-ready point, spot, and directional lights to Blockbench with viewport gizmos, animation support, shadows, and Studio Render controls. Provides the Lightflow lighting foundation for Shader Architect and Studio Render.',
         tags: ['Lightflow', 'Lighting', 'Shadows', 'Animation', 'Rendering', 'Studio'],
-        version: '1.4.0',
+        version: '1.5.0',
         min_version: '4.9.0',
         variant: 'both',
 
@@ -7313,7 +7373,9 @@ function initialize_light_plugin() {
                                     '512': '512',
                                     '1024': '1024',
                                     '2048': '2048',
-                                    '4096': '4096'
+                                    '4096': '4096',
+                                    '8192': '8192 — Render Pro',
+                                    '16384': '16384 — Render Ultra'
                                 },
                                 value: firstLight.studio_shadow_resolution ? firstLight.studio_shadow_resolution.toString() : '0',
                                 description: translateLightManager('property.studio_shadow_resolution.desc')
@@ -7726,7 +7788,9 @@ function initialize_light_plugin() {
                     512: { name: '512' },
                     1024: { name: '1024' },
                     2048: { name: '2048' },
-                    4096: { name: '4096' }
+                    4096: { name: '4096' },
+                    8192: { name: '8192 — Render Pro' },
+                    16384: { name: '16384 — Render Ultra' }
                 },
                 condition: shadowLightCondition,
                 onChange: function () {
@@ -8087,8 +8151,48 @@ function initialize_light_plugin() {
                 #panel_light_properties {
                     overflow-y: auto !important;
                     overflow-x: hidden;
+                    background: var(--color-ui);
                 }
-                /* Match the native Blockbench scrollbar style. */
+                #panel_light_properties .panel_handle {
+                    position: sticky;
+                    top: 0;
+                    z-index: 3;
+                    background: color-mix(in srgb, var(--color-ui) 94%, transparent);
+                    backdrop-filter: blur(8px);
+                    border-bottom: 1px solid var(--color-border);
+                }
+                #panel_light_properties .toolbar_wrapper {
+                    margin: 7px 8px;
+                    padding: 7px;
+                    box-sizing: border-box;
+                    border: 1px solid color-mix(in srgb, var(--color-border) 84%, transparent);
+                    border-radius: 8px;
+                    background: color-mix(in srgb, var(--color-back) 70%, var(--color-ui));
+                    box-shadow: 0 1px 0 rgba(255, 255, 255, .025);
+                }
+                #panel_light_properties .toolbar_wrapper:hover {
+                    border-color: color-mix(in srgb, var(--color-accent) 38%, var(--color-border));
+                }
+                #panel_light_properties .toolbar_wrapper .toolbar_label {
+                    min-height: 24px;
+                    margin-bottom: 4px;
+                    color: var(--color-text);
+                    font-size: 11px;
+                    font-weight: 700;
+                    letter-spacing: .055em;
+                    text-transform: uppercase;
+                    opacity: .8;
+                }
+                #panel_light_properties .toolbar {
+                    gap: 5px;
+                }
+                #panel_light_properties input,
+                #panel_light_properties select {
+                    min-height: 28px;
+                }
+                #panel_light_properties .tool.widget {
+                    border-radius: 5px;
+                }
                 #panel_light_properties::-webkit-scrollbar {
                     width: 6px;
                 }
