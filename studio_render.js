@@ -39,6 +39,9 @@
         bloom_threshold: 0.72,
         bloom_strength: 0.8,
         bloom_radius: 18,
+        bloom_hdr_strength: 1.0,
+        bloom_emissive_strength: 1.35,
+        bloom_occlusion: true,
         zoom: null,
         destination: 'preview',
         file_name: 'studio_render'
@@ -308,6 +311,9 @@
             'studio_render.field.bloom_threshold': 'Bloom Threshold',
             'studio_render.field.bloom_strength': 'Bloom Strength',
             'studio_render.field.bloom_radius': 'Bloom Radius',
+            'studio_render.field.bloom_hdr_strength': 'Bright Surface Bloom',
+            'studio_render.field.bloom_emissive_strength': 'Emissive Texture Bloom',
+            'studio_render.field.bloom_occlusion': 'Block Bloom Behind Geometry',
             'studio_render.field.zoom': 'Focal Length',
             'studio_render.field.gpu': 'GPU',
             'studio_render.field.gpu_renderer': 'Renderer',
@@ -405,6 +411,9 @@
             'studio_render.field.bloom_threshold': 'Umbral de Bloom',
             'studio_render.field.bloom_strength': 'Fuerza de Bloom',
             'studio_render.field.bloom_radius': 'Radio de Bloom',
+            'studio_render.field.bloom_hdr_strength': 'Bloom de superficies brillantes',
+            'studio_render.field.bloom_emissive_strength': 'Bloom de texturas emisivas',
+            'studio_render.field.bloom_occlusion': 'Bloquear Bloom detrás de geometría',
             'studio_render.field.zoom': 'Distancia Focal',
             'studio_render.field.gpu': 'GPU',
             'studio_render.field.gpu_renderer': 'Renderer',
@@ -489,6 +498,9 @@
         settings.bloom_threshold = clamp(toNumber(settings.bloom_threshold, 0.72), 0, 1);
         settings.bloom_strength = clamp(toNumber(settings.bloom_strength, 0.8), 0, 3);
         settings.bloom_radius = clamp(toNumber(settings.bloom_radius, 18), 1, 96);
+        settings.bloom_hdr_strength = clamp(toNumber(settings.bloom_hdr_strength, 1), 0, 4);
+        settings.bloom_emissive_strength = clamp(toNumber(settings.bloom_emissive_strength, 1.35), 0, 6);
+        settings.bloom_occlusion = settings.bloom_occlusion !== false;
         delete settings.gpu_status;
         return settings;
     }
@@ -780,6 +792,9 @@
         settings.bloom_threshold = clamp(toNumber(settings.bloom_threshold, 0.72), 0, 1);
         settings.bloom_strength = clamp(toNumber(settings.bloom_strength, 0.8), 0, 3);
         settings.bloom_radius = clamp(toNumber(settings.bloom_radius, 18), 1, 96);
+        settings.bloom_hdr_strength = clamp(toNumber(settings.bloom_hdr_strength, 1), 0, 4);
+        settings.bloom_emissive_strength = clamp(toNumber(settings.bloom_emissive_strength, 1.35), 0, 6);
+        settings.bloom_occlusion = settings.bloom_occlusion !== false;
         settings.zoom = settings.zoom === null || settings.zoom === undefined || settings.zoom === ''
             ? null
             : toNumber(settings.zoom, DEFAULT_ZOOM);
@@ -1670,7 +1685,7 @@
     function applyFinalBloom(canvas, settings, sourceMaskCanvas) {
         if (!canvas || !settings?.bloom_enabled) return canvas;
 
-        const maxMaskDimension = 2048;
+        const maxMaskDimension = 4096;
         const scale = Math.min(
             1,
             maxMaskDimension / Math.max(canvas.width || 1, canvas.height || 1)
@@ -1680,6 +1695,9 @@
         const threshold = clamp(toNumber(settings.bloom_threshold, 0.72), 0, 1);
         const strength = clamp(toNumber(settings.bloom_strength, 0.8), 0, 3);
         const radius = clamp(toNumber(settings.bloom_radius, 18), 1, 96) * scale;
+        const hdrStrength = clamp(toNumber(settings.bloom_hdr_strength, 1), 0, 4);
+        const emissiveStrength = clamp(toNumber(settings.bloom_emissive_strength, 1.35), 0, 6);
+        const useOcclusion = settings.bloom_occlusion !== false;
 
         const mask = document.createElement('canvas');
         mask.width = width;
@@ -1687,29 +1705,92 @@
         const maskContext = mask.getContext('2d', { willReadFrequently: true });
         maskContext.drawImage(sourceMaskCanvas || canvas, 0, 0, width, height);
 
-        const image = maskContext.getImageData(0, 0, width, height);
-        const pixels = image.data;
+        const sceneSample = document.createElement('canvas');
+        sceneSample.width = width;
+        sceneSample.height = height;
+        const sceneContext = sceneSample.getContext('2d', { willReadFrequently: true });
+        sceneContext.drawImage(canvas, 0, 0, width, height);
+
+        const blocker = document.createElement('canvas');
+        blocker.width = width;
+        blocker.height = height;
+        const blockerContext = blocker.getContext('2d', { willReadFrequently: true });
+
+        const maskImage = maskContext.getImageData(0, 0, width, height);
+        const sceneImage = sceneContext.getImageData(0, 0, width, height);
+        const blockerImage = blockerContext.createImageData(width, height);
+        const pixels = maskImage.data;
+        const scenePixels = sceneImage.data;
+        const blockerPixels = blockerImage.data;
+
         for (let index = 0; index < pixels.length; index += 4) {
-            const alpha = pixels[index + 3] / 255;
-            const luminance = (
-                pixels[index] * 0.2126 +
-                pixels[index + 1] * 0.7152 +
-                pixels[index + 2] * 0.0722
-            ) / 255;
-            const contribution = clamp((luminance - threshold) / Math.max(0.001, 1 - threshold), 0, 1);
-            pixels[index + 3] = Math.round(255 * alpha * contribution);
+            const geometryAlpha = pixels[index + 3] / 255;
+            const emissionR = pixels[index] / 255 * emissiveStrength;
+            const emissionG = pixels[index + 1] / 255 * emissiveStrength;
+            const emissionB = pixels[index + 2] / 255 * emissiveStrength;
+            const sceneR = scenePixels[index] / 255 * hdrStrength;
+            const sceneG = scenePixels[index + 1] / 255 * hdrStrength;
+            const sceneB = scenePixels[index + 2] / 255 * hdrStrength;
+
+            const hdrSignal = geometryAlpha > 0.001
+                ? Math.max(sceneR, sceneG, sceneB)
+                : 0;
+            const emissiveSignal = Math.max(emissionR, emissionG, emissionB);
+            const signal = Math.max(hdrSignal, emissiveSignal);
+            const contribution = clamp(
+                (signal - threshold) / Math.max(0.001, 1 - threshold),
+                0,
+                1
+            );
+
+            const combinedR = Math.max(sceneR, emissionR);
+            const combinedG = Math.max(sceneG, emissionG);
+            const combinedB = Math.max(sceneB, emissionB);
+            pixels[index] = Math.round(255 * clamp(combinedR * contribution, 0, 1));
+            pixels[index + 1] = Math.round(255 * clamp(combinedG * contribution, 0, 1));
+            pixels[index + 2] = Math.round(255 * clamp(combinedB * contribution, 0, 1));
+            pixels[index + 3] = Math.round(255 * contribution);
+
+            const blockerAlpha = useOcclusion && geometryAlpha > 0.001
+                ? geometryAlpha * (1 - contribution)
+                : 0;
+            blockerPixels[index] = 0;
+            blockerPixels[index + 1] = 0;
+            blockerPixels[index + 2] = 0;
+            blockerPixels[index + 3] = Math.round(255 * clamp(blockerAlpha, 0, 1));
         }
-        maskContext.putImageData(image, 0, 0);
+        maskContext.putImageData(maskImage, 0, 0);
+        blockerContext.putImageData(blockerImage, 0, 0);
+
+        const bloomLayer = document.createElement('canvas');
+        bloomLayer.width = canvas.width;
+        bloomLayer.height = canvas.height;
+        const bloomContext = bloomLayer.getContext('2d');
+        bloomContext.globalCompositeOperation = 'lighter';
+
+        const drawBloomLayer = (blur, alpha) => {
+            bloomContext.globalAlpha = clamp(alpha * strength, 0, 1);
+            bloomContext.filter = `blur(${Math.max(0.5, blur)}px)`;
+            bloomContext.drawImage(mask, 0, 0, canvas.width, canvas.height);
+        };
+
+        drawBloomLayer(radius * 2.4, 0.20);
+        drawBloomLayer(radius * 1.05, 0.42);
+        drawBloomLayer(radius * 0.38, 0.56);
+
+        if (useOcclusion) {
+            bloomContext.globalCompositeOperation = 'destination-out';
+            bloomContext.globalAlpha = 1;
+            bloomContext.filter = 'none';
+            bloomContext.drawImage(blocker, 0, 0, canvas.width, canvas.height);
+        }
 
         const output = canvas.getContext('2d');
         output.save();
         output.globalCompositeOperation = 'lighter';
-        output.globalAlpha = Math.min(1, strength * 0.32);
-        output.filter = `blur(${Math.max(1, radius * 2.25)}px)`;
-        output.drawImage(mask, 0, 0, canvas.width, canvas.height);
-        output.globalAlpha = Math.min(1, strength * 0.68);
-        output.filter = `blur(${Math.max(1, radius)}px)`;
-        output.drawImage(mask, 0, 0, canvas.width, canvas.height);
+        output.globalAlpha = 1;
+        output.filter = 'none';
+        output.drawImage(bloomLayer, 0, 0);
         output.restore();
         return canvas;
     }
@@ -2561,6 +2642,30 @@
                 step: 1,
                 condition: form => !!form.bloom_enabled && !!form.show_advanced
             },
+            bloom_hdr_strength: {
+                type: 'range',
+                label: 'studio_render.field.bloom_hdr_strength',
+                value: settings.bloom_hdr_strength,
+                min: 0,
+                max: 4,
+                step: 0.05,
+                condition: form => !!form.bloom_enabled && !!form.show_advanced
+            },
+            bloom_emissive_strength: {
+                type: 'range',
+                label: 'studio_render.field.bloom_emissive_strength',
+                value: settings.bloom_emissive_strength,
+                min: 0,
+                max: 6,
+                step: 0.05,
+                condition: form => !!form.bloom_enabled
+            },
+            bloom_occlusion: {
+                type: 'checkbox',
+                label: 'studio_render.field.bloom_occlusion',
+                value: settings.bloom_occlusion,
+                condition: form => !!form.bloom_enabled && !!form.show_advanced
+            },
             _export: '_',
             destination: {
                 type: 'select',
@@ -2864,7 +2969,7 @@
         author: 'MidFord327',
         description: 'Export polished Blockbench studio renders with tiled supersampling, 4K/8K-safe output, transparency, GPU guidance, and an adjustable frame. Complements Light Manager and Shader Architect in the Lightflow suite.',
         tags: ['Lightflow', 'Rendering', 'Export', 'Screenshots', 'Studio', 'Presentation'],
-        version: '1.2.1',
+        version: '1.3.0',
         min_version: '4.9.0',
         variant: 'both',
         onload() {
