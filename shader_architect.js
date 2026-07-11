@@ -10596,9 +10596,9 @@ ${lumaForgeLightflowHelpers}`
                     uniform float uRadius, uBias, uStrength, uPower; uniform int uSamples; varying vec2 vUv;
                     bool solid(float d){ return d > 0.000001 && d < 0.999999; }
                     vec3 pos(vec2 uv, float d){ vec4 p=uInverseProjection*vec4(uv*2.0-1.0,d*2.0-1.0,1.0); return p.xyz/max(p.w,0.000001); }
-                    vec3 norm(vec2 uv, vec3 c){ vec2 t=1.0/max(uResolution,vec2(1.0)); vec3 dx=pos(clamp(uv+vec2(t.x,0.0),0.0,1.0),texture2D(tDepth,clamp(uv+vec2(t.x,0.0),0.0,1.0)).x)-pos(clamp(uv-vec2(t.x,0.0),0.0,1.0),texture2D(tDepth,clamp(uv-vec2(t.x,0.0),0.0,1.0)).x); vec3 dy=pos(clamp(uv+vec2(0.0,t.y),0.0,1.0),texture2D(tDepth,clamp(uv+vec2(0.0,t.y),0.0,1.0)).x)-pos(clamp(uv-vec2(0.0,t.y),0.0,1.0),texture2D(tDepth,clamp(uv-vec2(0.0,t.y),0.0,1.0)).x); vec3 n=normalize(cross(dx,dy)); return dot(n,-c)<0.0?-n:n; }
+                    vec3 norm(vec2 uv, vec3 c){ vec2 t=1.0/max(uResolution,vec2(1.0)); vec2 ur=clamp(uv+vec2(t.x,0.0),0.0,1.0), ul=clamp(uv-vec2(t.x,0.0),0.0,1.0), uu=clamp(uv+vec2(0.0,t.y),0.0,1.0), ud=clamp(uv-vec2(0.0,t.y),0.0,1.0); float dr=texture2D(tDepth,ur).x, dl=texture2D(tDepth,ul).x, du=texture2D(tDepth,uu).x, dd=texture2D(tDepth,ud).x; vec3 pr=solid(dr)?pos(ur,dr):c, pl=solid(dl)?pos(ul,dl):c, pu=solid(du)?pos(uu,du):c, pd=solid(dd)?pos(ud,dd):c; vec3 dx=abs(pr.z-c.z)<abs(c.z-pl.z)?pr-c:c-pl; vec3 dy=abs(pu.z-c.z)<abs(c.z-pd.z)?pu-c:c-pd; vec3 n=cross(dx,dy); float n2=dot(n,n); if(n2<.00000001)return normalize(-c); n*=inversesqrt(n2); return dot(n,-c)<0.0?-n:n; }
                     float hash(vec2 p){ return fract(sin(dot(p,vec2(12.9898,78.233)))*43758.5453); }
-                    void main(){ vec4 color=texture2D(tScene,vUv); float d=texture2D(tDepth,vUv).x; float sceneD=texture2D(tSceneDepth,vUv).x; if(!solid(d)||!solid(sceneD)||abs(sceneD-d)>.00035){gl_FragColor=color;return;} vec3 c=pos(vUv,d), n=norm(vUv,c); vec3 axis=abs(n.z)<.95?vec3(0,0,1):vec3(0,1,0); vec3 t=normalize(cross(axis,n)), b=cross(n,t); float oc=0.0, count=0.0, rotation=hash(gl_FragCoord.xy)*6.2831853; for(int i=0;i<24;i++){if(i>=uSamples)continue; float q=(float(i)+.5)/float(max(uSamples,1)); float phi=float(i)*2.39996323+rotation; float z=mix(.12,.96,q); float radial=sqrt(max(1.0-z*z,0.0)); vec3 k=vec3(cos(phi)*radial,sin(phi)*radial,z); vec3 s=c+mat3(t,b,n)*k*uRadius*mix(.12,1.0,q*q); vec4 clip=uProjection*vec4(s,1.0); if(clip.w<=.000001)continue; vec2 uv=clip.xy/clip.w*.5+.5; if(uv.x<=.001||uv.y<=.001||uv.x>=.999||uv.y>=.999)continue; float sd=texture2D(tDepth,uv).x; if(!solid(sd))continue; vec3 sp=pos(uv,sd); float range=smoothstep(0.0,1.0,uRadius/max(abs(c.z-sp.z),.0001)); oc+=step(s.z+uBias,sp.z)*range; count+=1.0;} float ao=count<1.0?1.0:pow(clamp(1.0-oc/count*uStrength,0.0,1.0),uPower); gl_FragColor=vec4(color.rgb*ao,color.a); }
+                    void main(){ vec4 color=texture2D(tScene,vUv); float d=texture2D(tDepth,vUv).x; float sceneD=texture2D(tSceneDepth,vUv).x; if(!solid(d)||!solid(sceneD)){gl_FragColor=color;return;} vec3 c=pos(vUv,d), sceneP=pos(vUv,sceneD); float receiverTolerance=max(.0025,abs(c.z)*.00035); if(abs(sceneP.z-c.z)>receiverTolerance){gl_FragColor=color;return;} vec3 n=norm(vUv,c); vec3 axis=abs(n.z)<.95?vec3(0,0,1):vec3(0,1,0); vec3 t=normalize(cross(axis,n)), b=cross(n,t); float oc=0.0, count=0.0, rotation=hash(floor(gl_FragCoord.xy*.5))*6.2831853; for(int i=0;i<24;i++){if(i>=uSamples)continue; float q=(float(i)+.5)/float(max(uSamples,1)); float phi=float(i)*2.39996323+rotation; float z=mix(.16,.96,q); float radial=sqrt(max(1.0-z*z,0.0)); vec3 k=vec3(cos(phi)*radial,sin(phi)*radial,z); vec3 s=c+mat3(t,b,n)*k*uRadius*mix(.15,1.0,q*q); vec4 clip=uProjection*vec4(s,1.0); if(clip.w<=.000001)continue; vec2 uv=clip.xy/clip.w*.5+.5; if(uv.x<=.001||uv.y<=.001||uv.x>=.999||uv.y>=.999)continue; float sd=texture2D(tDepth,uv).x; if(!solid(sd))continue; vec3 sp=pos(uv,sd); float delta=sp.z-s.z; float localBias=max(uBias,abs(c.z)*.00012); float range=smoothstep(0.0,1.0,uRadius/max(abs(c.z-sp.z),.001)); float facing=smoothstep(-.15,.35,dot(n,normalize(sp-c+vec3(.000001)))); oc+=step(localBias,delta)*range*(1.0-facing*.35); count+=1.0;} float ao=count<1.0?1.0:pow(clamp(1.0-oc/count*uStrength,0.0,1.0),uPower); gl_FragColor=vec4(color.rgb*ao,color.a); }
                 `
             });
             const postScene = new THREE.Scene(), postCamera = new THREE.OrthographicCamera(-1,1,1,-1,0,1), quad = new THREE.Mesh(new THREE.PlaneGeometry(2,2), material);
@@ -12593,6 +12593,15 @@ ${lumaForgeLightflowHelpers}`
             const previousClearAlpha = renderer.getClearAlpha
                 ? renderer.getClearAlpha()
                 : 1.0;
+            const previousViewport = renderer.getViewport
+                ? renderer.getViewport(new THREE.Vector4())
+                : null;
+            const previousScissor = renderer.getScissor
+                ? renderer.getScissor(new THREE.Vector4())
+                : null;
+            const previousScissorTest = renderer.getScissorTest
+                ? renderer.getScissorTest()
+                : false;
 
             if (renderer.getClearColor) {
                 renderer.getClearColor(previousClearColor);
@@ -12668,6 +12677,17 @@ ${lumaForgeLightflowHelpers}`
                         );
                     }
 
+                    renderer.setRenderTarget(previousTarget);
+                    if (previousViewport && renderer.setViewport) {
+                        renderer.setViewport(previousViewport);
+                    }
+                    if (previousScissor && renderer.setScissor) {
+                        renderer.setScissor(previousScissor);
+                    }
+                    if (renderer.setScissorTest) {
+                        renderer.setScissorTest(previousScissorTest);
+                    }
+
                     this.compositeGroup(
                         state,
                         previousTarget,
@@ -12684,6 +12704,15 @@ ${lumaForgeLightflowHelpers}`
                 state.silhouetteValid = false;
             } finally {
                 renderer.setRenderTarget(previousTarget);
+                if (previousViewport && renderer.setViewport) {
+                    renderer.setViewport(previousViewport);
+                }
+                if (previousScissor && renderer.setScissor) {
+                    renderer.setScissor(previousScissor);
+                }
+                if (renderer.setScissorTest) {
+                    renderer.setScissorTest(previousScissorTest);
+                }
                 renderer.autoClear = previousAutoClear;
 
                 if (renderer.setClearColor) {
@@ -17185,7 +17214,7 @@ ${lumaForgeLightflowHelpers}`
         author: 'MidFord327',
         description: 'Build advanced Blockbench materials with real-time Lightflow presets, editable GLSL, material instances, and deep Light Manager integration. Requires Light Manager for lights and shadows.',
         tags: ['Lightflow', 'Shaders', 'Materials', 'Rendering', 'GLSL', 'Lighting'],
-        version: '2.2.3',
+        version: '2.3.0',
         min_version: '4.9.0',
         variant: 'both',
 
