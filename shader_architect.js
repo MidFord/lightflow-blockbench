@@ -4227,7 +4227,7 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
 
                     void main() {
                         vec4 color = texture2D(map, vUv);
-                        if (!EMISSIVE && color.a < 0.01) discard;
+                        if(color.a < 0.01) discard;
 
                         if (!EMISSIVE) {
                             gl_FragColor = vec4(lift + color.rgb * light, color.a);
@@ -4829,7 +4829,7 @@ void main() {
     vec4 texel = texture2D(map, vUv);
     texel.a *= clamp(uBaseAlpha, 0.0, 1.0);
 
-    if (!EMISSIVE && texel.a < 0.01) discard;
+    if (texel.a < 0.01) discard;
 
     vec3 baseColor = clamp(uBaseColor * texel.rgb, vec3(0.0), vec3(64.0));
     float metallic = uMetallic;
@@ -4943,8 +4943,8 @@ void main() {
         directSheen += radiance * sheenBRDF * NdotL * sheen * (1.0 - metallic) * lightMask;
     }
 
-    float proceduralAO = computeAmbientOcclusion(v_uvSize, N);
-    float ambientOcclusion = clamp(proceduralAO * aoMapValue, 0.0, 1.0);
+    // Contact AO is applied once as the depth-aware Lightflow SSAO pass.
+    float ambientOcclusion = 1.0;
     float directAO = mix(1.0, ambientOcclusion, clamp(uAODirectInfluence, 0.0, 1.0));
     float specAO = mix(1.0, ambientOcclusion, clamp(uAODirectInfluence * 0.35, 0.0, 1.0));
 
@@ -5814,7 +5814,7 @@ void main() {
     vec4 texel = texture2D(map, vUv * tiling_value);
     texel = saApplyNativePBRBaseColor(texel);
 
-    if (!EMISSIVE && texel.a < 0.01) discard;
+    if (texel.a < 0.01) discard;
 
     // --- LINEARIZE INPUT TEXTURE ---
     // Converts input texture from sRGB to Linear space so lighting calculations are correct.
@@ -5832,7 +5832,7 @@ void main() {
         directLight += computeLightContribution(i, normal, vWorldPos);
     }
 
-    float ambientOcclusion = computeVoxelAO(v_uvSize, normal);
+    float ambientOcclusion = 1.0;
 
     vec3 ambientLight = max(uAmbientColor, vec3(0.0)) * max(uAmbient, 0.0);
     ambientLight *= ambientOcclusion;
@@ -6360,7 +6360,7 @@ void main() {
     vec4 texel = texture2D(map, vUv * tiling_value);
     texel = saApplyNativePBRBaseColor(texel);
 
-    if (!EMISSIVE && texel.a < 0.01) discard;
+    if (texel.a < 0.01) discard;
 
     // --- LINEARIZE INPUT TEXTURE ---
     // Converts input texture from sRGB to Linear space so lighting math is calculated correctly.
@@ -6392,7 +6392,7 @@ void main() {
         directLight += lightContribution * shadow;
     }
 
-    float ambientOcclusion = computeVoxelAO(v_uvSize, normal);
+    float ambientOcclusion = 1.0;
 
     vec3 ambientLight = max(uAmbientColor, vec3(0.0)) * max(uAmbient, 0.0);
     ambientLight *= ambientOcclusion;
@@ -7474,14 +7474,11 @@ void main() {
         directLight += lightContribution * shadow;
     }
 
-    if (!EMISSIVE && texel.a < 0.01) {
+    if (texel.a < 0.01) {
         discard;
     }
 
-    float ambientOcclusion = computeVoxelAO(
-        vNormalizedFaceUv,
-        normal
-    );
+    float ambientOcclusion = 1.0;
 
     vec3 ambientLight =
         max(uAmbientColor, vec3(0.0)) *
@@ -9034,7 +9031,7 @@ void main() {
     );
     sampledColor = saApplyNativePBRBaseColor(sampledColor);
 
-    if (!EMISSIVE && sampledColor.a < 0.01) {
+    if (sampledColor.a < 0.01) {
         discard;
     }
 
@@ -9733,7 +9730,7 @@ ${lumaForgeLightflowHelpers}`
     );
     sampledColor = saApplyNativePBRBaseColor(sampledColor);
 
-    if (!EMISSIVE && sampledColor.a < 0.01) {
+    if (sampledColor.a < 0.01) {
         discard;
     }
 
@@ -9796,10 +9793,7 @@ ${lumaForgeLightflowHelpers}`
             directLight += lightContribution * shadow;
         }
 
-        float ambientOcclusion = computeVoxelAO(
-            vPromoElementUv,
-            normal
-        );
+        float ambientOcclusion = 1.0;
 
         vec3 ambientLight =
             max(uAmbientColor, vec3(0.0)) *
@@ -9975,7 +9969,7 @@ ${lumaForgeLightflowHelpers}`
 
                                 void main() {
                                     vec4 color = texture2D(map, vUv);
-                                    if (!EMISSIVE && color.a < 0.01) discard;
+                                    if(color.a < 0.01) discard;
 
                                     vec3 normal = normalize(vWorldNormal);
                                     vec3 sumLight = vec3(0.0);
@@ -10527,6 +10521,104 @@ ${lumaForgeLightflowHelpers}`
                 }
             });
         }
+    };
+
+    /*
+     * Depth-aware SSAO for Lightflow materials. This is intentionally a
+     * post-process, rather than the old UV/corner approximation inside every
+     * fragment shader: it sees real contact between separate cubes and never
+     * shades the editor gizmos, grid, helpers, or selection outlines.
+     */
+    const AmbientOcclusionManager = {
+        states: new Map(),
+        patchedPreviews: new Map(),
+        disposed: false,
+        settings: { enabled: true, strength: 0.82, radius: 0.55, bias: 0.028, power: 1.15, renderScale: 0.75 },
+
+        init() {
+            this.disposed = false;
+            this.patchAllPreviews();
+        },
+        dispose() {
+            this.disposed = true;
+            this.patchedPreviews.forEach((record, preview) => {
+                if (preview?.render === record.patchedRender) preview.render = record.originalRender;
+            });
+            this.patchedPreviews.clear();
+            this.states.forEach(state => {
+                state.target?.dispose?.();
+                state.material?.dispose?.();
+                state.quad?.geometry?.dispose?.();
+            });
+            this.states.clear();
+        },
+        hasLightflowMaterial() {
+            return !!(window.Cube && Cube.all && Cube.all.some(cube => {
+                const mesh = ShaderEngine.getCubeMesh(cube);
+                return !!(mesh?.material && ShaderEngine.getMaterialList(mesh.material).some(material => material?.sa_shader_id));
+            }));
+        },
+        createState(preview) {
+            const renderer = preview?.renderer;
+            if (!renderer || !THREE.DepthTexture || !THREE.WebGLRenderTarget) return null;
+            const depthTexture = new THREE.DepthTexture(1, 1);
+            depthTexture.type = THREE.UnsignedShortType || THREE.UnsignedIntType;
+            depthTexture.format = THREE.DepthFormat;
+            depthTexture.minFilter = THREE.NearestFilter;
+            depthTexture.magFilter = THREE.NearestFilter;
+            depthTexture.generateMipmaps = false;
+            const target = new THREE.WebGLRenderTarget(1, 1, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBAFormat, depthBuffer: true, stencilBuffer: false, depthTexture });
+            if (!target.depthTexture) target.depthTexture = depthTexture;
+            const uniforms = {
+                tScene: { value: target.texture }, tDepth: { value: target.depthTexture || depthTexture }, uResolution: { value: new THREE.Vector2(1, 1) },
+                uProjection: { value: new THREE.Matrix4() }, uInverseProjection: { value: new THREE.Matrix4() },
+                uRadius: { value: this.settings.radius }, uBias: { value: this.settings.bias }, uStrength: { value: this.settings.strength }, uPower: { value: this.settings.power }
+            };
+            const material = new THREE.ShaderMaterial({
+                uniforms, depthTest: false, depthWrite: false, toneMapped: false,
+                vertexShader: 'varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position.xy,0.0,1.0); }',
+                fragmentShader: `
+                    precision highp float;
+                    uniform sampler2D tScene, tDepth; uniform vec2 uResolution; uniform mat4 uProjection, uInverseProjection;
+                    uniform float uRadius, uBias, uStrength, uPower; varying vec2 vUv;
+                    bool solid(float d){ return d > 0.000001 && d < 0.999999; }
+                    vec3 pos(vec2 uv, float d){ vec4 p=uInverseProjection*vec4(uv*2.0-1.0,d*2.0-1.0,1.0); return p.xyz/max(p.w,0.000001); }
+                    vec3 norm(vec2 uv, vec3 c){ vec2 t=1.0/max(uResolution,vec2(1.0)); vec3 dx=pos(clamp(uv+vec2(t.x,0.0),0.0,1.0),texture2D(tDepth,clamp(uv+vec2(t.x,0.0),0.0,1.0)).x)-pos(clamp(uv-vec2(t.x,0.0),0.0,1.0),texture2D(tDepth,clamp(uv-vec2(t.x,0.0),0.0,1.0)).x); vec3 dy=pos(clamp(uv+vec2(0.0,t.y),0.0,1.0),texture2D(tDepth,clamp(uv+vec2(0.0,t.y),0.0,1.0)).x)-pos(clamp(uv-vec2(0.0,t.y),0.0,1.0),texture2D(tDepth,clamp(uv-vec2(0.0,t.y),0.0,1.0)).x); vec3 n=normalize(cross(dx,dy)); return dot(n,-c)<0.0?-n:n; }
+                    vec3 kernel(int i){ if(i==0)return vec3(.5381,.1856,.4319); if(i==1)return vec3(.1379,.2486,.4430); if(i==2)return vec3(.3371,.5679,.0057); if(i==3)return vec3(-.6999,-.0451,.0019); if(i==4)return vec3(.0689,-.1598,.8547); if(i==5)return vec3(.056,.0069,.1843); if(i==6)return vec3(-.0146,.1402,.0762); return vec3(.01,-.1924,.0344); }
+                    void main(){ vec4 color=texture2D(tScene,vUv); float d=texture2D(tDepth,vUv).x; if(!solid(d)){gl_FragColor=color;return;} vec3 c=pos(vUv,d), n=norm(vUv,c); vec3 axis=abs(n.z)<.95?vec3(0,0,1):vec3(0,1,0); vec3 t=normalize(cross(axis,n)), b=cross(n,t); float oc=0.0, count=0.0; for(int i=0;i<8;i++){float q=(float(i)+1.0)/8.0; vec3 s=c+mat3(t,b,n)*kernel(i)*uRadius*mix(.15,1.0,q*q); vec4 clip=uProjection*vec4(s,1.0); if(clip.w<=.000001)continue; vec2 uv=clip.xy/clip.w*.5+.5; if(uv.x<=.001||uv.y<=.001||uv.x>=.999||uv.y>=.999)continue; float sd=texture2D(tDepth,uv).x; if(!solid(sd))continue; vec3 sp=pos(uv,sd); oc+=step(s.z+uBias,sp.z)*smoothstep(0.0,1.0,uRadius/max(abs(c.z-sp.z),.0001)); count+=1.0;} float ao=count<.5?1.0:pow(clamp(1.0-oc/count*uStrength,0.0,1.0),uPower); gl_FragColor=vec4(color.rgb*ao,color.a); }
+                `
+            });
+            const postScene = new THREE.Scene(), postCamera = new THREE.OrthographicCamera(-1,1,1,-1,0,1), quad = new THREE.Mesh(new THREE.PlaneGeometry(2,2), material);
+            postScene.add(quad);
+            const state = { preview, renderer, target, depthTexture, material, uniforms, postScene, postCamera, quad, width: 1, height: 1, rendering: false };
+            this.states.set(preview, state);
+            return state;
+        },
+        resize(state) {
+            const canvas = state.renderer.domElement || state.preview.canvas;
+            const rect = canvas?.getBoundingClientRect?.() || { width: state.preview.width || 800, height: state.preview.height || 600 };
+            const scale = Math.max(.25, Math.min(1, Number(this.settings.renderScale) || .75));
+            const width = Math.max(2, Math.floor(rect.width * Math.min(state.renderer.getPixelRatio?.() || 1, 1.5) * scale));
+            const height = Math.max(2, Math.floor(rect.height * Math.min(state.renderer.getPixelRatio?.() || 1, 1.5) * scale));
+            if (width === state.width && height === state.height) return;
+            state.width = width; state.height = height; state.target.setSize(width, height); state.uniforms.uResolution.value.set(width, height);
+        },
+        hideEditorObjects() {
+            const changes = [], ignored = new WeakSet(), add = root => root?.traverse ? root.traverse(item => ignored.add(item)) : root && ignored.add(root);
+            (Canvas.gizmos || []).forEach(add); add(Canvas.outlines); add(window.three_grid); add(window.Transformer?.controls);
+            Canvas.scene.traverse(object => { const name=String(object?.name||'').toLowerCase(); if (ignored.has(object) || object?.isLine || object?.isLineSegments || object?.isPoints || object?.isTransformControls || /gizmo|grid|helper|outline|transform/.test(name)) { if(object?.visible){changes.push(object);object.visible=false;} } });
+            return changes;
+        },
+        composite(preview) {
+            const state = this.states.get(preview) || this.createState(preview);
+            if (!state || state.rendering || !this.settings.enabled || !this.hasLightflowMaterial()) return;
+            state.rendering = true; this.resize(state);
+            const camera = preview.camera, renderer = state.renderer, previousTarget = renderer.getRenderTarget(), previousAutoClear = renderer.autoClear, clear = new THREE.Color(), alpha = renderer.getClearAlpha?.() ?? 1;
+            renderer.getClearColor?.(clear);
+            try { state.uniforms.uRadius.value=this.settings.radius; state.uniforms.uBias.value=this.settings.bias; state.uniforms.uStrength.value=this.settings.strength; state.uniforms.uPower.value=this.settings.power; state.uniforms.uProjection.value.copy(camera.projectionMatrix); if(camera.projectionMatrixInverse) state.uniforms.uInverseProjection.value.copy(camera.projectionMatrixInverse); else if(state.uniforms.uInverseProjection.value.invert) state.uniforms.uInverseProjection.value.copy(camera.projectionMatrix).invert(); const hidden=this.hideEditorObjects(); renderer.autoClear=true; renderer.setRenderTarget(state.target); renderer.clear(true,true,true); try{renderer.render(Canvas.scene,camera);}finally{hidden.forEach(object=>object.visible=true);} renderer.setRenderTarget(previousTarget||null); renderer.clear(true,true,true); renderer.render(state.postScene,state.postCamera); } catch(error) { console.warn('[Lightflow SSAO] disabled after render failure',error); this.settings.enabled=false; } finally { renderer.setRenderTarget(previousTarget||null); renderer.autoClear=previousAutoClear; renderer.setClearColor?.(clear,alpha); state.rendering=false; }
+        },
+        patchPreview(preview) { if (!preview?.renderer || this.patchedPreviews.has(preview)) return; const originalRender=preview.render; if(typeof originalRender!=='function')return; const manager=this; const patchedRender=function lightflowSSAORender(){ const result=originalRender.apply(this,arguments); manager.composite(this); return result; }; preview.render=patchedRender; this.patchedPreviews.set(preview,{originalRender,patchedRender}); },
+        patchAllPreviews() { collectShaderArchitectRenderPreviews().forEach(preview => this.patchPreview(preview)); }
     };
 
 
@@ -13350,6 +13442,9 @@ ${lumaForgeLightflowHelpers}`
                     const sampleName = sampleMatch[2];
                     const emissiveReturn = `
     if (EMISSIVE) {
+        if (${sampleName}.a < 0.01) {
+            discard;
+        }
         gl_FragColor = vec4(${sampleName}.rgb, 1.0);
         return;
     }
@@ -17007,7 +17102,7 @@ ${lumaForgeLightflowHelpers}`
         author: 'MidFord327',
         description: 'Build advanced Blockbench materials with real-time Lightflow presets, editable GLSL, material instances, and deep Light Manager integration. Requires Light Manager for lights and shadows.',
         tags: ['Lightflow', 'Shaders', 'Materials', 'Rendering', 'GLSL', 'Lighting'],
-        version: '2.2.0',
+        version: '2.2.1',
         min_version: '4.9.0',
         variant: 'both',
 
@@ -17030,6 +17125,7 @@ ${lumaForgeLightflowHelpers}`
             window.FancyShaderMaterial = FancyShaderMaterial;
             window.FancyShaderMaterialInstance = FancyShaderMaterialInstance;
             window.ScreenSpaceReflectionManager = ScreenSpaceReflectionManager;
+            window.LightflowAmbientOcclusion = AmbientOcclusionManager;
             window.MinecraftPromotionalSilhouetteManager = MinecraftPromotionalSilhouetteManager;
             bindShaderArchitectLightCallbacks();
             const saProjectInstancesProp = MaterialManager.registerProjectMaterialInstanceProperty();
@@ -17055,6 +17151,7 @@ ${lumaForgeLightflowHelpers}`
             // Init backend
             MaterialManager.init();
             ScreenSpaceReflectionManager.init();
+            AmbientOcclusionManager.init();
             MinecraftPromotionalSilhouetteManager.init();
             const studioRenderPreTileListener = Blockbench.on('studio_render_pre_tile', event => {
                 const preview = event && event.preview;
@@ -17077,6 +17174,7 @@ ${lumaForgeLightflowHelpers}`
                 );
 
                 ScreenSpaceReflectionManager.patchPreview(preview);
+                AmbientOcclusionManager.patchPreview(preview);
                 ScreenSpaceReflectionManager.preparePreviewForRender(preview, {
                     studio: true
                 });
@@ -17318,6 +17416,19 @@ ${lumaForgeLightflowHelpers}`
                 onChange: () => ShaderEngine.requestPreviewRender({ cause: 'world_ground_change' })
             });
 
+            const worldAmbientOcclusionToggle = new Toggle('sa_world_ssao', {
+                name: 'Ambient Occlusion',
+                icon: 'grain',
+                category: 'render',
+                default: true,
+                value: AmbientOcclusionManager.settings.enabled,
+                onChange(value) {
+                    AmbientOcclusionManager.settings.enabled = !!value;
+                    AmbientOcclusionManager.patchAllPreviews();
+                    ShaderEngine.requestPreviewRender({ cause: 'ssao_toggle' });
+                }
+            });
+
             const syncWorldToolbarControls = () => {
                 worldBrightnessSlider.set(Number(getWorldSettingValue('brightness', 50)) || 0);
                 [
@@ -17331,6 +17442,8 @@ ${lumaForgeLightflowHelpers}`
                         toggle.updateEnabledState();
                     }
                 });
+                worldAmbientOcclusionToggle.value = !!AmbientOcclusionManager.settings.enabled;
+                worldAmbientOcclusionToggle.updateEnabledState?.();
             };
 
             const worldSettingsToolbar = new Toolbar({
@@ -17342,6 +17455,7 @@ ${lumaForgeLightflowHelpers}`
                     'sa_world_brightness',
                     '#',
                     'sa_world_shading',
+                    'sa_world_ssao',
                     'sa_world_grids',
                     'sa_world_ground'
                 ]
@@ -17352,6 +17466,7 @@ ${lumaForgeLightflowHelpers}`
             deletables.push(
                 worldBrightnessSlider,
                 worldShadingToggle,
+                worldAmbientOcclusionToggle,
                 worldGridsToggle,
                 worldGroundToggle,
                 worldSettingsToolbar,
@@ -18882,6 +18997,7 @@ ${lumaForgeLightflowHelpers}`
         onunload() {
             ShaderEngine.stopAnimationLoop();
             MinecraftPromotionalSilhouetteManager.dispose();
+            AmbientOcclusionManager.dispose();
             ScreenSpaceReflectionManager.dispose();
             if (ShaderEngine._transparentFallbackMap && typeof ShaderEngine._transparentFallbackMap.dispose === 'function') {
                 ShaderEngine._transparentFallbackMap.dispose();
@@ -18922,6 +19038,7 @@ ${lumaForgeLightflowHelpers}`
             if (window.FancyShaderMaterial === FancyShaderMaterial) delete window.FancyShaderMaterial;
             if (window.FancyShaderMaterialInstance === FancyShaderMaterialInstance) delete window.FancyShaderMaterialInstance;
             if (window.ScreenSpaceReflectionManager === ScreenSpaceReflectionManager) delete window.ScreenSpaceReflectionManager;
+            if (window.LightflowAmbientOcclusion === AmbientOcclusionManager) delete window.LightflowAmbientOcclusion;
             if (window.MinecraftPromotionalSilhouetteManager === MinecraftPromotionalSilhouetteManager) delete window.MinecraftPromotionalSilhouetteManager;
 
             styleEl = undefined;
