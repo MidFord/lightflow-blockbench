@@ -3523,6 +3523,7 @@ function initialize_light_plugin() {
         'property.cone_penumbra.desc': 'Softness of the spot light cone edge (0 to 1).',
         'property.light.viewport_tools': 'Viewport Tools',
         'property.light.quickbuttons': 'Light',
+        'property.light.shadows': 'Shadows',
         'property.cast_shadows': 'Cast Shadows',
         'property.shadow_near': 'Near',
         'property.shadow_far': 'Far',
@@ -3664,6 +3665,7 @@ function initialize_light_plugin() {
         'property.cone_penumbra.desc': 'Suavidad del borde del cono spot (0 a 1).',
         'property.light.viewport_tools': 'Herramientas de viewport',
         'property.light.quickbuttons': 'Luz',
+        'property.light.shadows': 'Sombras',
         'property.cast_shadows': 'Proyecta sombras',
         'property.shadow_near': 'Cerca',
         'property.shadow_far': 'Lejos',
@@ -3833,7 +3835,7 @@ function initialize_light_plugin() {
         author: 'MidFord327',
         description: 'Add production-ready point, spot, and directional lights to Blockbench with viewport gizmos, animation support, shadows, and Studio Render controls. Provides the Lightflow lighting foundation for Shader Architect and Studio Render.',
         tags: ['Lightflow', 'Lighting', 'Shadows', 'Animation', 'Rendering', 'Studio'],
-        version: '1.3.1',
+        version: '1.4.0',
         min_version: '4.9.0',
         variant: 'both',
 
@@ -7443,6 +7445,7 @@ function initialize_light_plugin() {
                     'light_gizmo_tools_toolbar',
                     'light_settings_toolbar',
                     'light_quickbuttons_toolbar',
+                    'light_shadow_quality_toolbar',
                     'light_shadow_clip_settings_toolbar',
                     'light_shadow_bounds_settings_toolbar',
 
@@ -7736,7 +7739,15 @@ function initialize_light_plugin() {
                 name: 'property.light.quickbuttons',
                 label: true,
                 condition: singleLightCondition,
-                children: ['light_type_select', 'light_color_picker', '+', 'cast_shadows', 'light_shadow_resolution_select', 'light_studio_shadow_resolution_select', '#', 'light_temperature_slider']
+                children: ['light_type_select', 'light_color_picker', '#', 'light_temperature_slider']
+            });
+
+            let light_shadow_quality_toolbar = new Toolbar({
+                id: 'light_shadow_quality',
+                name: 'property.light.shadows',
+                label: true,
+                condition: singleLightCondition,
+                children: ['cast_shadows', '#', 'light_shadow_resolution_select', 'light_studio_shadow_resolution_select']
             });
 
             let light_gizmo_tools_toolbar = new Toolbar({
@@ -8004,6 +8015,7 @@ function initialize_light_plugin() {
                 light_studio_shadow_resolution_select,
                 light_gizmo_tools_toolbar,
                 light_quickbuttons_toolbar,
+                light_shadow_quality_toolbar,
                 light_shadow_near_sliderbox,
                 light_shadow_far_sliderbox,
                 light_shadow_clip_settings_toolbar,
@@ -8061,6 +8073,7 @@ function initialize_light_plugin() {
                 toolbars: [
                     light_gizmo_tools_toolbar,
                     light_quickbuttons_toolbar,
+                    light_shadow_quality_toolbar,
                     light_settings_toolbar,
                     light_shadow_clip_settings_toolbar,
                     light_shadow_bounds_settings_toolbar,
