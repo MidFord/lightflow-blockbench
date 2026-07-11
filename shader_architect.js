@@ -2542,6 +2542,48 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
     #sa_material_studio_dialog ::-webkit-scrollbar-thumb:hover {
         background: var(--color-accent);
     }
+    /* Lightflow Studio: denser hierarchy without hiding advanced capability. */
+    #sa_material_studio_dialog .sa-studio-header {
+        min-height: 54px;
+        height: 54px;
+        padding: 8px 14px;
+        background:
+            linear-gradient(90deg, color-mix(in srgb, var(--color-accent) 10%, var(--color-ui)), var(--color-ui) 38%);
+    }
+    #sa_material_studio_dialog .sa-studio-sidebar {
+        width: clamp(240px, 19vw, 300px);
+    }
+    #sa_material_studio_dialog .sa-studio-sidebar.sa-right {
+        width: clamp(250px, 20vw, 320px);
+    }
+    #sa_material_studio_dialog .sa-materiel-list-item,
+    #sa_material_studio_dialog .sa-uniform-row {
+        border-radius: 8px;
+        box-shadow: 0 1px 0 rgba(255, 255, 255, .025);
+    }
+    #sa_material_studio_dialog .sa-materiel-list-item {
+        min-height: 46px;
+        margin-bottom: 7px;
+    }
+    #sa_material_studio_dialog .sa-uniform-row {
+        background: color-mix(in srgb, var(--color-ui) 86%, var(--color-back));
+    }
+    #sa_material_studio_dialog button {
+        border-radius: 6px;
+    }
+    #sa_material_studio_dialog input.dark_bordered,
+    #sa_material_studio_dialog select {
+        min-height: 30px;
+        border-radius: 5px;
+    }
+    @media (max-width: 1050px) {
+        #sa_material_studio_dialog .sa-studio-sidebar {
+            width: 230px;
+        }
+        #sa_material_studio_dialog .sa-studio-sidebar.sa-right {
+            width: 245px;
+        }
+    }
     `;
 
     if (typeof Prism !== 'undefined' && !Prism.languages.glsl) {
@@ -4185,7 +4227,7 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
 
                     void main() {
                         vec4 color = texture2D(map, vUv);
-                        if(color.a < 0.01) discard;
+                        if (!EMISSIVE && color.a < 0.01) discard;
 
                         if (!EMISSIVE) {
                             gl_FragColor = vec4(lift + color.rgb * light, color.a);
@@ -4787,7 +4829,7 @@ void main() {
     vec4 texel = texture2D(map, vUv);
     texel.a *= clamp(uBaseAlpha, 0.0, 1.0);
 
-    if (texel.a < 0.01) discard;
+    if (!EMISSIVE && texel.a < 0.01) discard;
 
     vec3 baseColor = clamp(uBaseColor * texel.rgb, vec3(0.0), vec3(64.0));
     float metallic = uMetallic;
@@ -4947,7 +4989,7 @@ void main() {
     color = applyOutputMapping(color);
 
     gl_FragColor = saApplyScreenSpaceReflection(
-        vec4(color, texel.a),
+        vec4(color, EMISSIVE ? 1.0 : texel.a),
         vSA_SSRViewNormal,
         vSA_SSRViewPosition,
         vSA_SSRClipPosition,
@@ -5772,7 +5814,7 @@ void main() {
     vec4 texel = texture2D(map, vUv * tiling_value);
     texel = saApplyNativePBRBaseColor(texel);
 
-    if (texel.a < 0.01) discard;
+    if (!EMISSIVE && texel.a < 0.01) discard;
 
     // --- LINEARIZE INPUT TEXTURE ---
     // Converts input texture from sRGB to Linear space so lighting calculations are correct.
@@ -5838,7 +5880,7 @@ void main() {
     // Converts the final linear color into sRGB space for correct display output.
     finalColor = pow(max(finalColor, vec3(0.0)), vec3(1.0 / 2.2));
 
-    gl_FragColor = vec4(finalColor, texel.a);
+    gl_FragColor = vec4(finalColor, EMISSIVE ? 1.0 : texel.a);
 }`,
                 uniforms: createLightflowUniforms()
             });
@@ -6318,7 +6360,7 @@ void main() {
     vec4 texel = texture2D(map, vUv * tiling_value);
     texel = saApplyNativePBRBaseColor(texel);
 
-    if (texel.a < 0.01) discard;
+    if (!EMISSIVE && texel.a < 0.01) discard;
 
     // --- LINEARIZE INPUT TEXTURE ---
     // Converts input texture from sRGB to Linear space so lighting math is calculated correctly.
@@ -6402,7 +6444,7 @@ void main() {
     finalColor = pow(max(finalColor, vec3(0.0)), vec3(1.0 / 2.2));
 
     gl_FragColor = saApplyScreenSpaceReflection(
-        vec4(finalColor, texel.a),
+        vec4(finalColor, EMISSIVE ? 1.0 : texel.a),
         vSA_SSRViewNormal,
         vSA_SSRViewPosition,
         vSA_SSRClipPosition,
@@ -7432,7 +7474,7 @@ void main() {
         directLight += lightContribution * shadow;
     }
 
-    if (texel.a < 0.01) {
+    if (!EMISSIVE && texel.a < 0.01) {
         discard;
     }
 
@@ -7510,7 +7552,7 @@ void main() {
         vec3(1.0 / 2.2)
     );
 
-    gl_FragColor = vec4(finalColor, texel.a);
+    gl_FragColor = vec4(finalColor, EMISSIVE ? 1.0 : texel.a);
 }`,
 
                 uniforms: {
@@ -8777,7 +8819,8 @@ float promoGetAlphaOutlineMask(
 ) {
     if (
         !OUTLINE_ALPHA_ENABLED ||
-        OUTLINE_WIDTH <= 0.0
+        OUTLINE_WIDTH <= 0.0 ||
+        sourceAlpha <= 0.02
     ) {
         return 0.0;
     }
@@ -8851,8 +8894,9 @@ float promoGetAlphaOutlineMask(
         }
     }
 
+    float alphaConfidence = smoothstep(0.02, 0.35, sourceAlpha);
     return clamp(
-        sourceAlpha - nearestNeighborAlpha,
+        (sourceAlpha - nearestNeighborAlpha) * alphaConfidence,
         0.0,
         1.0
     );
@@ -8990,7 +9034,7 @@ void main() {
     );
     sampledColor = saApplyNativePBRBaseColor(sampledColor);
 
-    if (sampledColor.a < 0.01) {
+    if (!EMISSIVE && sampledColor.a < 0.01) {
         discard;
     }
 
@@ -9645,6 +9689,7 @@ uniform float uAOCornerWeight;
 uniform float uAOFaceNormalWeight;
 
 uniform bool uClampLighting;
+uniform bool SHADOWS;
 
 uniform float uShadowStrength;
 uniform float uShadowFloor;
@@ -9688,7 +9733,7 @@ ${lumaForgeLightflowHelpers}`
     );
     sampledColor = saApplyNativePBRBaseColor(sampledColor);
 
-    if (sampledColor.a < 0.01) {
+    if (!EMISSIVE && sampledColor.a < 0.01) {
         discard;
     }
 
@@ -9743,7 +9788,10 @@ ${lumaForgeLightflowHelpers}`
                 normal,
                 vPromoWorldPosition
             );
-            float shadow = getCustomLightShadow(i);
+            float shadow = 1.0;
+            if (SHADOWS && uLightCastShadow[i] != 0) {
+                shadow = getCustomLightShadow(i);
+            }
 
             directLight += lightContribution * shadow;
         }
@@ -9927,7 +9975,7 @@ ${lumaForgeLightflowHelpers}`
 
                                 void main() {
                                     vec4 color = texture2D(map, vUv);
-                                    if(color.a < 0.01) discard;
+                                    if (!EMISSIVE && color.a < 0.01) discard;
 
                                     vec3 normal = normalize(vWorldNormal);
                                     vec3 sumLight = vec3(0.0);
@@ -13289,7 +13337,7 @@ ${lumaForgeLightflowHelpers}`
                 /\bsaGetNativePBREmissive\b/.test(fragmentShader)
             );
             const needsEmissiveFallback =
-                (sourceState.renderMode === 'emissive' || sourceState.renderMode === 'additive') &&
+                sourceState.renderMode === 'emissive' &&
                 !shaderAlreadyHandlesEmissive &&
                 !shaderHandlesNativePBREmissive;
 
@@ -13302,9 +13350,6 @@ ${lumaForgeLightflowHelpers}`
                     const sampleName = sampleMatch[2];
                     const emissiveReturn = `
     if (EMISSIVE) {
-        if (${sampleName}.a < 0.01) {
-            discard;
-        }
         gl_FragColor = vec4(${sampleName}.rgb, 1.0);
         return;
     }
@@ -13434,7 +13479,7 @@ ${lumaForgeLightflowHelpers}`
             };
             targetMaterial.uniforms.EMISSIVE.value = !!(
                 sourceState &&
-                (sourceState.renderMode === 'emissive' || sourceState.renderMode === 'additive')
+                sourceState.renderMode === 'emissive'
             );
         },
 
@@ -16962,7 +17007,7 @@ ${lumaForgeLightflowHelpers}`
         author: 'MidFord327',
         description: 'Build advanced Blockbench materials with real-time Lightflow presets, editable GLSL, material instances, and deep Light Manager integration. Requires Light Manager for lights and shadows.',
         tags: ['Lightflow', 'Shaders', 'Materials', 'Rendering', 'GLSL', 'Lighting'],
-        version: '2.1.0',
+        version: '2.2.0',
         min_version: '4.9.0',
         variant: 'both',
 
@@ -17314,8 +17359,8 @@ ${lumaForgeLightflowHelpers}`
             );
 
             let renderWorkspaceMode = new Mode('render', {
-                name: 'Render',
-                icon: 'hangout_video',
+                name: 'Lightflow Render',
+                icon: 'photo_camera_back',
                 category: 'navigate',
                 condition: () => Project,
                 onSelect() {
@@ -18610,14 +18655,56 @@ ${lumaForgeLightflowHelpers}`
             });
 
             const materialPanelStyle = Blockbench.addCSS(`
+                #panel_global_renderer_properties,
+                #panel_material_instance_manager,
+                #panel_material_properties {
+                    background: var(--color-ui);
+                }
+                #panel_global_renderer_properties .panel_handle,
+                #panel_material_instance_manager .panel_handle,
+                #panel_material_properties .panel_handle {
+                    position: sticky;
+                    top: 0;
+                    z-index: 3;
+                    background: color-mix(in srgb, var(--color-ui) 94%, transparent);
+                    backdrop-filter: blur(8px);
+                    border-bottom: 1px solid var(--color-border);
+                }
+                #panel_global_renderer_properties .toolbar_wrapper {
+                    margin: 6px;
+                    padding: 4px;
+                    border: 1px solid var(--color-border);
+                    border-radius: 7px;
+                    background: color-mix(in srgb, var(--color-back) 70%, var(--color-ui));
+                }
+                #panel_material_instance_manager .form,
                 #panel_material_properties .form {
                     overflow-y: auto !important;
                     overflow-x: hidden;
+                    padding: 8px !important;
+                    box-sizing: border-box;
                 }
-                /* Match the native Blockbench scrollbar style. */
+                #panel_material_instance_manager .dialog_bar,
+                #panel_material_properties .dialog_bar {
+                    margin: 0 0 7px !important;
+                    padding: 7px 8px !important;
+                    border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
+                    border-radius: 7px;
+                    background: color-mix(in srgb, var(--color-back) 72%, var(--color-ui));
+                }
+                #panel_material_instance_manager .dialog_bar:hover,
+                #panel_material_properties .dialog_bar:hover {
+                    border-color: color-mix(in srgb, var(--color-accent) 42%, var(--color-border));
+                }
+                #panel_material_instance_manager .dialog_bar label,
+                #panel_material_properties .dialog_bar label {
+                    font-size: 12px;
+                }
+                #panel_material_instance_manager .form::-webkit-scrollbar,
                 #panel_material_properties .form::-webkit-scrollbar {
                     width: 6px;
                 }
+                #panel_material_instance_manager .form::-webkit-scrollbar-thumb,
                 #panel_material_properties .form::-webkit-scrollbar-thumb {
                     background-color: var(--color-button);
                     border-radius: 3px;
@@ -18625,13 +18712,20 @@ ${lumaForgeLightflowHelpers}`
                 #panel_material_properties .dialog_bar[class*="form_bar__sa_uniform_group_"] {
                     margin-top: 7px;
                     padding: 0 !important;
-                    background: rgba(255, 255, 255, 0.035) !important;
-                    border: 1px solid var(--color-border);
-                    border-radius: 4px;
+                    background: color-mix(in srgb, var(--color-accent) 7%, var(--color-back)) !important;
+                    border-color: color-mix(in srgb, var(--color-accent) 24%, var(--color-border));
+                    border-radius: 7px;
                 }
                 #panel_material_properties .dialog_bar[class*="form_bar__sa_uniform_group_"] .custom_checkbox {
                     height: 28px !important;
                     font-weight: 600;
+                }
+                #panel_material_properties .toolbar_wrapper {
+                    margin: 6px 8px 0;
+                    padding: 4px;
+                    border: 1px solid var(--color-border);
+                    border-radius: 7px;
+                    background: color-mix(in srgb, var(--color-back) 68%, var(--color-ui));
                 }
 
             `);
