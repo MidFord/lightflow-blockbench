@@ -1471,7 +1471,7 @@
 
                     void main() {
                         vec4 base = texture2D(map, vUv);
-                        if (uMode != 1 && base.a < uAlphaCutoff) discard;
+                        if (base.a < uAlphaCutoff) discard;
 
                         if (!uEmit) {
                             gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
@@ -2586,9 +2586,7 @@
         activeDialog = new Dialog({
             id: 'studio_render',
             title: 'studio_render.dialog.title',
-            width: Math.min(820, window.innerWidth - 56),
-            height: Math.min(860, window.innerHeight - 72),
-            resizable: true,
+            width: 620,
             form: createDialogForm(currentSettings),
             buttons: ['studio_render.button.render', 'dialog.cancel'],
             onFormChange(form) {
@@ -2617,113 +2615,6 @@
 
     function addStyles() {
         stylesheet = Blockbench.addCSS(`
-            #studio_render .dialog_wrapper,
-            #studio_render_dialog .dialog_wrapper {
-                min-width: min(760px, calc(100vw - 56px));
-            }
-            #studio_render .dialog_content,
-            #studio_render_dialog .dialog_content {
-                padding: 12px 14px 8px !important;
-                overflow-y: auto !important;
-                background:
-                    radial-gradient(circle at 100% 0, color-mix(in srgb, var(--color-accent) 9%, transparent), transparent 36%),
-                    var(--color-back);
-            }
-            #studio_render .form,
-            #studio_render_dialog .form {
-                display: grid;
-                grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-                gap: 8px 12px;
-                align-items: start;
-            }
-            #studio_render .dialog_bar,
-            #studio_render_dialog .dialog_bar {
-                min-width: 0;
-                margin: 0 !important;
-                padding: 8px 10px !important;
-                border: 1px solid color-mix(in srgb, var(--color-border) 80%, transparent);
-                border-radius: 7px;
-                background: color-mix(in srgb, var(--color-ui) 86%, transparent);
-            }
-            #studio_render .dialog_bar[class*="form_bar___"],
-            #studio_render_dialog .dialog_bar[class*="form_bar___"] {
-                grid-column: 1 / -1;
-                min-height: 30px;
-                padding: 12px 2px 4px !important;
-                border: 0;
-                border-bottom: 1px solid var(--color-border);
-                border-radius: 0;
-                background: transparent;
-                color: var(--color-text);
-                font-size: 12px;
-                font-weight: 700;
-                letter-spacing: .08em;
-                text-transform: uppercase;
-            }
-            #studio_render .form_bar___camera::before,
-            #studio_render_dialog .form_bar___camera::before { content: "Camera"; }
-            #studio_render .form_bar___output::before,
-            #studio_render_dialog .form_bar___output::before { content: "Output & Quality"; }
-            #studio_render .form_bar___frame::before,
-            #studio_render_dialog .form_bar___frame::before { content: "Composition"; }
-            #studio_render .form_bar___look::before,
-            #studio_render_dialog .form_bar___look::before { content: "Scene"; }
-            #studio_render .form_bar___effects::before,
-            #studio_render_dialog .form_bar___effects::before { content: "Final Effects"; }
-            #studio_render .form_bar___export::before,
-            #studio_render_dialog .form_bar___export::before { content: "Delivery"; }
-            #studio_render .dialog_bar[class*="form_bar___"] > *,
-            #studio_render_dialog .dialog_bar[class*="form_bar___"] > * {
-                display: none !important;
-            }
-            #studio_render .form_bar__frame_tools,
-            #studio_render_dialog .form_bar__frame_tools,
-            #studio_render .form_bar__gpu_status,
-            #studio_render_dialog .form_bar__gpu_status {
-                grid-column: 1 / -1;
-            }
-            #studio_render .dialog_bar label,
-            #studio_render_dialog .dialog_bar label {
-                font-size: 12px;
-                opacity: .86;
-            }
-            #studio_render .dialog_bar input,
-            #studio_render .dialog_bar select,
-            #studio_render_dialog .dialog_bar input,
-            #studio_render_dialog .dialog_bar select {
-                min-height: 30px;
-            }
-            #studio_render .dialog_buttons,
-            #studio_render_dialog .dialog_buttons {
-                padding: 10px 14px !important;
-                border-top: 1px solid var(--color-border);
-                background: var(--color-ui);
-            }
-            #studio_render .dialog_buttons button:first-child,
-            #studio_render_dialog .dialog_buttons button:first-child {
-                min-width: 150px;
-                background: var(--color-accent);
-                color: var(--color-accent_text);
-                font-weight: 650;
-            }
-            @media (max-width: 760px) {
-                #studio_render .dialog_wrapper,
-                #studio_render_dialog .dialog_wrapper {
-                    min-width: calc(100vw - 24px);
-                }
-                #studio_render .form,
-                #studio_render_dialog .form {
-                    grid-template-columns: 1fr;
-                }
-                #studio_render .dialog_bar[class*="form_bar___"],
-                #studio_render_dialog .dialog_bar[class*="form_bar___"],
-                #studio_render .form_bar__frame_tools,
-                #studio_render_dialog .form_bar__frame_tools,
-                #studio_render .form_bar__gpu_status,
-                #studio_render_dialog .form_bar__gpu_status {
-                    grid-column: 1;
-                }
-            }
             #studio_render_frame {
                 position: absolute;
                 z-index: 30;
@@ -2973,7 +2864,7 @@
         author: 'MidFord327',
         description: 'Export polished Blockbench studio renders with tiled supersampling, 4K/8K-safe output, transparency, GPU guidance, and an adjustable frame. Complements Light Manager and Shader Architect in the Lightflow suite.',
         tags: ['Lightflow', 'Rendering', 'Export', 'Screenshots', 'Studio', 'Presentation'],
-        version: '1.2.0',
+        version: '1.2.1',
         min_version: '4.9.0',
         variant: 'both',
         onload() {
