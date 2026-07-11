@@ -10533,7 +10533,7 @@ ${lumaForgeLightflowHelpers}`
         states: new Map(),
         patchedPreviews: new Map(),
         disposed: false,
-        settings: { enabled: true, strength: 0.72, radius: 0.42, bias: 0.035, power: 1.25, renderScale: 1.0 },
+        settings: { enabled: true, strength: 0.62, radius: 0.34, bias: 0.04, power: 1.1, renderScale: 1.0, samples: 20 },
 
         init() {
             this.disposed = false;
@@ -10556,8 +10556,12 @@ ${lumaForgeLightflowHelpers}`
         hasLightflowMaterial() {
             return !!(window.Cube && Cube.all && Cube.all.some(cube => {
                 const mesh = ShaderEngine.getCubeMesh(cube);
-                return !!(mesh?.material && ShaderEngine.getMaterialList(mesh.material).some(material => material?.sa_shader_id));
+                return !!(mesh?.material && ShaderEngine.getMaterialList(mesh.material).some(material => this.materialReceivesAO(material)));
             }));
+        },
+        materialReceivesAO(material) {
+            const id = String(material?.sa_shader_id || '').toLowerCase();
+            return !!id && id !== 'classic';
         },
         createState(preview) {
             const renderer = preview?.renderer;
@@ -10568,46 +10572,71 @@ ${lumaForgeLightflowHelpers}`
             depthTexture.minFilter = THREE.NearestFilter;
             depthTexture.magFilter = THREE.NearestFilter;
             depthTexture.generateMipmaps = false;
-            const sceneTarget = new THREE.WebGLRenderTarget(1, 1, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBAFormat, depthBuffer: true, stencilBuffer: false });
+            const sceneDepthTexture = new THREE.DepthTexture(1, 1);
+            sceneDepthTexture.type = THREE.UnsignedShortType || THREE.UnsignedIntType;
+            sceneDepthTexture.format = THREE.DepthFormat;
+            sceneDepthTexture.minFilter = THREE.NearestFilter;
+            sceneDepthTexture.magFilter = THREE.NearestFilter;
+            sceneDepthTexture.generateMipmaps = false;
+            const sceneTarget = new THREE.WebGLRenderTarget(1, 1, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBAFormat, depthBuffer: true, stencilBuffer: false, depthTexture: sceneDepthTexture });
+            if (!sceneTarget.depthTexture) sceneTarget.depthTexture = sceneDepthTexture;
             const cubeTarget = new THREE.WebGLRenderTarget(1, 1, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBAFormat, depthBuffer: true, stencilBuffer: false, depthTexture });
             if (!cubeTarget.depthTexture) cubeTarget.depthTexture = depthTexture;
             const uniforms = {
-                tScene: { value: sceneTarget.texture }, tDepth: { value: cubeTarget.depthTexture || depthTexture }, uResolution: { value: new THREE.Vector2(1, 1) },
+                tScene: { value: sceneTarget.texture }, tSceneDepth: { value: sceneTarget.depthTexture || sceneDepthTexture }, tDepth: { value: cubeTarget.depthTexture || depthTexture }, uResolution: { value: new THREE.Vector2(1, 1) },
                 uProjection: { value: new THREE.Matrix4() }, uInverseProjection: { value: new THREE.Matrix4() },
-                uRadius: { value: this.settings.radius }, uBias: { value: this.settings.bias }, uStrength: { value: this.settings.strength }, uPower: { value: this.settings.power }
+                uRadius: { value: this.settings.radius }, uBias: { value: this.settings.bias }, uStrength: { value: this.settings.strength }, uPower: { value: this.settings.power }, uSamples: { value: this.settings.samples }
             };
             const material = new THREE.ShaderMaterial({
                 uniforms, depthTest: false, depthWrite: false, toneMapped: false,
                 vertexShader: 'varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position.xy,0.0,1.0); }',
                 fragmentShader: `
                     precision highp float;
-                    uniform sampler2D tScene, tDepth; uniform vec2 uResolution; uniform mat4 uProjection, uInverseProjection;
-                    uniform float uRadius, uBias, uStrength, uPower; varying vec2 vUv;
+                    uniform sampler2D tScene, tSceneDepth, tDepth; uniform vec2 uResolution; uniform mat4 uProjection, uInverseProjection;
+                    uniform float uRadius, uBias, uStrength, uPower; uniform int uSamples; varying vec2 vUv;
                     bool solid(float d){ return d > 0.000001 && d < 0.999999; }
                     vec3 pos(vec2 uv, float d){ vec4 p=uInverseProjection*vec4(uv*2.0-1.0,d*2.0-1.0,1.0); return p.xyz/max(p.w,0.000001); }
                     vec3 norm(vec2 uv, vec3 c){ vec2 t=1.0/max(uResolution,vec2(1.0)); vec3 dx=pos(clamp(uv+vec2(t.x,0.0),0.0,1.0),texture2D(tDepth,clamp(uv+vec2(t.x,0.0),0.0,1.0)).x)-pos(clamp(uv-vec2(t.x,0.0),0.0,1.0),texture2D(tDepth,clamp(uv-vec2(t.x,0.0),0.0,1.0)).x); vec3 dy=pos(clamp(uv+vec2(0.0,t.y),0.0,1.0),texture2D(tDepth,clamp(uv+vec2(0.0,t.y),0.0,1.0)).x)-pos(clamp(uv-vec2(0.0,t.y),0.0,1.0),texture2D(tDepth,clamp(uv-vec2(0.0,t.y),0.0,1.0)).x); vec3 n=normalize(cross(dx,dy)); return dot(n,-c)<0.0?-n:n; }
-                    vec3 kernel(int i){ if(i==0)return vec3(.5381,.1856,.4319); if(i==1)return vec3(.1379,.2486,.4430); if(i==2)return vec3(.3371,.5679,.0057); if(i==3)return vec3(-.6999,-.0451,.0019); if(i==4)return vec3(.0689,-.1598,.8547); if(i==5)return vec3(.056,.0069,.1843); if(i==6)return vec3(-.0146,.1402,.0762); return vec3(.01,-.1924,.0344); }
-                    void main(){ vec4 color=texture2D(tScene,vUv); float d=texture2D(tDepth,vUv).x; if(!solid(d)){gl_FragColor=color;return;} vec3 c=pos(vUv,d), n=norm(vUv,c); vec3 axis=abs(n.z)<.95?vec3(0,0,1):vec3(0,1,0); vec3 t=normalize(cross(axis,n)), b=cross(n,t); float oc=0.0, count=0.0; for(int i=0;i<8;i++){float q=(float(i)+1.0)/8.0; vec3 s=c+mat3(t,b,n)*kernel(i)*uRadius*mix(.15,1.0,q*q); vec4 clip=uProjection*vec4(s,1.0); if(clip.w<=.000001)continue; vec2 uv=clip.xy/clip.w*.5+.5; if(uv.x<=.001||uv.y<=.001||uv.x>=.999||uv.y>=.999)continue; float sd=texture2D(tDepth,uv).x; if(!solid(sd))continue; vec3 sp=pos(uv,sd); oc+=step(s.z+uBias,sp.z)*smoothstep(0.0,1.0,uRadius/max(abs(c.z-sp.z),.0001)); count+=1.0;} float ao=count<.5?1.0:pow(clamp(1.0-oc/count*uStrength,0.0,1.0),uPower); gl_FragColor=vec4(color.rgb*ao,color.a); }
+                    float hash(vec2 p){ return fract(sin(dot(p,vec2(12.9898,78.233)))*43758.5453); }
+                    void main(){ vec4 color=texture2D(tScene,vUv); float d=texture2D(tDepth,vUv).x; float sceneD=texture2D(tSceneDepth,vUv).x; if(!solid(d)||!solid(sceneD)||abs(sceneD-d)>.00035){gl_FragColor=color;return;} vec3 c=pos(vUv,d), n=norm(vUv,c); vec3 axis=abs(n.z)<.95?vec3(0,0,1):vec3(0,1,0); vec3 t=normalize(cross(axis,n)), b=cross(n,t); float oc=0.0, count=0.0, rotation=hash(gl_FragCoord.xy)*6.2831853; for(int i=0;i<24;i++){if(i>=uSamples)continue; float q=(float(i)+.5)/float(max(uSamples,1)); float phi=float(i)*2.39996323+rotation; float z=mix(.12,.96,q); float radial=sqrt(max(1.0-z*z,0.0)); vec3 k=vec3(cos(phi)*radial,sin(phi)*radial,z); vec3 s=c+mat3(t,b,n)*k*uRadius*mix(.12,1.0,q*q); vec4 clip=uProjection*vec4(s,1.0); if(clip.w<=.000001)continue; vec2 uv=clip.xy/clip.w*.5+.5; if(uv.x<=.001||uv.y<=.001||uv.x>=.999||uv.y>=.999)continue; float sd=texture2D(tDepth,uv).x; if(!solid(sd))continue; vec3 sp=pos(uv,sd); float range=smoothstep(0.0,1.0,uRadius/max(abs(c.z-sp.z),.0001)); oc+=step(s.z+uBias,sp.z)*range; count+=1.0;} float ao=count<1.0?1.0:pow(clamp(1.0-oc/count*uStrength,0.0,1.0),uPower); gl_FragColor=vec4(color.rgb*ao,color.a); }
                 `
             });
             const postScene = new THREE.Scene(), postCamera = new THREE.OrthographicCamera(-1,1,1,-1,0,1), quad = new THREE.Mesh(new THREE.PlaneGeometry(2,2), material);
             postScene.add(quad);
-            const state = { preview, renderer, sceneTarget, cubeTarget, depthTexture, material, uniforms, postScene, postCamera, quad, width: 1, height: 1, rendering: false };
+            const state = { preview, renderer, sceneTarget, cubeTarget, depthTexture, sceneDepthTexture, material, uniforms, postScene, postCamera, quad, width: 1, height: 1, sceneWidth: 1, sceneHeight: 1, rendering: false };
             this.states.set(preview, state);
             return state;
         },
         resize(state) {
-            const canvas = state.renderer.domElement || state.preview.canvas;
-            const rect = canvas?.getBoundingClientRect?.() || { width: state.preview.width || 800, height: state.preview.height || 600 };
-            const scale = Math.max(.25, Math.min(1, Number(this.settings.renderScale) || .75));
-            const width = Math.max(2, Math.floor(rect.width * Math.min(state.renderer.getPixelRatio?.() || 1, 1.5) * scale));
-            const height = Math.max(2, Math.floor(rect.height * Math.min(state.renderer.getPixelRatio?.() || 1, 1.5) * scale));
-            if (width === state.width && height === state.height) return;
-            state.width = width; state.height = height; state.sceneTarget.setSize(width, height); state.cubeTarget.setSize(width, height); state.uniforms.uResolution.value.set(width, height);
+            const renderer = state.renderer;
+            const drawingSize = renderer.getDrawingBufferSize
+                ? renderer.getDrawingBufferSize(new THREE.Vector2())
+                : new THREE.Vector2(renderer.domElement?.width || state.preview.width || 800, renderer.domElement?.height || state.preview.height || 600);
+            const sceneWidth = Math.max(2, Math.floor(drawingSize.x));
+            const sceneHeight = Math.max(2, Math.floor(drawingSize.y));
+            const scale = state.preview.sa_studio_render_active
+                ? 1.0
+                : Math.max(.25, Math.min(1, Number(this.settings.renderScale) || 1));
+            const width = Math.max(2, Math.floor(sceneWidth * scale));
+            const height = Math.max(2, Math.floor(sceneHeight * scale));
+            if (width === state.width && height === state.height && sceneWidth === state.sceneWidth && sceneHeight === state.sceneHeight) return;
+            state.width = width;
+            state.height = height;
+            state.sceneWidth = sceneWidth;
+            state.sceneHeight = sceneHeight;
+            state.sceneTarget.setSize(sceneWidth, sceneHeight);
+            state.cubeTarget.setSize(width, height);
+            state.uniforms.uResolution.value.set(width, height);
         },
         hideNonCubeObjects() {
             const changes = [], cubeObjects = new WeakSet();
-            (Cube.all || []).forEach(cube => { const mesh = ShaderEngine.getCubeMesh(cube); if (mesh?.traverse) mesh.traverse(object => cubeObjects.add(object)); else if (mesh) cubeObjects.add(mesh); });
+            (Cube.all || []).forEach(cube => {
+                const mesh = ShaderEngine.getCubeMesh(cube);
+                const receivesAO = !!(mesh?.material && ShaderEngine.getMaterialList(mesh.material).some(material => this.materialReceivesAO(material)));
+                if (!receivesAO) return;
+                if (mesh?.traverse) mesh.traverse(object => cubeObjects.add(object));
+                else if (mesh) cubeObjects.add(mesh);
+            });
             Canvas.scene.traverse(object => {
                 const renderable = object?.isMesh || object?.isSprite || object?.isLine || object?.isLineSegments || object?.isPoints;
                 if (renderable && !cubeObjects.has(object) && object.visible) { changes.push(object); object.visible = false; }
@@ -10618,9 +10647,58 @@ ${lumaForgeLightflowHelpers}`
             const state = this.states.get(preview) || this.createState(preview);
             if (!state || state.rendering || !this.settings.enabled || !this.hasLightflowMaterial()) return;
             state.rendering = true; this.resize(state);
-            const camera = preview.camera, renderer = state.renderer, previousTarget = renderer.getRenderTarget(), previousAutoClear = renderer.autoClear, clear = new THREE.Color(), alpha = renderer.getClearAlpha?.() ?? 1;
+            const camera = preview.camera;
+            const renderer = state.renderer;
+            const previousTarget = renderer.getRenderTarget();
+            const previousAutoClear = renderer.autoClear;
+            const clear = new THREE.Color();
+            const alpha = renderer.getClearAlpha?.() ?? 1;
+            const previousViewport = renderer.getViewport?.(new THREE.Vector4()) || null;
+            const previousScissor = renderer.getScissor?.(new THREE.Vector4()) || null;
+            const previousScissorTest = renderer.getScissorTest?.() ?? false;
             renderer.getClearColor?.(clear);
-            try { state.uniforms.uRadius.value=this.settings.radius; state.uniforms.uBias.value=this.settings.bias; state.uniforms.uStrength.value=this.settings.strength; state.uniforms.uPower.value=this.settings.power; state.uniforms.uProjection.value.copy(camera.projectionMatrix); if(camera.projectionMatrixInverse) state.uniforms.uInverseProjection.value.copy(camera.projectionMatrixInverse); else if(state.uniforms.uInverseProjection.value.invert) state.uniforms.uInverseProjection.value.copy(camera.projectionMatrix).invert(); renderer.autoClear=true; renderer.setRenderTarget(state.sceneTarget); renderer.clear(true,true,true); renderer.render(Canvas.scene,camera); const hidden=this.hideNonCubeObjects(); renderer.setRenderTarget(state.cubeTarget); renderer.clear(true,true,true); try{renderer.render(Canvas.scene,camera);}finally{hidden.forEach(object=>object.visible=true);} renderer.setRenderTarget(previousTarget||null); renderer.clear(true,true,true); renderer.render(state.postScene,state.postCamera); } catch(error) { console.warn('[Lightflow SSAO] disabled after render failure',error); this.settings.enabled=false; } finally { renderer.setRenderTarget(previousTarget||null); renderer.autoClear=previousAutoClear; renderer.setClearColor?.(clear,alpha); state.rendering=false; }
+            try {
+                state.uniforms.uRadius.value = this.settings.radius;
+                state.uniforms.uBias.value = this.settings.bias;
+                state.uniforms.uStrength.value = this.settings.strength;
+                state.uniforms.uPower.value = this.settings.power;
+                state.uniforms.uSamples.value = Math.max(4, Math.min(24, Math.round(this.settings.samples || 20)));
+                state.uniforms.uProjection.value.copy(camera.projectionMatrix);
+                if (camera.projectionMatrixInverse) state.uniforms.uInverseProjection.value.copy(camera.projectionMatrixInverse);
+                else if (state.uniforms.uInverseProjection.value.invert) state.uniforms.uInverseProjection.value.copy(camera.projectionMatrix).invert();
+
+                renderer.autoClear = true;
+                renderer.setScissorTest?.(false);
+                renderer.setRenderTarget(state.sceneTarget);
+                renderer.setViewport?.(0, 0, state.sceneWidth, state.sceneHeight);
+                renderer.clear(true, true, true);
+                renderer.render(Canvas.scene, camera);
+
+                const hidden = this.hideNonCubeObjects();
+                renderer.setRenderTarget(state.cubeTarget);
+                renderer.setViewport?.(0, 0, state.width, state.height);
+                renderer.clear(true, true, true);
+                try { renderer.render(Canvas.scene, camera); }
+                finally { hidden.forEach(object => { object.visible = true; }); }
+
+                renderer.setRenderTarget(previousTarget || null);
+                if (previousViewport) renderer.setViewport?.(previousViewport);
+                if (previousScissor) renderer.setScissor?.(previousScissor);
+                renderer.setScissorTest?.(previousScissorTest);
+                renderer.clear(true, true, true);
+                renderer.render(state.postScene, state.postCamera);
+            } catch (error) {
+                console.warn('[Lightflow SSAO] disabled after render failure', error);
+                this.settings.enabled = false;
+            } finally {
+                renderer.setRenderTarget(previousTarget || null);
+                if (previousViewport) renderer.setViewport?.(previousViewport);
+                if (previousScissor) renderer.setScissor?.(previousScissor);
+                renderer.setScissorTest?.(previousScissorTest);
+                renderer.autoClear = previousAutoClear;
+                renderer.setClearColor?.(clear, alpha);
+                state.rendering = false;
+            }
         },
         patchPreview(preview) { if (!preview?.renderer || this.patchedPreviews.has(preview)) return; const originalRender=preview.render; if(typeof originalRender!=='function')return; const manager=this; const patchedRender=function lightflowSSAORender(){ const result=originalRender.apply(this,arguments); manager.composite(this); return result; }; preview.render=patchedRender; this.patchedPreviews.set(preview,{originalRender,patchedRender}); },
         patchAllPreviews() { collectShaderArchitectRenderPreviews().forEach(preview => this.patchPreview(preview)); }
@@ -17107,7 +17185,7 @@ ${lumaForgeLightflowHelpers}`
         author: 'MidFord327',
         description: 'Build advanced Blockbench materials with real-time Lightflow presets, editable GLSL, material instances, and deep Light Manager integration. Requires Light Manager for lights and shadows.',
         tags: ['Lightflow', 'Shaders', 'Materials', 'Rendering', 'GLSL', 'Lighting'],
-        version: '2.2.2',
+        version: '2.2.3',
         min_version: '4.9.0',
         variant: 'both',
 
@@ -17448,6 +17526,7 @@ ${lumaForgeLightflowHelpers}`
                                 label: 'Quality', type: 'select', value: String(ao.renderScale),
                                 options: { '0.5': 'Performance (50%)', '0.75': 'Balanced (75%)', '1': 'High (native resolution)' }
                             },
+                            samples: { label: 'Samples', type: 'number', value: ao.samples, min: 4, max: 24, step: 1, description: 'Higher values reduce noise and improve contact detail.' },
                             strength: { label: 'Strength', type: 'range', value: ao.strength, min: 0, max: 2, step: 0.01 },
                             radius: { label: 'Radius', type: 'range', value: ao.radius, min: 0.05, max: 4, step: 0.01 },
                             bias: { label: 'Bias', type: 'range', value: ao.bias, min: 0, max: 0.2, step: 0.001 },
@@ -17455,6 +17534,7 @@ ${lumaForgeLightflowHelpers}`
                         },
                         onConfirm(result) {
                             ao.renderScale = Number(result.quality) || 1;
+                            ao.samples = Math.max(4, Math.min(24, Math.round(Number(result.samples) || 20)));
                             ao.strength = Math.max(0, Math.min(2, Number(result.strength) || 0));
                             ao.radius = Math.max(0.05, Math.min(4, Number(result.radius) || 0.05));
                             ao.bias = Math.max(0, Math.min(0.2, Number(result.bias) || 0));
