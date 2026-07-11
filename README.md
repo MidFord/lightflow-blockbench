@@ -39,9 +39,9 @@ The plugins work independently where possible, but they are designed to be used 
 
 | Plugin | Current version | Purpose | Dependency |
 | --- | ---: | --- | --- |
-| **Light Manager** | `1.4.0` | Adds production-oriented point, spot, and directional lights with shadows, gizmos, animation support, and lighting profiles. | None |
-| **Shader Architect** | `2.1.0` | Builds and assigns advanced materials, exposes shader controls, supports editable GLSL, material instances, and `.samat` material files. | **Light Manager required** |
-| **Studio Render** | `1.1.0` | Exports clean images with tiled supersampling, adjustable framing, optional final Bloom, transparency, and 4K/8K-safe output controls. | Works alone; integrates with the other two plugins |
+| **Light Manager** | `1.5.0` | Adds production-oriented point, spot, and directional lights with adaptive shadows, gizmos, animation support, and lighting profiles. | None |
+| **Shader Architect** | `2.2.0` | Builds and assigns advanced materials, supports Blockbench render modes, exposes shader controls, editable GLSL, and material instances. | **Light Manager required** |
+| **Studio Render** | `1.2.0` | Exports clean images with tiled supersampling, emissive-aware Bloom, adjustable framing, transparency, and 4K/8K-safe output controls. | Works alone; integrates with the other two plugins |
 
 ### Why Lightflow exists
 
@@ -158,6 +158,8 @@ Light Manager is the foundation of the suite. It introduces real scene lights to
 - Viewport gizmos for positioning, aiming, range, cone, clipping, and shadow bounds.
 - Shadow controls for resolution, bias, normal bias, softness, near/far planes, and directional bounds.
 - Separate **Studio Shadow Resolution** for final renders without forcing the viewport to use the same cost.
+- Render-only 8K and 16K shadow maps for professional output, automatically capped to the GPU's supported texture size.
+- Resolution-, range-, cone-, clipping-, and bounds-aware automatic bias to reduce shadow acne without detaching shadows from surfaces.
 - Lighting profiles and shadow profiles for faster setup.
 - Fit selected lights to selected cubes or groups.
 - Free movement from the current camera view.
@@ -184,6 +186,8 @@ Shader Architect is Lightflow's material and shader workspace. It can drive an e
 - Exposed uniforms for artist-facing controls and advanced technical controls for shader authors.
 - Dynamic Light Manager uniforms for light positions, directions, colors, intensities, attenuation, cones, and shadow behavior.
 - Built-in surface systems including PBR-style controls, stylized lighting, voxel-style AO, shadows, screen-space reflections, bevels, alpha-edge treatment, outlines, and promotional rim lighting.
+- Native Blockbench texture semantics for `emissive`, `additive`, and `layered` render modes, including MER green-channel emission.
+- LumaForge shadow switching and alpha-aware rim/outline masking for cleaner transparent edges.
 
 **Material-instance workflow**
 
@@ -209,6 +213,9 @@ Studio Render is the export layer. It is intended for portfolio images, social-m
 - GPU diagnostics showing the detected renderer and relevant WebGL limits.
 - Temporary Studio Render sessions that coordinate with Light Manager so final shadow settings do not permanently disturb the viewport.
 - Optional final-image Bloom with a simple strength control and advanced threshold/radius controls.
+- Emissive-only Bloom masking: emissive render-mode alpha, MER maps, dedicated emissive maps, and additive materials glow without blooming ordinary bright surfaces.
+- Selection highlight suppression during final capture so editing state cannot leak into exported pixels.
+- A two-column, sectioned render dialog that collapses responsively on narrow windows.
 - A compact default form; tile size, GPU diagnostics, resolution scaling, and technical effect controls stay under **Advanced Controls**.
 
 ---
