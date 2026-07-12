@@ -1560,16 +1560,24 @@
 
         const previousTarget = renderer.getRenderTarget?.();
         const previousAutoClear = renderer.autoClear;
+        const previousShadowAutoUpdate = renderer.shadowMap ? renderer.shadowMap.autoUpdate : undefined;
         const previousClearColor = new THREE.Color();
         const previousClearAlpha = renderer.getClearAlpha?.() ?? 1;
         renderer.getClearColor?.(previousClearColor);
 
         try {
             renderer.autoClear = true;
+            if (renderer.shadowMap) renderer.shadowMap.autoUpdate = false;
             renderer.setRenderTarget?.(null);
             renderer.setClearColor?.(0x000000, 0);
             renderer.clear?.(true, true, true);
             renderer.render(scene, renderPreview.camera);
+            if (window.LightflowAtmosphere && typeof window.LightflowAtmosphere.composite === 'function') {
+                window.LightflowAtmosphere.composite(renderPreview, {
+                    studio: true,
+                    bloomMask: true
+                });
+            }
             drawTile(targetContext, renderPreview, tile, sampleFactor);
         } finally {
             for (let index = changes.length - 1; index >= 0; index--) {
@@ -1577,6 +1585,7 @@
             }
             renderer.setRenderTarget?.(previousTarget || null);
             renderer.autoClear = previousAutoClear;
+            if (renderer.shadowMap && previousShadowAutoUpdate !== undefined) renderer.shadowMap.autoUpdate = previousShadowAutoUpdate;
             renderer.setClearColor?.(previousClearColor, previousClearAlpha);
         }
     }
