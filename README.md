@@ -40,7 +40,7 @@ The plugins work independently where possible, but they are designed to be used 
 | Plugin | Current version | Purpose | Dependency |
 | --- | ---: | --- | --- |
 | **Light Manager** | `1.5.2` | Adds production-oriented point, spot, and directional lights with adaptive shadows, gizmos, animation support, and lighting profiles. | None |
-| **Shader Architect** | `2.3.0` | Builds and assigns advanced materials, supports Blockbench render modes, stable Cube-masked depth-aware ambient occlusion, editable GLSL, and material instances. | **Light Manager required** |
+| **Shader Architect** | `2.4.0` | Builds and assigns advanced materials with thickness-aware SSS, layered PBR controls, Blockbench render modes, stable Cube-masked AO, editable GLSL, and material instances. | **Light Manager required** |
 | **Studio Render** | `1.3.0` | Exports clean images with tiled supersampling, HDR/emissive Bloom with geometry occlusion, adjustable framing, transparency, and 4K/8K-safe output controls. | Works alone; integrates with the other two plugins |
 
 ### Why Lightflow exists
@@ -127,7 +127,7 @@ With **Light Manager** enabled:
 With **Shader Architect** enabled:
 
 1. Open **Material Studio**.
-2. Choose a built-in material such as **Lightflow**, **LumaForge**, or **PBR Metallic/Roughness**.
+2. Choose a built-in material such as **Lightflow**, **LumaForge**, or **Lightflow Principled PBR**.
 3. Apply it globally, to selected cubes, or to selected faces.
 4. Use exposed controls to tune lighting, ambient contribution, shadows, bevels, outlines, rim light, AO, or reflections as appropriate. Lightflow's **Shadows** toggle switches cast shadows without changing presets.
 5. Create a **Material Instance** when different parts of the same model need different values without duplicating the shader code.
@@ -185,7 +185,10 @@ Shader Architect is Lightflow's material and shader workspace. It can drive an e
 - Import and export of custom `.samat` material files.
 - Exposed uniforms for artist-facing controls and advanced technical controls for shader authors.
 - Dynamic Light Manager uniforms for light positions, directions, colors, intensities, attenuation, cones, and shadow behavior.
-- Built-in surface systems including PBR-style controls, stylized lighting, voxel-style AO, shadows, screen-space reflections, bevels, alpha-edge treatment, outlines, and promotional rim lighting.
+- Built-in surface systems including PBR-style controls, thickness-aware real-time subsurface scattering, stylized lighting, voxel-style AO, shadows, screen-space reflections, bevels, alpha-edge treatment, outlines, and promotional rim lighting.
+- Independently switchable PBR layers for clearcoat, anisotropy, sheen, transmission, and iridescence, plus specular and clearcoat tint controls.
+- UV-derived tangent frames for proper tangent-space normal maps and genuinely directional anisotropic GGX highlights, even when Blockbench geometry has no exported tangent attribute.
+- Native Blockbench `MER Subsurface` support: its alpha channel becomes a per-pixel SSS mask instead of being treated as glass transmission.
 - Native Blockbench texture semantics for `emissive`, `additive`, and `layered` render modes, including MER green-channel emission.
 - LumaForge shadow switching and alpha-aware rim/outline masking for cleaner transparent edges.
 
@@ -227,13 +230,26 @@ The current built-in preset library includes:
 | Preset | Best use |
 | --- | --- |
 | **Classic Shader** | Familiar Blockbench-like rendering with simple controls. |
-| **PBR Metallic/Roughness** | A more technical material workflow with metallic/roughness-style behavior. |
+| **Lightflow Principled PBR** | Layered physically based controls for metal/roughness, SSS, clearcoat, sheen, transmission, iridescence, and reflections. |
 | **Lightflow** | General-purpose stylized lighting. Use its **Shadows** toggle for shadowed or shadow-free rendering without switching materials. |
 | **Pixelated Lightflow** | A deliberately stepped or pixel-oriented shaded response. |
 | **LumaForge** | A more stylized studio material with artistic Lightflow features. |
 | **Minecraft Promotional Bevel** | A specialized promotional bevel treatment for blocky, illustrated presentation renders. |
 
 Use the preset name as a starting point, not as a guarantee of a specific visual style. A good render comes from the interaction between the preset, texture content, cube scale, lighting, camera angle, and export settings.
+
+### Subsurface scattering workflow
+
+Use **Lightflow Principled PBR** for wax, skin-like stylization, leaves, thin fabric, candles, or translucent organic materials:
+
+1. Enable **Subsurface** and raise **SSS Weight** gradually from `0.15` to `0.5`.
+2. Set **SSS Color** to the color that should appear in backlit areas.
+3. Use **SSS Radius** to control how far light wraps around the form, and **SSS Thickness** to control how much backlight survives the material.
+4. Put a point, spot, or directional light behind or beside the subject to evaluate the transmitted-light lobe.
+5. For per-pixel control, use a Blockbench **MER Subsurface** texture. Lightflow reads its alpha channel automatically while **Native PBR SSS** is enabled.
+6. Open advanced material controls to tune **SSS Direction**, **SSS Focus**, **SSS Ambient**, and **SSS Shadows**.
+
+Lightflow's SSS is a stable real-time approximation designed for Blockbench's WebGL pipeline. It models light wrapping, forward/back scattering, thickness absorption, shadow response, and texture masks, but it is not Blender Cycles' path-traced random-walk SSS.
 
 ---
 
