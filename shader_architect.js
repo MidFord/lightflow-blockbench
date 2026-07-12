@@ -10981,6 +10981,7 @@ ${lumaForgeLightflowHelpers}`
                 renderer.clear(true, true, true);
                 try { renderer.render(Canvas.scene, camera); }
                 finally { hidden.forEach(object => { object.visible = true; }); }
+                state.lightflowDepthStamp = performance.now();
 
                 renderer.setRenderTarget(previousTarget || null);
                 if (previousViewport) renderer.setViewport?.(previousViewport);
@@ -13070,15 +13071,23 @@ ${lumaForgeLightflowHelpers}`
             const manager = this;
 
             const patchedRender = function minecraftPromotionalSilhouetteRender() {
-                const result = originalRender.apply(
-                    this,
-                    arguments
-                );
+                this.lightflow_atmosphere_host_cycle = true;
+                try {
+                    const result = originalRender.apply(
+                        this,
+                        arguments
+                    );
 
-                if (!this.sa_studio_render_manual_silhouette) {
-                    manager.renderSilhouette(this);
+                    if (window.LightflowAtmosphere && typeof window.LightflowAtmosphere.composite === 'function') {
+                        window.LightflowAtmosphere.composite(this);
+                    }
+                    if (!this.sa_studio_render_manual_silhouette) {
+                        manager.renderSilhouette(this);
+                    }
+                    return result;
+                } finally {
+                    delete this.lightflow_atmosphere_host_cycle;
                 }
-                return result;
             };
 
             preview.render = patchedRender;
