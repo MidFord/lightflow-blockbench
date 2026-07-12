@@ -527,7 +527,7 @@
         "shader_architect.ui.allow_lower": "Allow Lower",
 
         "shader_architect.preset.classic": "Classic Shader",
-        "shader_architect.preset.pbr_metallic_roughness": "PBR Metallic/Roughness",
+        "shader_architect.preset.pbr_metallic_roughness": "Lightflow Principled PBR",
         "shader_architect.preset.lightflow": "Lightflow",
         "shader_architect.preset.shaded_lightflow": "Lightflow (Legacy)",
         "shader_architect.preset.pixelated_shaded_lightflow": "Pixelated Lightflow",
@@ -709,20 +709,30 @@
         "shader_architect.uniform.uRoughness.desc": "Surface roughness factor, controlling glossy reflections scatter",
         "shader_architect.uniform.uAO": "Baked AO",
         "shader_architect.uniform.uAO.desc": "Baked ambient occlusion factor",
+        "shader_architect.uniform.uClearcoatEnabled": "Coat Layer",
+        "shader_architect.uniform.uClearcoatEnabled.desc": "Enable the clearcoat lighting layer; disabling it skips its per-light calculation",
         "shader_architect.uniform.uClearcoat": "Clearcoat",
         "shader_architect.uniform.uClearcoat.desc": "Clearcoat layer intensity (e.g. lacquer/varnish)",
         "shader_architect.uniform.uClearcoatRoughness": "Coat Rough",
         "shader_architect.uniform.uClearcoatRoughness.desc": "Roughness of the clearcoat layer",
+        "shader_architect.uniform.uClearcoatTint": "Coat Tint",
+        "shader_architect.uniform.uClearcoatTint.desc": "Color tint of the clearcoat reflection",
+        "shader_architect.uniform.uAnisotropyEnabled": "Anisotropy Layer",
+        "shader_architect.uniform.uAnisotropyEnabled.desc": "Enable directional stretching of specular highlights",
         "shader_architect.uniform.uAnisotropy": "Anisotropy",
         "shader_architect.uniform.uAnisotropy.desc": "Reflection anisotropy level (stretching along a direction)",
         "shader_architect.uniform.uAnisotropyDirection": "Aniso Dir",
         "shader_architect.uniform.uAnisotropyDirection.desc": "Orientation angle/vector of anisotropy tangent",
+        "shader_architect.uniform.uSheenEnabled": "Sheen Layer",
+        "shader_architect.uniform.uSheenEnabled.desc": "Enable the fabric-like sheen lighting layer",
         "shader_architect.uniform.uSheen": "Sheen",
         "shader_architect.uniform.uSheen.desc": "Sheen backscattering intensity for velvet/fabric effects",
         "shader_architect.uniform.uSheenColor": "Sheen Color",
         "shader_architect.uniform.uSheenColor.desc": "Color of the sheen reflection",
         "shader_architect.uniform.uSheenRoughness": "Sheen Soft",
         "shader_architect.uniform.uSheenRoughness.desc": "Roughness of the sheen reflection",
+        "shader_architect.uniform.uTransmissionEnabled": "Transmission Layer",
+        "shader_architect.uniform.uTransmissionEnabled.desc": "Enable thickness-aware light transmission",
         "shader_architect.uniform.uTransmission": "Transmission",
         "shader_architect.uniform.uTransmission.desc": "Light transmission factor (translucency/glass effect)",
         "shader_architect.uniform.uThickness": "Thickness",
@@ -733,6 +743,10 @@
         "shader_architect.uniform.uAttenuationDistance.desc": "Distance light travels through medium before absorption",
         "shader_architect.uniform.uIOR": "IOR",
         "shader_architect.uniform.uIOR.desc": "Index of Refraction (IOR) determining light bending",
+        "shader_architect.uniform.uThinWalled": "Thin Walled",
+        "shader_architect.uniform.uThinWalled.desc": "Treat the surface as a thin sheet for stronger back transmission",
+        "shader_architect.uniform.uIridescenceEnabled": "Iridescence Layer",
+        "shader_architect.uniform.uIridescenceEnabled.desc": "Enable the thin-film iridescence lighting layer",
         "shader_architect.uniform.uIridescence": "Iridescence",
         "shader_architect.uniform.uIridescence.desc": "Thin-film interference iridescence (rainbow shimmer)",
         "shader_architect.uniform.uIridescenceIOR": "Iridesc IOR",
@@ -741,6 +755,28 @@
         "shader_architect.uniform.uIridescenceThicknessMin.desc": "Minimum thickness of thin-film in nanometers",
         "shader_architect.uniform.uIridescenceThicknessMax": "Iridesc Max",
         "shader_architect.uniform.uIridescenceThicknessMax.desc": "Maximum thickness of thin-film in nanometers",
+        "shader_architect.uniform.uSSSEnabled": "Subsurface",
+        "shader_architect.uniform.uSSSEnabled.desc": "Enable real-time thickness-aware subsurface scattering for wax, skin, leaves, and fabric",
+        "shader_architect.uniform.uSSSWeight": "SSS Weight",
+        "shader_architect.uniform.uSSSWeight.desc": "Overall amount of diffuse light replaced by subsurface scattering",
+        "shader_architect.uniform.uSSSColor": "SSS Color",
+        "shader_architect.uniform.uSSSColor.desc": "Color of light after it scatters inside the material",
+        "shader_architect.uniform.uSSSRadius": "SSS Radius",
+        "shader_architect.uniform.uSSSRadius.desc": "Mean scattering distance; larger values wrap light farther around the surface",
+        "shader_architect.uniform.uSSSThickness": "SSS Thickness",
+        "shader_architect.uniform.uSSSThickness.desc": "Approximate material thickness used for absorption and backlighting",
+        "shader_architect.uniform.uSSSDistortion": "SSS Direction",
+        "shader_architect.uniform.uSSSDistortion.desc": "Bends the transmitted-light lobe toward the surface normal",
+        "shader_architect.uniform.uSSSPower": "SSS Focus",
+        "shader_architect.uniform.uSSSPower.desc": "Sharpness of the forward-scattering highlight",
+        "shader_architect.uniform.uSSSAmbient": "SSS Ambient",
+        "shader_architect.uniform.uSSSAmbient.desc": "Soft ambient energy returned by the scattering medium",
+        "shader_architect.uniform.uSSSShadowMix": "SSS Shadows",
+        "shader_architect.uniform.uSSSShadowMix.desc": "How strongly cast shadows block subsurface light",
+        "shader_architect.uniform.uSSSUseNativePBR": "Native PBR SSS",
+        "shader_architect.uniform.uSSSUseNativePBR.desc": "Read Blockbench material-config SSS and MER Subsurface alpha automatically",
+        "shader_architect.uniform.uUseSSSMaskMap": "MER SSS Mask",
+        "shader_architect.uniform.uUseSSSMaskMap.desc": "Use the alpha channel of a Blockbench MER Subsurface map as the per-pixel SSS mask",
         "shader_architect.uniform.uEmissiveColor": "Emit Color",
         "shader_architect.uniform.uEmissiveColor.desc": "Self-illumination emissive color",
         "shader_architect.uniform.uEmissiveStrength": "Emit Power",
@@ -807,6 +843,8 @@
         "shader_architect.uniform.uEnvSpecularStrength.desc": "Intensity of specular reflection from the environment environment",
         "shader_architect.uniform.uSpecularIntensity": "Specular",
         "shader_architect.uniform.uSpecularIntensity.desc": "General multiplier for direct specular highlight highlights",
+        "shader_architect.uniform.uSpecularTint": "Specular Tint",
+        "shader_architect.uniform.uSpecularTint.desc": "Tint dielectric reflections toward the base color without making the surface metallic",
         "shader_architect.uniform.uSSREnabled": "SSR",
         "shader_architect.uniform.uSSREnabled.desc": "Enable real screen-space reflections for this material",
         "shader_architect.uniform.uSSRIntensity": "SSR Power",
@@ -996,7 +1034,7 @@
         "shader_architect.ui.allow_lower": "Permitir menor",
 
         "shader_architect.preset.classic": "Shader Clásico",
-        "shader_architect.preset.pbr_metallic_roughness": "PBR Metálico/Rugosidad",
+        "shader_architect.preset.pbr_metallic_roughness": "PBR Principled Lightflow",
         "shader_architect.preset.lightflow": "Lightflow",
         "shader_architect.preset.shaded_lightflow": "Lightflow (Compatibilidad)",
         "shader_architect.preset.pixelated_shaded_lightflow": "Lightflow Pixelado",
@@ -1028,20 +1066,30 @@
         "shader_architect.uniform.uRoughness.desc": "Que tan opacos o definidos son los brillos",
         "shader_architect.uniform.uAO": "AO Baked",
         "shader_architect.uniform.uAO.desc": "Factor de oclusion ambiente horneada",
+        "shader_architect.uniform.uClearcoatEnabled": "Capa Barniz",
+        "shader_architect.uniform.uClearcoatEnabled.desc": "Activa la capa de barniz; al apagarla omite su calculo por luz",
         "shader_architect.uniform.uClearcoat": "Barniz",
         "shader_architect.uniform.uClearcoat.desc": "Capa brillante adicional",
         "shader_architect.uniform.uClearcoatRoughness": "Barniz Rug",
         "shader_architect.uniform.uClearcoatRoughness.desc": "Rugosidad del barniz",
+        "shader_architect.uniform.uClearcoatTint": "Tinte Barniz",
+        "shader_architect.uniform.uClearcoatTint.desc": "Color del reflejo de la capa de barniz",
+        "shader_architect.uniform.uAnisotropyEnabled": "Capa Aniso",
+        "shader_architect.uniform.uAnisotropyEnabled.desc": "Activa el estiramiento direccional de reflejos",
         "shader_architect.uniform.uAnisotropy": "Aniso",
         "shader_architect.uniform.uAnisotropy.desc": "Estiramiento direccional del brillo",
         "shader_architect.uniform.uAnisotropyDirection": "Dir Aniso",
         "shader_architect.uniform.uAnisotropyDirection.desc": "Direccion del brillo anisotropico",
+        "shader_architect.uniform.uSheenEnabled": "Capa Tela",
+        "shader_architect.uniform.uSheenEnabled.desc": "Activa la capa de brillo suave tipo tela",
         "shader_architect.uniform.uSheen": "Tela",
         "shader_architect.uniform.uSheen.desc": "Brillo suave tipo tela",
         "shader_architect.uniform.uSheenColor": "Color Tela",
         "shader_architect.uniform.uSheenColor.desc": "Color del brillo tipo tela",
         "shader_architect.uniform.uSheenRoughness": "Tela Rug",
         "shader_architect.uniform.uSheenRoughness.desc": "Suavidad del brillo tipo tela",
+        "shader_architect.uniform.uTransmissionEnabled": "Capa Transmis",
+        "shader_architect.uniform.uTransmissionEnabled.desc": "Activa transmision de luz dependiente del grosor",
         "shader_architect.uniform.uTransmission": "Transmis",
         "shader_architect.uniform.uTransmission.desc": "Paso de luz tipo vidrio",
         "shader_architect.uniform.uThickness": "Grosor",
@@ -1052,6 +1100,10 @@
         "shader_architect.uniform.uAttenuationDistance.desc": "Distancia antes de absorber luz",
         "shader_architect.uniform.uIOR": "IOR",
         "shader_architect.uniform.uIOR.desc": "Indice de refraccion",
+        "shader_architect.uniform.uThinWalled": "Pared Delgada",
+        "shader_architect.uniform.uThinWalled.desc": "Trata la superficie como una lamina fina con mayor contraluz",
+        "shader_architect.uniform.uIridescenceEnabled": "Capa Irisada",
+        "shader_architect.uniform.uIridescenceEnabled.desc": "Activa la capa de interferencia irisada",
         "shader_architect.uniform.uIridescence": "Irisado",
         "shader_architect.uniform.uIridescence.desc": "Brillo de interferencia de color",
         "shader_architect.uniform.uIridescenceIOR": "IOR Iris",
@@ -1060,6 +1112,28 @@
         "shader_architect.uniform.uIridescenceThicknessMin.desc": "Grosor minimo del irisado",
         "shader_architect.uniform.uIridescenceThicknessMax": "Iris Max",
         "shader_architect.uniform.uIridescenceThicknessMax.desc": "Grosor maximo del irisado",
+        "shader_architect.uniform.uSSSEnabled": "Subsuperficie",
+        "shader_architect.uniform.uSSSEnabled.desc": "Activa dispersion subsuperficial en tiempo real para cera, piel, hojas y tela",
+        "shader_architect.uniform.uSSSWeight": "Cantidad SSS",
+        "shader_architect.uniform.uSSSWeight.desc": "Cantidad de luz difusa sustituida por dispersion interna",
+        "shader_architect.uniform.uSSSColor": "Color SSS",
+        "shader_architect.uniform.uSSSColor.desc": "Color de la luz despues de dispersarse dentro del material",
+        "shader_architect.uniform.uSSSRadius": "Radio SSS",
+        "shader_architect.uniform.uSSSRadius.desc": "Distancia media de dispersion; valores altos envuelven mas la superficie",
+        "shader_architect.uniform.uSSSThickness": "Grosor SSS",
+        "shader_architect.uniform.uSSSThickness.desc": "Grosor aproximado usado para absorcion y contraluz",
+        "shader_architect.uniform.uSSSDistortion": "Direccion SSS",
+        "shader_architect.uniform.uSSSDistortion.desc": "Inclina el lobulo de luz transmitida hacia la normal",
+        "shader_architect.uniform.uSSSPower": "Enfoque SSS",
+        "shader_architect.uniform.uSSSPower.desc": "Nitidez del brillo de dispersion frontal",
+        "shader_architect.uniform.uSSSAmbient": "Ambiente SSS",
+        "shader_architect.uniform.uSSSAmbient.desc": "Energia ambiente suave devuelta por el medio",
+        "shader_architect.uniform.uSSSShadowMix": "Sombras SSS",
+        "shader_architect.uniform.uSSSShadowMix.desc": "Cuanto bloquean las sombras proyectadas la luz subsuperficial",
+        "shader_architect.uniform.uSSSUseNativePBR": "SSS PBR Nativo",
+        "shader_architect.uniform.uSSSUseNativePBR.desc": "Lee automaticamente el SSS del material y el alfa MER Subsurface de Blockbench",
+        "shader_architect.uniform.uUseSSSMaskMap": "Mascara MER SSS",
+        "shader_architect.uniform.uUseSSSMaskMap.desc": "Usa el canal alfa de MER Subsurface como mascara SSS por pixel",
         "shader_architect.uniform.uEmissiveColor": "Color Emit",
         "shader_architect.uniform.uEmissiveColor.desc": "Color de autoiluminacion",
         "shader_architect.uniform.uEmissiveStrength": "Pot Emit",
@@ -1126,6 +1200,8 @@
         "shader_architect.uniform.uEnvSpecularStrength.desc": "Fuerza del reflejo de entorno",
         "shader_architect.uniform.uSpecularIntensity": "Especular",
         "shader_architect.uniform.uSpecularIntensity.desc": "Fuerza del brillo especular",
+        "shader_architect.uniform.uSpecularTint": "Tinte Especular",
+        "shader_architect.uniform.uSpecularTint.desc": "Tiñe reflejos dielectricos hacia el color base sin volver metalica la superficie",
         "shader_architect.uniform.uSSREnabled": "SSR",
         "shader_architect.uniform.uSSREnabled.desc": "Activa reflejos en pantalla",
         "shader_architect.uniform.uSSRIntensity": "Pot SSR",
@@ -1655,7 +1731,7 @@ vec3 saApplyBlockbenchRenderModeEmission(vec3 litColor, vec3 baseColor, float al
         if (/^(uLight|LIGHTCOLOR|LIGHTSIDE|SHADE|max_light_number|uAmbient|uExposure|uToneMapping|uStylizedNormalInfluence|uLightWrap|uClampLighting)/.test(name)) {
             return 'lighting';
         }
-        if (/^(uBaseColor|uMetallic|uRoughness|uClearcoat|uAnisotropy|uSheen|uTransmission|uThickness|uAttenuation|uIOR|uIridescence|uEmissive|uNormalScale|EMISSIVE|uAO$)/.test(name)) {
+        if (/^(uBaseColor|uMetallic|uRoughness|uClearcoat|uAnisotropy|uSheen|uTransmission|uThickness|uAttenuation|uIOR|uThinWalled|uIridescence|uSSS|uUseSSS|uEmissive|uSpecularTint|uNormalScale|EMISSIVE|uAO$)/.test(name)) {
             return 'surface';
         }
         if (def && def.advanced) return 'technical';
@@ -4373,24 +4449,46 @@ uniform float uAO;
 
 uniform float uClearcoat;
 uniform float uClearcoatRoughness;
+uniform bool uClearcoatEnabled;
+uniform vec3 uClearcoatTint;
 
 uniform float uAnisotropy;
 uniform vec2 uAnisotropyDirection;
+uniform bool uAnisotropyEnabled;
 
 uniform float uSheen;
 uniform vec3 uSheenColor;
 uniform float uSheenRoughness;
+uniform bool uSheenEnabled;
 
 uniform float uTransmission;
 uniform float uThickness;
 uniform vec3 uAttenuationColor;
 uniform float uAttenuationDistance;
 uniform float uIOR;
+uniform bool uTransmissionEnabled;
+uniform bool uThinWalled;
 
 uniform float uIridescence;
 uniform float uIridescenceIOR;
 uniform float uIridescenceThicknessMin;
 uniform float uIridescenceThicknessMax;
+uniform bool uIridescenceEnabled;
+
+uniform bool uSSSEnabled;
+uniform float uSSSWeight;
+uniform vec3 uSSSColor;
+uniform float uSSSRadius;
+uniform float uSSSThickness;
+uniform float uSSSDistortion;
+uniform float uSSSPower;
+uniform float uSSSAmbient;
+uniform float uSSSShadowMix;
+uniform bool uSSSUseNativePBR;
+uniform bool uUseSSSMaskMap;
+uniform bool uNativeSSSEnabled;
+uniform float uNativeSSSWeight;
+uniform bool uNativeSSSUseMask;
 
 uniform vec3 uEmissiveColor;
 uniform float uEmissiveStrength;
@@ -4425,6 +4523,7 @@ uniform float uNormalYSign;
 uniform float uHeightScale;
 uniform float uEnvSpecularStrength;
 uniform float uSpecularIntensity;
+uniform float uSpecularTint;
 
 // -------------------------------------------------------------------------
 // Lightflow-compatible light arrays
@@ -4512,6 +4611,36 @@ float D_GGX(float NdotH, float roughness) {
     float nh2 = NdotH * NdotH;
     float denom = nh2 * (a2 - 1.0) + 1.0;
     return a2 * RECIPROCAL_PI / max(denom * denom, 1e-7);
+}
+
+float D_GGX_Anisotropic(
+    vec3 halfVector,
+    vec3 normal,
+    vec3 tangent,
+    vec3 bitangent,
+    float roughness,
+    float anisotropy
+) {
+    float alpha = max(roughness * roughness, 0.001);
+    float aspect = sqrt(max(1.0 - 0.9 * abs(anisotropy), 0.1));
+    float alphaX = max(alpha / aspect, 0.001);
+    float alphaY = max(alpha * aspect, 0.001);
+
+    if (anisotropy < 0.0) {
+        float swapAlpha = alphaX;
+        alphaX = alphaY;
+        alphaY = swapAlpha;
+    }
+
+    float HdotT = dot(halfVector, tangent);
+    float HdotB = dot(halfVector, bitangent);
+    float HdotN = max(dot(halfVector, normal), 0.0);
+    float denominator =
+        (HdotT * HdotT) / (alphaX * alphaX) +
+        (HdotB * HdotB) / (alphaY * alphaY) +
+        HdotN * HdotN;
+
+    return 1.0 / max(PI * alphaX * alphaY * denominator * denominator, 1e-7);
 }
 
 float G_SchlickGGX(float NdotX, float roughness) {
@@ -4787,18 +4916,48 @@ vec3 evaluateIridescence(float NdotV, float thickness) {
     return wave;
 }
 
+void buildSurfaceTangentFrame(vec3 normal, out vec3 tangent, out vec3 bitangent) {
+    vec3 positionDx = dFdx(vWorldPos);
+    vec3 positionDy = dFdy(vWorldPos);
+    vec2 uvDx = dFdx(vUv);
+    vec2 uvDy = dFdy(vUv);
+    float determinant = uvDx.x * uvDy.y - uvDx.y * uvDy.x;
+
+    vec3 fallbackTangent = safeNormalize(
+        cross(abs(normal.y) < 0.999 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0), normal),
+        vec3(1.0, 0.0, 0.0)
+    );
+    vec3 fallbackBitangent = safeNormalize(cross(normal, fallbackTangent), vec3(0.0, 0.0, 1.0));
+
+    if (abs(determinant) > 1e-7) {
+        tangent = safeNormalize(
+            (positionDx * uvDy.y - positionDy * uvDx.y) / determinant,
+            fallbackTangent
+        );
+        tangent = safeNormalize(tangent - normal * dot(normal, tangent), fallbackTangent);
+        bitangent = safeNormalize(cross(normal, tangent), fallbackBitangent);
+    } else {
+        tangent = fallbackTangent;
+        bitangent = fallbackBitangent;
+    }
+}
+
 vec3 applyCheapNormalMap(vec3 normal) {
     if (!uUseNormalMap) return normal;
 
     vec3 nTex = texture2D(uNormalMap, vUv * uNormalMapScale).xyz * 2.0 - 1.0;
     nTex.y *= uNormalYSign;
 
-    // Blockbench meshes usually do not provide tangents. This is a safe stylized
-    // perturbation, not a full tangent-space normal map. It stays optional.
-    vec3 axisX = safeNormalize(cross(vec3(0.0, 1.0, 0.0), normal), vec3(1.0, 0.0, 0.0));
-    vec3 axisY = safeNormalize(cross(normal, axisX), vec3(0.0, 1.0, 0.0));
+    vec3 tangent;
+    vec3 bitangent;
+    buildSurfaceTangentFrame(normal, tangent, bitangent);
+    float normalStrength = clamp(uNormalScale, 0.0, 2.0);
+    vec3 tangentNormal = safeNormalize(
+        vec3(nTex.xy * normalStrength, max(nTex.z, 0.001)),
+        vec3(0.0, 0.0, 1.0)
+    );
     vec3 bumped = safeNormalize(
-        normal + (axisX * nTex.x + axisY * nTex.y) * clamp(uNormalScale, 0.0, 2.0),
+        tangent * tangentNormal.x + bitangent * tangentNormal.y + normal * tangentNormal.z,
         normal
     );
 
@@ -4825,6 +4984,21 @@ vec3 applyHeightMap(vec3 normal) {
     );
 }
 
+void buildAnisotropyFrame(vec3 normal, out vec3 tangent, out vec3 bitangent) {
+    buildSurfaceTangentFrame(normal, tangent, bitangent);
+
+    vec2 direction = uAnisotropyDirection;
+    float directionLength = length(direction);
+    direction = directionLength > 1e-5 ? direction / directionLength : vec2(1.0, 0.0);
+
+    vec3 orientedTangent = safeNormalize(
+        tangent * direction.x + bitangent * direction.y,
+        tangent
+    );
+    tangent = orientedTangent;
+    bitangent = safeNormalize(cross(normal, tangent), bitangent);
+}
+
 void main() {
     vec4 texel = texture2D(map, vUv);
     texel.a *= clamp(uBaseAlpha, 0.0, 1.0);
@@ -4845,6 +5019,9 @@ void main() {
     float thickness = uThickness;
     float iridescence = uIridescence;
     float iridescenceThickness = mix(uIridescenceThicknessMin, uIridescenceThicknessMax, 0.5);
+    bool nativeSSSActive = uSSSUseNativePBR && uNativeSSSEnabled;
+    bool useSSSMask = uUseSSSMaskMap || (nativeSSSActive && uNativeSSSUseMask);
+    float sssMask = useSSSMask ? 0.0 : 1.0;
     vec3 emissive = uEmissiveColor * max(uEmissiveStrength, 0.0);
 
     if (uUseBaseColorMap) {
@@ -4857,6 +5034,10 @@ void main() {
         roughness *= uUseBlockbenchMERMap ? mr.b : mr.g;
         if (uUseBlockbenchMERMap) {
             emissive += baseColor * mr.g * max(uEmissiveStrength, 0.0);
+        }
+        if (useSSSMask) {
+            // Blockbench's MER Subsurface convention stores the SSS mask in alpha.
+            sssMask = mr.a;
         }
     }
 
@@ -4880,6 +5061,27 @@ void main() {
     thickness = max(thickness, 0.0);
     iridescence = clamp(iridescence, 0.0, 1.0);
 
+    if (!uClearcoatEnabled) clearcoat = 0.0;
+    if (!uAnisotropyEnabled) anisotropy = 0.0;
+    if (!uSheenEnabled) sheen = 0.0;
+    if (!uTransmissionEnabled) transmission = 0.0;
+    if (!uIridescenceEnabled) iridescence = 0.0;
+
+    bool sssEnabled = uSSSEnabled || nativeSSSActive;
+    float manualSSSWeight = uSSSEnabled ? clamp(uSSSWeight, 0.0, 1.0) : 0.0;
+    float nativeSSSWeight = nativeSSSActive ? clamp(uNativeSSSWeight, 0.0, 1.0) : 0.0;
+    float sssWeight = sssEnabled
+        ? max(manualSSSWeight, nativeSSSWeight) * clamp(sssMask, 0.0, 1.0) * (1.0 - metallic)
+        : 0.0;
+    float sssRadius = max(uSSSRadius, 0.001);
+    float sssThickness = max(uSSSThickness, 0.001);
+    float transmissionThickness = uThinWalled ? min(thickness, 0.075) : thickness;
+    vec3 transmissionAbsorption = exp(
+        -max(vec3(1.0) - clamp(uAttenuationColor, vec3(0.0), vec3(1.0)), vec3(0.0))
+        * transmissionThickness
+        * max(uAttenuationDistance, 0.001)
+    );
+
     vec3 N = safeNormalize(vWorldNormal, vec3(0.0, 1.0, 0.0));
     N = applyCheapNormalMap(N);
     N = applyHeightMap(N);
@@ -4889,15 +5091,29 @@ void main() {
 
     float ior = clamp(uIOR, 1.0, 3.0);
     float dielectricF0 = pow((ior - 1.0) / max(ior + 1.0, 0.001), 2.0);
-    vec3 F0 = mix(vec3(dielectricF0), baseColor, metallic);
+    float baseLuminance = max(dot(baseColor, vec3(0.2126, 0.7152, 0.0722)), 0.001);
+    vec3 baseTint = clamp(baseColor / baseLuminance, vec3(0.0), vec3(4.0));
+    vec3 dielectricSpecular = dielectricF0 * mix(
+        vec3(1.0),
+        baseTint,
+        clamp(uSpecularTint, 0.0, 1.0)
+    );
+    vec3 F0 = mix(dielectricSpecular, baseColor, metallic);
 
     vec3 directDiffuse = vec3(0.0);
     vec3 directSpecular = vec3(0.0);
     vec3 directClearcoat = vec3(0.0);
     vec3 directSheen = vec3(0.0);
+    vec3 directSubsurface = vec3(0.0);
+    vec3 directTransmission = vec3(0.0);
 
     float anisotropyAmount = abs(anisotropy);
-    float specRoughness = clamp(mix(roughness, roughness * (1.0 - 0.55 * anisotropyAmount), anisotropyAmount), 0.035, 1.0);
+    float specRoughness = roughness;
+    vec3 anisotropyTangent = vec3(1.0, 0.0, 0.0);
+    vec3 anisotropyBitangent = vec3(0.0, 0.0, 1.0);
+    if (uAnisotropyEnabled && anisotropyAmount > 0.0001) {
+        buildAnisotropyFrame(N, anisotropyTangent, anisotropyBitangent);
+    }
 
     for (int i = 0; i < 16; i++) {
         if (i >= max_light_number) break;
@@ -4905,7 +5121,8 @@ void main() {
         vec3 L = getLightDirection(i, vWorldPos);
         float attenuation = getLightAttenuation(i, vWorldPos, L);
         float shadow = getCustomLightShadow(i);
-        vec3 radiance = getLightRadiance(i, attenuation) * shadow;
+        vec3 incidentRadiance = getLightRadiance(i, attenuation);
+        vec3 radiance = incidentRadiance * shadow;
 
         float NdotLRaw = dot(N, L);
         float NdotL = max(NdotLRaw, 0.0);
@@ -4917,7 +5134,9 @@ void main() {
         float VdotH = max(dot(V, H), 0.0);
 
         vec3 F = F_Schlick(F0, VdotH);
-        float D = D_GGX(NdotH, specRoughness);
+        float D = anisotropyAmount > 0.0001
+            ? D_GGX_Anisotropic(H, N, anisotropyTangent, anisotropyBitangent, specRoughness, anisotropy)
+            : D_GGX(NdotH, specRoughness);
         float G = G_Smith(NdotV, max(NdotL, 0.001), specRoughness);
 
         vec3 specularBRDF = (D * G * F) / max(4.0 * NdotV * max(NdotL, 0.001), 0.001);
@@ -4927,20 +5146,68 @@ void main() {
         vec3 kD = (vec3(1.0) - kS) * (1.0 - metallic);
         vec3 diffuseBRDF = kD * baseColor * RECIPROCAL_PI;
 
-        directDiffuse += radiance * diffuseBRDF * wrappedNdotL * lightMask;
+        directDiffuse += radiance * diffuseBRDF * wrappedNdotL * lightMask * (1.0 - 0.5 * sssWeight);
         directSpecular += radiance * specularBRDF * NdotL * lightMask;
 
-        float ccD = D_GGX(NdotH, clearcoatRoughness);
-        float ccG = G_Smith(NdotV, max(NdotL, 0.001), clearcoatRoughness);
-        vec3 ccF = F_Schlick(vec3(0.04), VdotH);
-        vec3 ccBRDF = (ccD * ccG * ccF) / max(4.0 * NdotV * max(NdotL, 0.001), 0.001);
-        directClearcoat += radiance * ccBRDF * NdotL * clearcoat * lightMask;
+        if (uClearcoatEnabled && clearcoat > 0.0001) {
+            float ccD = D_GGX(NdotH, clearcoatRoughness);
+            float ccG = G_Smith(NdotV, max(NdotL, 0.001), clearcoatRoughness);
+            vec3 ccF0 = 0.04 * clamp(uClearcoatTint, vec3(0.0), vec3(4.0));
+            vec3 ccF = F_Schlick(ccF0, VdotH);
+            vec3 ccBRDF = (ccD * ccG * ccF) / max(4.0 * NdotV * max(NdotL, 0.001), 0.001);
+            directClearcoat += radiance * ccBRDF * NdotL * clearcoat * lightMask;
+        }
 
-        float sheenD = D_GGX(NdotH, sheenRoughness);
-        float sheenG = G_Smith(NdotV, max(NdotL, 0.001), sheenRoughness);
-        vec3 sheenF = F_Schlick(saturateVec3(sheenColor), VdotH);
-        vec3 sheenBRDF = sheenD * sheenG * sheenF / max(4.0 * NdotV * max(NdotL, 0.001), 0.001);
-        directSheen += radiance * sheenBRDF * NdotL * sheen * (1.0 - metallic) * lightMask;
+        if (uSheenEnabled && sheen > 0.0001) {
+            float sheenD = D_GGX(NdotH, sheenRoughness);
+            float sheenG = G_Smith(NdotV, max(NdotL, 0.001), sheenRoughness);
+            vec3 sheenF = F_Schlick(saturateVec3(sheenColor), VdotH);
+            vec3 sheenBRDF = sheenD * sheenG * sheenF / max(4.0 * NdotV * max(NdotL, 0.001), 0.001);
+            directSheen += radiance * sheenBRDF * NdotL * sheen * (1.0 - metallic) * lightMask;
+        }
+
+        if (sssEnabled && sssWeight > 0.0001) {
+            float radiusWrap = clamp(sssRadius / (sssRadius + 1.0), 0.0, 0.85);
+            float wrappedScatter = max((NdotLRaw + radiusWrap) / (1.0 + radiusWrap), 0.0);
+            float surfaceScatter = max(wrappedScatter - NdotL, 0.0);
+            vec3 bentLight = safeNormalize(
+                L + N * clamp(uSSSDistortion, -0.95, 0.95),
+                L
+            );
+            float viewScatter = pow(
+                max(dot(V, -bentLight), 0.0),
+                max(uSSSPower, 0.25)
+            );
+            float backScatter = pow(
+                max(-NdotLRaw, 0.0),
+                mix(2.0, 0.45, radiusWrap)
+            );
+            float meanFreePath = max(sssRadius * (0.5 + 1.5 * radiusWrap), 0.001);
+            float throughProfile = exp(-sssThickness / meanFreePath);
+            float diffusionProfile = 1.0 - exp(-sssRadius * max(sssThickness, 0.05));
+            float scatterProfile = surfaceScatter * (0.25 + 0.75 * diffusionProfile);
+            scatterProfile += backScatter * (0.35 + 0.65 * viewScatter) * throughProfile;
+            scatterProfile = min(scatterProfile, 2.0);
+
+            // SSS can pass through the casting surface, but artists can restore full
+            // shadowing with SSS Shadow Mix when a denser material is required.
+            float sssShadow = mix(1.0, shadow, clamp(uSSSShadowMix, 0.0, 1.0));
+            directSubsurface += incidentRadiance
+                * baseColor
+                * max(uSSSColor, vec3(0.0))
+                * scatterProfile
+                * sssShadow
+                * sssWeight;
+        }
+
+        if (uTransmissionEnabled && transmission > 0.0001) {
+            float transmissionBacklight = max(-NdotLRaw, 0.0);
+            float transmissionShadow = mix(1.0, shadow, uThinWalled ? 0.15 : 0.45);
+            directTransmission += incidentRadiance
+                * baseColor
+                * transmissionBacklight
+                * transmissionShadow;
+        }
     }
 
     // Contact AO is applied once as the depth-aware Lightflow SSAO pass.
@@ -4963,13 +5230,23 @@ void main() {
     color += directClearcoat * specAO;
     color += directSheen * directAO;
 
+    float sssDiffusion = 1.0 - exp(-sssRadius * max(sssThickness, 0.05));
+    vec3 ambientSubsurface = ambientLight
+        * baseColor
+        * max(uSSSColor, vec3(0.0))
+        * max(uSSSAmbient, 0.0)
+        * sssWeight
+        * (0.2 + 0.8 * sssDiffusion);
+    color += (directSubsurface + ambientSubsurface) * mix(1.0, directAO, 0.35);
+
     float transmissionFactor = transmission * (1.0 - metallic);
-    vec3 absorption = exp(-max(vec3(1.0) - uAttenuationColor, vec3(0.0)) * thickness * max(uAttenuationDistance, 0.001));
-    vec3 transmitted = ambientLight * baseColor * absorption;
+    vec3 transmitted = (ambientLight * baseColor + directTransmission) * transmissionAbsorption;
     color = mix(color, transmitted + directSpecular * specAO, transmissionFactor);
 
-    vec3 irid = evaluateIridescence(NdotV, iridescenceThickness);
-    color += irid * iridescence * (0.08 + 0.35 * (1.0 - roughness));
+    if (uIridescenceEnabled && iridescence > 0.0001) {
+        vec3 irid = evaluateIridescence(NdotV, iridescenceThickness);
+        color += irid * iridescence * (0.08 + 0.35 * (1.0 - roughness));
+    }
 
     color += emissive;
 
@@ -5006,30 +5283,53 @@ void main() {
                     "uAO": { type: "float", value: 1.0, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
 
                     // Clearcoat
+                    "uClearcoatEnabled": { type: "bool", value: true, expose: true },
                     "uClearcoat": { type: "float", value: 0.0, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
-                    "uClearcoatRoughness": { type: "float", value: 0.1, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
+                    "uClearcoatRoughness": { type: "float", value: 0.1, expose: true, advanced: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
+                    "uClearcoatTint": { type: "vec3", value: new THREE.Vector3(1, 1, 1), hexValue: "#ffffff", expose: true, is_color: true, advanced: true },
 
                     // Anisotropy
+                    "uAnisotropyEnabled": { type: "bool", value: true, expose: true },
                     "uAnisotropy": { type: "float", value: 0.0, expose: true, min: -1.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
-                    "uAnisotropyDirection": { type: "vec2", value: new THREE.Vector2(1.0, 0.0), expose: true },
+                    "uAnisotropyDirection": { type: "vec2", value: new THREE.Vector2(1.0, 0.0), expose: true, advanced: true },
 
                     // Sheen
+                    "uSheenEnabled": { type: "bool", value: true, expose: true },
                     "uSheen": { type: "float", value: 0.0, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
-                    "uSheenColor": { type: "vec3", value: new THREE.Vector3(1, 1, 1), hexValue: "#ffffff", expose: true, is_color: true },
-                    "uSheenRoughness": { type: "float", value: 0.5, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
+                    "uSheenColor": { type: "vec3", value: new THREE.Vector3(1, 1, 1), hexValue: "#ffffff", expose: true, is_color: true, advanced: true },
+                    "uSheenRoughness": { type: "float", value: 0.5, expose: true, advanced: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
 
                     // Transmission
+                    "uTransmissionEnabled": { type: "bool", value: true, expose: true },
                     "uTransmission": { type: "float", value: 0.0, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
                     "uThickness": { type: "float", value: 1.0, expose: true, min: 0.0, max: 10.0, step: 0.1, allow_higher: true, allow_lower: false },
-                    "uAttenuationColor": { type: "vec3", value: new THREE.Vector3(1, 1, 1), hexValue: "#ffffff", expose: true, is_color: true },
-                    "uAttenuationDistance": { type: "float", value: 1.0, expose: true, min: 0.0, max: 10.0, step: 0.1, allow_higher: true, allow_lower: false },
-                    "uIOR": { type: "float", value: 1.5, expose: true, min: 1.0, max: 3.0, step: 0.01, allow_higher: true, allow_lower: false },
+                    "uAttenuationColor": { type: "vec3", value: new THREE.Vector3(1, 1, 1), hexValue: "#ffffff", expose: true, is_color: true, advanced: true },
+                    "uAttenuationDistance": { type: "float", value: 1.0, expose: true, advanced: true, min: 0.0, max: 10.0, step: 0.1, allow_higher: true, allow_lower: false },
+                    "uIOR": { type: "float", value: 1.5, expose: true, advanced: true, min: 1.0, max: 3.0, step: 0.01, allow_higher: true, allow_lower: false },
+                    "uThinWalled": { type: "bool", value: false, expose: true, advanced: true },
 
                     // Iridescence
+                    "uIridescenceEnabled": { type: "bool", value: true, expose: true },
                     "uIridescence": { type: "float", value: 0.0, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
-                    "uIridescenceIOR": { type: "float", value: 1.33, expose: true, min: 1.0, max: 3.0, step: 0.01, allow_higher: true, allow_lower: false },
-                    "uIridescenceThicknessMin": { type: "float", value: 100.0, expose: true, min: 0.0, max: 1000.0, step: 10.0, allow_higher: true, allow_lower: false },
-                    "uIridescenceThicknessMax": { type: "float", value: 400.0, expose: true, min: 0.0, max: 1000.0, step: 10.0, allow_higher: true, allow_lower: false },
+                    "uIridescenceIOR": { type: "float", value: 1.33, expose: true, advanced: true, min: 1.0, max: 3.0, step: 0.01, allow_higher: true, allow_lower: false },
+                    "uIridescenceThicknessMin": { type: "float", value: 100.0, expose: true, advanced: true, min: 0.0, max: 1000.0, step: 10.0, allow_higher: true, allow_lower: false },
+                    "uIridescenceThicknessMax": { type: "float", value: 400.0, expose: true, advanced: true, min: 0.0, max: 1000.0, step: 10.0, allow_higher: true, allow_lower: false },
+
+                    // Subsurface scattering (real-time, thickness-aware approximation)
+                    "uSSSEnabled": { type: "bool", value: false, expose: true },
+                    "uSSSWeight": { type: "float", value: 0.0, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
+                    "uSSSColor": { type: "vec3", value: new THREE.Vector3(1.0, 0.42, 0.28), hexValue: "#ff6b47", expose: true, is_color: true },
+                    "uSSSRadius": { type: "float", value: 0.5, expose: true, min: 0.01, max: 4.0, step: 0.01, allow_higher: true, allow_lower: false },
+                    "uSSSThickness": { type: "float", value: 0.35, expose: true, min: 0.01, max: 4.0, step: 0.01, allow_higher: true, allow_lower: false },
+                    "uSSSDistortion": { type: "float", value: 0.25, expose: true, advanced: true, min: -0.95, max: 0.95, step: 0.05, allow_higher: false, allow_lower: false },
+                    "uSSSPower": { type: "float", value: 2.0, expose: true, advanced: true, min: 0.25, max: 8.0, step: 0.05, allow_higher: true, allow_lower: false },
+                    "uSSSAmbient": { type: "float", value: 0.15, expose: true, advanced: true, min: 0.0, max: 2.0, step: 0.05, allow_higher: true, allow_lower: false },
+                    "uSSSShadowMix": { type: "float", value: 0.35, expose: true, advanced: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
+                    "uSSSUseNativePBR": { type: "bool", value: true, expose: true, advanced: true },
+                    "uUseSSSMaskMap": { type: "bool", value: false, expose: true, advanced: true },
+                    "uNativeSSSEnabled": { type: "bool", value: false, expose: false },
+                    "uNativeSSSWeight": { type: "float", value: 0.0, expose: false },
+                    "uNativeSSSUseMask": { type: "bool", value: false, expose: false },
 
                     // Emission
                     "uEmissiveColor": { type: "vec3", value: new THREE.Vector3(0, 0, 0), hexValue: "#000000", expose: true, is_color: true },
@@ -5067,6 +5367,7 @@ void main() {
                     "uHeightScale": { type: "float", value: 0.4, expose: false },
                     "uEnvSpecularStrength": { type: "float", value: 0.35, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: true, allow_lower: false },
                     "uSpecularIntensity": { type: "float", value: 1.0, expose: true, min: 0.0, max: 2.0, step: 0.05, allow_higher: true, allow_lower: false },
+                    "uSpecularTint": { type: "float", value: 0.0, expose: true, advanced: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
 
                     // Light arrays / Lightflow-compatible uniforms
                     "uLightPos": { type: "vec3v", value: Array.from({ length: 16 }, () => new THREE.Vector3()), expose: false },
@@ -13312,6 +13613,11 @@ ${lumaForgeLightflowHelpers}`
             const merTexture = this.getTextureFromGroupByPBRChannel(textureGroup, ['mer', 'mer_subsurface']);
             const emissiveTexture = this.getTextureFromGroupByPBRChannel(textureGroup, ['emissive', 'emission', 'emit']);
             const materialConfig = textureGroup.material_config || {};
+            const merChannel = String((merTexture && merTexture.pbr_channel) || '').toLowerCase();
+            const useSubsurfaceAlpha = !!(
+                merTexture &&
+                (merChannel === 'mer_subsurface' || materialConfig.subsurface_enabled === true)
+            );
 
             const colorValue = Array.isArray(materialConfig.color_value)
                 ? materialConfig.color_value
@@ -13372,7 +13678,10 @@ ${lumaForgeLightflowHelpers}`
                 useHeightMap: !!heightMap && !normalMap,
                 useMERMap: !!merMap,
                 useEmissiveMap: !!emissiveMap || !!merMap || (!!baseColorMap && Number(merValue[1]) > 0),
-                subsurface: Math.clamp((Number(materialConfig.subsurface_value) || 0) / 255, 0, 1)
+                useSubsurfaceAlpha,
+                subsurface: useSubsurfaceAlpha
+                    ? 1.0
+                    : Math.clamp((Number(materialConfig.subsurface_value) || 0) / 255, 0, 1)
             };
         },
 
@@ -13587,6 +13896,9 @@ ${lumaForgeLightflowHelpers}`
             const nativePBR = sourceState && sourceState.nativePBR;
             if (!nativePBR || !nativePBR.enabled) {
                 ensureUniform('uUseNativePBR', false, 'bool');
+                ensureUniform('uNativeSSSEnabled', false, 'bool');
+                ensureUniform('uNativeSSSWeight', 0.0, 'float');
+                ensureUniform('uNativeSSSUseMask', false, 'bool');
                 return;
             }
 
@@ -13633,7 +13945,17 @@ ${lumaForgeLightflowHelpers}`
             ensureUniform('uHeightScale', 0.4, 'float');
             ensureUniform('uNativePBRSpecularStrength', 0.35, 'float');
 
-            if (hasUniform('uTransmission') && nativePBR.subsurface > 0) {
+            if (hasUniform('uNativeSSSEnabled')) {
+                ensureUniform('uNativeSSSEnabled', nativePBR.subsurface > 0 || nativePBR.useSubsurfaceAlpha, 'bool');
+                ensureUniform('uNativeSSSWeight', nativePBR.subsurface, 'float');
+                ensureUniform('uNativeSSSUseMask', nativePBR.useSubsurfaceAlpha, 'bool');
+            } else if (hasUniform('uSSSEnabled')) {
+                // Compatibility path for custom SSS shaders created before 2.4.
+                ensureUniform('uSSSEnabled', nativePBR.subsurface > 0 || nativePBR.useSubsurfaceAlpha, 'bool');
+                ensureUniform('uSSSWeight', nativePBR.subsurface, 'float');
+                ensureUniform('uUseSSSMaskMap', nativePBR.useSubsurfaceAlpha, 'bool');
+            } else if (hasUniform('uTransmission') && nativePBR.subsurface > 0) {
+                // Compatibility fallback for older custom shaders without Lightflow SSS.
                 ensureUniform('uTransmission', nativePBR.subsurface, 'float');
             }
 
@@ -17214,7 +17536,7 @@ ${lumaForgeLightflowHelpers}`
         author: 'MidFord327',
         description: 'Build advanced Blockbench materials with real-time Lightflow presets, editable GLSL, material instances, and deep Light Manager integration. Requires Light Manager for lights and shadows.',
         tags: ['Lightflow', 'Shaders', 'Materials', 'Rendering', 'GLSL', 'Lighting'],
-        version: '2.3.0',
+        version: '2.4.0',
         min_version: '4.9.0',
         variant: 'both',
 
