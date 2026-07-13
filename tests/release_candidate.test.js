@@ -25,7 +25,7 @@ test('all independently loadable plugins parse as JavaScript', () => {
 test('release candidate versions stay synchronized with the README', () => {
     const expected = {
         'light_manager.js': '1.6.1',
-        'shader_architect.js': '2.5.1',
+        'shader_architect.js': '2.6.0',
         'lightflow_atmosphere.js': '0.2.0',
         'studio_render.js': '1.4.2'
     };
@@ -73,6 +73,23 @@ test('AO render targets remain DPI-safe without relying on shadow-map passes', (
     assert.match(source, /if \(renderer\.shadowMap\) renderer\.shadowMap\.autoUpdate = false/);
     assert.doesNotMatch(source, /setRenderTarget\(state\.sceneTarget\);\s*renderer\.setViewport/s);
     assert.doesNotMatch(source, /setRenderTarget\(state\.cubeTarget\);\s*renderer\.setViewport/s);
+});
+
+test('high-object-count rendering collapses equivalent Cube slots and removes per-object frame work', () => {
+    const source = read('shader_architect.js');
+    assert.match(source, /materialsCanCollapse\(left, right\)/);
+    assert.match(source, /mesh\.material = pooled/);
+    assert.match(source, /saCollapsedMaterialSlots/);
+    assert.match(source, /saOriginalMaterialSlotCount/);
+    assert.match(source, /poolMaterial\(material\)/);
+    assert.match(source, /sourceMaterial\.is_sa_pooled/);
+    assert.match(source, /bindSharedFrameUniforms\(targetMaterial\)/);
+    assert.match(source, /bindSharedLightUniforms\(targetMaterial\)/);
+    assert.match(source, /shaderArchitectPerDrawUniformSync/);
+    assert.match(source, /colorWrite: false/);
+    assert.match(source, /LightflowPerformance/);
+    assert.doesNotMatch(source, /self\.updateWorldNormalMatrices\(animationTargets\)/);
+    assert.doesNotMatch(source, /requestSceneUpdate\('update_selection',[\s\S]{0,160}partial: true/);
 });
 
 test('automatic normal bias migrates the old formula and PBR matches Lightflow intensity units', () => {
