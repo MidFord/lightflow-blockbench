@@ -2,11 +2,11 @@
     'use strict';
 
     const PLUGIN_ID = 'lightflow_atmosphere';
-    const PLUGIN_VERSION = '0.1.0';
+    const PLUGIN_VERSION = '0.1.1';
     const MAX_VOLUMES = 4;
     const MAX_LIGHTS = 4;
     const MAX_SHADOWS = 2;
-    const MAX_RAY_STEPS = 160;
+    const MAX_RAY_STEPS = 96;
     const STORAGE_KEY = 'lightflow_atmosphere.settings';
     const DEFAULT_SETTINGS = {
         enabled: true,
@@ -14,12 +14,12 @@
         helper_mask: true,
         preview_quality: 'balanced',
         render_quality: 'high',
-        preview_scale: 0.65,
+        preview_scale: 0.5,
         render_scale: 1.0
     };
 
-    const PREVIEW_STEPS = { draft: 24, balanced: 40, high: 64, ultra: 88 };
-    const RENDER_STEPS = { draft: 48, balanced: 80, high: 120, ultra: 160 };
+    const PREVIEW_STEPS = { draft: 16, balanced: 24, high: 36, ultra: 48 };
+    const RENDER_STEPS = { draft: 28, balanced: 44, high: 64, ultra: 96 };
     const QUALITY_OPTIONS = {
         draft: 'Draft',
         balanced: 'Balanced',
@@ -35,9 +35,9 @@
             scattering_color: [214, 229, 242], absorption_color: [226, 235, 242]
         },
         godrays: {
-            density_mode: 'uniform', density: 0.052, scattering_strength: 1.15,
-            absorption: 0.12, anisotropy: 0.72, edge_feather: 0.08,
-            ambient: 0.035, receive_shadows: true,
+            density_mode: 'uniform', density: 0.06, scattering_strength: 1.4,
+            absorption: 0.025, anisotropy: 0.68, edge_feather: 0.32,
+            ambient: 0.008, receive_shadows: true,
             scattering_color: [255, 238, 205], absorption_color: [255, 248, 232]
         },
         clouds: {
@@ -234,7 +234,7 @@
             float result = 0.0;
             float weight = 0.55;
             float normalization = 0.0;
-            for (int octave = 0; octave < 4; octave++) {
+            for (int octave = 0; octave < 3; octave++) {
                 if (float(octave) <= detail - 0.5) {
                     result += projectedNoise3D(point) * weight;
                     normalization += weight;
@@ -281,7 +281,10 @@
                 : 0.5 - length(local);
             if (edgeDistance <= 0.0) return 0.0;
             float edge = smoothstep(0.0, feather * 0.5, edgeDistance);
-            float density = uVolumeOptics[index].x;
+            // Convert compact Blockbench units into a practical optical scale.
+            // This prevents a normal 16-64 unit domain from flattening all
+            // surface lighting while keeping density behavior predictable.
+            float density = uVolumeOptics[index].x * 0.12;
             float normalizedHeight = clamp(local.y + 0.5, 0.0, 1.0);
             float heightFalloff = uVolumeHeightNoise[index].x;
             float heightOffset = uVolumeHeightNoise[index].y;
@@ -303,7 +306,10 @@
         float henyeyGreenstein(float cosTheta, float anisotropy) {
             float g = clamp(anisotropy, -0.92, 0.92);
             float denominator = max(1.0 + g * g - 2.0 * g * cosTheta, 0.0001);
-            return (1.0 - g * g) / (4.0 * PI * pow(denominator, 1.5));
+            // Light Manager uses artist-facing intensity units. Relative HG
+            // normalization preserves the directional lobe without making an
+            // intensity of 1 almost invisible after the physical 1/(4*pi).
+            return (1.0 - g * g) / pow(denominator, 1.5);
         }
 
         float unpackDepth(vec4 packedDepth) {
@@ -389,7 +395,11 @@
                     }
                 }
                 if (attenuation <= 0.00001) continue;
-                float phase = henyeyGreenstein(dot(toLight, viewDirection), anisotropy);
+                // viewDirection points from the camera into the scene, while
+                // the phase function needs the direction from the sample back
+                // to the camera. The old sign inverted forward scattering and
+                // made real camera-facing shafts almost disappear.
+                float phase = henyeyGreenstein(dot(toLight, -viewDirection), anisotropy);
                 int shadowSlot = int(floor(coneShadow.z + 0.5));
                 float visibility = receiveShadows ? lightShadow(shadowSlot, worldPoint) : 1.0;
                 lighting += colorIntensity.rgb * colorIntensity.w * attenuation * phase * visibility;
@@ -491,6 +501,8 @@
         uniform vec2 uVolumeTexel;
         uniform bool uHelperMask;
         uniform bool uBilateralUpsample;
+        uniform bool uBloomComposite;
+        uniform float uBloomMultiplier;
         varying vec2 vUv;
 
         bool solidDepth(float depth) { return depth > 0.000001 && depth < 0.999999; }
@@ -507,6 +519,12 @@
             float difference = abs(viewZ(vUv, centerDepth) - viewZ(uv, sampleDepth));
             return exp(-difference * 7.5);
         }
+        vec4 finalizeVolume(vec4 color) {
+            if (!uBloomComposite) return color;
+            color.rgb *= uBloomMultiplier;
+            color.a = clamp(max(color.r, max(color.g, color.b)), 0.0, 1.0);
+            return color;
+        }
         void main() {
             float sceneDepth = texture2D(tSceneDepth, vUv).x;
             float cubeDepth = texture2D(tCubeDepth, vUv).x;
@@ -517,7 +535,7 @@
                 }
             }
             if (!uBilateralUpsample) {
-                gl_FragColor = texture2D(tVolume, vUv);
+                gl_FragColor = finalizeVolume(texture2D(tVolume, vUv));
                 return;
             }
             vec4 color = texture2D(tVolume, vUv) * 2.0;
@@ -535,7 +553,7 @@
             color += texture2D(tVolume, uv2) * weight2;
             color += texture2D(tVolume, uv3) * weight3;
             weight += weight0 + weight1 + weight2 + weight3;
-            gl_FragColor = color / max(weight, 0.0001);
+            gl_FragColor = finalizeVolume(color / max(weight, 0.0001));
         }
     `;
 
@@ -761,7 +779,9 @@
                 uInverseProjection: { value: new THREE.Matrix4() },
                 uVolumeTexel: { value: new THREE.Vector2(1, 1) },
                 uHelperMask: { value: true },
-                uBilateralUpsample: { value: true }
+                uBilateralUpsample: { value: true },
+                uBloomComposite: { value: false },
+                uBloomMultiplier: { value: 1 }
             };
             const compositeMaterial = new THREE.ShaderMaterial({
                 uniforms: compositeUniforms,
@@ -792,7 +812,11 @@
                 volumeMaterial, volumeUniforms, compositeMaterial, compositeUniforms,
                 postCamera, volumeScene, compositeScene, volumeQuad, compositeQuad,
                 sceneWidth: 1, sceneHeight: 1, volumeWidth: 1, volumeHeight: 1,
-                rendering: false, ownDepthStamp: 0
+                depthWidth: 1, depthHeight: 1,
+                rendering: false, ownDepthStamp: 0,
+                lastNormalVolumeReady: false,
+                lastNormalStudio: false,
+                lastBloomMultiplier: 1
             };
             this.states.set(preview, state);
             return state;
@@ -806,14 +830,20 @@
             const sceneWidth = Math.max(2, Math.floor(drawingSize.x));
             const sceneHeight = Math.max(2, Math.floor(drawingSize.y));
             const requestedScale = studio ? this.settings.render_scale : this.settings.preview_scale;
-            const scale = clamp(finite(requestedScale, studio ? 1 : 0.65), 0.25, 1.0);
+            const studioSamples = studio
+                ? clamp(parseInt(this.studioTile?.settings?.samples, 10) || 1, 1, 8)
+                : 1;
+            // Studio Render already supersamples the scene. Ray marching at
+            // that multiplied resolution repeats nearly identical work, so
+            // keep Atmosphere near final-output resolution instead.
+            const scale = studio
+                ? clamp(finite(requestedScale, 1) / studioSamples, 0.125, 1.0)
+                : clamp(finite(requestedScale, 0.5), 0.25, 1.0);
             const volumeWidth = Math.max(2, Math.floor(sceneWidth * scale));
             const volumeHeight = Math.max(2, Math.floor(sceneHeight * scale));
             if (state.sceneWidth !== sceneWidth || state.sceneHeight !== sceneHeight) {
                 state.sceneWidth = sceneWidth;
                 state.sceneHeight = sceneHeight;
-                state.sceneTarget.setSize(sceneWidth, sceneHeight);
-                state.cubeTarget.setSize(sceneWidth, sceneHeight);
             }
             if (state.volumeWidth !== volumeWidth || state.volumeHeight !== volumeHeight) {
                 state.volumeWidth = volumeWidth;
@@ -821,6 +851,13 @@
                 state.volumeTarget.setSize(volumeWidth, volumeHeight);
                 state.volumeUniforms.uResolution.value.set(volumeWidth, volumeHeight);
                 state.compositeUniforms.uVolumeTexel.value.set(1 / volumeWidth, 1 / volumeHeight);
+                state.lastNormalVolumeReady = false;
+            }
+            if (state.depthWidth !== volumeWidth || state.depthHeight !== volumeHeight) {
+                state.depthWidth = volumeWidth;
+                state.depthHeight = volumeHeight;
+                state.sceneTarget.setSize(volumeWidth, volumeHeight);
+                state.cubeTarget.setSize(volumeWidth, volumeHeight);
             }
             state.compositeUniforms.uBilateralUpsample.value = volumeWidth < sceneWidth || volumeHeight < sceneHeight;
         },
@@ -834,6 +871,30 @@
             if (!stamp || performance.now() - stamp > 80) return null;
             if (shared.sceneWidth !== state.sceneWidth || shared.sceneHeight !== state.sceneHeight) return null;
             return shared.sceneTarget.depthTexture;
+        },
+
+        findFreshSharedDepthSources(preview, state) {
+            const manager = window.LightflowAmbientOcclusion;
+            const shared = manager?.states?.get?.(preview);
+            if (!manager?.settings?.enabled || !shared?.sceneTarget?.depthTexture || !shared?.cubeTarget?.depthTexture) return null;
+            const stamp = finite(shared.lightflowDepthStamp, 0);
+            if (!stamp || performance.now() - stamp > 80) return null;
+            if (shared.sceneWidth !== state.sceneWidth || shared.sceneHeight !== state.sceneHeight) return null;
+            if (shared.width < state.depthWidth || shared.height < state.depthHeight) return null;
+
+            const cubeObjects = this.collectCubeObjects();
+            if (this.settings.helper_mask && this.hasVisibleHelpers(window.Canvas?.scene, cubeObjects)) return null;
+            const allVisibleCubesCovered = (window.Cube?.all || []).every(cube => {
+                const mesh = getCubeMesh(cube);
+                if (!mesh || mesh.visible === false) return true;
+                const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+                return materials.some(material => manager.materialReceivesAO?.(material));
+            });
+            if (!allVisibleCubesCovered) return null;
+            return {
+                sceneDepth: this.settings.helper_mask ? shared.sceneTarget.depthTexture : shared.cubeTarget.depthTexture,
+                cubeDepth: shared.cubeTarget.depthTexture
+            };
         },
 
         collectCubeObjects() {
@@ -923,7 +984,7 @@
                         return !cubeObjects.has(object) && (object.isLine || object.isLineSegments || object.isSprite || object.isPoints);
                     });
                     renderer.setRenderTarget(state.sceneTarget);
-                    renderer.setViewport?.(0, 0, state.sceneWidth, state.sceneHeight);
+                    renderer.setViewport?.(0, 0, state.depthWidth, state.depthHeight);
                     renderer.setClearColor?.(0x000000, 0);
                     renderer.clear?.(true, true, true);
                     try {
@@ -935,7 +996,7 @@
                 const hidden = this.collectNonCubeVisibilityChanges(cubeObjects);
                 const cubeDepthChanges = this.forceDepthWriting(scene, object => cubeObjects.has(object));
                 renderer.setRenderTarget(state.cubeTarget);
-                renderer.setViewport?.(0, 0, state.sceneWidth, state.sceneHeight);
+                renderer.setViewport?.(0, 0, state.depthWidth, state.depthHeight);
                 renderer.setClearColor?.(0x000000, 0);
                 renderer.clear?.(true, true, true);
                 try {
@@ -964,6 +1025,7 @@
             const uniforms = state.volumeUniforms;
             const scaleMatrix = new THREE.Matrix4();
             const worldMatrix = new THREE.Matrix4();
+            window.Canvas?.scene?.updateMatrixWorld?.(true);
             for (let index = 0; index < MAX_VOLUMES; index++) {
                 const volume = volumes[index];
                 if (!volume) {
@@ -1115,8 +1177,8 @@
             state.volumeUniforms.uBloomPass.value = !!bloomPass;
             const quality = studio ? this.settings.render_quality : this.settings.preview_quality;
             const table = studio ? RENDER_STEPS : PREVIEW_STEPS;
-            state.volumeUniforms.uSteps.value = Math.min(MAX_RAY_STEPS, table[quality] || (studio ? 120 : 40));
-            state.volumeUniforms.uShadowSamples.value = studio && (quality === 'high' || quality === 'ultra') ? 4 : 1;
+            state.volumeUniforms.uSteps.value = Math.min(MAX_RAY_STEPS, table[quality] || (studio ? 64 : 24));
+            state.volumeUniforms.uShadowSamples.value = studio && quality === 'ultra' ? 4 : 1;
             if (studio) {
                 if (this.studioTime === null) this.studioTime = performance.now() * 0.001;
                 state.volumeUniforms.uTime.value = this.studioTime;
@@ -1167,21 +1229,45 @@
             const previousClearAlpha = renderer.getClearAlpha?.() ?? 1;
             renderer.getClearColor?.(previousClearColor);
             try {
-                const depthSources = this.captureDepth(state, preview);
-                if (!depthSources) return false;
-                this.updateUniforms(state, preview, volumes, studio, !!settings.bloomMask, depthSources);
-                renderer.autoClear = true;
-                renderer.setScissorTest?.(false);
-                renderer.setRenderTarget?.(state.volumeTarget);
-                renderer.setViewport?.(0, 0, state.volumeWidth, state.volumeHeight);
-                renderer.setClearColor?.(0x000000, 0);
-                renderer.clear?.(true, true, true);
-                renderer.render(state.volumeScene, state.postCamera);
+                const useCachedBloom = !!settings.bloomMask && state.lastNormalVolumeReady && state.lastNormalStudio === studio;
+                if (!useCachedBloom) {
+                    // AO runs immediately before Atmosphere in the Lightflow
+                    // pipeline. Reuse its fresh depth buffers when they cover
+                    // every visible cube; this removes two full scene draws
+                    // per tile while preserving alpha-tested foliage depth.
+                    const depthSources = this.findFreshSharedDepthSources(preview, state) || this.captureDepth(state, preview);
+                    if (!depthSources) return false;
+                    this.updateUniforms(state, preview, volumes, studio, !!settings.bloomMask, depthSources);
+                    renderer.autoClear = true;
+                    renderer.setScissorTest?.(false);
+                    renderer.setRenderTarget?.(state.volumeTarget);
+                    renderer.setViewport?.(0, 0, state.volumeWidth, state.volumeHeight);
+                    renderer.setClearColor?.(0x000000, 0);
+                    renderer.clear?.(true, true, true);
+                    renderer.render(state.volumeScene, state.postCamera);
+                    if (!settings.bloomMask) {
+                        state.lastNormalVolumeReady = true;
+                        state.lastNormalStudio = studio;
+                        state.lastBloomMultiplier = volumes.reduce((maximum, volume) => {
+                            return Math.max(maximum, clamp(finite(volume.bloom_contribution, 1), 0, 4));
+                        }, 0);
+                    }
+                }
 
                 renderer.autoClear = false;
                 renderer.setRenderTarget?.(previousTarget);
-                renderer.setViewport?.(0, 0, state.sceneWidth, state.sceneHeight);
+                /*
+                 * getDrawingBufferSize() is expressed in physical pixels,
+                 * while setViewport() on the default framebuffer expects
+                 * logical pixels and applies renderer.pixelRatio itself.
+                 * Reusing the saved viewport prevents a second DPI scaling,
+                 * which was the source of the Windows viewport offset.
+                 */
+                if (previousViewport) renderer.setViewport?.(previousViewport);
+                else if (previousTarget) renderer.setViewport?.(0, 0, previousTarget.width, previousTarget.height);
                 renderer.setScissorTest?.(false);
+                state.compositeUniforms.uBloomComposite.value = !!settings.bloomMask;
+                state.compositeUniforms.uBloomMultiplier.value = useCachedBloom ? state.lastBloomMultiplier : 1;
                 renderer.render(state.compositeScene, state.postCamera);
                 preview.lightflow_atmosphere_done = true;
                 return true;
@@ -1208,6 +1294,8 @@
         prepareStudioTile(event) {
             if (!event?.preview) return;
             this.studioTile = { preview: event.preview, tile: event.tile || {}, settings: event.settings || {} };
+            const state = this.states.get(event.preview);
+            if (state) state.lastNormalVolumeReady = false;
             this.patchPreview(event.preview);
         },
 
@@ -1746,7 +1834,7 @@
                 AtmosphereManager.settings = Object.assign({}, settings, {
                     enabled: !!result.enabled,
                     preview_quality: PREVIEW_STEPS[result.preview_quality] ? result.preview_quality : 'balanced',
-                    preview_scale: clamp(finite(result.preview_scale, 0.65), 0.25, 1),
+                    preview_scale: clamp(finite(result.preview_scale, 0.5), 0.25, 1),
                     render_quality: RENDER_STEPS[result.render_quality] ? result.render_quality : 'high',
                     render_scale: clamp(finite(result.render_scale, 1), 0.5, 1),
                     temporal_jitter: !!result.temporal_jitter,
