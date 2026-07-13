@@ -4989,7 +4989,17 @@ float getLightAttenuation(int lightIndex, vec3 worldPos, vec3 lightDir) {
 }
 
 vec3 getLightRadiance(int lightIndex, float attenuation) {
-    return max(uLightColor[lightIndex], vec3(0.0)) * max(uLightIntensity[lightIndex], 0.0) * attenuation;
+    /*
+        Light Manager intensities are artist-facing and historically calibrated
+        against Lightflow's Lambert term (baseColor * NdotL), while this shader
+        uses the energy-conserving Lambert BRDF (baseColor / PI). Multiplying
+        incoming direct radiance by PI keeps intensity 1 visually equivalent
+        without breaking the PBR BRDF's diffuse/specular energy split.
+    */
+    return max(uLightColor[lightIndex], vec3(0.0))
+        * max(uLightIntensity[lightIndex], 0.0)
+        * attenuation
+        * PI;
 }
 
 // -------------------------------------------------------------------------
@@ -11208,6 +11218,15 @@ ${lumaForgeLightflowHelpers}`
             state.sceneHeight = sceneHeight;
             state.sceneTarget.setSize(sceneWidth, sceneHeight);
             state.cubeTarget.setSize(width, height);
+            // Render-target viewports use physical pixels. Keep them on the
+            // targets so Three.js r129 applies them without devicePixelRatio
+            // conversion and without mutating Blockbench's logical viewport.
+            state.sceneTarget.viewport?.set?.(0, 0, sceneWidth, sceneHeight);
+            state.sceneTarget.scissor?.set?.(0, 0, sceneWidth, sceneHeight);
+            state.sceneTarget.scissorTest = false;
+            state.cubeTarget.viewport?.set?.(0, 0, width, height);
+            state.cubeTarget.scissor?.set?.(0, 0, width, height);
+            state.cubeTarget.scissorTest = false;
             state.uniforms.uResolution.value.set(width, height);
         },
         hideNonCubeObjects() {
@@ -11238,6 +11257,7 @@ ${lumaForgeLightflowHelpers}`
             const previousViewport = renderer.getViewport?.(new THREE.Vector4()) || null;
             const previousScissor = renderer.getScissor?.(new THREE.Vector4()) || null;
             const previousScissorTest = renderer.getScissorTest?.() ?? false;
+            const previousShadowAutoUpdate = renderer.shadowMap?.autoUpdate;
             renderer.getClearColor?.(clear);
             try {
                 state.uniforms.uRadius.value = this.settings.radius;
@@ -11251,14 +11271,16 @@ ${lumaForgeLightflowHelpers}`
 
                 renderer.autoClear = true;
                 renderer.setScissorTest?.(false);
+                // The main preview render already refreshed shadow maps. The AO
+                // captures must not depend on a shadow pass to reset WebGL state
+                // and should not render every shadow map a second time.
+                if (renderer.shadowMap) renderer.shadowMap.autoUpdate = false;
                 renderer.setRenderTarget(state.sceneTarget);
-                renderer.setViewport?.(0, 0, state.sceneWidth, state.sceneHeight);
                 renderer.clear(true, true, true);
                 renderer.render(Canvas.scene, camera);
 
                 const hidden = this.hideNonCubeObjects();
                 renderer.setRenderTarget(state.cubeTarget);
-                renderer.setViewport?.(0, 0, state.width, state.height);
                 renderer.clear(true, true, true);
                 try { renderer.render(Canvas.scene, camera); }
                 finally { hidden.forEach(object => { object.visible = true; }); }
@@ -11280,6 +11302,9 @@ ${lumaForgeLightflowHelpers}`
                 renderer.setScissorTest?.(previousScissorTest);
                 renderer.autoClear = previousAutoClear;
                 renderer.setClearColor?.(clear, alpha);
+                if (renderer.shadowMap && previousShadowAutoUpdate !== undefined) {
+                    renderer.shadowMap.autoUpdate = previousShadowAutoUpdate;
+                }
                 state.rendering = false;
             }
         },
@@ -18141,7 +18166,7 @@ ${stochasticAlpha
         author: 'MidFord327',
         description: 'Build advanced Blockbench materials with real-time Lightflow presets, editable GLSL, material instances, and deep Light Manager integration. Requires Light Manager for lights and shadows.',
         tags: ['Lightflow', 'Shaders', 'Materials', 'Rendering', 'GLSL', 'Lighting'],
-        version: '2.5.0',
+        version: '2.5.1',
         min_version: '4.9.0',
         variant: 'both',
 
