@@ -2,7 +2,7 @@
     'use strict';
 
     const PLUGIN_ID = 'lightflow_atmosphere';
-    const PLUGIN_VERSION = '0.1.1';
+    const PLUGIN_VERSION = '0.2.0';
     const MAX_VOLUMES = 4;
     const MAX_LIGHTS = 4;
     const MAX_SHADOWS = 2;
@@ -126,6 +126,34 @@
     function getCubeMesh(cube) {
         if (!cube) return null;
         return cube.mesh || (window.Project && Project.nodes_3d ? Project.nodes_3d[cube.uuid] : null) || null;
+    }
+
+    function getRenderElements() {
+        const elements = [];
+        const seen = new Set();
+        [window.Cube, window.Mesh, window.TextureMesh].forEach(Type => {
+            const list = Type && Array.isArray(Type.all) ? Type.all : [];
+            list.forEach(element => {
+                if (!element || seen.has(element)) return;
+                seen.add(element);
+                elements.push(element);
+            });
+        });
+        return elements;
+    }
+
+    function getSelectedRenderElements() {
+        const elements = [];
+        const seen = new Set();
+        [window.Cube, window.Mesh, window.TextureMesh].forEach(Type => {
+            const list = Type && Array.isArray(Type.selected) ? Type.selected : [];
+            list.forEach(element => {
+                if (!element || seen.has(element)) return;
+                seen.add(element);
+                elements.push(element);
+            });
+        });
+        return elements;
     }
 
     function collectPreviews() {
@@ -884,7 +912,7 @@
 
             const cubeObjects = this.collectCubeObjects();
             if (this.settings.helper_mask && this.hasVisibleHelpers(window.Canvas?.scene, cubeObjects)) return null;
-            const allVisibleCubesCovered = (window.Cube?.all || []).every(cube => {
+            const allVisibleCubesCovered = getRenderElements().every(cube => {
                 const mesh = getCubeMesh(cube);
                 if (!mesh || mesh.visible === false) return true;
                 const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
@@ -899,7 +927,7 @@
 
         collectCubeObjects() {
             const cubeObjects = new WeakSet();
-            (window.Cube?.all || []).forEach(cube => {
+            getRenderElements().forEach(cube => {
                 const mesh = getCubeMesh(cube);
                 if (!mesh) return;
                 if (mesh.isMesh) cubeObjects.add(mesh);
@@ -1553,7 +1581,7 @@
     }
 
     function findSelectionBounds() {
-        const selected = window.Cube?.selected || [];
+        const selected = getSelectedRenderElements();
         if (!selected.length) return null;
         const bounds = new THREE.Box3();
         let found = false;
@@ -1860,7 +1888,7 @@
         });
         const fitAction = new Action('fit_lightflow_volume', {
             name: 'lightflow_atmosphere.action.fit', icon: 'fit_screen', category: 'edit',
-            condition: () => getSelectedVolumes().length > 0 && (window.Cube?.selected?.length || 0) > 0,
+            condition: () => getSelectedVolumes().length > 0 && getSelectedRenderElements().length > 0,
             click() {
                 const volumes = getSelectedVolumes();
                 Undo.initEdit({ elements: volumes });
