@@ -42,7 +42,7 @@ The plugins work independently where possible, but they are designed to be used 
 | --- | ---: | --- | --- |
 | **Light Manager** | `1.6.1` | Adds production-oriented point, spot, and directional lights with adaptive shadows, gizmos, animation support, and lighting profiles. | None |
 | **Shader Architect** | `2.6.0` | Builds and assigns advanced materials to Cubes, Meshes, and Texture Meshes with PBR controls, Blockbench render modes, editable GLSL, material instances, and automatic draw-call reduction. | **Light Manager required** |
-| **Lightflow Atmosphere** | `0.2.0` | Adds physically grounded local fog, shadowed light shafts, height fog, and procedural cloud domains with render-element depth occlusion. | **Light Manager recommended**; integrates with Shader Architect and Studio Render |
+| **Lightflow Atmosphere** | `1.0.0` | Adds production-ready local fog, correctly occluded additive light shafts, height fog, and procedural cloud domains with render-element depth occlusion. | **Light Manager recommended**; integrates with Shader Architect and Studio Render |
 | **Studio Render** | `1.4.2` | Exports clean images with tiled supersampling, HDR/emissive Bloom with geometry occlusion, adjustable framing, transparency, and 4K/8K-safe output controls. | Works alone; integrates with the other Lightflow modules |
 
 ### Why Lightflow exists
@@ -228,6 +228,8 @@ Lightflow Atmosphere adds bounded participating media to the Blockbench scene. E
 - Box and sphere/ellipsoid domains.
 - Uniform fog, exponential height fog, and animated procedural cloud density.
 - Beer–Lambert transmittance and Henyey–Greenstein anisotropic single scattering.
+- Separate **Physical Medium** and **Additive Light Shafts** rendering models, so a shadowed God Ray remains transparent instead of darkening the scene.
+- Artist-controlled multiple-scattering fill for softer fog and cloud shadows.
 - Direct contribution from up to four Light Manager lights.
 - Geometry-occluded volumetric shadows from up to two directional or spot lights.
 - Depth-aware stopping at Cubes, Meshes, and Texture Meshes, so light shafts and Bloom do not pass through foreground geometry.
@@ -235,8 +237,12 @@ Lightflow Atmosphere adds bounded participating media to the Blockbench scene. E
 - Separate viewport and Studio Render step counts and internal resolution.
 - Tile-stable spatial jitter and frozen cloud time during Studio Render to prevent seams.
 - DPI-correct viewport composition, alpha-tested foliage shadows, and camera-facing phase scattering for stable, visible God Rays.
-- SSAA-aware raymarch resolution, reusable AO depth, and a cached Atmosphere Bloom mask to avoid redundant high-resolution passes.
+- SSAA-aware raymarch resolution, reusable AO depth, cached static raymarches, cached Atmosphere Bloom masks, and frustum culling for off-screen domains.
+- Lightweight alpha-aware depth-only captures when Shader Architect AO depth is unavailable.
+- Quick setups for Soft Mist, God Rays, Cloud Volume, Stage Haze, and Cinematic Dust.
 - Per-domain scattering, absorption, ambient fill, edge feather, shadow reception, and Bloom contribution.
+
+Live counters are available from the Blockbench developer console through `LightflowAtmosphere.performance()`; they report raymarches, cache hits, depth captures, and cache-hit rate.
 
 The implementation is physically grounded real-time **single scattering**. It is not path-traced multiple scattering, fluid simulation, or Blender Cycles; procedural clouds are shader density fields rather than simulated weather.
 
@@ -379,7 +385,7 @@ Save active Lightflow projects as **`.bbmodel`**. Shader Architect material assi
 - Higher supersampling improves edge quality but raises render time and memory use.
 - Larger shadow maps can improve detail but will not fix poor shadow bounds, unsuitable near/far planes, or a bad camera/light relationship.
 - Many lights, high-resolution shadows, screen-space effects, and 8K output can become expensive quickly.
-- Volumetric cost grows with ray steps, internal resolution, active domains, active lights, and shadow-map samples. Up to four domains are rendered at once; keep overlapping domains intentional.
+- Volumetric cost grows with ray steps, internal resolution, visible domains, active lights, and shadow-map samples. Up to four visible domains are rendered at once; off-screen domains are culled and unchanged frames reuse their previous raymarch by default.
 - Semitransparent textures use stochastic alpha coverage in ordinary WebGL shadow maps. This produces proportional shadow density without requiring ray tracing; colored transmissive shadows are outside the depth-only shadow-map model.
 - Keep the scene simple while tuning. Add expensive effects only after the core composition works.
 
@@ -510,7 +516,7 @@ This roadmap is directional, not a release promise.
 - Refinement of AO, shadows, screen-space effects, bevel behavior, and rim consistency between viewport and final render.
 - A transmittance-buffer experiment for colored raster shadows, gated by GPU capabilities.
 - Evaluation of a future native/WebGPU renderer only when Blockbench and the browser graphics stack expose a stable ray-tracing path; the current WebGL backend does not advertise hardware RTX.
-- Multi-scattering approximations, point-light volumetric shadows, artist-authored 3D density textures, and improved temporal accumulation for Atmosphere.
+- Higher-order multiple scattering, point-light volumetric shadows, artist-authored 3D density textures, and improved temporal accumulation for Atmosphere.
 - Expanded documentation, visual examples, and troubleshooting coverage.
 - Packaging and validation for a Blockbench Plugin Store submission.
 

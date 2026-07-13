@@ -2,7 +2,7 @@
     'use strict';
 
     const PLUGIN_ID = 'lightflow_atmosphere';
-    const PLUGIN_VERSION = '0.2.0';
+    const PLUGIN_VERSION = '1.0.0';
     const MAX_VOLUMES = 4;
     const MAX_LIGHTS = 4;
     const MAX_SHADOWS = 2;
@@ -12,6 +12,8 @@
         enabled: true,
         temporal_jitter: false,
         helper_mask: true,
+        static_cache: true,
+        frustum_culling: true,
         preview_quality: 'balanced',
         render_quality: 'high',
         preview_scale: 0.5,
@@ -29,18 +31,21 @@
 
     const VOLUME_PRESETS = {
         soft_mist: {
+            composite_mode: 'physical', shadow_fill: 0.18,
             density_mode: 'height', density: 0.032, scattering_strength: 0.82,
             absorption: 0.16, anisotropy: 0.18, height_falloff: 1.35,
             height_offset: 0.12, edge_feather: 0.14, ambient: 0.22,
             scattering_color: [214, 229, 242], absorption_color: [226, 235, 242]
         },
         godrays: {
+            composite_mode: 'shafts', shadow_fill: 0,
             density_mode: 'uniform', density: 0.06, scattering_strength: 1.4,
             absorption: 0.025, anisotropy: 0.68, edge_feather: 0.32,
-            ambient: 0.008, receive_shadows: true,
+            ambient: 0.0, receive_shadows: true,
             scattering_color: [255, 238, 205], absorption_color: [255, 248, 232]
         },
         clouds: {
+            composite_mode: 'physical', shadow_fill: 0.12,
             density_mode: 'cloud', density: 0.095, scattering_strength: 1.0,
             absorption: 0.34, anisotropy: 0.42, edge_feather: 0.18,
             noise_scale: 3.6, noise_detail: 4, coverage: 0.46, erosion: 0.24,
@@ -48,10 +53,20 @@
             scattering_color: [244, 247, 255], absorption_color: [212, 224, 240]
         },
         stage_haze: {
+            composite_mode: 'physical', shadow_fill: 0.08,
             density_mode: 'uniform', density: 0.018, scattering_strength: 0.72,
             absorption: 0.08, anisotropy: 0.58, edge_feather: 0.2,
             ambient: 0.04, scattering_color: [232, 238, 255],
             absorption_color: [242, 246, 255]
+        },
+        cinematic_dust: {
+            composite_mode: 'shafts', shadow_fill: 0.02,
+            density_mode: 'cloud', density: 0.024, scattering_strength: 0.86,
+            absorption: 0.02, anisotropy: 0.74, edge_feather: 0.24,
+            noise_scale: 8.0, noise_detail: 2, coverage: 0.32, erosion: 0.5,
+            height_falloff: 0.25, height_offset: 0.05, ambient: 0.015,
+            receive_shadows: true, bloom_contribution: 1.25,
+            scattering_color: [255, 226, 184], absorption_color: [255, 240, 216]
         }
     };
 
@@ -395,6 +410,7 @@
         vec3 volumeLighting(int volumeIndex, vec3 worldPoint, vec3 viewDirection) {
             vec3 lighting = uAmbientColor * uVolumeFlags[volumeIndex].y;
             float anisotropy = uVolumeOptics[volumeIndex].w;
+            float shadowFill = clamp(uVolumeShapeMode[volumeIndex].w, 0.0, 1.0);
             bool receiveShadows = uVolumeFlags[volumeIndex].x > 0.5;
             for (int lightIndex = 0; lightIndex < MAX_LIGHTS; lightIndex++) {
                 if (lightIndex >= uLightCount) continue;
@@ -430,6 +446,10 @@
                 float phase = henyeyGreenstein(dot(toLight, -viewDirection), anisotropy);
                 int shadowSlot = int(floor(coneShadow.z + 0.5));
                 float visibility = receiveShadows ? lightShadow(shadowSlot, worldPoint) : 1.0;
+                // A small fill approximates unresolved multiple scattering for
+                // fog and clouds. Light-shaft presets leave it at zero so a
+                // fully occluded sample contributes no visible medium.
+                visibility = mix(shadowFill, 1.0, visibility);
                 lighting += colorIntensity.rgb * colorIntensity.w * attenuation * phase * visibility;
             }
             return max(lighting, vec3(0.0));
@@ -499,9 +519,15 @@
                     vec3 sigmaS = uVolumeColor[volumeIndex] * scattering * density;
                     vec3 sigmaA = uVolumeAbsorptionColor[volumeIndex] * absorption * density;
                     float bloomContribution = uVolumeFlags[volumeIndex].z;
+                    bool lightShaft = uVolumeFlags[volumeIndex].w > 0.5;
                     vec3 lightEnergy = volumeLighting(volumeIndex, worldPoint, rayDirection);
                     scatteringSource += sigmaS * lightEnergy * (uBloomPass ? bloomContribution : 1.0);
-                    extinctionColor += sigmaS + sigmaA;
+                    // Physical media attenuate the scene with Beer-Lambert.
+                    // Artistic God Rays are emissive shafts: applying the same
+                    // extinction in a shadow produced an opaque black volume.
+                    // Keeping their extinction at zero makes unlit samples
+                    // transparent while lit samples compose additively.
+                    if (!lightShaft) extinctionColor += sigmaS + sigmaA;
                 }
                 float extinction = dot(extinctionColor, vec3(0.2126, 0.7152, 0.0722));
                 if (extinction > 0.000001) {
@@ -509,6 +535,8 @@
                     vec3 integratedScatter = scatteringSource * ((1.0 - stepTransmission) / extinction);
                     accumulated += transmittance * integratedScatter;
                     transmittance *= stepTransmission;
+                } else {
+                    accumulated += transmittance * scatteringSource * stepLength;
                 }
                 if (max(transmittance.r, max(transmittance.g, transmittance.b)) < 0.008) break;
                 distanceAlongRay += stepLength;
@@ -609,6 +637,13 @@
         return target;
     }
 
+    function configureRenderTarget(target, width, height) {
+        if (!target) return;
+        target.viewport?.set?.(0, 0, width, height);
+        target.scissor?.set?.(0, 0, width, height);
+        target.scissorTest = false;
+    }
+
     function createWhiteTexture() {
         const texture = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1, THREE.RGBAFormat);
         texture.minFilter = THREE.NearestFilter;
@@ -675,10 +710,27 @@
         noiseTexture: null,
         studioTile: null,
         studioTime: null,
+        sceneRevision: 1,
+        scenePartitionCache: null,
+        depthMaterialCache: new WeakMap(),
+        depthMaterialResources: new Set(),
+        activeVolumeCandidates: [],
+        activeVolumes: [],
+        activeVolumeScratch: null,
         disposed: false,
 
         init() {
             this.disposed = false;
+            this.sceneRevision = 1;
+            this.invalidateSceneCache();
+            this.activeVolumeScratch = {
+                cameraPosition: new THREE.Vector3(),
+                center: new THREE.Vector3(),
+                scale: new THREE.Vector3(),
+                sphere: new THREE.Sphere(),
+                viewProjection: new THREE.Matrix4(),
+                frustum: new THREE.Frustum()
+            };
             this.whiteTexture = createWhiteTexture();
             this.noiseTexture = createNoiseTexture(128);
             this.patchAllPreviews();
@@ -692,6 +744,13 @@
             this.patchedPreviews.clear();
             this.states.forEach(state => this.disposeState(state));
             this.states.clear();
+            this.depthMaterialResources.forEach(material => material?.dispose?.());
+            this.depthMaterialResources.clear();
+            this.depthMaterialCache = new WeakMap();
+            this.invalidateSceneCache();
+            this.activeVolumeCandidates.length = 0;
+            this.activeVolumes.length = 0;
+            this.activeVolumeScratch = null;
             this.whiteTexture?.dispose?.();
             this.noiseTexture?.dispose?.();
             this.whiteTexture = null;
@@ -711,19 +770,51 @@
             state.compositeQuad?.geometry?.dispose?.();
         },
 
+        invalidateSceneCache() {
+            this.scenePartitionCache = null;
+            this.sceneRevision = (this.sceneRevision + 1) >>> 0;
+            this.states.forEach(state => {
+                state.lastFrameSignature = null;
+                state.lastNormalVolumeReady = false;
+            });
+        },
+
         getActiveVolumes(camera) {
             if (!VolumeElement || !Array.isArray(VolumeElement.all)) return [];
-            const cameraPosition = new THREE.Vector3();
-            camera?.getWorldPosition?.(cameraPosition);
-            return VolumeElement.all.filter(volume => {
-                return volume && volume.visibility !== false && volume.enabled !== false && volume.mesh && finite(volume.density, 0) > 0;
-            }).sort((first, second) => {
-                const firstPosition = first.mesh?.getWorldPosition ? first.mesh.getWorldPosition(new THREE.Vector3()) : new THREE.Vector3();
-                const secondPosition = second.mesh?.getWorldPosition ? second.mesh.getWorldPosition(new THREE.Vector3()) : new THREE.Vector3();
-                const firstScore = finite(first.density, 0) * 256 - firstPosition.distanceToSquared(cameraPosition) * 0.0001;
-                const secondScore = finite(second.density, 0) * 256 - secondPosition.distanceToSquared(cameraPosition) * 0.0001;
-                return secondScore - firstScore;
-            }).slice(0, MAX_VOLUMES);
+            const scratch = this.activeVolumeScratch;
+            if (!scratch || !camera) return VolumeElement.all.filter(volume => volume?.visibility !== false && volume?.enabled !== false).slice(0, MAX_VOLUMES);
+            camera.updateMatrixWorld?.(true);
+            camera.getWorldPosition?.(scratch.cameraPosition);
+            scratch.viewProjection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+            scratch.frustum.setFromProjectionMatrix(scratch.viewProjection);
+            this.activeVolumeCandidates.length = 0;
+            let candidateIndex = 0;
+            for (let index = 0; index < VolumeElement.all.length; index++) {
+                const volume = VolumeElement.all[index];
+                if (!volume || volume.visibility === false || volume.enabled === false || !volume.mesh || finite(volume.density, 0) <= 0) continue;
+                volume.mesh.updateMatrixWorld?.(false);
+                scratch.center.setFromMatrixPosition(volume.mesh.matrixWorld);
+                scratch.scale.setFromMatrixScale(volume.mesh.matrixWorld);
+                const size = Array.isArray(volume.size) ? volume.size : [16, 16, 16];
+                const radius = 0.5 * Math.hypot(
+                    Math.abs(finite(size[0], 16) * scratch.scale.x),
+                    Math.abs(finite(size[1], 16) * scratch.scale.y),
+                    Math.abs(finite(size[2], 16) * scratch.scale.z)
+                );
+                scratch.sphere.center.copy(scratch.center);
+                scratch.sphere.radius = Math.max(0.001, radius);
+                if (this.settings.frustum_culling && !scratch.frustum.intersectsSphere(scratch.sphere)) continue;
+                const candidate = this.activeVolumeCandidates[candidateIndex] || (this.activeVolumeCandidates[candidateIndex] = {});
+                candidate.volume = volume;
+                candidate.score = finite(volume.density, 0) * 256 + radius * 0.02 - scratch.center.distanceToSquared(scratch.cameraPosition) * 0.0001;
+                candidateIndex++;
+            }
+            this.activeVolumeCandidates.length = candidateIndex;
+            this.activeVolumeCandidates.sort((first, second) => second.score - first.score);
+            const activeCount = Math.min(MAX_VOLUMES, candidateIndex);
+            this.activeVolumes.length = activeCount;
+            for (let index = 0; index < activeCount; index++) this.activeVolumes[index] = this.activeVolumeCandidates[index].volume;
+            return this.activeVolumes;
         },
 
         createState(preview) {
@@ -844,7 +935,19 @@
                 rendering: false, ownDepthStamp: 0,
                 lastNormalVolumeReady: false,
                 lastNormalStudio: false,
-                lastBloomMultiplier: 1
+                lastBloomMultiplier: 1,
+                lastFrameSignature: null,
+                lastDepthSources: null,
+                lightCandidates: [],
+                scratch: {
+                    scaleMatrix: new THREE.Matrix4(),
+                    worldMatrix: new THREE.Matrix4(),
+                    position: new THREE.Vector3(),
+                    targetPosition: new THREE.Vector3(),
+                    direction: new THREE.Vector3(),
+                    quaternion: new THREE.Quaternion()
+                },
+                stats: { raymarches: 0, cacheHits: 0, depthCaptures: 0, culledFrames: 0 }
             };
             this.states.set(preview, state);
             return state;
@@ -877,21 +980,25 @@
                 state.volumeWidth = volumeWidth;
                 state.volumeHeight = volumeHeight;
                 state.volumeTarget.setSize(volumeWidth, volumeHeight);
+                configureRenderTarget(state.volumeTarget, volumeWidth, volumeHeight);
                 state.volumeUniforms.uResolution.value.set(volumeWidth, volumeHeight);
                 state.compositeUniforms.uVolumeTexel.value.set(1 / volumeWidth, 1 / volumeHeight);
                 state.lastNormalVolumeReady = false;
+                state.lastFrameSignature = null;
             }
             if (state.depthWidth !== volumeWidth || state.depthHeight !== volumeHeight) {
                 state.depthWidth = volumeWidth;
                 state.depthHeight = volumeHeight;
                 state.sceneTarget.setSize(volumeWidth, volumeHeight);
                 state.cubeTarget.setSize(volumeWidth, volumeHeight);
+                configureRenderTarget(state.sceneTarget, volumeWidth, volumeHeight);
+                configureRenderTarget(state.cubeTarget, volumeWidth, volumeHeight);
+                state.lastFrameSignature = null;
             }
             state.compositeUniforms.uBilateralUpsample.value = volumeWidth < sceneWidth || volumeHeight < sceneHeight;
         },
 
         findFreshSharedSceneDepth(preview, state) {
-            if (this.settings.helper_mask) return null;
             const manager = window.LightflowAmbientOcclusion;
             const shared = manager?.states?.get?.(preview);
             if (!manager?.settings?.enabled || !shared || !shared.sceneTarget?.depthTexture) return null;
@@ -910,8 +1017,6 @@
             if (shared.sceneWidth !== state.sceneWidth || shared.sceneHeight !== state.sceneHeight) return null;
             if (shared.width < state.depthWidth || shared.height < state.depthHeight) return null;
 
-            const cubeObjects = this.collectCubeObjects();
-            if (this.settings.helper_mask && this.hasVisibleHelpers(window.Canvas?.scene, cubeObjects)) return null;
             const allVisibleCubesCovered = getRenderElements().every(cube => {
                 const mesh = getCubeMesh(cube);
                 if (!mesh || mesh.visible === false) return true;
@@ -925,26 +1030,38 @@
             };
         },
 
-        collectCubeObjects() {
+        getScenePartition() {
+            if (this.scenePartitionCache) return this.scenePartitionCache;
             const cubeObjects = new WeakSet();
-            getRenderElements().forEach(cube => {
-                const mesh = getCubeMesh(cube);
+            const cubeMeshes = [];
+            const nonCubeObjects = [];
+            getRenderElements().forEach(element => {
+                const mesh = getCubeMesh(element);
                 if (!mesh) return;
-                if (mesh.isMesh) cubeObjects.add(mesh);
-                mesh.traverse?.(object => {
-                    if (object?.isMesh && object.material) cubeObjects.add(object);
-                });
+                const addObject = object => {
+                    if (!object || cubeObjects.has(object)) return;
+                    cubeObjects.add(object);
+                    if (object.isMesh && object.material) cubeMeshes.push(object);
+                };
+                if (mesh.traverse) mesh.traverse(addObject);
+                else addObject(mesh);
             });
-            return cubeObjects;
+            window.Canvas?.scene?.traverse?.(object => {
+                const renderable = object?.isMesh || object?.isSprite || object?.isLine || object?.isLineSegments || object?.isPoints;
+                if (renderable && !cubeObjects.has(object)) nonCubeObjects.push(object);
+            });
+            this.scenePartitionCache = { cubeObjects, cubeMeshes, nonCubeObjects };
+            return this.scenePartitionCache;
+        },
+
+        collectCubeObjects() {
+            return this.getScenePartition().cubeObjects;
         },
 
         collectNonCubeVisibilityChanges(cubeObjects) {
-            const knownCubeObjects = cubeObjects || this.collectCubeObjects();
             const changes = [];
-            const scene = window.Canvas?.scene;
-            scene?.traverse?.(object => {
-                const renderable = object?.isMesh || object?.isSprite || object?.isLine || object?.isLineSegments || object?.isPoints;
-                if (renderable && object.visible && !knownCubeObjects.has(object)) {
+            this.getScenePartition().nonCubeObjects.forEach(object => {
+                if (object?.visible) {
                     changes.push(object);
                     object.visible = false;
                 }
@@ -968,8 +1085,8 @@
 
         hasVisibleHelpers(scene, cubeObjects) {
             let found = false;
-            scene?.traverse?.(object => {
-                if (found || !object?.visible || cubeObjects.has(object)) return;
+            this.getScenePartition().nonCubeObjects.forEach(object => {
+                if (found || !object?.visible) return;
                 let ancestor = object.parent;
                 while (ancestor && ancestor !== scene) {
                     if (ancestor.visible === false) return;
@@ -978,6 +1095,90 @@
                 if (object.isLine || object.isLineSegments || object.isSprite || object.isPoints) found = true;
             });
             return found;
+        },
+
+        getDepthOnlyMaterial(sourceMaterial) {
+            if (!sourceMaterial) return sourceMaterial;
+            const sharedManager = window.LightflowAmbientOcclusion;
+            if (sharedManager?.getDepthOnlyMaterial) {
+                const sharedMaterial = sharedManager.getDepthOnlyMaterial(sourceMaterial);
+                if (sharedMaterial) sharedMaterial.depthWrite = true;
+                return sharedMaterial;
+            }
+            let material = this.depthMaterialCache.get(sourceMaterial);
+            if (!material) {
+                material = new THREE.ShaderMaterial({
+                    uniforms: {
+                        map: { value: null },
+                        uHasMap: { value: false },
+                        uOpacity: { value: 1 },
+                        uAlphaTest: { value: 0.01 }
+                    },
+                    vertexShader: `
+                        varying vec2 vUv;
+                        void main() {
+                            vUv = uv;
+                            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                        }
+                    `,
+                    fragmentShader: `
+                        precision highp float;
+                        uniform sampler2D map;
+                        uniform bool uHasMap;
+                        uniform float uOpacity;
+                        uniform float uAlphaTest;
+                        varying vec2 vUv;
+                        void main() {
+                            float alpha = uOpacity;
+                            if (uHasMap) alpha *= texture2D(map, vUv).a;
+                            if (alpha < uAlphaTest) discard;
+                            gl_FragColor = vec4(1.0);
+                        }
+                    `,
+                    depthTest: true,
+                    depthWrite: true,
+                    colorWrite: false,
+                    transparent: false,
+                    blending: THREE.NoBlending,
+                    side: sourceMaterial.shadowSide !== undefined
+                        ? sourceMaterial.shadowSide
+                        : (sourceMaterial.side !== undefined ? sourceMaterial.side : THREE.FrontSide)
+                });
+                material.name = 'LightflowAtmosphere_DepthOnly';
+                this.depthMaterialCache.set(sourceMaterial, material);
+                this.depthMaterialResources.add(material);
+            }
+            const map = sourceMaterial.uniforms?.map?.value || sourceMaterial.map || null;
+            const baseAlpha = sourceMaterial.uniforms?.uBaseAlpha?.value;
+            material.uniforms.map.value = map;
+            material.uniforms.uHasMap.value = !!map;
+            material.uniforms.uOpacity.value = Number.isFinite(Number(baseAlpha))
+                ? clamp(Number(baseAlpha), 0, 1)
+                : clamp(finite(sourceMaterial.opacity, 1), 0, 1);
+            material.uniforms.uAlphaTest.value = Math.max(0.001, finite(sourceMaterial.alphaTest, 0.01));
+            material.side = sourceMaterial.shadowSide !== undefined
+                ? sourceMaterial.shadowSide
+                : (sourceMaterial.side !== undefined ? sourceMaterial.side : THREE.FrontSide);
+            return material;
+        },
+
+        useDepthOnlyCubeMaterials() {
+            const changes = [];
+            this.getScenePartition().cubeMeshes.forEach(mesh => {
+                if (!mesh?.material) return;
+                const original = mesh.material;
+                mesh.material = Array.isArray(original)
+                    ? original.map(material => this.getDepthOnlyMaterial(material))
+                    : this.getDepthOnlyMaterial(original);
+                changes.push({ mesh, material: original });
+            });
+            return changes;
+        },
+
+        restoreCubeMaterials(changes) {
+            (changes || []).forEach(entry => {
+                if (entry?.mesh) entry.mesh.material = entry.material;
+            });
         },
 
         restoreMaterialChanges(changes) {
@@ -1012,7 +1213,6 @@
                         return !cubeObjects.has(object) && (object.isLine || object.isLineSegments || object.isSprite || object.isPoints);
                     });
                     renderer.setRenderTarget(state.sceneTarget);
-                    renderer.setViewport?.(0, 0, state.depthWidth, state.depthHeight);
                     renderer.setClearColor?.(0x000000, 0);
                     renderer.clear?.(true, true, true);
                     try {
@@ -1022,18 +1222,18 @@
                     }
                 }
                 const hidden = this.collectNonCubeVisibilityChanges(cubeObjects);
-                const cubeDepthChanges = this.forceDepthWriting(scene, object => cubeObjects.has(object));
+                const cubeMaterialChanges = this.useDepthOnlyCubeMaterials();
                 renderer.setRenderTarget(state.cubeTarget);
-                renderer.setViewport?.(0, 0, state.depthWidth, state.depthHeight);
                 renderer.setClearColor?.(0x000000, 0);
                 renderer.clear?.(true, true, true);
                 try {
                     renderer.render(scene, camera);
                 } finally {
-                    this.restoreMaterialChanges(cubeDepthChanges);
+                    this.restoreCubeMaterials(cubeMaterialChanges);
                     hidden.forEach(object => { object.visible = true; });
                 }
                 state.ownDepthStamp = performance.now();
+                state.stats.depthCaptures++;
                 return {
                     sceneDepth: needsHelperDepth ? (sharedSceneDepth || state.sceneTarget.depthTexture) : state.cubeTarget.depthTexture,
                     cubeDepth: state.cubeTarget.depthTexture
@@ -1051,8 +1251,8 @@
 
         updateVolumeUniforms(state, volumes) {
             const uniforms = state.volumeUniforms;
-            const scaleMatrix = new THREE.Matrix4();
-            const worldMatrix = new THREE.Matrix4();
+            const scaleMatrix = state.scratch.scaleMatrix;
+            const worldMatrix = state.scratch.worldMatrix;
             window.Canvas?.scene?.updateMatrixWorld?.(true);
             for (let index = 0; index < MAX_VOLUMES; index++) {
                 const volume = volumes[index];
@@ -1084,7 +1284,7 @@
                     shape,
                     mode,
                     clamp(finite(volume.edge_feather, 0.12), 0.001, 1),
-                    0
+                    clamp(finite(volume.shadow_fill, 0.1), 0, 1)
                 );
                 uniforms.uVolumeOptics.value[index].set(
                     clamp(finite(volume.density, 0.04), 0, 4),
@@ -1110,7 +1310,7 @@
                     volume.receive_shadows === false ? 0 : 1,
                     clamp(finite(volume.ambient, 0.12), 0, 4),
                     clamp(finite(volume.bloom_contribution, 1), 0, 4),
-                    0
+                    volume.composite_mode === 'shafts' ? 1 : 0
                 );
                 colorArrayToVector(volume.scattering_color, uniforms.uVolumeColor.value[index]);
                 colorArrayToVector(volume.absorption_color, uniforms.uVolumeAbsorptionColor.value[index]);
@@ -1120,15 +1320,28 @@
 
         updateLightUniforms(state) {
             const uniforms = state.volumeUniforms;
-            const entries = Object.entries(window.three_lights || {}).filter(([, light]) => {
-                return light && light.visible !== false && finite(light.intensity, 0) > 0;
-            }).sort((first, second) => finite(second[1]?.intensity, 0) - finite(first[1]?.intensity, 0)).slice(0, MAX_LIGHTS);
-            const position = new THREE.Vector3();
-            const targetPosition = new THREE.Vector3();
-            const direction = new THREE.Vector3();
+            const candidates = state.lightCandidates;
+            let candidateCount = 0;
+            const lights = window.three_lights || {};
+            for (const uuid in lights) {
+                if (!Object.prototype.hasOwnProperty.call(lights, uuid)) continue;
+                const light = lights[uuid];
+                if (!light || light.visible === false || finite(light.intensity, 0) <= 0) continue;
+                const candidate = candidates[candidateCount] || (candidates[candidateCount] = {});
+                candidate.uuid = uuid;
+                candidate.light = light;
+                candidate.intensity = finite(light.intensity, 0);
+                candidateCount++;
+            }
+            candidates.length = candidateCount;
+            candidates.sort((first, second) => second.intensity - first.intensity);
+            const lightCount = Math.min(MAX_LIGHTS, candidateCount);
+            const position = state.scratch.position;
+            const targetPosition = state.scratch.targetPosition;
+            const direction = state.scratch.direction;
             let shadowCount = 0;
             for (let index = 0; index < MAX_LIGHTS; index++) {
-                const entry = entries[index];
+                const entry = index < lightCount ? candidates[index] : null;
                 if (!entry) {
                     uniforms.uLightPositionType.value[index].set(0, 0, 0, 1);
                     uniforms.uLightDirectionRange.value[index].set(0, -1, 0, 0);
@@ -1136,14 +1349,14 @@
                     uniforms.uLightConeShadow.value[index].set(-1, 1, -1, 0);
                     continue;
                 }
-                const [uuid, light] = entry;
+                const { uuid, light } = entry;
                 const element = window.LightElement?.all?.find?.(candidate => candidate?.uuid === uuid);
                 light.getWorldPosition?.(position);
                 if (light.target?.getWorldPosition) {
                     light.target.getWorldPosition(targetPosition);
                     direction.copy(targetPosition).sub(position).normalize();
                 } else {
-                    direction.set(0, 0, -1).applyQuaternion(light.getWorldQuaternion(new THREE.Quaternion())).normalize();
+                    direction.set(0, 0, -1).applyQuaternion(light.getWorldQuaternion(state.scratch.quaternion)).normalize();
                 }
                 const type = light.isDirectionalLight ? 0 : (light.isSpotLight ? 2 : 1);
                 const range = Math.max(0, finite(light.distance, finite(element?.distance, 0)));
@@ -1186,7 +1399,117 @@
                 uniforms.uShadowMatrix1.value.identity();
                 uniforms.uShadowParams1.value.set(1, 1, 0, 0);
             }
-            uniforms.uLightCount.value = entries.length;
+            uniforms.uLightCount.value = lightCount;
+        },
+
+        hashNumber(hash, value) {
+            const quantized = Math.round(finite(value, 0) * 100000);
+            return Math.imul((hash ^ quantized) >>> 0, 16777619) >>> 0;
+        },
+
+        hashString(hash, value) {
+            const text = String(value || '');
+            for (let index = 0; index < text.length; index++) {
+                hash = Math.imul((hash ^ text.charCodeAt(index)) >>> 0, 16777619) >>> 0;
+            }
+            return hash;
+        },
+
+        hashArray(hash, values) {
+            if (!values) return this.hashNumber(hash, 0);
+            for (let index = 0; index < values.length; index++) hash = this.hashNumber(hash, values[index]);
+            return hash;
+        },
+
+        computeFrameSignature(state, preview, volumes, studio) {
+            let hash = 2166136261;
+            hash = this.hashNumber(hash, this.sceneRevision);
+            hash = this.hashNumber(hash, state.sceneWidth);
+            hash = this.hashNumber(hash, state.sceneHeight);
+            hash = this.hashNumber(hash, state.volumeWidth);
+            hash = this.hashNumber(hash, state.volumeHeight);
+            hash = this.hashString(hash, studio ? this.settings.render_quality : this.settings.preview_quality);
+            hash = this.hashNumber(hash, this.settings.helper_mask ? 1 : 0);
+            hash = this.hashNumber(hash, this.settings.temporal_jitter ? 1 : 0);
+            const camera = preview.camera;
+            hash = this.hashArray(hash, camera?.matrixWorld?.elements);
+            hash = this.hashArray(hash, camera?.projectionMatrix?.elements);
+            hash = this.hashNumber(hash, camera?.near);
+            hash = this.hashNumber(hash, camera?.far);
+
+            let animated = !!this.settings.temporal_jitter;
+            volumes.forEach(volume => {
+                hash = this.hashString(hash, volume.uuid);
+                hash = this.hashArray(hash, volume.mesh?.matrixWorld?.elements);
+                hash = this.hashArray(hash, volume.size);
+                hash = this.hashString(hash, volume.shape);
+                hash = this.hashString(hash, volume.density_mode);
+                hash = this.hashString(hash, volume.composite_mode);
+                hash = this.hashNumber(hash, volume.density);
+                hash = this.hashNumber(hash, volume.scattering_strength);
+                hash = this.hashNumber(hash, volume.absorption);
+                hash = this.hashNumber(hash, volume.anisotropy);
+                hash = this.hashNumber(hash, volume.ambient);
+                hash = this.hashNumber(hash, volume.shadow_fill);
+                hash = this.hashNumber(hash, volume.edge_feather);
+                hash = this.hashNumber(hash, volume.height_falloff);
+                hash = this.hashNumber(hash, volume.height_offset);
+                hash = this.hashNumber(hash, volume.noise_scale);
+                hash = this.hashNumber(hash, volume.noise_detail);
+                hash = this.hashNumber(hash, volume.coverage);
+                hash = this.hashNumber(hash, volume.erosion);
+                hash = this.hashNumber(hash, volume.wind_speed);
+                hash = this.hashArray(hash, volume.wind_direction);
+                hash = this.hashArray(hash, volume.scattering_color);
+                hash = this.hashArray(hash, volume.absorption_color);
+                hash = this.hashNumber(hash, volume.receive_shadows === false ? 0 : 1);
+                hash = this.hashNumber(hash, volume.bloom_contribution);
+                if (volume.density_mode === 'cloud' && Math.abs(finite(volume.wind_speed, 0)) > 0.00001) animated = true;
+            });
+
+            const lights = window.three_lights || {};
+            for (const uuid in lights) {
+                if (!Object.prototype.hasOwnProperty.call(lights, uuid)) continue;
+                const light = lights[uuid];
+                if (!light || light.visible === false || finite(light.intensity, 0) <= 0) continue;
+                hash = this.hashString(hash, uuid);
+                hash = this.hashArray(hash, light.matrixWorld?.elements);
+                hash = this.hashArray(hash, light.target?.matrixWorld?.elements);
+                hash = this.hashNumber(hash, light.intensity);
+                hash = this.hashNumber(hash, light.distance);
+                hash = this.hashNumber(hash, light.angle);
+                hash = this.hashNumber(hash, light.penumbra);
+                hash = this.hashNumber(hash, light.color?.r);
+                hash = this.hashNumber(hash, light.color?.g);
+                hash = this.hashNumber(hash, light.color?.b);
+                hash = this.hashNumber(hash, light.castShadow === false ? 0 : 1);
+                hash = this.hashArray(hash, light.shadow?.matrix?.elements);
+                hash = this.hashNumber(hash, light.shadow?.bias);
+            }
+            const tile = studio && this.studioTile?.preview === preview ? this.studioTile.tile : null;
+            if (tile) {
+                hash = this.hashNumber(hash, tile.viewX);
+                hash = this.hashNumber(hash, tile.viewY);
+                hash = this.hashNumber(hash, tile.viewWidth);
+                hash = this.hashNumber(hash, tile.viewHeight);
+                hash = this.hashNumber(hash, tile.sampleX);
+                hash = this.hashNumber(hash, tile.sampleY);
+            }
+            if (window.Timeline?.playing) animated = true;
+            if (animated && !studio) hash = this.hashNumber(hash, Math.floor(performance.now() / 33));
+            return hash >>> 0;
+        },
+
+        performance() {
+            const result = { states: this.states.size, raymarches: 0, cacheHits: 0, depthCaptures: 0, cacheHitRate: 0 };
+            this.states.forEach(state => {
+                result.raymarches += state.stats.raymarches;
+                result.cacheHits += state.stats.cacheHits;
+                result.depthCaptures += state.stats.depthCaptures;
+            });
+            const total = result.raymarches + result.cacheHits;
+            result.cacheHitRate = total ? result.cacheHits / total : 0;
+            return result;
         },
 
         updateUniforms(state, preview, volumes, studio, bloomPass, depthSources) {
@@ -1248,6 +1571,7 @@
             const studio = !!(preview.sa_studio_render_active || window.LightManagerStudioRenderSession || settings.studio || settings.bloomMask);
             state.rendering = true;
             this.resize(state, studio);
+            const frameSignature = this.computeFrameSignature(state, preview, volumes, studio);
             const previousTarget = renderer.getRenderTarget?.() || null;
             const previousAutoClear = renderer.autoClear;
             const previousViewport = renderer.getViewport?.(new THREE.Vector4()) || null;
@@ -1257,29 +1581,40 @@
             const previousClearAlpha = renderer.getClearAlpha?.() ?? 1;
             renderer.getClearColor?.(previousClearColor);
             try {
-                const useCachedBloom = !!settings.bloomMask && state.lastNormalVolumeReady && state.lastNormalStudio === studio;
-                if (!useCachedBloom) {
+                const sameNormalFrame = state.lastNormalVolumeReady &&
+                    state.lastNormalStudio === studio &&
+                    state.lastFrameSignature === frameSignature;
+                const useCachedBloom = !!settings.bloomMask && sameNormalFrame;
+                const useCachedNormal = !settings.bloomMask && !!this.settings.static_cache && sameNormalFrame;
+                if (!useCachedBloom && !useCachedNormal) {
                     // AO runs immediately before Atmosphere in the Lightflow
                     // pipeline. Reuse its fresh depth buffers when they cover
                     // every visible cube; this removes two full scene draws
                     // per tile while preserving alpha-tested foliage depth.
                     const depthSources = this.findFreshSharedDepthSources(preview, state) || this.captureDepth(state, preview);
                     if (!depthSources) return false;
+                    state.lastDepthSources = depthSources;
                     this.updateUniforms(state, preview, volumes, studio, !!settings.bloomMask, depthSources);
                     renderer.autoClear = true;
                     renderer.setScissorTest?.(false);
                     renderer.setRenderTarget?.(state.volumeTarget);
-                    renderer.setViewport?.(0, 0, state.volumeWidth, state.volumeHeight);
                     renderer.setClearColor?.(0x000000, 0);
                     renderer.clear?.(true, true, true);
                     renderer.render(state.volumeScene, state.postCamera);
+                    state.stats.raymarches++;
                     if (!settings.bloomMask) {
                         state.lastNormalVolumeReady = true;
                         state.lastNormalStudio = studio;
+                        state.lastFrameSignature = frameSignature;
                         state.lastBloomMultiplier = volumes.reduce((maximum, volume) => {
                             return Math.max(maximum, clamp(finite(volume.bloom_contribution, 1), 0, 4));
                         }, 0);
+                    } else {
+                        state.lastNormalVolumeReady = false;
+                        state.lastFrameSignature = null;
                     }
+                } else {
+                    state.stats.cacheHits++;
                 }
 
                 renderer.autoClear = false;
@@ -1362,6 +1697,7 @@
         if (!volume) return volume;
         volume.shape = volume.shape === 'sphere' ? 'sphere' : 'box';
         volume.density_mode = ['uniform', 'height', 'cloud'].includes(volume.density_mode) ? volume.density_mode : 'uniform';
+        volume.composite_mode = volume.composite_mode === 'shafts' ? 'shafts' : 'physical';
         volume.size = Array.isArray(volume.size) ? volume.size.slice(0, 3) : [32, 16, 32];
         while (volume.size.length < 3) volume.size.push(16);
         volume.size = volume.size.map(value => Math.max(0.01, Math.abs(finite(value, 16))));
@@ -1378,6 +1714,7 @@
         volume.erosion = clamp(finite(volume.erosion, 0.22), 0.01, 1);
         volume.wind_speed = clamp(finite(volume.wind_speed, 0), -8, 8);
         volume.ambient = clamp(finite(volume.ambient, 0.12), 0, 4);
+        volume.shadow_fill = clamp(finite(volume.shadow_fill, 0.1), 0, 1);
         volume.bloom_contribution = clamp(finite(volume.bloom_contribution, 1), 0, 4);
         return volume;
     }
@@ -1416,6 +1753,15 @@
                 super(data, uuid);
                 for (const key in LightflowVolumeElement.properties) LightflowVolumeElement.properties[key].reset(this);
                 if (data && typeof data === 'object') this.extend(data);
+                const legacyGodRays = data && !Object.prototype.hasOwnProperty.call(data, 'composite_mode') &&
+                    this.density_mode === 'uniform' && finite(this.scattering_strength, 0) >= 1.15 &&
+                    finite(this.absorption, 1) <= 0.05 && finite(this.anisotropy, 0) >= 0.55 &&
+                    finite(this.ambient, 1) <= 0.02;
+                if (legacyGodRays) {
+                    this.composite_mode = 'shafts';
+                    this.shadow_fill = 0;
+                    this.ambient = 0;
+                }
                 sanitizeVolume(this);
             }
 
@@ -1487,6 +1833,7 @@
         new Property(VolumeElement, 'string', 'name', { default: 'Volume Domain' });
         new Property(VolumeElement, 'string', 'shape', { default: 'box' });
         new Property(VolumeElement, 'string', 'density_mode', { default: 'uniform' });
+        new Property(VolumeElement, 'string', 'composite_mode', { default: 'physical' });
         new Property(VolumeElement, 'vector', 'position');
         new Property(VolumeElement, 'vector', 'rotation');
         new Property(VolumeElement, 'vector', 'size', { default: [32, 16, 32] });
@@ -1499,6 +1846,7 @@
         new Property(VolumeElement, 'number', 'absorption', { default: 0.18, min: 0 });
         new Property(VolumeElement, 'number', 'anisotropy', { default: 0.35 });
         new Property(VolumeElement, 'number', 'ambient', { default: 0.12, min: 0 });
+        new Property(VolumeElement, 'number', 'shadow_fill', { default: 0.1, min: 0 });
         new Property(VolumeElement, 'boolean', 'receive_shadows', { default: true });
         new Property(VolumeElement, 'number', 'bloom_contribution', { default: 1, min: 0 });
         new Property(VolumeElement, 'number', 'edge_feather', { default: 0.12, min: 0 });
@@ -1566,6 +1914,7 @@
             updateTransform(element) {
                 NodePreviewController.prototype.updateTransform.call(this, element);
                 updateVolumeGizmo(element);
+                AtmosphereManager.invalidateSceneCache();
                 requestPreviewRender();
                 this.dispatchEvent('update_transform', { element });
             },
@@ -1650,7 +1999,8 @@
                     soft_mist: 'lightflow_atmosphere.preset.soft_mist',
                     godrays: 'lightflow_atmosphere.preset.godrays',
                     clouds: 'lightflow_atmosphere.preset.clouds',
-                    stage_haze: 'lightflow_atmosphere.preset.stage_haze'
+                    stage_haze: 'lightflow_atmosphere.preset.stage_haze',
+                    cinematic_dust: 'lightflow_atmosphere.preset.cinematic_dust'
                 }
             },
             name: { type: 'text', label: 'generic.name', value: volume.name },
@@ -1664,6 +2014,10 @@
                 type: 'select', label: 'lightflow_atmosphere.field.density_mode', value: volume.density_mode,
                 options: { uniform: 'lightflow_atmosphere.option.uniform', height: 'lightflow_atmosphere.option.height', cloud: 'lightflow_atmosphere.option.cloud' }
             },
+            composite_mode: {
+                type: 'select', label: 'lightflow_atmosphere.field.composite_mode', value: volume.composite_mode,
+                options: { physical: 'lightflow_atmosphere.option.physical', shafts: 'lightflow_atmosphere.option.shafts' }
+            },
             _optics: '_',
             density: { type: 'number', label: 'lightflow_atmosphere.field.density', value: volume.density, min: 0, max: 4, step: 0.001 },
             scattering_color: { type: 'color', label: 'lightflow_atmosphere.field.scattering_color', value: colorArrayToHex(volume.scattering_color) },
@@ -1673,6 +2027,7 @@
             anisotropy: { type: 'range', label: 'lightflow_atmosphere.field.anisotropy', value: volume.anisotropy, min: -0.92, max: 0.92, step: 0.01 },
             ambient: { type: 'range', label: 'lightflow_atmosphere.field.ambient', value: volume.ambient, min: 0, max: 2, step: 0.01 },
             receive_shadows: { type: 'checkbox', label: 'lightflow_atmosphere.field.receive_shadows', value: volume.receive_shadows !== false },
+            shadow_fill: { type: 'range', label: 'lightflow_atmosphere.field.shadow_fill', value: volume.shadow_fill, min: 0, max: 1, step: 0.01 },
             bloom_contribution: { type: 'range', label: 'lightflow_atmosphere.field.bloom', value: volume.bloom_contribution, min: 0, max: 4, step: 0.05 },
             _density_shape: '_',
             edge_feather: { type: 'range', label: 'lightflow_atmosphere.field.edge_feather', value: volume.edge_feather, min: 0.001, max: 1, step: 0.005 },
@@ -1718,6 +2073,7 @@
             shape: result.shape === 'sphere' ? 'sphere' : 'box',
             size: Array.isArray(result.size) ? result.size.slice(0, 3) : volume.size,
             density_mode: ['uniform', 'height', 'cloud'].includes(result.density_mode) ? result.density_mode : 'uniform',
+            composite_mode: result.composite_mode === 'shafts' ? 'shafts' : 'physical',
             density: finite(result.density, volume.density),
             scattering_color: hexToColorArray(result.scattering_color, volume.scattering_color),
             scattering_strength: finite(result.scattering_strength, volume.scattering_strength),
@@ -1725,6 +2081,7 @@
             absorption: finite(result.absorption, volume.absorption),
             anisotropy: finite(result.anisotropy, volume.anisotropy),
             ambient: finite(result.ambient, volume.ambient),
+            shadow_fill: finite(result.shadow_fill, volume.shadow_fill),
             receive_shadows: !!result.receive_shadows,
             bloom_contribution: finite(result.bloom_contribution, volume.bloom_contribution),
             edge_feather: finite(result.edge_feather, volume.edge_feather),
@@ -1785,6 +2142,10 @@
                 type: 'select', label: 'lightflow_atmosphere.field.density_mode', value: volume.density_mode,
                 options: { uniform: 'lightflow_atmosphere.option.uniform', height: 'lightflow_atmosphere.option.height', cloud: 'lightflow_atmosphere.option.cloud' }
             },
+            panel_composite: {
+                type: 'select', label: 'lightflow_atmosphere.field.composite_mode', value: volume.composite_mode,
+                options: { physical: 'lightflow_atmosphere.option.physical', shafts: 'lightflow_atmosphere.option.shafts' }
+            },
             panel_density: { type: 'range', label: 'lightflow_atmosphere.field.density', value: volume.density, min: 0, max: 0.3, step: 0.001 },
             panel_scattering: { type: 'range', label: 'lightflow_atmosphere.field.scattering', value: volume.scattering_strength, min: 0, max: 4, step: 0.01 },
             panel_anisotropy: { type: 'range', label: 'lightflow_atmosphere.field.anisotropy', value: volume.anisotropy, min: -0.92, max: 0.92, step: 0.01 },
@@ -1828,7 +2189,8 @@
             const keys = Array.isArray(changed_keys) && changed_keys.length ? changed_keys : Object.keys(result || {});
             const mapping = {
                 panel_enabled: 'enabled', panel_mode: 'density_mode', panel_density: 'density',
-                panel_scattering: 'scattering_strength', panel_anisotropy: 'anisotropy', panel_shadows: 'receive_shadows'
+                panel_composite: 'composite_mode', panel_scattering: 'scattering_strength',
+                panel_anisotropy: 'anisotropy', panel_shadows: 'receive_shadows'
             };
             const config = {};
             keys.forEach(key => {
@@ -1856,7 +2218,9 @@
                 render_scale: { type: 'range', label: 'lightflow_atmosphere.settings.render_scale', value: settings.render_scale, min: 0.5, max: 1, step: 0.05 },
                 _advanced: '_',
                 temporal_jitter: { type: 'checkbox', label: 'lightflow_atmosphere.settings.jitter', value: settings.temporal_jitter },
-                helper_mask: { type: 'checkbox', label: 'lightflow_atmosphere.settings.helper_mask', value: settings.helper_mask }
+                helper_mask: { type: 'checkbox', label: 'lightflow_atmosphere.settings.helper_mask', value: settings.helper_mask },
+                static_cache: { type: 'checkbox', label: 'lightflow_atmosphere.settings.static_cache', value: settings.static_cache !== false },
+                frustum_culling: { type: 'checkbox', label: 'lightflow_atmosphere.settings.frustum_culling', value: settings.frustum_culling !== false }
             },
             onConfirm(result) {
                 AtmosphereManager.settings = Object.assign({}, settings, {
@@ -1866,9 +2230,12 @@
                     render_quality: RENDER_STEPS[result.render_quality] ? result.render_quality : 'high',
                     render_scale: clamp(finite(result.render_scale, 1), 0.5, 1),
                     temporal_jitter: !!result.temporal_jitter,
-                    helper_mask: !!result.helper_mask
+                    helper_mask: !!result.helper_mask,
+                    static_cache: !!result.static_cache,
+                    frustum_culling: !!result.frustum_culling
                 });
                 saveSettings(AtmosphereManager.settings);
+                AtmosphereManager.invalidateSceneCache();
                 requestPreviewRender();
             }
         }).show();
@@ -1926,6 +2293,7 @@
             'lightflow_atmosphere.field.shape': 'Domain Shape',
             'lightflow_atmosphere.field.size': 'Domain Size',
             'lightflow_atmosphere.field.density_mode': 'Density Model',
+            'lightflow_atmosphere.field.composite_mode': 'Rendering Model',
             'lightflow_atmosphere.field.density': 'Density',
             'lightflow_atmosphere.field.scattering_color': 'Scattering Color',
             'lightflow_atmosphere.field.scattering': 'Scattering',
@@ -1934,6 +2302,7 @@
             'lightflow_atmosphere.field.anisotropy': 'Anisotropy',
             'lightflow_atmosphere.field.ambient': 'Ambient Fill',
             'lightflow_atmosphere.field.receive_shadows': 'Receive Volumetric Shadows',
+            'lightflow_atmosphere.field.shadow_fill': 'Multiple-Scattering Fill',
             'lightflow_atmosphere.field.bloom': 'Bloom Contribution',
             'lightflow_atmosphere.field.edge_feather': 'Boundary Feather',
             'lightflow_atmosphere.field.height_falloff': 'Height Falloff',
@@ -1950,10 +2319,13 @@
             'lightflow_atmosphere.option.uniform': 'Uniform Fog',
             'lightflow_atmosphere.option.height': 'Height Fog',
             'lightflow_atmosphere.option.cloud': 'Procedural Clouds',
+            'lightflow_atmosphere.option.physical': 'Physical Medium (Fog / Clouds)',
+            'lightflow_atmosphere.option.shafts': 'Additive Light Shafts',
             'lightflow_atmosphere.preset.soft_mist': 'Soft Mist',
             'lightflow_atmosphere.preset.godrays': 'God Rays',
             'lightflow_atmosphere.preset.clouds': 'Cloud Volume',
             'lightflow_atmosphere.preset.stage_haze': 'Stage Haze',
+            'lightflow_atmosphere.preset.cinematic_dust': 'Cinematic Dust',
             'lightflow_atmosphere.button.advanced': 'Advanced Volume Settings...',
             'lightflow_atmosphere.settings.title': 'Atmosphere Quality',
             'lightflow_atmosphere.settings.preview_quality': 'Viewport Steps',
@@ -1962,6 +2334,8 @@
             'lightflow_atmosphere.settings.render_scale': 'Studio Render Resolution',
             'lightflow_atmosphere.settings.jitter': 'Temporal Jitter',
             'lightflow_atmosphere.settings.helper_mask': 'Keep Gizmos and Helpers Clear',
+            'lightflow_atmosphere.settings.static_cache': 'Reuse Unchanged Volume Frames',
+            'lightflow_atmosphere.settings.frustum_culling': 'Cull Off-Screen Volume Domains',
             'lightflow_atmosphere.undo.add': 'Add Volume Domain',
             'lightflow_atmosphere.undo.edit': 'Edit Volume Domain',
             'lightflow_atmosphere.undo.fit': 'Fit Volume Domain',
@@ -1983,6 +2357,7 @@
             'lightflow_atmosphere.field.shape': 'Forma del dominio',
             'lightflow_atmosphere.field.size': 'Tamaño del dominio',
             'lightflow_atmosphere.field.density_mode': 'Modelo de densidad',
+            'lightflow_atmosphere.field.composite_mode': 'Modelo de renderizado',
             'lightflow_atmosphere.field.density': 'Densidad',
             'lightflow_atmosphere.field.scattering_color': 'Color de dispersión',
             'lightflow_atmosphere.field.scattering': 'Dispersión',
@@ -1991,6 +2366,7 @@
             'lightflow_atmosphere.field.anisotropy': 'Anisotropía',
             'lightflow_atmosphere.field.ambient': 'Relleno ambiental',
             'lightflow_atmosphere.field.receive_shadows': 'Recibir sombras volumétricas',
+            'lightflow_atmosphere.field.shadow_fill': 'Relleno de dispersión múltiple',
             'lightflow_atmosphere.field.bloom': 'Contribución al Bloom',
             'lightflow_atmosphere.field.edge_feather': 'Suavizado del límite',
             'lightflow_atmosphere.field.height_falloff': 'Caída por altura',
@@ -2007,10 +2383,13 @@
             'lightflow_atmosphere.option.uniform': 'Niebla uniforme',
             'lightflow_atmosphere.option.height': 'Niebla por altura',
             'lightflow_atmosphere.option.cloud': 'Nubes procedurales',
+            'lightflow_atmosphere.option.physical': 'Medio físico (niebla / nubes)',
+            'lightflow_atmosphere.option.shafts': 'Haces de luz aditivos',
             'lightflow_atmosphere.preset.soft_mist': 'Niebla suave',
             'lightflow_atmosphere.preset.godrays': 'God Rays',
             'lightflow_atmosphere.preset.clouds': 'Volumen de nubes',
             'lightflow_atmosphere.preset.stage_haze': 'Bruma de escenario',
+            'lightflow_atmosphere.preset.cinematic_dust': 'Polvo cinematográfico',
             'lightflow_atmosphere.button.advanced': 'Ajustes avanzados del volumen...',
             'lightflow_atmosphere.settings.title': 'Calidad de atmósfera',
             'lightflow_atmosphere.settings.preview_quality': 'Pasos en el viewport',
@@ -2019,6 +2398,8 @@
             'lightflow_atmosphere.settings.render_scale': 'Resolución de Studio Render',
             'lightflow_atmosphere.settings.jitter': 'Jitter temporal',
             'lightflow_atmosphere.settings.helper_mask': 'Mantener gizmos y ayudas limpios',
+            'lightflow_atmosphere.settings.static_cache': 'Reutilizar frames volumétricos sin cambios',
+            'lightflow_atmosphere.settings.frustum_culling': 'Omitir dominios fuera de cámara',
             'lightflow_atmosphere.undo.add': 'Añadir dominio volumétrico',
             'lightflow_atmosphere.undo.edit': 'Editar dominio volumétrico',
             'lightflow_atmosphere.undo.fit': 'Ajustar dominio volumétrico',
@@ -2051,7 +2432,7 @@
         title: 'Lightflow Atmosphere',
         icon: 'blur_on',
         author: 'MidFord327',
-        description: 'Physically grounded local fog, volumetric light shafts, and procedural cloud domains for the Lightflow rendering suite.',
+        description: 'Production-ready local fog, occluded additive light shafts, and procedural cloud domains for the Lightflow rendering suite.',
         tags: ['Lightflow', 'Rendering', 'Volumetrics', 'Fog', 'God Rays', 'Clouds'],
         version: PLUGIN_VERSION,
         min_version: '4.9.0',
@@ -2065,18 +2446,28 @@
             window.LightflowAtmosphere = AtmosphereManager;
 
             const studioListener = Blockbench.on('studio_render_pre_tile', event => AtmosphereManager.prepareStudioTile(event));
-            const selectionListener = Blockbench.on('update_selection', () => syncAtmospherePanel());
+            const selectionListener = Blockbench.on('update_selection', () => {
+                AtmosphereManager.invalidateSceneCache();
+                syncAtmospherePanel();
+            });
             const projectListener = Blockbench.on('select_project', () => {
+                AtmosphereManager.invalidateSceneCache();
                 AtmosphereManager.patchAllPreviews();
                 syncAtmospherePanel();
                 requestPreviewRender();
             });
             const lightManagerListener = () => {
+                AtmosphereManager.invalidateSceneCache();
                 AtmosphereManager.patchAllPreviews();
                 requestPreviewRender();
             };
             window.addEventListener('light_manager_initialized', lightManagerListener);
-            deletables.push(studioListener, selectionListener, projectListener, {
+            const sceneMutationListeners = [
+                'update_transform', 'update_geometry', 'update_faces', 'update_uv',
+                'add_cube', 'add_mesh', 'add_texture_mesh', 'remove_cube', 'remove_mesh',
+                'undo', 'redo', 'load_project'
+            ].map(eventName => Blockbench.on(eventName, () => AtmosphereManager.invalidateSceneCache()));
+            deletables.push(studioListener, selectionListener, projectListener, ...sceneMutationListeners, {
                 delete() { window.removeEventListener('light_manager_initialized', lightManagerListener); }
             });
             syncAtmospherePanel();

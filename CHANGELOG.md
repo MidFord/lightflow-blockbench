@@ -38,8 +38,20 @@ Lightflow uses a suite release version for public downloads. Individual plugins 
 - Added Texture Mesh selection support to light fitting.
 - Made Render-mode panel routing aware of Cube, Mesh, and Texture Mesh selections.
 
-### Lightflow Atmosphere 0.2.0
+### Lightflow Atmosphere 1.0.0
 
+- Promoted Atmosphere from its experimental series to the first stable release.
+- Fixed the high-DPI viewport displacement by moving physical-pixel viewport and scissor state onto Atmosphere render targets instead of applying device-pixel ratio twice.
+- Added separate Physical Medium and Additive Light Shafts composition. God Rays now contribute only illuminated in-scattering, so fully shadowed regions remain transparent instead of producing black volume.
+- Migrated existing God Rays-style domains to the additive model without changing ordinary fog and cloud projects.
+- Added an artist-facing multiple-scattering fill approximation for fog and cloud shadow softness.
+- Added the Cinematic Dust quick setup and exposed rendering model and shadow fill in the volume UI with English and Spanish translations.
+- Added conservative camera-frustum culling before volume upload and ray marching.
+- Added static-frame signature caching that skips unchanged depth capture, light upload, and ray marching while preserving animated clouds, temporal jitter, camera movement, edits, shadows, and Studio Render tiles.
+- Reused Shader Architect AO scene and receiver depth even when editor helpers are visible, eliminating redundant full-scene captures in the standard Lightflow pipeline.
+- Added cached scene partitions and lightweight alpha-aware depth-only materials for standalone Atmosphere depth capture.
+- Removed per-frame Matrix4, Vector3, Quaternion, light-entry, and active-volume allocations from hot paths.
+- Added `LightflowAtmosphere.performance()` counters for raymarches, cache hits, depth captures, and cache-hit rate.
 - Generalized depth occluder collection, shared-depth validation, and volume fitting from Cubes to Cube, Mesh, and Texture Mesh render elements.
 
 ### Studio Render 1.4.2

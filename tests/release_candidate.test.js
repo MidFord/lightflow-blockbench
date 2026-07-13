@@ -26,7 +26,7 @@ test('release candidate versions stay synchronized with the README', () => {
     const expected = {
         'light_manager.js': '1.6.1',
         'shader_architect.js': '2.6.0',
-        'lightflow_atmosphere.js': '0.2.0',
+        'lightflow_atmosphere.js': '1.0.0',
         'studio_render.js': '1.4.2'
     };
     const readme = read('README.md');
@@ -119,6 +119,31 @@ test('supporting modules include Mesh and TextureMesh render elements', () => {
     assert.match(atmosphere, /\[window\.Cube, window\.Mesh, window\.TextureMesh\]/);
     assert.match(studio, /\[window\.Cube, window\.Mesh, window\.TextureMesh\]/);
     assert.match(lights, /TextureMesh\.selected/);
+});
+
+test('Atmosphere 1.0 keeps volume targets DPI-safe and shadowed God Rays transparent', () => {
+    const source = read('lightflow_atmosphere.js');
+    assert.match(source, /function configureRenderTarget\(target, width, height\)/);
+    assert.match(source, /configureRenderTarget\(state\.volumeTarget, volumeWidth, volumeHeight\)/);
+    assert.match(source, /configureRenderTarget\(state\.sceneTarget, volumeWidth, volumeHeight\)/);
+    assert.match(source, /configureRenderTarget\(state\.cubeTarget, volumeWidth, volumeHeight\)/);
+    assert.doesNotMatch(source, /setRenderTarget\??\.?(?:\(state\.(?:volume|scene|cube)Target\)|\(state\.(?:volume|scene|cube)Target)[\s\S]{0,100}setViewport/);
+    assert.match(source, /godrays:\s*\{[\s\S]{0,100}composite_mode: 'shafts', shadow_fill: 0/);
+    assert.match(source, /if \(!lightShaft\) extinctionColor \+= sigmaS \+ sigmaA/);
+    assert.match(source, /accumulated \+= transmittance \* scatteringSource \* stepLength/);
+    assert.match(source, /const legacyGodRays =/);
+});
+
+test('Atmosphere 1.0 skips redundant realtime volume work', () => {
+    const source = read('lightflow_atmosphere.js');
+    assert.match(source, /frustum\.intersectsSphere/);
+    assert.match(source, /computeFrameSignature\(state, preview, volumes, studio\)/);
+    assert.match(source, /const useCachedNormal =/);
+    assert.match(source, /state\.stats\.cacheHits\+\+/);
+    assert.match(source, /getScenePartition\(\)/);
+    assert.match(source, /useDepthOnlyCubeMaterials\(\)/);
+    assert.match(source, /findFreshSharedDepthSources/);
+    assert.match(source, /performance\(\) \{/);
 });
 
 test('renderer documentation does not misrepresent WebGL as hardware RTX', () => {
