@@ -27,7 +27,7 @@ test('release candidate versions stay synchronized with the README', () => {
         'light_manager.js': '1.6.1',
         'shader_architect.js': '2.5.1',
         'lightflow_atmosphere.js': '0.2.0',
-        'studio_render.js': '1.4.1'
+        'studio_render.js': '1.4.2'
     };
     const readme = read('README.md');
     Object.entries(expected).forEach(([file, version]) => {
@@ -87,10 +87,11 @@ test('automatic normal bias migrates the old formula and PBR matches Lightflow i
     assert.match(shaders, /\* attenuation\s*\* PI;/);
 });
 
-test('Bloom keeps non-emissive texels of emissive-capable materials as occluders', () => {
+test('Bloom uses transparent depth-only texels to occlude hidden emitters without erasing visible glow', () => {
     const source = read('studio_render.js');
-    assert.match(source, /if \(energy <= 0\.0005\) \{[\s\S]*?gl_FragColor = vec4\(0\.0, 0\.0, 0\.0, 1\.0\);[\s\S]*?return;/);
-    assert.match(source, /gl_FragColor = vec4\(max\(emission, vec3\(0\.0\)\), 1\.0\);/);
+    assert.match(source, /if \(energy <= 0\.0005\) \{[\s\S]*?gl_FragColor = vec4\(0\.0\);[\s\S]*?return;/);
+    assert.match(source, /gl_FragColor = vec4\(max\(emission, vec3\(0\.0\)\), clamp\(energy, 0\.0, 1\.0\)\);/);
+    assert.match(source, /depthWrite: true/);
     assert.doesNotMatch(source, /if \(energy <= 0\.0005\) discard;/);
 });
 
