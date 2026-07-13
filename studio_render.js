@@ -685,8 +685,8 @@
     async function withoutStudioRenderHighlights(callback) {
         const snapshots = [];
 
-        if (window.Cube && Array.isArray(Cube.all)) {
-            Cube.all.forEach(cube => {
+        [window.Cube, window.Mesh, window.TextureMesh].forEach(ElementType => {
+            if (ElementType && Array.isArray(ElementType.all)) ElementType.all.forEach(cube => {
                 const mesh = cube && cube.mesh;
                 const attribute = mesh?.geometry?.attributes?.highlight;
                 if (!attribute || !attribute.array) return;
@@ -704,7 +704,7 @@
                 attribute.array.fill(0);
                 attribute.needsUpdate = true;
             });
-        }
+        });
 
         try {
             return await callback();
@@ -2978,7 +2978,7 @@
         author: 'MidFord327',
         description: 'Export polished Blockbench studio renders with tiled supersampling, 4K/8K-safe output, transparency, GPU guidance, and an adjustable frame. Complements Light Manager and Shader Architect in the Lightflow suite.',
         tags: ['Lightflow', 'Rendering', 'Export', 'Screenshots', 'Studio', 'Presentation'],
-        version: '1.3.0',
+        version: '1.4.0',
         min_version: '4.9.0',
         variant: 'both',
         onload() {
