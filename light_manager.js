@@ -66,7 +66,12 @@ const LIGHT_MANAGER_SHADOW_NORMAL_BIAS_DEFAULTS = {
     2048: 0.01,
     4096: 0.01
 };
-const LIGHT_MANAGER_SHADOW_NORMAL_BIAS_LEGACY_DEFAULTS = [0.012];
+const LIGHT_MANAGER_SHADOW_NORMAL_BIAS_LEGACY_DEFAULTS = [0.012, 0.008];
+// Three.js normalBias is expressed in world units. Voxel faces and grazing
+// directional light need several texels of separation to eliminate acne
+// reliably; the previous 0.72-texel calibration was consistently too small.
+const LIGHT_MANAGER_NORMAL_BIAS_TEXEL_FACTOR = 4.4;
+const LIGHT_MANAGER_LEGACY_NORMAL_BIAS_TEXEL_FACTOR = 0.72;
 const LIGHT_MANAGER_AUTO_NORMAL_BIAS_PROPERTIES = [
     'light_type',
     'shadow_resolution',
@@ -506,7 +511,7 @@ const LightManagerUtils = {
         };
     },
 
-    defaultShadowNormalBias(source, overrides = {}) {
+    calculateShadowNormalBias(source, overrides = {}, texelFactor = LIGHT_MANAGER_NORMAL_BIAS_TEXEL_FACTOR) {
         const context = this.shadowNormalBiasContext(source, overrides);
         const resolution = Math.max(256, context.shadow_resolution);
         const depthRange = Math.max(0.001, context.shadow_far - context.shadow_near);
@@ -531,8 +536,24 @@ const LightManagerUtils = {
         }
 
         const worldUnitsPerTexel = worldSpan / resolution;
-        const bias = worldUnitsPerTexel * 0.72;
+        const bias = worldUnitsPerTexel * Math.max(0, Number(texelFactor) || 0);
         return Math.round(Math.max(0.00025, Math.min(0.12, bias)) * 100000) / 100000;
+    },
+
+    defaultShadowNormalBias(source, overrides = {}) {
+        return this.calculateShadowNormalBias(
+            source,
+            overrides,
+            LIGHT_MANAGER_NORMAL_BIAS_TEXEL_FACTOR
+        );
+    },
+
+    legacyShadowNormalBias(source, overrides = {}) {
+        return this.calculateShadowNormalBias(
+            source,
+            overrides,
+            LIGHT_MANAGER_LEGACY_NORMAL_BIAS_TEXEL_FACTOR
+        );
     },
 
     defaultShadowBias(source, overrides = {}) {
@@ -564,7 +585,12 @@ const LightManagerUtils = {
             ...Object.values(LIGHT_MANAGER_SHADOW_NORMAL_BIAS_DEFAULTS),
             ...LIGHT_MANAGER_SHADOW_NORMAL_BIAS_LEGACY_DEFAULTS
         ];
-        if (source) defaults.push(this.defaultShadowNormalBias(source));
+        if (source) {
+            defaults.push(this.defaultShadowNormalBias(source));
+            // Migrate values produced by Light Manager <= 1.6.0 instead of
+            // mistaking them for intentional manual overrides.
+            defaults.push(this.legacyShadowNormalBias(source));
+        }
         return defaults.some(defaultValue => (
             Math.abs(parsed - defaultValue) <= 0.000001
         ));
@@ -3896,7 +3922,7 @@ function initialize_light_plugin() {
         author: 'MidFord327',
         description: 'Add production-ready point, spot, and directional lights to Blockbench with viewport gizmos, animation support, shadows, and Studio Render controls. Provides the Lightflow lighting foundation for Shader Architect and Studio Render.',
         tags: ['Lightflow', 'Lighting', 'Shadows', 'Animation', 'Rendering', 'Studio'],
-        version: '1.6.0',
+        version: '1.6.1',
         min_version: '4.9.0',
         variant: 'both',
 
