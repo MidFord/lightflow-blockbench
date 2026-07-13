@@ -2937,6 +2937,7 @@ window.LightManagerFitTool = {
         if (typeof Cube !== 'undefined') this.addSelectionList(nodes, Cube.selected);
         if (typeof Group !== 'undefined') this.addSelectionList(nodes, Group.selected);
         if (typeof Mesh !== 'undefined') this.addSelectionList(nodes, Mesh.selected);
+        if (typeof TextureMesh !== 'undefined') this.addSelectionList(nodes, TextureMesh.selected);
         if (typeof Locator !== 'undefined') this.addSelectionList(nodes, Locator.selected);
         if (typeof NullObject !== 'undefined') this.addSelectionList(nodes, NullObject.selected);
 
@@ -3895,7 +3896,7 @@ function initialize_light_plugin() {
         author: 'MidFord327',
         description: 'Add production-ready point, spot, and directional lights to Blockbench with viewport gizmos, animation support, shadows, and Studio Render controls. Provides the Lightflow lighting foundation for Shader Architect and Studio Render.',
         tags: ['Lightflow', 'Lighting', 'Shadows', 'Animation', 'Rendering', 'Studio'],
-        version: '1.5.2',
+        version: '1.6.0',
         min_version: '4.9.0',
         variant: 'both',
 
@@ -8356,7 +8357,10 @@ function initialize_light_plugin() {
                         Panels.material_properties.selectTab(Panels.material_properties);
                     }
                 }
-                if (Project.mode === 'render' && LightElement.selected.length > 0 && (Cube.selected.length === 0)) {
+                const renderElementSelected = [window.Cube, window.Mesh, window.TextureMesh].some(ElementType => (
+                    ElementType && Array.isArray(ElementType.selected) && ElementType.selected.length > 0
+                ));
+                if (Project.mode === 'render' && LightElement.selected.length > 0 && !renderElementSelected) {
                     Panels.material_properties.selectTab(Panels.light_properties);
                 }
             });
