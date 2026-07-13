@@ -43,7 +43,7 @@ The plugins work independently where possible, but they are designed to be used 
 | **Light Manager** | `1.6.1` | Adds production-oriented point, spot, and directional lights with adaptive shadows, gizmos, animation support, and lighting profiles. | None |
 | **Shader Architect** | `2.5.1` | Builds and assigns advanced materials to Cubes, Meshes, and Texture Meshes with PBR controls, Blockbench render modes, editable GLSL, and material instances. | **Light Manager required** |
 | **Lightflow Atmosphere** | `0.2.0` | Adds physically grounded local fog, shadowed light shafts, height fog, and procedural cloud domains with render-element depth occlusion. | **Light Manager recommended**; integrates with Shader Architect and Studio Render |
-| **Studio Render** | `1.4.0` | Exports clean images with tiled supersampling, HDR/emissive Bloom with geometry occlusion, adjustable framing, transparency, and 4K/8K-safe output controls. | Works alone; integrates with the other Lightflow modules |
+| **Studio Render** | `1.4.1` | Exports clean images with tiled supersampling, HDR/emissive Bloom with geometry occlusion, adjustable framing, transparency, and 4K/8K-safe output controls. | Works alone; integrates with the other Lightflow modules |
 
 ### Why Lightflow exists
 
