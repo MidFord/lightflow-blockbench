@@ -40,8 +40,8 @@ The plugins work independently where possible, but they are designed to be used 
 
 | Plugin | Current version | Purpose | Dependency |
 | --- | ---: | --- | --- |
-| **Light Manager** | `1.6.0` | Adds production-oriented point, spot, and directional lights with adaptive shadows, gizmos, animation support, and lighting profiles. | None |
-| **Shader Architect** | `2.5.0` | Builds and assigns advanced materials to Cubes, Meshes, and Texture Meshes with PBR controls, Blockbench render modes, editable GLSL, and material instances. | **Light Manager required** |
+| **Light Manager** | `1.6.1` | Adds production-oriented point, spot, and directional lights with adaptive shadows, gizmos, animation support, and lighting profiles. | None |
+| **Shader Architect** | `2.5.1` | Builds and assigns advanced materials to Cubes, Meshes, and Texture Meshes with PBR controls, Blockbench render modes, editable GLSL, and material instances. | **Light Manager required** |
 | **Lightflow Atmosphere** | `0.2.0` | Adds physically grounded local fog, shadowed light shafts, height fog, and procedural cloud domains with render-element depth occlusion. | **Light Manager recommended**; integrates with Shader Architect and Studio Render |
 | **Studio Render** | `1.4.0` | Exports clean images with tiled supersampling, HDR/emissive Bloom with geometry occlusion, adjustable framing, transparency, and 4K/8K-safe output controls. | Works alone; integrates with the other Lightflow modules |
 
@@ -413,7 +413,7 @@ Save the project as **`.bbmodel`**. Other formats may not preserve Lightflow's c
 
 ### A flat Cube flickers or lights incorrectly
 
-- Confirm the Cube is using a Lightflow material after updating Shader Architect to `2.5.0` or newer.
+- Confirm the render element is using a Lightflow material after updating Shader Architect to `2.5.1` or newer.
 - Keep the intended textured face and fully transparent opposite face; Lightflow detects the collapsed axis and resolves the two-sided surface automatically.
 - If both coincident faces contain visible pixels, each remains independent and is lit from its own direction.
 
