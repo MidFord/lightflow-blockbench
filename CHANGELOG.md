@@ -33,7 +33,10 @@ Lightflow uses a suite release version for public downloads. Individual plugins 
 
 - Generalized depth occluder collection, shared-depth validation, and volume fitting from Cubes to Cube, Mesh, and Texture Mesh render elements.
 
-### Studio Render 1.4.0
+### Studio Render 1.4.1
+
+- Fixed Bloom leaking through foreground geometry when emissive and non-emissive texels share one material or texture atlas. Non-emissive fragments now remain as black depth-writing occluders in the nearest-surface Bloom mask instead of being discarded.
+- Made Bloom-mask alpha represent visible geometry coverage consistently, while RGB remains reserved for the front-most emissive contribution.
 
 - Generalized selection-highlight suppression to every supported render-element type.
 
