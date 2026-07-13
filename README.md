@@ -41,7 +41,7 @@ The plugins work independently where possible, but they are designed to be used 
 | Plugin | Current version | Purpose | Dependency |
 | --- | ---: | --- | --- |
 | **Light Manager** | `1.6.1` | Adds production-oriented point, spot, and directional lights with adaptive shadows, gizmos, animation support, and lighting profiles. | None |
-| **Shader Architect** | `2.5.1` | Builds and assigns advanced materials to Cubes, Meshes, and Texture Meshes with PBR controls, Blockbench render modes, editable GLSL, and material instances. | **Light Manager required** |
+| **Shader Architect** | `2.6.0` | Builds and assigns advanced materials to Cubes, Meshes, and Texture Meshes with PBR controls, Blockbench render modes, editable GLSL, material instances, and automatic draw-call reduction. | **Light Manager required** |
 | **Lightflow Atmosphere** | `0.2.0` | Adds physically grounded local fog, shadowed light shafts, height fog, and procedural cloud domains with render-element depth occlusion. | **Light Manager recommended**; integrates with Shader Architect and Studio Render |
 | **Studio Render** | `1.4.2` | Exports clean images with tiled supersampling, HDR/emissive Bloom with geometry occlusion, adjustable framing, transparency, and 4K/8K-safe output controls. | Works alone; integrates with the other Lightflow modules |
 
@@ -422,6 +422,13 @@ Save the project as **`.bbmodel`**. Other formats may not preserve Lightflow's c
 - Cutout alpha is respected by the custom depth and distance shadow materials.
 - Semitransparent alpha casts a proportional dithered shadow. Increase Studio Render samples for a cleaner final integration.
 - WebGL shadow maps store depth, not transmitted RGB color, so colored glass shadows require a future transmittance-buffer backend; see `docs/RENDER_BACKENDS.md`.
+
+### FPS drops in scenes with many Cubes
+
+- Shader Architect `2.6.0+` automatically collapses equivalent Cube face slots and pools identical materials across elements. Different face textures, transparency modes, or Material Overrides remain independent.
+- Reload Shader Architect after updating so existing scene materials are rebuilt through the optimized path.
+- In Blockbench Developer Tools, run `LightflowPerformance()` to inspect `collapsedCubes`, `savedMaterialBatches`, `estimatedSceneDrawsPerFrame`, and the renderer's latest draw-call count.
+- Compare the same camera and effect settings. AO intentionally adds scene passes, but its receiver depth now uses a lightweight cached shader rather than evaluating the complete surface lighting again.
 
 ### Gizmos appear where they should not
 
