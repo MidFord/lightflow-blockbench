@@ -6,7 +6,16 @@ Lightflow uses a suite release version for public downloads. Individual plugins 
 
 ## [Unreleased]
 
-### Shader Architect 2.5.1
+### Shader Architect 2.6.0
+
+- Added lossless Cube material-slot collapsing: six equivalent face slots now render as one material batch while genuinely different textures, render modes, transparency states, and face overrides remain independent.
+- Added a content-validated material pool across Cubes, reusing identical compiled GPU materials while keeping per-object transforms correct through draw-time uniforms.
+- Moved world-normal synchronization to the per-draw boundary, eliminating full-scene matrix walks on every animation frame while remaining correct for transforms and shared render passes.
+- Shared time, viewport-lighting, ambient, and Light Manager uniform objects across materials, reducing per-frame and light-update work from per-material array copies to constant-time updates.
+- Added cached AO receiver partitions and cached SSR material/mesh discovery instead of scanning every Cube on every preview render.
+- Added a lightweight alpha-aware AO depth-only material pass so AO receiver depth no longer evaluates complete Lightflow/PBR lighting shaders.
+- Removed redundant shader/material reconstruction on selection-only changes.
+- Added `LightflowPerformance()` diagnostics for live element, material-batch, saved-batch, AO, draw-call, and triangle counters.
 
 - Fixed the Windows/DPI viewport and picking mismatch when AO was enabled without any shadow-casting lights. AO render targets now own physical-pixel viewports and no longer mutate Blockbench's logical viewport.
 - Prevented AO captures from redundantly refreshing shadow maps, making AO behavior and cost independent of whether a light casts shadows.
