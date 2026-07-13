@@ -10691,7 +10691,16 @@ ${lumaForgeLightflowHelpers}`
         patchedPreviews: new Map(),
         fallbackTexture: null,
         lastPreviewPatchCount: -1,
+        activeMaterialCache: null,
+        reflectiveMeshCache: null,
+        materialCacheDirty: true,
         disposed: false,
+
+        invalidateMaterialCache() {
+            this.activeMaterialCache = null;
+            this.reflectiveMeshCache = null;
+            this.materialCacheDirty = true;
+        },
 
         init() {
             this.disposed = false;
@@ -10718,6 +10727,7 @@ ${lumaForgeLightflowHelpers}`
                 }
             });
             this.states.clear();
+            this.invalidateMaterialCache();
 
             if (this.fallbackTexture && typeof this.fallbackTexture.dispose === 'function') {
                 this.fallbackTexture.dispose();
@@ -10993,43 +11003,50 @@ ${lumaForgeLightflowHelpers}`
         },
 
         hasActiveReflectiveMaterials() {
-            if (this.disposed) return false;
-            for (const cube of getAllShaderElements()) {
-                const mesh = ShaderEngine.getCubeMesh(cube);
-                if (mesh && this.meshUsesActiveSSR(mesh)) return true;
-            }
-            return false;
+            return !this.disposed && this.collectActiveMaterials().length > 0;
         },
 
         collectActiveMaterials() {
+            if (!this.materialCacheDirty && this.activeMaterialCache) {
+                return this.activeMaterialCache;
+            }
             const materials = [];
+            const reflectiveMeshes = [];
             const seen = new Set();
             const elements = getAllShaderElements();
-            if (!elements.length) return materials;
+            if (!elements.length) {
+                this.activeMaterialCache = materials;
+                this.reflectiveMeshCache = reflectiveMeshes;
+                this.materialCacheDirty = false;
+                return materials;
+            }
 
             elements.forEach(cube => {
                 const mesh = ShaderEngine.getCubeMesh(cube);
                 if (!mesh) return;
+                let meshReflective = false;
                 ShaderEngine.forEachMeshMaterial(mesh, (material) => {
                     if (!this.materialIsActive(material)) return;
+                    meshReflective = true;
                     const key = material.uuid || material.id || material;
                     if (seen.has(key)) return;
                     seen.add(key);
                     materials.push(material);
                 });
+                if (meshReflective) reflectiveMeshes.push(mesh);
             });
 
+            this.activeMaterialCache = materials;
+            this.reflectiveMeshCache = reflectiveMeshes;
+            this.materialCacheDirty = false;
             return materials;
         },
 
         setReflectiveMeshesVisible(visible) {
             const changed = [];
-            const elements = getAllShaderElements();
-            if (!elements.length) return changed;
-
-            elements.forEach(cube => {
-                const mesh = ShaderEngine.getCubeMesh(cube);
-                if (!mesh || !this.meshUsesActiveSSR(mesh)) return;
+            this.collectActiveMaterials();
+            (this.reflectiveMeshCache || []).forEach(mesh => {
+                if (!mesh) return;
                 changed.push({ mesh, visible: mesh.visible });
                 mesh.visible = visible;
             });
@@ -11124,12 +11141,21 @@ ${lumaForgeLightflowHelpers}`
     const AmbientOcclusionManager = {
         states: new Map(),
         patchedPreviews: new Map(),
+        scenePartitionCache: null,
+        scenePartitionDirty: true,
+        depthMaterialCache: new WeakMap(),
+        depthMaterialResources: new Set(),
         disposed: false,
         settings: { enabled: true, strength: 0.62, radius: 0.34, bias: 0.04, power: 1.1, renderScale: 1.0, samples: 20 },
 
         init() {
             this.disposed = false;
+            this.invalidateSceneCache();
             this.patchAllPreviews();
+        },
+        invalidateSceneCache() {
+            this.scenePartitionCache = null;
+            this.scenePartitionDirty = true;
         },
         dispose() {
             this.disposed = true;
@@ -11144,12 +11170,13 @@ ${lumaForgeLightflowHelpers}`
                 state.quad?.geometry?.dispose?.();
             });
             this.states.clear();
+            this.depthMaterialResources.forEach(material => material?.dispose?.());
+            this.depthMaterialResources.clear();
+            this.depthMaterialCache = new WeakMap();
+            this.invalidateSceneCache();
         },
         hasLightflowMaterial() {
-            return getAllShaderElements().some(cube => {
-                const mesh = ShaderEngine.getCubeMesh(cube);
-                return !!(mesh?.material && ShaderEngine.getMaterialList(mesh.material).some(material => this.materialReceivesAO(material)));
-            });
+            return this.getScenePartition().receiverMeshes.length > 0;
         },
         materialReceivesAO(material) {
             const id = String(material?.sa_shader_id || '').toLowerCase();
@@ -11229,20 +11256,114 @@ ${lumaForgeLightflowHelpers}`
             state.cubeTarget.scissorTest = false;
             state.uniforms.uResolution.value.set(width, height);
         },
-        hideNonCubeObjects() {
-            const changes = [], cubeObjects = new WeakSet();
+        getScenePartition() {
+            if (!this.scenePartitionDirty && this.scenePartitionCache) {
+                return this.scenePartitionCache;
+            }
+            const receiverMeshes = [];
+            const hiddenCandidates = [];
+            const cubeObjects = new WeakSet();
             getAllShaderElements().forEach(cube => {
                 const mesh = ShaderEngine.getCubeMesh(cube);
                 const receivesAO = !!(mesh?.material && ShaderEngine.getMaterialList(mesh.material).some(material => this.materialReceivesAO(material)));
                 if (!receivesAO) return;
+                receiverMeshes.push(mesh);
                 if (mesh?.traverse) mesh.traverse(object => cubeObjects.add(object));
                 else if (mesh) cubeObjects.add(mesh);
             });
             Canvas.scene.traverse(object => {
                 const renderable = object?.isMesh || object?.isSprite || object?.isLine || object?.isLineSegments || object?.isPoints;
-                if (renderable && !cubeObjects.has(object) && object.visible) { changes.push(object); object.visible = false; }
+                if (renderable && !cubeObjects.has(object)) hiddenCandidates.push(object);
+            });
+            this.scenePartitionCache = { receiverMeshes, hiddenCandidates };
+            this.scenePartitionDirty = false;
+            return this.scenePartitionCache;
+        },
+        hideNonCubeObjects() {
+            const changes = [];
+            this.getScenePartition().hiddenCandidates.forEach(object => {
+                if (object?.visible) { changes.push(object); object.visible = false; }
             });
             return changes;
+        },
+        getDepthOnlyMaterial(sourceMaterial) {
+            if (!sourceMaterial) return sourceMaterial;
+            let material = this.depthMaterialCache.get(sourceMaterial);
+            if (!material) {
+                material = new THREE.ShaderMaterial({
+                    uniforms: {
+                        map: { value: null },
+                        uHasMap: { value: false },
+                        uOpacity: { value: 1.0 },
+                        uAlphaTest: { value: 0.01 }
+                    },
+                    vertexShader: `
+                        varying vec2 vUv;
+                        void main() {
+                            vUv = uv;
+                            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                        }
+                    `,
+                    fragmentShader: `
+                        precision highp float;
+                        uniform sampler2D map;
+                        uniform bool uHasMap;
+                        uniform float uOpacity;
+                        uniform float uAlphaTest;
+                        varying vec2 vUv;
+                        void main() {
+                            float alpha = uOpacity;
+                            if (uHasMap) alpha *= texture2D(map, vUv).a;
+                            if (alpha < uAlphaTest) discard;
+                            gl_FragColor = vec4(1.0);
+                        }
+                    `,
+                    depthTest: sourceMaterial.depthTest !== false,
+                    depthWrite: sourceMaterial.depthWrite !== false,
+                    colorWrite: false,
+                    transparent: false,
+                    blending: THREE.NoBlending,
+                    side: sourceMaterial.shadowSide !== undefined
+                        ? sourceMaterial.shadowSide
+                        : (sourceMaterial.side !== undefined ? sourceMaterial.side : THREE.FrontSide)
+                });
+                material.name = 'SA_AO_DepthOnly';
+                this.depthMaterialCache.set(sourceMaterial, material);
+                this.depthMaterialResources.add(material);
+            }
+
+            const map = sourceMaterial.uniforms?.map?.value || sourceMaterial.map || null;
+            const baseAlpha = sourceMaterial.uniforms?.uBaseAlpha?.value;
+            material.uniforms.map.value = map;
+            material.uniforms.uHasMap.value = !!map;
+            material.uniforms.uOpacity.value = Number.isFinite(Number(baseAlpha))
+                ? Math.max(0, Math.min(1, Number(baseAlpha)))
+                : (Number.isFinite(Number(sourceMaterial.opacity)) ? Number(sourceMaterial.opacity) : 1);
+            material.uniforms.uAlphaTest.value = Math.max(0.001, Number(sourceMaterial.alphaTest) || 0.01);
+            material.depthTest = sourceMaterial.depthTest !== false;
+            material.depthWrite = sourceMaterial.depthWrite !== false;
+            material.side = sourceMaterial.shadowSide !== undefined
+                ? sourceMaterial.shadowSide
+                : (sourceMaterial.side !== undefined ? sourceMaterial.side : THREE.FrontSide);
+            return material;
+        },
+        useDepthOnlyReceiverMaterials() {
+            const changes = [];
+            this.getScenePartition().receiverMeshes.forEach(mesh => {
+                if (!mesh?.material) return;
+                const original = mesh.material;
+                const replacement = Array.isArray(original)
+                    ? original.map(material => this.getDepthOnlyMaterial(material))
+                    : this.getDepthOnlyMaterial(original);
+                changes.push({ mesh, material: original });
+                mesh.material = replacement;
+            });
+            return changes;
+        },
+        restoreReceiverMaterials(changes) {
+            (changes || []).forEach(entry => {
+                if (entry?.mesh) entry.mesh.material = entry.material;
+            });
         },
         composite(preview) {
             const state = this.states.get(preview) || this.createState(preview);
@@ -11280,10 +11401,14 @@ ${lumaForgeLightflowHelpers}`
                 renderer.render(Canvas.scene, camera);
 
                 const hidden = this.hideNonCubeObjects();
+                const depthMaterialChanges = this.useDepthOnlyReceiverMaterials();
                 renderer.setRenderTarget(state.cubeTarget);
                 renderer.clear(true, true, true);
                 try { renderer.render(Canvas.scene, camera); }
-                finally { hidden.forEach(object => { object.visible = true; }); }
+                finally {
+                    this.restoreReceiverMaterials(depthMaterialChanges);
+                    hidden.forEach(object => { object.visible = true; });
+                }
                 state.lightflowDepthStamp = performance.now();
 
                 renderer.setRenderTarget(previousTarget || null);
@@ -13415,21 +13540,270 @@ ${lumaForgeLightflowHelpers}`
         lightUniformMaterialCacheDirty: true,
         animationUniformTargets: null,
         animationUniformTargetCacheDirty: true,
+        sharedFrameUniforms: null,
+        sharedLightUniforms: null,
+        materialPool: new Map(),
+        materialPoolObjectIds: new WeakMap(),
+        nextMaterialPoolObjectId: 1,
         clock: new THREE.Clock(),
+
+        getSharedFrameUniform(name, fallbackValue) {
+            if (!this.sharedFrameUniforms) this.sharedFrameUniforms = {};
+            if (!this.sharedFrameUniforms[name]) {
+                this.sharedFrameUniforms[name] = {
+                    value: fallbackValue && typeof fallbackValue.clone === 'function'
+                        ? fallbackValue.clone()
+                        : fallbackValue
+                };
+            }
+            return this.sharedFrameUniforms[name];
+        },
+
+        bindSharedFrameUniforms(material) {
+            if (!material?.uniforms) return;
+            ['uTime', 'SHADE', 'LIGHTSIDE', 'LIGHTCOLOR', 'uAmbientColor', 'uAmbient'].forEach(name => {
+                const uniform = material.uniforms[name];
+                if (!uniform) return;
+                material.uniforms[name] = this.getSharedFrameUniform(name, uniform.value);
+            });
+        },
+
+        bindSharedLightUniforms(material) {
+            if (!material?.uniforms) return;
+            if (!this.sharedLightUniforms) this.sharedLightUniforms = {};
+            [
+                'max_light_number', 'uLightPos', 'uLightDir', 'uLightColor',
+                'uLightIntensity', 'uLightDistance', 'uLightConeAngle',
+                'uLightType', 'uLightPenumbra', 'uLightCastShadow',
+                'uLightShadowIndex'
+            ].forEach(name => {
+                const uniform = material.uniforms[name];
+                if (!uniform) return;
+                if (!this.sharedLightUniforms[name]) this.sharedLightUniforms[name] = uniform;
+                material.uniforms[name] = this.sharedLightUniforms[name];
+            });
+        },
+
+        refreshSharedFrameUniforms(time) {
+            if (!this.sharedFrameUniforms) return;
+            const update = (name, value) => {
+                const uniform = this.sharedFrameUniforms[name];
+                if (!uniform) return;
+                if (uniform.value && value && typeof uniform.value.copy === 'function') {
+                    uniform.value.copy(value);
+                } else {
+                    uniform.value = value;
+                }
+            };
+
+            update('uTime', time);
+            update('SHADE', resolveSystemUniformValue('SHADE', null, true, null));
+            update('LIGHTSIDE', resolveSystemUniformValue('LIGHTSIDE', null, 0, null));
+            update('LIGHTCOLOR', resolveSystemUniformValue('LIGHTCOLOR', null, new THREE.Vector3(1, 1, 1), null));
+            update('uAmbientColor', resolveSystemUniformValue('uAmbientColor', null, new THREE.Vector3(1, 1, 1), null));
+            update('uAmbient', resolveSystemUniformValue('uAmbient', null, 0.3, null));
+        },
+
+        ensurePerDrawUniformSync(mesh) {
+            if (!mesh || mesh.userData?.saPerDrawUniformSync) return;
+            mesh.userData = mesh.userData || {};
+            const previous = mesh.onBeforeRender;
+            const normalMatrix = new THREE.Matrix3();
+            let lastRendererFrame = -1;
+
+            mesh.onBeforeRender = function shaderArchitectPerDrawUniformSync(renderer, scene, camera, geometry, material, group) {
+                if (typeof previous === 'function') {
+                    previous.call(this, renderer, scene, camera, geometry, material, group);
+                }
+                const uniform = material?.uniforms?.uWorldNormalMatrix;
+                if (!uniform) return;
+
+                const rendererFrame = Number(renderer?.info?.render?.frame);
+                if (!Number.isFinite(rendererFrame) || rendererFrame !== lastRendererFrame) {
+                    normalMatrix.getNormalMatrix(this.matrixWorld);
+                    lastRendererFrame = rendererFrame;
+                }
+                if (uniform.value && typeof uniform.value.copy === 'function') {
+                    uniform.value.copy(normalMatrix);
+                } else {
+                    uniform.value = normalMatrix.clone();
+                }
+                // Shared ShaderMaterials are not automatically refreshed when
+                // consecutive objects use the same program/material identity.
+                // Force the draw-local world normal to reach the GPU.
+                material.uniformsNeedUpdate = true;
+            };
+            mesh.userData.saPerDrawUniformSync = true;
+            mesh.userData.saPreviousOnBeforeRender = previous || null;
+        },
+
+        uniformValuesEquivalent(left, right) {
+            if (left === right) return true;
+            if (!left || !right) return false;
+            if (left.isTexture || right.isTexture) return left === right;
+            if (Array.isArray(left) || Array.isArray(right)) {
+                if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+                for (let index = 0; index < left.length; index++) {
+                    if (!this.uniformValuesEquivalent(left[index], right[index])) return false;
+                }
+                return true;
+            }
+            if (typeof left.equals === 'function') return left.equals(right);
+            return false;
+        },
+
+        materialsCanCollapse(left, right) {
+            if (!left || !right) return false;
+            const scalarKeys = [
+                'vertexShader', 'fragmentShader', 'lights', 'transparent', 'alphaTest',
+                'side', 'shadowSide', 'depthTest', 'depthWrite', 'blending',
+                'blendSrc', 'blendDst', 'blendEquation', 'premultipliedAlpha',
+                'sa_shader_id', 'sa_material_instance_id', 'sa_source_render_mode'
+            ];
+            if (scalarKeys.some(key => left[key] !== right[key])) return false;
+
+            const leftUniforms = left.uniforms || {};
+            const rightUniforms = right.uniforms || {};
+            const leftKeys = Object.keys(leftUniforms).filter(key => key !== 'uWorldNormalMatrix').sort();
+            const rightKeys = Object.keys(rightUniforms).filter(key => key !== 'uWorldNormalMatrix').sort();
+            if (leftKeys.length !== rightKeys.length) return false;
+            for (let index = 0; index < leftKeys.length; index++) {
+                const key = leftKeys[index];
+                if (key !== rightKeys[index]) return false;
+                if (!this.uniformValuesEquivalent(leftUniforms[key]?.value, rightUniforms[key]?.value)) return false;
+            }
+            return true;
+        },
+
+        getMaterialPoolObjectId(object) {
+            if (!object || (typeof object !== 'object' && typeof object !== 'function')) return String(object);
+            let id = this.materialPoolObjectIds.get(object);
+            if (!id) {
+                id = this.nextMaterialPoolObjectId++;
+                this.materialPoolObjectIds.set(object, id);
+            }
+            return id;
+        },
+
+        hashMaterialShader(source) {
+            const text = String(source || '');
+            let hash = 2166136261;
+            for (let index = 0; index < text.length; index++) {
+                hash ^= text.charCodeAt(index);
+                hash = Math.imul(hash, 16777619);
+            }
+            return (hash >>> 0).toString(36);
+        },
+
+        getMaterialPoolKey(material) {
+            const map = material?.uniforms?.map?.value || material?.map || null;
+            return [
+                material?.sa_shader_id || '',
+                material?.sa_material_instance_id || '',
+                material?.sa_source_render_mode || '',
+                this.getMaterialPoolObjectId(map),
+                this.hashMaterialShader(material?.vertexShader),
+                this.hashMaterialShader(material?.fragmentShader),
+                material?.transparent ? 1 : 0,
+                material?.depthWrite ? 1 : 0,
+                material?.side ?? ''
+            ].join('|');
+        },
+
+        poolMaterial(material) {
+            if (!material?.is_sa_cloned) return material;
+            const key = this.getMaterialPoolKey(material);
+            let bucket = this.materialPool.get(key);
+            if (!bucket) {
+                bucket = [];
+                this.materialPool.set(key, bucket);
+            }
+            const reusable = bucket.find(candidate => this.materialsCanCollapse(candidate, material));
+            if (reusable) {
+                if (material !== reusable && !material.is_sa_pooled) material.dispose?.();
+                return reusable;
+            }
+            material.is_sa_pooled = true;
+            bucket.push(material);
+            return material;
+        },
+
+        disposeMaterialPool() {
+            this.materialPool.forEach(bucket => {
+                bucket.forEach(material => material?.dispose?.());
+            });
+            this.materialPool.clear();
+            this.materialPoolObjectIds = new WeakMap();
+            this.nextMaterialPoolObjectId = 1;
+        },
+
+        pruneMaterialPool() {
+            const inUse = new Set();
+            getAllShaderElements().forEach(element => {
+                const mesh = this.getCubeMesh(element);
+                this.getMaterialList(mesh?.material).forEach(material => inUse.add(material));
+            });
+            this.materialPool.forEach((bucket, key) => {
+                const retained = bucket.filter(material => inUse.has(material));
+                bucket.forEach(material => {
+                    if (!inUse.has(material)) material?.dispose?.();
+                });
+                if (retained.length) this.materialPool.set(key, retained);
+                else this.materialPool.delete(key);
+            });
+        },
 
         getCubeMesh(cube) {
             return getShaderElementMesh(cube);
+        },
+
+        getPerformanceStats() {
+            const elements = getAllShaderElements();
+            let collapsedCubes = 0;
+            let originalMaterialSlots = 0;
+            let activeMaterialBatches = 0;
+            let shaderMaterials = 0;
+
+            elements.forEach(element => {
+                const mesh = this.getCubeMesh(element);
+                if (!mesh?.material) return;
+                const materials = this.getMaterialList(mesh.material);
+                const originalSlots = Math.max(1, Number(mesh.userData?.saOriginalMaterialSlotCount) || materials.length || 1);
+                originalMaterialSlots += originalSlots;
+                activeMaterialBatches += Math.max(1, materials.length);
+                shaderMaterials += materials.filter(material => material?.is_sa_cloned).length;
+                if (mesh.userData?.saCollapsedMaterialSlots) collapsedCubes++;
+            });
+
+            const aoActive = !!(
+                AmbientOcclusionManager.settings.enabled &&
+                AmbientOcclusionManager.hasLightflowMaterial()
+            );
+            const scenePasses = aoActive ? 3 : 1;
+            const renderer = window.Preview?.selected?.renderer || window.main_preview?.renderer;
+
+            return {
+                elements: elements.length,
+                collapsedCubes,
+                originalMaterialSlots,
+                activeMaterialBatches,
+                savedMaterialBatches: Math.max(0, originalMaterialSlots - activeMaterialBatches),
+                shaderMaterials,
+                aoActive,
+                estimatedSceneDrawsPerFrame: activeMaterialBatches * scenePasses,
+                rendererCallsLastFrame: renderer?.info?.render?.calls ?? null,
+                rendererTrianglesLastFrame: renderer?.info?.render?.triangles ?? null
+            };
         },
 
         startAnimationLoop() {
             const self = this;
             function tick() {
                 let time = self.clock.getElapsedTime();
+                self.refreshSharedFrameUniforms(time);
                 const animationTargets = self.getAnimationUniformTargets();
 
                 self.updateAnimationUniformTargets(animationTargets, time);
-
-                self.updateWorldNormalMatrices(animationTargets);
                 ScreenSpaceReflectionManager.patchAllPreviews();
                 MinecraftPromotionalSilhouetteManager.patchAllPreviews();
                 self.animationReq = requestAnimationFrame(tick);
@@ -13461,9 +13835,12 @@ ${lumaForgeLightflowHelpers}`
                 this.forEachMeshMaterial(mesh, mat => {
                     if (!mat || !mat.uniforms) return;
 
-                    const systemKeys = ANIMATION_SYSTEM_UNIFORM_KEYS.filter(key => !!mat.uniforms[key]);
-                    const hasTime = !!mat.uniforms.uTime;
-                    const hasWorldNormalMatrix = !!mat.uniforms.uWorldNormalMatrix;
+                    // EMISSIVE and TEXTURE_SIZE change only with material/texture
+                    // lifecycle events. Global frame uniforms are shared above,
+                    // so the animation loop has no reason to revisit them per mesh.
+                    const systemKeys = [];
+                    const hasTime = !!mat.uniforms.uTime && mat.uniforms.uTime !== this.sharedFrameUniforms?.uTime;
+                    const hasWorldNormalMatrix = false;
 
                     if (!hasTime && !hasWorldNormalMatrix && systemKeys.length === 0) {
                         return;
@@ -14703,7 +15080,13 @@ ${lumaForgeLightflowHelpers}`
             const isCubeElement = typeof Cube !== 'undefined' && cube instanceof Cube;
 
             const wasMaterialArray = Array.isArray(mesh.material);
-            const sourceSlots = wasMaterialArray ? mesh.material.slice() : [mesh.material];
+            const rememberedSlotCount = Math.max(
+                1,
+                Number(mesh.userData?.saOriginalMaterialSlotCount) || (wasMaterialArray ? mesh.material.length : 1)
+            );
+            const sourceSlots = wasMaterialArray
+                ? mesh.material.slice()
+                : Array.from({ length: rememberedSlotCount }, () => mesh.material);
             const fallbackSourceMaterial = sourceSlots.find(Boolean);
 
             if (!fallbackSourceMaterial) return;
@@ -14712,7 +15095,7 @@ ${lumaForgeLightflowHelpers}`
                 ? MaterialManager.getCubeFaceMaterialInstanceOverrides(cube)
                 : {};
             const hasFaceMaterialOverrides = Object.keys(faceMaterialOverrides).length > 0;
-            const useMaterialArray = wasMaterialArray || hasFaceMaterialOverrides;
+            const useMaterialArray = sourceSlots.length > 1 || hasFaceMaterialOverrides;
 
             if (hasFaceMaterialOverrides && sourceSlots.length < MATERIAL_SLOT_FACE_ORDER.length) {
                 while (sourceSlots.length < MATERIAL_SLOT_FACE_ORDER.length) {
@@ -15153,6 +15536,9 @@ ${stochasticAlpha
 
                 ScreenSpaceReflectionManager.configureMaterial(targetMaterial, activeShader);
 
+                this.bindSharedFrameUniforms(targetMaterial);
+                this.bindSharedLightUniforms(targetMaterial);
+
                 targetMaterial.transparent =
                     sourceState.transparent !== undefined
                         ? sourceState.transparent
@@ -15251,6 +15637,7 @@ ${stochasticAlpha
                 );
                 const shouldCreateSlotMaterial =
                     !sourceMaterial.is_sa_cloned ||
+                    !!sourceMaterial.is_sa_pooled ||
                     (useMaterialArray && sourceMaterial.sa_material_index !== materialIndex) ||
                     sourceMaterial.sa_shader_id !== targetShaderId ||
                     sourceMaterial.vertexShader !== targetVertexShader ||
@@ -15371,13 +15758,40 @@ ${stochasticAlpha
             };
             resolvePlanarCubeSurface();
 
-            mesh.material = useMaterialArray ? newMaterialSlots : newMaterialSlots[0];
+            let collapsedMaterialSlots = false;
+            if (useMaterialArray && newMaterialSlots.length > 1 && newMaterialSlots[0]) {
+                collapsedMaterialSlots = newMaterialSlots.every(material => (
+                    this.materialsCanCollapse(newMaterialSlots[0], material)
+                ));
+            }
+
+            if (collapsedMaterialSlots) {
+                const retained = newMaterialSlots[0];
+                new Set(newMaterialSlots.slice(1)).forEach(material => {
+                    if (material && material !== retained && material.is_sa_cloned) {
+                        material.dispose?.();
+                    }
+                });
+                const pooled = this.poolMaterial(retained);
+                newMaterialSlots.fill(pooled);
+                mesh.material = pooled;
+            } else {
+                for (let index = 0; index < newMaterialSlots.length; index++) {
+                    newMaterialSlots[index] = this.poolMaterial(newMaterialSlots[index]);
+                }
+                mesh.material = useMaterialArray ? newMaterialSlots : newMaterialSlots[0];
+            }
+            mesh.userData = mesh.userData || {};
+            mesh.userData.saCollapsedMaterialSlots = collapsedMaterialSlots;
+            mesh.userData.saOriginalMaterialSlotCount = sourceSlots.length;
+            this.ensurePerDrawUniformSync(mesh);
 
             const retainedMaterials = new Set(newMaterialSlots);
             sourceSlots.forEach(oldMaterial => {
                 if (
                     oldMaterial &&
                     oldMaterial.is_sa_cloned &&
+                    !oldMaterial.is_sa_pooled &&
                     !retainedMaterials.has(oldMaterial) &&
                     typeof oldMaterial.dispose === 'function'
                 ) {
@@ -15404,9 +15818,18 @@ ${stochasticAlpha
                 getFallbackTexture();
 
             const shadowShader = slotShaders.find(slotShader => slotShader && slotShader.enableShadows) || shader;
-            setupAlphaShadowMaterials(mesh, firstTexture, firstSourceMaterial, shadowShader, firstSourceState, sourceStates);
+            setupAlphaShadowMaterials(
+                mesh,
+                firstTexture,
+                firstSourceMaterial,
+                shadowShader,
+                firstSourceState,
+                collapsedMaterialSlots ? [firstSourceState] : sourceStates
+            );
             this.invalidateLightUniformMaterialCache();
             this.invalidateAnimationUniformTargetCache();
+            ScreenSpaceReflectionManager.invalidateMaterialCache();
+            AmbientOcclusionManager.invalidateSceneCache();
         },
 
         updateAllCubes(cause = 'default', options = {}) {
@@ -15429,6 +15852,8 @@ ${stochasticAlpha
                     this.applyToMesh(cube, shader);
                 }
             });
+
+            this.pruneMaterialPool();
 
             this.updateWorldNormalMatrices();
             this.updateLightUniforms();
@@ -15498,6 +15923,8 @@ ${stochasticAlpha
 
                 this.applyToMesh(cube, shader);
             });
+
+            this.pruneMaterialPool();
 
             const targetSet = new Set(targetCubes);
             const animationTargets = this.getAnimationUniformTargets()
@@ -16011,8 +16438,13 @@ ${stochasticAlpha
                 return uniform;
             };
 
+            const updatedUniformGroups = new Set();
             this.getLightUniformMaterials().forEach(mat => {
                 if (!mat || !mat.uniforms) return;
+
+                const uniformGroupKey = mat.uniforms.uLightPos || mat.uniforms.uLightIntensity || mat.uniforms.max_light_number || mat;
+                if (updatedUniformGroups.has(uniformGroupKey)) return;
+                updatedUniformGroups.add(uniformGroupKey);
 
                 let lightUniformsUpdated = false;
 
@@ -18166,7 +18598,7 @@ ${stochasticAlpha
         author: 'MidFord327',
         description: 'Build advanced Blockbench materials with real-time Lightflow presets, editable GLSL, material instances, and deep Light Manager integration. Requires Light Manager for lights and shadows.',
         tags: ['Lightflow', 'Shaders', 'Materials', 'Rendering', 'GLSL', 'Lighting'],
-        version: '2.5.1',
+        version: '2.6.0',
         min_version: '4.9.0',
         variant: 'both',
 
@@ -18185,6 +18617,7 @@ ${stochasticAlpha
             }
 
             window.ShaderEngine = ShaderEngine;
+            window.LightflowPerformance = () => ShaderEngine.getPerformanceStats();
             window.MaterialManager = MaterialManager;
             window.FancyShaderMaterial = FancyShaderMaterial;
             window.FancyShaderMaterialInstance = FancyShaderMaterialInstance;
@@ -20123,10 +20556,13 @@ ${stochasticAlpha
                 let updateSelectionEvent = Blockbench.on('update_selection', () => {
                     if (!Project.parsed) return;
                     if (Blockbench.hasFlag('switching_project')) return;
-                    ShaderEngine.requestSceneUpdate('update_selection', {
-                        partial: true,
-                        cubes: ShaderEngine.getSelectedSceneCubes()
-                    });
+                    /*
+                     * Selection changes only touch Blockbench's highlight
+                     * attribute; shader source, textures and material overrides
+                     * are unchanged. Rebuilding every selected Cube here made
+                     * box-selecting hundreds of elements unnecessarily clone,
+                     * compare and dispose thousands of materials.
+                     */
                 });
 
                 deletables.push(updateSelectionEvent);
@@ -20136,6 +20572,7 @@ ${stochasticAlpha
 
         onunload() {
             ShaderEngine.stopAnimationLoop();
+            ShaderEngine.disposeMaterialPool();
             MinecraftPromotionalSilhouetteManager.dispose();
             AmbientOcclusionManager.dispose();
             ScreenSpaceReflectionManager.dispose();
@@ -20166,6 +20603,13 @@ ${stochasticAlpha
 
             getAllShaderElements().forEach(cube => {
                 const mesh = ShaderEngine.getCubeMesh(cube);
+                if (mesh?.userData?.saPerDrawUniformSync) {
+                    mesh.onBeforeRender = mesh.userData.saPreviousOnBeforeRender || null;
+                    delete mesh.userData.saPerDrawUniformSync;
+                    delete mesh.userData.saPreviousOnBeforeRender;
+                    delete mesh.userData.saCollapsedMaterialSlots;
+                    delete mesh.userData.saOriginalMaterialSlotCount;
+                }
                 if (mesh && mesh.material) {
                     ShaderEngine.getMaterialList(mesh.material).forEach(mat => {
                         mat.vertexShader = undefined;
@@ -20192,6 +20636,7 @@ ${stochasticAlpha
             invalidateTextureAlphaProfiles();
 
             if (window.ShaderEngine === ShaderEngine) delete window.ShaderEngine;
+            if (window.LightflowPerformance) delete window.LightflowPerformance;
             if (window.MaterialManager === MaterialManager) delete window.MaterialManager;
             if (window.FancyShaderMaterial === FancyShaderMaterial) delete window.FancyShaderMaterial;
             if (window.FancyShaderMaterialInstance === FancyShaderMaterialInstance) delete window.FancyShaderMaterialInstance;
