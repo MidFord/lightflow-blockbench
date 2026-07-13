@@ -1508,8 +1508,23 @@
                         }
 
                         float energy = max(emission.r, max(emission.g, emission.b));
-                        if (energy <= 0.0005) discard;
-                        gl_FragColor = vec4(max(emission, vec3(0.0)), clamp(energy, 0.0, 1.0));
+                        if (energy <= 0.0005) {
+                            /*
+                                A material can contain both emissive and ordinary
+                                texels (atlas textures and MER maps). Discarding an
+                                ordinary texel also discarded its depth, turning a
+                                foreground nose/limb into a hole through which an
+                                emissive surface behind it leaked into Bloom.
+
+                                Keep every visible, alpha-tested fragment in the
+                                nearest-surface mask. Black means "geometry that
+                                occludes Bloom"; RGB carries emission only where
+                                the front-most fragment actually emits.
+                            */
+                            gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+                            return;
+                        }
+                        gl_FragColor = vec4(max(emission, vec3(0.0)), 1.0);
                     }
                 `,
                 depthTest: true,
@@ -2978,7 +2993,7 @@
         author: 'MidFord327',
         description: 'Export polished Blockbench studio renders with tiled supersampling, 4K/8K-safe output, transparency, GPU guidance, and an adjustable frame. Complements Light Manager and Shader Architect in the Lightflow suite.',
         tags: ['Lightflow', 'Rendering', 'Export', 'Screenshots', 'Studio', 'Presentation'],
-        version: '1.4.0',
+        version: '1.4.1',
         min_version: '4.9.0',
         variant: 'both',
         onload() {
