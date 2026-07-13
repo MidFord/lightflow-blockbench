@@ -42,7 +42,7 @@ The plugins work independently where possible, but they are designed to be used 
 | --- | ---: | --- | --- |
 | **Light Manager** | `1.5.2` | Adds production-oriented point, spot, and directional lights with adaptive shadows, gizmos, animation support, and lighting profiles. | None |
 | **Shader Architect** | `2.4.0` | Builds and assigns advanced materials with thickness-aware SSS, layered PBR controls, Blockbench render modes, stable Cube-masked AO, editable GLSL, and material instances. | **Light Manager required** |
-| **Lightflow Atmosphere** | `0.1.0` | Adds physically grounded local fog, shadowed light shafts, height fog, and procedural cloud domains with separate viewport/render quality. | **Light Manager recommended**; integrates with Shader Architect and Studio Render |
+| **Lightflow Atmosphere** | `0.1.1` | Adds physically grounded local fog, shadowed light shafts, height fog, and procedural cloud domains with separate viewport/render quality. | **Light Manager recommended**; integrates with Shader Architect and Studio Render |
 | **Studio Render** | `1.3.0` | Exports clean images with tiled supersampling, HDR/emissive Bloom with geometry occlusion, adjustable framing, transparency, and 4K/8K-safe output controls. | Works alone; integrates with the other Lightflow modules |
 
 ### Why Lightflow exists
@@ -231,6 +231,8 @@ Lightflow Atmosphere adds bounded participating media to the Blockbench scene. E
 - Helper masking so light icons, locators, grids, selection helpers, and volume gizmos remain clear.
 - Separate viewport and Studio Render step counts and internal resolution.
 - Tile-stable spatial jitter and frozen cloud time during Studio Render to prevent seams.
+- DPI-correct viewport composition, alpha-tested foliage shadows, and camera-facing phase scattering for stable, visible God Rays.
+- SSAA-aware raymarch resolution, reusable AO depth, and a cached Atmosphere Bloom mask to avoid redundant high-resolution passes.
 - Per-domain scattering, absorption, ambient fill, edge feather, shadow reception, and Bloom contribution.
 
 The implementation is physically grounded real-time **single scattering**. It is not path-traced multiple scattering, fluid simulation, or Blender Cycles; procedural clouds are shader density fields rather than simulated weather.
@@ -365,7 +367,7 @@ Save active Lightflow projects as **`.bbmodel`**. Shader Architect material assi
 - Tile size: Auto or 2048 px
 - Transparent background when compositing is planned
 - Studio shadow resolution: 2048 or 4096 only when the model and camera need it
-- Atmosphere render quality: High at 100%; Ultra only for difficult close-up shafts or dense clouds
+- Atmosphere render quality: High at 100%; Ultra only for difficult close-up shafts or dense clouds. Atmosphere automatically compensates for Studio SSAA so 4×/8× does not multiply the raymarch resolution again.
 
 ### Important tradeoffs
 
@@ -413,6 +415,7 @@ Studio Render hides gizmos by default. Verify that **Show Gizmos** is disabled i
 - Use a directional or spot light; point-light volumetric illumination works, but point-light volumetric shadow maps are not part of this first release.
 - Enable cast shadows on the light and **Receive Volumetric Shadows** on the domain.
 - Increase density gradually and verify anisotropy is not aimed away from the camera.
+- For leaf cards or other cutout textures, keep transparent pixels at alpha 0 so the light shadow map can filter the shafts through the silhouette.
 
 ### Fog is noisy, banded, or too slow
 
