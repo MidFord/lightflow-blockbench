@@ -1516,15 +1516,16 @@
                                 foreground nose/limb into a hole through which an
                                 emissive surface behind it leaked into Bloom.
 
-                                Keep every visible, alpha-tested fragment in the
-                                nearest-surface mask. Black means "geometry that
-                                occludes Bloom"; RGB carries emission only where
-                                the front-most fragment actually emits.
+                                Keep the fragment in the depth buffer, but leave
+                                its mask coverage transparent. This blocks hidden
+                                emitters during the GPU depth test without making
+                                the final 2D blocker erase Bloom from every
+                                ordinary surface in a close-up render.
                             */
-                            gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+                            gl_FragColor = vec4(0.0);
                             return;
                         }
-                        gl_FragColor = vec4(max(emission, vec3(0.0)), 1.0);
+                        gl_FragColor = vec4(max(emission, vec3(0.0)), clamp(energy, 0.0, 1.0));
                     }
                 `,
                 depthTest: true,
@@ -2993,7 +2994,7 @@
         author: 'MidFord327',
         description: 'Export polished Blockbench studio renders with tiled supersampling, 4K/8K-safe output, transparency, GPU guidance, and an adjustable frame. Complements Light Manager and Shader Architect in the Lightflow suite.',
         tags: ['Lightflow', 'Rendering', 'Export', 'Screenshots', 'Studio', 'Presentation'],
-        version: '1.4.1',
+        version: '1.4.2',
         min_version: '4.9.0',
         variant: 'both',
         onload() {
