@@ -6,6 +6,36 @@ Lightflow uses a suite release version for public downloads. Individual plugins 
 
 ## [Unreleased]
 
+### Lightflow Environment 1.0.0
+
+- Added a separately loadable procedural environment module with Minecraft time (`0`–`23999`), controllable day length, realtime playback, sun azimuth, moon phases, stars, and block-shaped clouds.
+- Added independent **Vanilla** and **Vibrant Visuals** presets for sky gradients, sunset/night transitions, celestial bodies, cloud response, and ambient palettes.
+- Added directional sun and moon lighting with artist-controlled shadow area, near/far range, resolution, bias, normal bias, and pixelated-shadow settings.
+- Exposed a stable environment API and project-persisted lighting state for Shader Architect, Studio Render, and future Lightflow modules.
+
+### Shader Architect 2.7.0
+
+- Added environment ambient uniforms so sky, horizon, and ground light can tint compatible Lightflow materials in realtime.
+- Extended depth-aware SSR with a world-space procedural environment fallback—including sky gradient, sun/moon, and clouds—when a reflection ray misses visible screen geometry.
+- Added **Vibrant Visuals PBR**, a complete PBR starting preset with environment response, SSR, and pixel-shadow defaults.
+- Added a switchable pixelated-shadow path with adjustable quantization steps and pixel scale to Pixelated Lightflow and Vibrant Visuals PBR.
+- Added the Environment sun/moon as a synthetic Lightflow light source, including dynamic direction, color, strength, and shadow settings.
+
+### Studio Render 1.5.0
+
+- Added **Scene Composer** with realtime viewport Bloom, Bloom preview FPS, exposure, contrast, saturation, temperature, tint, vignette, and integrated environment controls.
+- Reused the final renderer's emissive/atmosphere Bloom masks, geometry occlusion, threshold, multiscale blur, radius, and strength in the realtime viewport preview.
+- Added one shared color-grade implementation for realtime preview and final tiled output.
+- Added a persistent Scene Composer panel plus quick viewport-Bloom and strength controls.
+
+### Light Manager 1.6.2
+
+- Fixed the Three.js r129 compatibility path so Light Manager no longer injects a second `punctualLightIntensityToIrradianceFactor` body when Blockbench already provides it.
+
+### Release-candidate validation
+
+- Extended syntax/version coverage to all five modules and added regression guards for Scene Composer parity, environment integration, Vibrant Visuals PBR, SSR environment fallback, and pixelated shadows.
+
 ### Shader Architect 2.6.0
 
 - Added lossless Cube material-slot collapsing: six equivalent face slots now render as one material batch while genuinely different textures, render modes, transparency states, and face overrides remain independent.

@@ -42,6 +42,15 @@
         bloom_hdr_strength: 1.0,
         bloom_emissive_strength: 1.35,
         bloom_occlusion: true,
+        viewport_bloom_enabled: true,
+        viewport_bloom_fps: 30,
+        color_grading_enabled: false,
+        exposure: 1.0,
+        contrast: 1.0,
+        saturation: 1.0,
+        temperature: 0.0,
+        tint: 0.0,
+        vignette: 0.0,
         zoom: null,
         destination: 'preview',
         file_name: 'studio_render'
@@ -51,6 +60,13 @@
     let quickRenderAction;
     let frameAction;
     let resetFrameAction;
+    let sceneComposerAction;
+    let viewportBloomToggle;
+    let sceneBloomStrength;
+    let sceneComposerPanel;
+    let sceneComposerToolbar;
+    let sceneComposerProjectListener;
+    let activeComposerDialog;
     let stylesheet;
     let activeDialog;
     let currentSettings = Object.assign({}, DEFAULT_SETTINGS);
@@ -60,6 +76,7 @@
         occluderMaterials: new WeakMap(),
         resources: new Set()
     };
+    const VIEWPORT_COMPOSER_STATE = new Map();
 
     function clamp(value, min, max) {
         return Math.max(min, Math.min(max, value));
@@ -314,6 +331,17 @@
             'studio_render.field.bloom_hdr_strength': 'Bright Surface Bloom',
             'studio_render.field.bloom_emissive_strength': 'Emissive Texture Bloom',
             'studio_render.field.bloom_occlusion': 'Block Bloom Behind Geometry',
+            'studio_render.field.viewport_bloom_enabled': 'Preview Bloom in Viewport',
+            'studio_render.field.viewport_bloom_fps': 'Viewport Bloom Refresh',
+            'studio_render.field.color_grading_enabled': 'Color Grading',
+            'studio_render.field.exposure': 'Exposure',
+            'studio_render.field.contrast': 'Contrast',
+            'studio_render.field.saturation': 'Saturation',
+            'studio_render.field.temperature': 'Temperature',
+            'studio_render.field.tint': 'Tint',
+            'studio_render.field.vignette': 'Vignette',
+            'studio_render.action.scene_composer': 'Scene Composer...',
+            'studio_render.action.scene_composer.desc': 'Match realtime viewport post-processing to Studio Render and coordinate the Lightflow environment',
             'studio_render.field.zoom': 'Focal Length',
             'studio_render.field.gpu': 'GPU',
             'studio_render.field.gpu_renderer': 'Renderer',
@@ -414,6 +442,17 @@
             'studio_render.field.bloom_hdr_strength': 'Bloom de superficies brillantes',
             'studio_render.field.bloom_emissive_strength': 'Bloom de texturas emisivas',
             'studio_render.field.bloom_occlusion': 'Bloquear Bloom detrás de geometría',
+            'studio_render.field.viewport_bloom_enabled': 'Previsualizar Bloom en viewport',
+            'studio_render.field.viewport_bloom_fps': 'Actualización de Bloom en viewport',
+            'studio_render.field.color_grading_enabled': 'Gradación de color',
+            'studio_render.field.exposure': 'Exposición',
+            'studio_render.field.contrast': 'Contraste',
+            'studio_render.field.saturation': 'Saturación',
+            'studio_render.field.temperature': 'Temperatura',
+            'studio_render.field.tint': 'Tinte',
+            'studio_render.field.vignette': 'Viñeta',
+            'studio_render.action.scene_composer': 'Compositor de escena...',
+            'studio_render.action.scene_composer.desc': 'Iguala el postprocesado del viewport con Studio Render y coordina el entorno Lightflow',
             'studio_render.field.zoom': 'Distancia Focal',
             'studio_render.field.gpu': 'GPU',
             'studio_render.field.gpu_renderer': 'Renderer',
@@ -501,6 +540,15 @@
         settings.bloom_hdr_strength = clamp(toNumber(settings.bloom_hdr_strength, 1), 0, 4);
         settings.bloom_emissive_strength = clamp(toNumber(settings.bloom_emissive_strength, 1.35), 0, 6);
         settings.bloom_occlusion = settings.bloom_occlusion !== false;
+        settings.viewport_bloom_enabled = settings.viewport_bloom_enabled !== false;
+        settings.viewport_bloom_fps = clamp(toNumber(settings.viewport_bloom_fps, 30), 5, 60);
+        settings.color_grading_enabled = !!settings.color_grading_enabled;
+        settings.exposure = clamp(toNumber(settings.exposure, 1), 0.1, 4);
+        settings.contrast = clamp(toNumber(settings.contrast, 1), 0, 3);
+        settings.saturation = clamp(toNumber(settings.saturation, 1), 0, 3);
+        settings.temperature = clamp(toNumber(settings.temperature, 0), -1, 1);
+        settings.tint = clamp(toNumber(settings.tint, 0), -1, 1);
+        settings.vignette = clamp(toNumber(settings.vignette, 0), 0, 1);
         delete settings.gpu_status;
         return settings;
     }
@@ -795,6 +843,15 @@
         settings.bloom_hdr_strength = clamp(toNumber(settings.bloom_hdr_strength, 1), 0, 4);
         settings.bloom_emissive_strength = clamp(toNumber(settings.bloom_emissive_strength, 1.35), 0, 6);
         settings.bloom_occlusion = settings.bloom_occlusion !== false;
+        settings.viewport_bloom_enabled = settings.viewport_bloom_enabled !== false;
+        settings.viewport_bloom_fps = clamp(toNumber(settings.viewport_bloom_fps, 30), 5, 60);
+        settings.color_grading_enabled = !!settings.color_grading_enabled;
+        settings.exposure = clamp(toNumber(settings.exposure, 1), 0.1, 4);
+        settings.contrast = clamp(toNumber(settings.contrast, 1), 0, 3);
+        settings.saturation = clamp(toNumber(settings.saturation, 1), 0, 3);
+        settings.temperature = clamp(toNumber(settings.temperature, 0), -1, 1);
+        settings.tint = clamp(toNumber(settings.tint, 0), -1, 1);
+        settings.vignette = clamp(toNumber(settings.vignette, 0), 0, 1);
         settings.zoom = settings.zoom === null || settings.zoom === undefined || settings.zoom === ''
             ? null
             : toNumber(settings.zoom, DEFAULT_ZOOM);
@@ -1820,6 +1877,216 @@
         return canvas;
     }
 
+    function applyFinalColorGrade(canvas, settings) {
+        if (!canvas || !settings?.color_grading_enabled) return canvas;
+        const width = canvas.width || 1;
+        const height = canvas.height || 1;
+        const source = document.createElement('canvas');
+        source.width = width;
+        source.height = height;
+        source.getContext('2d').drawImage(canvas, 0, 0);
+
+        const context = canvas.getContext('2d');
+        context.save();
+        context.clearRect(0, 0, width, height);
+        context.filter = [
+            'brightness(' + clamp(toNumber(settings.exposure, 1), 0.1, 4) + ')',
+            'contrast(' + clamp(toNumber(settings.contrast, 1), 0, 3) + ')',
+            'saturate(' + clamp(toNumber(settings.saturation, 1), 0, 3) + ')'
+        ].join(' ');
+        context.drawImage(source, 0, 0);
+        context.filter = 'none';
+
+        const temperature = clamp(toNumber(settings.temperature, 0), -1, 1);
+        const tint = clamp(toNumber(settings.tint, 0), -1, 1);
+        if (Math.abs(temperature) > 0.001 || Math.abs(tint) > 0.001) {
+            context.globalCompositeOperation = 'soft-light';
+            context.globalAlpha = Math.min(0.42, (Math.abs(temperature) + Math.abs(tint)) * 0.24);
+            const red = clamp(128 + temperature * 127 + tint * 26, 0, 255);
+            const green = clamp(128 - Math.abs(tint) * 92, 0, 255);
+            const blue = clamp(128 - temperature * 127 + tint * 26, 0, 255);
+            context.fillStyle = 'rgb(' + Math.round(red) + ', ' + Math.round(green) + ', ' + Math.round(blue) + ')';
+            context.fillRect(0, 0, width, height);
+        }
+
+        const vignette = clamp(toNumber(settings.vignette, 0), 0, 1);
+        if (vignette > 0.001) {
+            const gradient = context.createRadialGradient(
+                width * 0.5, height * 0.5, Math.min(width, height) * 0.18,
+                width * 0.5, height * 0.5, Math.max(width, height) * 0.72
+            );
+            gradient.addColorStop(0, 'rgba(0, 0, 0, 0)');
+            gradient.addColorStop(0.62, 'rgba(0, 0, 0, 0)');
+            gradient.addColorStop(1, 'rgba(0, 0, 0, ' + (vignette * 0.82) + ')');
+            context.globalCompositeOperation = 'source-over';
+            context.globalAlpha = 1;
+            context.fillStyle = gradient;
+            context.fillRect(0, 0, width, height);
+        }
+        context.restore();
+        return canvas;
+    }
+
+    function getViewportComposerState(preview) {
+        if (!preview?.canvas || !preview.canvas.parentElement) return null;
+        let state = VIEWPORT_COMPOSER_STATE.get(preview);
+        if (state) return state;
+
+        const overlay = document.createElement('canvas');
+        overlay.className = 'lightflow_scene_composer_overlay';
+        Object.assign(overlay.style, {
+            position: 'absolute',
+            pointerEvents: 'none',
+            zIndex: '4',
+            display: 'none'
+        });
+        const parent = preview.canvas.parentElement;
+        const previousParentPosition = parent.style.position;
+        if (getComputedStyle(parent).position === 'static') parent.style.position = 'relative';
+        parent.appendChild(overlay);
+
+        state = {
+            preview,
+            overlay,
+            parent,
+            previousParentPosition,
+            baseCanvas: document.createElement('canvas'),
+            maskCanvas: document.createElement('canvas'),
+            lastRender: 0,
+            rendering: false
+        };
+        VIEWPORT_COMPOSER_STATE.set(preview, state);
+        return state;
+    }
+
+    function positionViewportComposerOverlay(state) {
+        const source = state.preview.canvas;
+        const parentRect = state.parent.getBoundingClientRect();
+        const sourceRect = source.getBoundingClientRect();
+        state.overlay.style.left = (sourceRect.left - parentRect.left + state.parent.scrollLeft) + 'px';
+        state.overlay.style.top = (sourceRect.top - parentRect.top + state.parent.scrollTop) + 'px';
+        state.overlay.style.width = sourceRect.width + 'px';
+        state.overlay.style.height = sourceRect.height + 'px';
+    }
+
+    function hideViewportComposerOverlay(preview) {
+        const state = VIEWPORT_COMPOSER_STATE.get(preview);
+        if (state?.overlay) state.overlay.style.display = 'none';
+    }
+
+    function renderViewportComposer(preview) {
+        if (!preview?.renderer || !preview.canvas || window.LightManagerStudioRenderSession || preview.sa_studio_render_active) {
+            hideViewportComposerOverlay(preview);
+            return;
+        }
+        const active = (
+            currentSettings.viewport_bloom_enabled &&
+            currentSettings.bloom_enabled
+        ) || currentSettings.color_grading_enabled;
+        if (!active) {
+            hideViewportComposerOverlay(preview);
+            return;
+        }
+
+        const state = getViewportComposerState(preview);
+        if (!state || state.rendering) return;
+        const now = performance.now();
+        const interval = 1000 / clamp(toNumber(currentSettings.viewport_bloom_fps, 30), 5, 60);
+        if (now - state.lastRender < interval) {
+            // Keep the last completed post-process frame visible while the
+            // composer is throttled. Hiding it here would alternate between
+            // graded and ungraded frames on a faster viewport.
+            return;
+        }
+
+        const source = preview.canvas;
+        const width = Math.max(1, source.width || source.clientWidth || 1);
+        const height = Math.max(1, source.height || source.clientHeight || 1);
+        [state.baseCanvas, state.maskCanvas, state.overlay].forEach(canvas => {
+            if (canvas.width !== width) canvas.width = width;
+            if (canvas.height !== height) canvas.height = height;
+        });
+        positionViewportComposerOverlay(state);
+
+        state.rendering = true;
+        state.lastRender = now;
+        try {
+            const baseContext = state.baseCanvas.getContext('2d', { alpha: true });
+            baseContext.clearRect(0, 0, width, height);
+            baseContext.drawImage(source, 0, 0, width, height);
+
+            if (currentSettings.viewport_bloom_enabled && currentSettings.bloom_enabled) {
+                const maskContext = state.maskCanvas.getContext('2d', { alpha: true });
+                maskContext.clearRect(0, 0, width, height);
+                renderBloomMaskTile(preview, maskContext, {
+                    outputX: 0,
+                    outputY: 0,
+                    outputWidth: width,
+                    outputHeight: height,
+                    sampleWidth: width,
+                    sampleHeight: height,
+                    renderWidth: width,
+                    renderHeight: height,
+                    cropX: 0,
+                    cropY: 0,
+                    cropRight: 0,
+                    cropBottom: 0
+                }, 1);
+                applyFinalBloom(state.baseCanvas, currentSettings, state.maskCanvas);
+            }
+            applyFinalColorGrade(state.baseCanvas, currentSettings);
+
+            const overlayContext = state.overlay.getContext('2d', { alpha: true });
+            overlayContext.clearRect(0, 0, width, height);
+            overlayContext.drawImage(state.baseCanvas, 0, 0, width, height);
+            state.overlay.style.display = 'block';
+        } catch (error) {
+            state.overlay.style.display = 'none';
+        } finally {
+            state.rendering = false;
+        }
+    }
+
+    function collectStudioRenderPreviews() {
+        const previews = new Set();
+        if (window.Preview?.selected) previews.add(Preview.selected);
+        if (Array.isArray(window.Preview?.all)) Preview.all.forEach(preview => previews.add(preview));
+        [window.main_preview, window.MediaPreview, window.Screencam?.NoAAPreview].forEach(preview => {
+            if (preview) previews.add(preview);
+        });
+        return previews;
+    }
+
+    function patchViewportComposer(preview) {
+        if (!preview?.renderer || typeof preview.render !== 'function' || VIEWPORT_COMPOSER_STATE.has(preview)) return;
+        const originalRender = preview.render;
+        const patchedRender = function lightflowSceneComposerRender() {
+            const result = originalRender.apply(this, arguments);
+            renderViewportComposer(this);
+            return result;
+        };
+        const state = getViewportComposerState(preview);
+        if (!state) return;
+        state.originalRender = originalRender;
+        state.patchedRender = patchedRender;
+        preview.render = patchedRender;
+    }
+
+    function patchAllViewportComposers() {
+        collectStudioRenderPreviews().forEach(patchViewportComposer);
+    }
+
+    function disposeViewportComposers() {
+        VIEWPORT_COMPOSER_STATE.forEach((state, preview) => {
+            if (preview?.render === state.patchedRender) preview.render = state.originalRender;
+            state.overlay?.remove?.();
+            if (state.parent && state.previousParentPosition !== undefined) {
+                state.parent.style.position = state.previousParentPosition;
+            }
+        });
+        VIEWPORT_COMPOSER_STATE.clear();
+    }
+
     async function deliverRender(dataUrl, size, settings) {
         const name = settings.file_name.replace(/[\\/:*?"<>|]+/g, '_') || DEFAULT_SETTINGS.file_name;
         if (settings.destination === 'save') {
@@ -1981,6 +2248,7 @@
 
             Blockbench.setStatusBarText(translate('studio_render.status.downsample', 'Compositing final image...'));
             applyFinalBloom(canvas, normalized, bloomMaskCanvas);
+            applyFinalColorGrade(canvas, normalized);
             const dataUrl = canvas.toDataURL('image/png');
             await deliverRender(dataUrl, outputSize, normalized);
         } catch (error) {
@@ -2691,6 +2959,80 @@
                 value: settings.bloom_occlusion,
                 condition: form => !!form.bloom_enabled && !!form.show_advanced
             },
+            viewport_bloom_enabled: {
+                type: 'checkbox',
+                label: 'studio_render.field.viewport_bloom_enabled',
+                value: settings.viewport_bloom_enabled,
+                condition: form => !!form.bloom_enabled
+            },
+            viewport_bloom_fps: {
+                type: 'range',
+                label: 'studio_render.field.viewport_bloom_fps',
+                value: settings.viewport_bloom_fps,
+                min: 5,
+                max: 60,
+                step: 5,
+                condition: form => !!form.bloom_enabled && !!form.viewport_bloom_enabled && !!form.show_advanced
+            },
+            color_grading_enabled: {
+                type: 'checkbox',
+                label: 'studio_render.field.color_grading_enabled',
+                value: settings.color_grading_enabled
+            },
+            exposure: {
+                type: 'range',
+                label: 'studio_render.field.exposure',
+                value: settings.exposure,
+                min: 0.1,
+                max: 4,
+                step: 0.05,
+                condition: form => !!form.color_grading_enabled
+            },
+            contrast: {
+                type: 'range',
+                label: 'studio_render.field.contrast',
+                value: settings.contrast,
+                min: 0,
+                max: 3,
+                step: 0.05,
+                condition: form => !!form.color_grading_enabled
+            },
+            saturation: {
+                type: 'range',
+                label: 'studio_render.field.saturation',
+                value: settings.saturation,
+                min: 0,
+                max: 3,
+                step: 0.05,
+                condition: form => !!form.color_grading_enabled
+            },
+            temperature: {
+                type: 'range',
+                label: 'studio_render.field.temperature',
+                value: settings.temperature,
+                min: -1,
+                max: 1,
+                step: 0.02,
+                condition: form => !!form.color_grading_enabled && !!form.show_advanced
+            },
+            tint: {
+                type: 'range',
+                label: 'studio_render.field.tint',
+                value: settings.tint,
+                min: -1,
+                max: 1,
+                step: 0.02,
+                condition: form => !!form.color_grading_enabled && !!form.show_advanced
+            },
+            vignette: {
+                type: 'range',
+                label: 'studio_render.field.vignette',
+                value: settings.vignette,
+                min: 0,
+                max: 1,
+                step: 0.02,
+                condition: form => !!form.color_grading_enabled
+            },
             _export: '_',
             destination: {
                 type: 'select',
@@ -2711,6 +3053,243 @@
         };
     }
 
+    function createSceneComposerForm(settings) {
+        const environment = window.LightflowEnvironment?.settings || {};
+        return {
+            _realtime: '_',
+            viewport_bloom_enabled: {
+                type: 'checkbox',
+                label: 'studio_render.field.viewport_bloom_enabled',
+                value: settings.viewport_bloom_enabled
+            },
+            viewport_bloom_fps: {
+                type: 'range',
+                label: 'studio_render.field.viewport_bloom_fps',
+                value: settings.viewport_bloom_fps,
+                min: 5,
+                max: 60,
+                step: 5,
+                condition: form => !!form.viewport_bloom_enabled
+            },
+            _bloom: '_',
+            bloom_enabled: {
+                type: 'checkbox',
+                label: 'studio_render.field.bloom_enabled',
+                value: settings.bloom_enabled
+            },
+            bloom_threshold: {
+                type: 'range',
+                label: 'studio_render.field.bloom_threshold',
+                value: settings.bloom_threshold,
+                min: 0,
+                max: 1,
+                step: 0.01,
+                condition: form => !!form.bloom_enabled
+            },
+            bloom_strength: {
+                type: 'range',
+                label: 'studio_render.field.bloom_strength',
+                value: settings.bloom_strength,
+                min: 0,
+                max: 3,
+                step: 0.05,
+                condition: form => !!form.bloom_enabled
+            },
+            bloom_radius: {
+                type: 'range',
+                label: 'studio_render.field.bloom_radius',
+                value: settings.bloom_radius,
+                min: 1,
+                max: 96,
+                step: 1,
+                condition: form => !!form.bloom_enabled
+            },
+            bloom_hdr_strength: {
+                type: 'range',
+                label: 'studio_render.field.bloom_hdr_strength',
+                value: settings.bloom_hdr_strength,
+                min: 0,
+                max: 4,
+                step: 0.05,
+                condition: form => !!form.bloom_enabled
+            },
+            bloom_emissive_strength: {
+                type: 'range',
+                label: 'studio_render.field.bloom_emissive_strength',
+                value: settings.bloom_emissive_strength,
+                min: 0,
+                max: 6,
+                step: 0.05,
+                condition: form => !!form.bloom_enabled
+            },
+            bloom_occlusion: {
+                type: 'checkbox',
+                label: 'studio_render.field.bloom_occlusion',
+                value: settings.bloom_occlusion,
+                condition: form => !!form.bloom_enabled
+            },
+            _grade: '_',
+            color_grading_enabled: {
+                type: 'checkbox',
+                label: 'studio_render.field.color_grading_enabled',
+                value: settings.color_grading_enabled
+            },
+            exposure: {
+                type: 'range',
+                label: 'studio_render.field.exposure',
+                value: settings.exposure,
+                min: 0.1,
+                max: 4,
+                step: 0.05,
+                condition: form => !!form.color_grading_enabled
+            },
+            contrast: {
+                type: 'range',
+                label: 'studio_render.field.contrast',
+                value: settings.contrast,
+                min: 0,
+                max: 3,
+                step: 0.05,
+                condition: form => !!form.color_grading_enabled
+            },
+            saturation: {
+                type: 'range',
+                label: 'studio_render.field.saturation',
+                value: settings.saturation,
+                min: 0,
+                max: 3,
+                step: 0.05,
+                condition: form => !!form.color_grading_enabled
+            },
+            temperature: {
+                type: 'range',
+                label: 'studio_render.field.temperature',
+                value: settings.temperature,
+                min: -1,
+                max: 1,
+                step: 0.02,
+                condition: form => !!form.color_grading_enabled
+            },
+            tint: {
+                type: 'range',
+                label: 'studio_render.field.tint',
+                value: settings.tint,
+                min: -1,
+                max: 1,
+                step: 0.02,
+                condition: form => !!form.color_grading_enabled
+            },
+            vignette: {
+                type: 'range',
+                label: 'studio_render.field.vignette',
+                value: settings.vignette,
+                min: 0,
+                max: 1,
+                step: 0.02,
+                condition: form => !!form.color_grading_enabled
+            },
+            _environment: '_',
+            environment_enabled: {
+                type: 'checkbox',
+                label: 'lightflow_environment.field.enabled',
+                value: environment.enabled !== false,
+                condition: () => !!window.LightflowEnvironment
+            },
+            environment_preset: {
+                type: 'select',
+                label: 'lightflow_environment.field.preset',
+                value: environment.preset || 'vanilla',
+                options: {
+                    vanilla: 'Minecraft Vanilla',
+                    vibrant_visuals: 'Minecraft Vibrant Visuals'
+                },
+                condition: () => !!window.LightflowEnvironment
+            },
+            environment_time: {
+                type: 'range',
+                label: 'lightflow_environment.field.time',
+                value: Number(environment.time) || 6000,
+                min: 0,
+                max: 23999,
+                step: 100,
+                condition: () => !!window.LightflowEnvironment
+            },
+            environment_strength: {
+                type: 'range',
+                label: 'lightflow_environment.field.environment',
+                value: Number(environment.environment_strength) || 0.75,
+                min: 0,
+                max: 4,
+                step: 0.05,
+                condition: () => !!window.LightflowEnvironment
+            }
+        };
+    }
+
+    function refreshSceneComposerPreviews() {
+        patchAllViewportComposers();
+        collectStudioRenderPreviews().forEach(preview => preview?.render?.());
+    }
+
+    function applySceneComposerForm(form, persist) {
+        const next = Object.assign({}, currentSettings, form || {});
+        delete next.environment_enabled;
+        delete next.environment_preset;
+        delete next.environment_time;
+        delete next.environment_strength;
+        currentSettings = normalizeForm(next);
+        if (persist) saveSettings(currentSettings);
+
+        if (window.LightflowEnvironment && form) {
+            window.LightflowEnvironment.setSettings({
+                enabled: form.environment_enabled,
+                preset: form.environment_preset,
+                time: form.environment_time,
+                environment_strength: form.environment_strength
+            }, {
+                cause: 'scene_composer',
+                render: false,
+                forceShadow: false
+            });
+        }
+
+        if (viewportBloomToggle) {
+            viewportBloomToggle.value = !!currentSettings.viewport_bloom_enabled;
+            viewportBloomToggle.updateEnabledState?.();
+        }
+        refreshSceneComposerPreviews();
+    }
+
+    function openSceneComposerDialog() {
+        currentSettings = loadSettings();
+        const initialEnvironment = window.LightflowEnvironment?.settings || null;
+        activeComposerDialog = new Dialog('lightflow_scene_composer_dialog', {
+            title: 'studio_render.action.scene_composer',
+            width: 680,
+            form: createSceneComposerForm(currentSettings),
+            onFormChange(form) {
+                applySceneComposerForm(form, false);
+            },
+            onConfirm(form) {
+                applySceneComposerForm(form, true);
+                activeComposerDialog = null;
+            },
+            onCancel() {
+                currentSettings = loadSettings();
+                if (initialEnvironment && window.LightflowEnvironment) {
+                    window.LightflowEnvironment.setSettings(initialEnvironment, {
+                        cause: 'scene_composer_cancel',
+                        render: false,
+                        forceShadow: true
+                    });
+                }
+                refreshSceneComposerPreviews();
+                activeComposerDialog = null;
+            }
+        });
+        activeComposerDialog.show();
+    }
+
     function openStudioRenderDialog() {
         currentSettings = loadSettings();
         activeDialog = new Dialog({
@@ -2726,6 +3305,7 @@
                 }
                 currentSettings = next;
                 StudioRenderFrame.updateNode();
+                refreshSceneComposerPreviews();
             },
             onConfirm(form) {
                 const settings = normalizeForm(form);
@@ -2737,6 +3317,7 @@
             onCancel() {
                 currentSettings = loadSettings();
                 StudioRenderFrame.updateNode();
+                refreshSceneComposerPreviews();
                 activeDialog = null;
             }
         });
@@ -2976,10 +3557,21 @@
             activeDialog.hide();
             activeDialog = null;
         }
+        if (activeComposerDialog) {
+            activeComposerDialog.hide();
+            activeComposerDialog = null;
+        }
         if (exportAction) exportAction.delete();
         if (quickRenderAction) quickRenderAction.delete();
         if (frameAction) frameAction.delete();
         if (resetFrameAction) resetFrameAction.delete();
+        if (sceneComposerAction) sceneComposerAction.delete();
+        if (viewportBloomToggle) viewportBloomToggle.delete();
+        if (sceneBloomStrength) sceneBloomStrength.delete();
+        if (sceneComposerToolbar) sceneComposerToolbar.delete();
+        if (sceneComposerPanel) sceneComposerPanel.delete();
+        if (sceneComposerProjectListener) sceneComposerProjectListener.delete?.();
+        disposeViewportComposers();
         if (stylesheet && typeof stylesheet.delete === 'function') stylesheet.delete();
         BLOOM_MASK_STATE.resources.forEach(resource => resource?.dispose?.());
         BLOOM_MASK_STATE.resources.clear();
@@ -2994,7 +3586,7 @@
         author: 'MidFord327',
         description: 'Export polished Blockbench studio renders with tiled supersampling, 4K/8K-safe output, transparency, GPU guidance, and an adjustable frame. Complements Light Manager and Shader Architect in the Lightflow suite.',
         tags: ['Lightflow', 'Rendering', 'Export', 'Screenshots', 'Studio', 'Presentation'],
-        version: '1.4.2',
+        version: '1.5.0',
         min_version: '4.9.0',
         variant: 'both',
         onload() {
@@ -3045,17 +3637,95 @@
                 }
             });
 
+            sceneComposerAction = new Action('lightflow_scene_composer', {
+                name: 'studio_render.action.scene_composer',
+                description: 'studio_render.action.scene_composer.desc',
+                icon: 'auto_fix_high',
+                category: 'view',
+                condition: () => !!getPreview(),
+                click: openSceneComposerDialog
+            });
+
+            viewportBloomToggle = new Toggle('lightflow_viewport_bloom', {
+                name: 'studio_render.field.viewport_bloom_enabled',
+                icon: 'flare',
+                category: 'view',
+                condition: () => !!getPreview(),
+                value: !!currentSettings.viewport_bloom_enabled,
+                onChange(value) {
+                    currentSettings.viewport_bloom_enabled = !!value;
+                    saveSettings(normalizeForm(currentSettings));
+                    refreshSceneComposerPreviews();
+                }
+            });
+
+            sceneBloomStrength = new NumSlider('lightflow_scene_bloom_strength', {
+                name: 'studio_render.field.bloom_strength',
+                icon: 'blur_on',
+                category: 'view',
+                condition: () => !!getPreview(),
+                value: currentSettings.bloom_strength,
+                min: 0,
+                max: 3,
+                step: 0.05,
+                onChange() {
+                    currentSettings.bloom_strength = clamp(toNumber(this.value, 0.8), 0, 3);
+                    currentSettings.bloom_enabled = currentSettings.bloom_strength > 0;
+                    saveSettings(normalizeForm(currentSettings));
+                    refreshSceneComposerPreviews();
+                }
+            });
+
+            sceneComposerToolbar = new Toolbar({
+                id: 'lightflow_scene_composer_toolbar',
+                name: 'studio_render.action.scene_composer',
+                children: [
+                    'lightflow_scene_composer',
+                    'lightflow_viewport_bloom',
+                    'lightflow_scene_bloom_strength'
+                ]
+            });
+
+            sceneComposerPanel = new Panel('lightflow_scene_composer_panel', {
+                name: 'studio_render.action.scene_composer',
+                icon: 'auto_fix_high',
+                condition: () => !!window.Project,
+                default_position: {
+                    slot: 'right_bar',
+                    height: 58,
+                    folded: false
+                },
+                toolbars: [sceneComposerToolbar]
+            });
+
             MenuBar.addAction(exportAction, 'file.export');
             MenuBar.addAction(quickRenderAction, 'file.export');
             MenuBar.addAction(exportAction, 'view');
             MenuBar.addAction(quickRenderAction, 'view');
             MenuBar.addAction(frameAction, 'view');
             MenuBar.addAction(resetFrameAction, 'view');
+            MenuBar.addAction(sceneComposerAction, 'view');
+
+            patchAllViewportComposers();
+            sceneComposerProjectListener = Blockbench.on('select_project', () => {
+                currentSettings = loadSettings();
+                patchAllViewportComposers();
+                refreshSceneComposerPreviews();
+            });
 
             window.StudioRender = {
                 open: openStudioRenderDialog,
                 render: renderWithSettings,
                 quickRender: quickStudioRender,
+                openComposer: openSceneComposerDialog,
+                refreshComposer: refreshSceneComposerPreviews,
+                get settings() { return Object.assign({}, currentSettings); },
+                setComposerSettings(next) {
+                    currentSettings = normalizeForm(Object.assign({}, currentSettings, next || {}));
+                    saveSettings(currentSettings);
+                    refreshSceneComposerPreviews();
+                    return Object.assign({}, currentSettings);
+                },
                 showFrame: () => StudioRenderFrame.show(getPreview(), currentSettings),
                 hideFrame: () => StudioRenderFrame.remove(true),
                 resetFrame: () => StudioRenderFrame.reset(getPreview(), currentSettings)

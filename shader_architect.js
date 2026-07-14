@@ -668,6 +668,7 @@
 
         "shader_architect.preset.classic": "Classic Shader",
         "shader_architect.preset.pbr_metallic_roughness": "Lightflow Principled PBR",
+        "shader_architect.preset.vibrant_visuals_pbr": "Vibrant Visuals PBR",
         "shader_architect.preset.lightflow": "Lightflow",
         "shader_architect.preset.shaded_lightflow": "Lightflow (Legacy)",
         "shader_architect.preset.pixelated_shaded_lightflow": "Pixelated Lightflow",
@@ -1027,6 +1028,12 @@
         "shader_architect.uniform.shadowPixelResolution.desc": "Size of the pixelated shadow grid",
         "shader_architect.uniform.shadowThreshold": "Cutoff",
         "shader_architect.uniform.shadowThreshold.desc": "Shadow threshold for the pixelated shadow mask",
+        "shader_architect.uniform.PIXELATED_SHADOWS": "Pixelated Shadows",
+        "shader_architect.uniform.PIXELATED_SHADOWS.desc": "Switch the Vibrant Visuals-style stepped shadow response without changing material",
+        "shader_architect.uniform.uPixelatedShadows": "Pixelated Shadows",
+        "shader_architect.uniform.uPixelatedShadows.desc": "Quantize PBR shadow visibility into stable screen-space pixel cells",
+        "shader_architect.uniform.uPixelShadowSteps": "Shadow Tone Steps",
+        "shader_architect.uniform.uPixelShadowScale": "Shadow Pixel Size",
         "shader_architect.uniform.shadowFilterScale": "Filter Scale",
         "shader_architect.uniform.shadowFilterScale.desc": "Multiplies the light shadow softness used by pixelated shadows",
         "shader_architect.uniform.shadowFeather": "Feather",
@@ -1185,6 +1192,7 @@
 
         "shader_architect.preset.classic": "Shader Clásico",
         "shader_architect.preset.pbr_metallic_roughness": "PBR Principled Lightflow",
+        "shader_architect.preset.vibrant_visuals_pbr": "PBR Vibrant Visuals",
         "shader_architect.preset.lightflow": "Lightflow",
         "shader_architect.preset.shaded_lightflow": "Lightflow (Compatibilidad)",
         "shader_architect.preset.pixelated_shaded_lightflow": "Lightflow Pixelado",
@@ -2094,7 +2102,23 @@ uniform float uSA_SSRCameraNear;
 uniform float uSA_SSRCameraFar;
 uniform int uSA_SSRCameraIsPerspective;
 uniform mat4 uSA_SSRCameraProjectionMatrix;
+uniform mat4 uSA_SSRViewToWorld;
 uniform float uSA_SSRTime;
+uniform int uSA_EnvironmentEnabled;
+uniform vec3 uSA_EnvironmentZenith;
+uniform vec3 uSA_EnvironmentHorizon;
+uniform vec3 uSA_EnvironmentGround;
+uniform vec3 uSA_EnvironmentCelestialDirection;
+uniform vec3 uSA_EnvironmentCelestialColor;
+uniform float uSA_EnvironmentCelestialSize;
+uniform vec3 uSA_EnvironmentCloudColor;
+uniform float uSA_EnvironmentCloudCoverage;
+uniform float uSA_EnvironmentCloudOpacity;
+uniform float uSA_EnvironmentCloudTime;
+uniform float uSA_EnvironmentDaylight;
+uniform float uSA_EnvironmentTwilight;
+uniform float uSA_EnvironmentVibrant;
+uniform float uSA_EnvironmentIntensity;
 
 uniform bool uSSREnabled;
 uniform float uSSRIntensity;
@@ -2149,11 +2173,95 @@ vec3 saSSRSampleScene(vec2 uv, float roughness) {
     return color;
 }
 
+float saSSREnvironmentHash(vec2 p) {
+    p = fract(p * vec2(123.34, 456.21));
+    p += dot(p, p + 45.32);
+    return fract(p.x * p.y);
+}
+
+float saSSREnvironmentNoise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(
+        mix(saSSREnvironmentHash(i), saSSREnvironmentHash(i + vec2(1.0, 0.0)), f.x),
+        mix(saSSREnvironmentHash(i + vec2(0.0, 1.0)), saSSREnvironmentHash(i + vec2(1.0)), f.x),
+        f.y
+    );
+}
+
+float saSSREnvironmentClouds(vec2 p) {
+    p = floor(p * 3.0) / 3.0;
+    return saSSREnvironmentNoise(p * 0.18) * 0.58 +
+        saSSREnvironmentNoise(p * 0.43 + 17.0) * 0.28 +
+        saSSREnvironmentNoise(p * 0.91 + 31.0) * 0.14;
+}
+
+float saSSREnvironmentCelestial(vec3 direction, vec3 center, float size) {
+    vec3 reference = abs(center.y) > 0.96 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0);
+    vec3 tangent = normalize(cross(reference, center));
+    vec3 bitangent = normalize(cross(center, tangent));
+    float facing = max(dot(direction, center), 0.0001);
+    vec2 coordinates = vec2(dot(direction, tangent), dot(direction, bitangent)) / facing;
+    float distanceToSquare = max(abs(coordinates.x), abs(coordinates.y));
+    return 1.0 - smoothstep(size * 0.88, size * 1.08, distanceToSquare);
+}
+
+vec3 saSSRSampleEnvironment(vec3 viewRay, float roughness, out float visibility) {
+    if (uSA_EnvironmentEnabled != 1 || uSA_EnvironmentIntensity <= 0.0) {
+        visibility = 0.0;
+        return vec3(0.0);
+    }
+
+    vec3 worldRay = normalize((uSA_SSRViewToWorld * vec4(viewRay, 0.0)).xyz);
+    float horizon = pow(1.0 - clamp(abs(worldRay.y), 0.0, 1.0), 2.6);
+    vec3 upper = mix(uSA_EnvironmentZenith, uSA_EnvironmentHorizon, horizon);
+    vec3 lower = mix(uSA_EnvironmentGround, uSA_EnvironmentHorizon, exp(worldRay.y * 6.0));
+    vec3 environment = worldRay.y >= 0.0 ? upper : lower;
+
+    vec3 celestialDirection = normalize(uSA_EnvironmentCelestialDirection);
+    float celestial = saSSREnvironmentCelestial(
+        worldRay,
+        celestialDirection,
+        max(uSA_EnvironmentCelestialSize, 0.001)
+    );
+    environment = mix(environment, uSA_EnvironmentCelestialColor, celestial);
+
+    if (uSA_EnvironmentCloudOpacity > 0.0 && worldRay.y > 0.025) {
+        vec2 cloudUv = worldRay.xz / max(worldRay.y, 0.035) * 7.5 +
+            vec2(uSA_EnvironmentCloudTime, uSA_EnvironmentCloudTime * 0.37);
+        float clouds = smoothstep(
+            uSA_EnvironmentCloudCoverage - 0.08,
+            uSA_EnvironmentCloudCoverage + 0.08,
+            saSSREnvironmentClouds(cloudUv)
+        );
+        clouds *= smoothstep(0.025, 0.13, worldRay.y) * uSA_EnvironmentCloudOpacity;
+        vec3 cloudLight = mix(
+            uSA_EnvironmentCloudColor * 0.24,
+            uSA_EnvironmentCloudColor,
+            0.18 + 0.82 * uSA_EnvironmentDaylight
+        );
+        cloudLight = mix(
+            cloudLight,
+            vec3(1.0, 0.42, 0.22),
+            uSA_EnvironmentTwilight * 0.34 * (1.0 - uSA_EnvironmentVibrant)
+        );
+        environment = mix(environment, cloudLight, clouds);
+    }
+
+    // Rough materials see a broader, quieter environment lobe.
+    environment = mix(environment, uSA_EnvironmentHorizon, clamp(roughness, 0.0, 1.0) * 0.38);
+    visibility = 1.0;
+    return max(environment, vec3(0.0)) * uSA_EnvironmentIntensity;
+}
+
 vec3 saSSRFallbackReflection(vec4 clipPosition, vec3 rayDir, float roughness, out float hitFade) {
     vec2 screenUv = (clipPosition.xy / max(clipPosition.w, 0.0001)) * 0.5 + 0.5;
     vec2 uv = screenUv + rayDir.xy * clamp(uSSRDistortion, 0.0, 0.5) / max(0.35, abs(rayDir.z));
     hitFade = saSSRScreenEdgeFade(uv);
-    if (saSSROutsideScreen(uv)) hitFade = 0.0;
+    if (saSSROutsideScreen(uv)) {
+        return saSSRSampleEnvironment(rayDir, roughness, hitFade);
+    }
     return saSSRSampleScene(uv, roughness);
 }
 
@@ -2208,7 +2316,9 @@ vec3 saSSRRaymarch(vec3 viewPosition, vec3 rayDir, vec4 clipPosition, float roug
         }
     }
 
-    if (hitFade <= 0.0 || saSSROutsideScreen(hitUv)) return vec3(0.0);
+    if (hitFade <= 0.0 || saSSROutsideScreen(hitUv)) {
+        return saSSRSampleEnvironment(rayDir, roughness, hitFade);
+    }
     return saSSRSampleScene(hitUv, roughness);
 }
 
@@ -4810,6 +4920,9 @@ uniform int uLightShadowIndex[16];
 
 uniform float uAmbient;
 uniform vec3 uAmbientColor;
+uniform int uSAEnvironmentEnabled;
+uniform vec3 uSAEnvironmentAmbient;
+uniform float uSAEnvironmentStrength;
 
 uniform float uExposure;
 uniform float uUseToneMapping;
@@ -4824,6 +4937,9 @@ uniform float uAODirectInfluence;
 
 uniform float uShadowStrength;
 uniform float uShadowFloor;
+uniform bool uPixelatedShadows;
+uniform float uPixelShadowSteps;
+uniform float uPixelShadowScale;
 
 varying vec2 vUv;
 varying vec2 v_uvSize;
@@ -5398,6 +5514,12 @@ void main() {
         vec3 L = getLightDirection(i, vWorldPos);
         float attenuation = getLightAttenuation(i, vWorldPos, L);
         float shadow = getCustomLightShadow(i);
+        if (uPixelatedShadows) {
+            float levels = max(2.0, uPixelShadowSteps);
+            vec2 pixelCell = floor(gl_FragCoord.xy / max(uPixelShadowScale, 1.0));
+            float dither = fract(dot(pixelCell, vec2(0.75487766, 0.56984029))) - 0.5;
+            shadow = floor(clamp(shadow + dither / levels, 0.0, 1.0) * levels + 0.5) / levels;
+        }
         vec3 incidentRadiance = getLightRadiance(i, attenuation);
         vec3 radiance = incidentRadiance * shadow;
 
@@ -5493,6 +5615,10 @@ void main() {
     float specAO = mix(1.0, ambientOcclusion, clamp(uAODirectInfluence * 0.35, 0.0, 1.0));
 
     vec3 ambientLight = max(uAmbientColor, vec3(0.0)) * max(uAmbient, 0.0);
+    if (uSAEnvironmentEnabled == 1) {
+        ambientLight += max(uSAEnvironmentAmbient, vec3(0.0)) *
+            max(uSAEnvironmentStrength, 0.0);
+    }
 
     vec3 F_ambient = F_SchlickRoughness(F0, NdotV, roughness);
     vec3 ambientDiffuse = ambientLight * baseColor * (1.0 - metallic) * ambientOcclusion;
@@ -5662,6 +5788,9 @@ void main() {
                     // Ambient
                     "uAmbient": { type: "float", value: 0.3, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: true, allow_lower: false },
                     "uAmbientColor": { type: "vec3", value: new THREE.Vector3(1, 1, 1), hexValue: "#ffffff", expose: true, is_color: true },
+                    "uSAEnvironmentEnabled": { type: "int", value: 0, expose: false },
+                    "uSAEnvironmentAmbient": { type: "vec3", value: new THREE.Vector3(1, 1, 1), expose: false },
+                    "uSAEnvironmentStrength": { type: "float", value: 0.0, expose: false },
 
                     // Normal correction
                     "uWorldNormalMatrix": { type: "mat3", value: new THREE.Matrix3(), expose: false },
@@ -5683,6 +5812,9 @@ void main() {
                     // Shadows
                     "uShadowStrength": { type: "float", value: 1.0, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
                     "uShadowFloor": { type: "float", value: 0.0, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
+                    "uPixelatedShadows": { type: "bool", value: false, expose: true },
+                    "uPixelShadowSteps": { type: "float", value: 4.0, expose: true, min: 2.0, max: 16.0, step: 1.0, allow_higher: false, allow_lower: false },
+                    "uPixelShadowScale": { type: "float", value: 2.0, expose: true, min: 1.0, max: 16.0, step: 1.0, allow_higher: false, allow_lower: false },
 
                     // Blockbench-style controls
                     "SHADE": { type: "bool", value: true, expose: true },
@@ -5695,6 +5827,42 @@ void main() {
                     quality: 0.72,
                     renderScale: 0.85
                 })),
+                supportsScreenSpaceReflections: true,
+                enableShadows: true
+            });
+
+            const vibrantVisualsUniforms = {};
+            Object.keys(pbr_metallic_roughness.uniforms).forEach(key => {
+                vibrantVisualsUniforms[key] = cloneUniformDefinition(
+                    pbr_metallic_roughness.uniforms[key]
+                );
+            });
+            const setVibrantDefault = (name, value) => {
+                if (vibrantVisualsUniforms[name]) vibrantVisualsUniforms[name].value = value;
+            };
+            setVibrantDefault('uRoughness', 0.62);
+            setVibrantDefault('uEnvSpecularStrength', 0.72);
+            setVibrantDefault('uSpecularIntensity', 0.9);
+            setVibrantDefault('uAmbient', 0.16);
+            setVibrantDefault('uUseToneMapping', 1.0);
+            setVibrantDefault('uExposure', 1.08);
+            setVibrantDefault('uSSREnabled', true);
+            setVibrantDefault('uSSRIntensity', 0.48);
+            setVibrantDefault('uSSRRoughness', 0.22);
+            setVibrantDefault('uSSRQuality', 0.72);
+            setVibrantDefault('uSSRRenderScale', 0.85);
+            setVibrantDefault('uPixelatedShadows', true);
+            setVibrantDefault('uPixelShadowSteps', 4.0);
+            setVibrantDefault('uPixelShadowScale', 2.0);
+
+            const vibrant_visuals_pbr = new FancyShaderMaterial({
+                id: 'vibrant_visuals_pbr',
+                name: tl('shader_architect.preset.vibrant_visuals_pbr'),
+                icon: 'landscape_2',
+                isCustom: false,
+                vertex: pbr_metallic_roughness.vertex,
+                fragment: pbr_metallic_roughness.fragment,
+                uniforms: vibrantVisualsUniforms,
                 supportsScreenSpaceReflections: true,
                 enableShadows: true
             });
@@ -5813,6 +5981,21 @@ void main() {
                         hexValue: "#ffffff",
                         expose: true,
                         is_color: true
+                    },
+                    "uSAEnvironmentEnabled": {
+                        type: "int",
+                        value: 0,
+                        expose: false
+                    },
+                    "uSAEnvironmentAmbient": {
+                        type: "vec3",
+                        value: new THREE.Vector3(1, 1, 1),
+                        expose: false
+                    },
+                    "uSAEnvironmentStrength": {
+                        type: "float",
+                        value: 0.0,
+                        expose: false
                     },
                     // Light arrays
                     "uLightPos": {
@@ -6150,6 +6333,9 @@ uniform int max_light_number;
 
 uniform float uAmbient;
 uniform vec3 uAmbientColor;
+uniform int uSAEnvironmentEnabled;
+uniform vec3 uSAEnvironmentAmbient;
+uniform float uSAEnvironmentStrength;
 
 uniform float uExposure;
 uniform int uToneMapping;
@@ -6413,6 +6599,10 @@ void main() {
     float ambientOcclusion = 1.0;
 
     vec3 ambientLight = max(uAmbientColor, vec3(0.0)) * max(uAmbient, 0.0);
+    if (uSAEnvironmentEnabled == 1) {
+        ambientLight += max(uSAEnvironmentAmbient, vec3(0.0)) *
+            max(uSAEnvironmentStrength, 0.0);
+    }
     ambientLight *= ambientOcclusion;
 
     float directAO = mix(1.0, ambientOcclusion, clamp(uAODirectInfluence, 0.0, 1.0));
@@ -6593,6 +6783,9 @@ uniform int uLightShadowIndex[16];
 
 uniform float uAmbient;
 uniform vec3 uAmbientColor;
+uniform int uSAEnvironmentEnabled;
+uniform vec3 uSAEnvironmentAmbient;
+uniform float uSAEnvironmentStrength;
 
 uniform float uExposure;
 uniform int uToneMapping;
@@ -6973,6 +7166,10 @@ void main() {
     float ambientOcclusion = 1.0;
 
     vec3 ambientLight = max(uAmbientColor, vec3(0.0)) * max(uAmbient, 0.0);
+    if (uSAEnvironmentEnabled == 1) {
+        ambientLight += max(uSAEnvironmentAmbient, vec3(0.0)) *
+            max(uSAEnvironmentStrength, 0.0);
+    }
     ambientLight *= ambientOcclusion;
 
     float directAO = mix(1.0, ambientOcclusion, clamp(uAODirectInfluence, 0.0, 1.0));
@@ -7159,6 +7356,9 @@ uniform int max_light_number;
 /* Ambient */
 uniform float uAmbient;
 uniform vec3 uAmbientColor;
+uniform int uSAEnvironmentEnabled;
+uniform vec3 uSAEnvironmentAmbient;
+uniform float uSAEnvironmentStrength;
 
 /* Artistic controls */
 uniform float uExposure;
@@ -7190,6 +7390,7 @@ uniform float uShadowFloor;
 */
 uniform float shadowPixelResolution;
 uniform float shadowThreshold;
+uniform bool PIXELATED_SHADOWS;
 uniform float shadowFilterScale;
 uniform float shadowFeather;
 
@@ -7502,6 +7703,7 @@ vec4 getPointShadowCoordAtUV(
 }
 
 float pixelShadowMask(float visibility) {
+    if (!PIXELATED_SHADOWS) return visibility;
     float threshold = clamp(shadowThreshold, 0.0, 1.0);
     float feather = clamp(shadowFeather, 0.0, 0.49);
 
@@ -7776,6 +7978,10 @@ float getPixelatedLightShadow(
 ) {
     if (uLightCastShadow[lightIndex] == 0) {
         return 1.0;
+    }
+
+    if (!PIXELATED_SHADOWS) {
+        targetUV = currentUV;
     }
 
     int shadowIndex = uLightShadowIndex[lightIndex];
@@ -8061,6 +8267,10 @@ void main() {
     vec3 ambientLight =
         max(uAmbientColor, vec3(0.0)) *
         max(uAmbient, 0.0);
+    if (uSAEnvironmentEnabled == 1) {
+        ambientLight += max(uSAEnvironmentAmbient, vec3(0.0)) *
+            max(uSAEnvironmentStrength, 0.0);
+    }
 
     ambientLight *= ambientOcclusion;
 
@@ -8144,6 +8354,13 @@ void main() {
                         step: 0.05,
                         allow_higher: true,
                         allow_lower: false
+                    },
+
+                    "PIXELATED_SHADOWS": {
+                        type: "bool",
+                        value: true,
+                        expose: true,
+                        advanced: false
                     },
 
                     "shadowThreshold": {
@@ -10253,6 +10470,9 @@ uniform int uLightShadowIndex[16];
 
 uniform float uAmbient;
 uniform vec3 uAmbientColor;
+uniform int uSAEnvironmentEnabled;
+uniform vec3 uSAEnvironmentAmbient;
+uniform float uSAEnvironmentStrength;
 
 uniform float uExposure;
 uniform int uToneMapping;
@@ -10381,6 +10601,10 @@ ${lumaForgeLightflowHelpers}`
         vec3 ambientLight =
             max(uAmbientColor, vec3(0.0)) *
             max(uAmbient, 0.0);
+        if (uSAEnvironmentEnabled == 1) {
+            ambientLight += max(uSAEnvironmentAmbient, vec3(0.0)) *
+                max(uSAEnvironmentStrength, 0.0);
+        }
         ambientLight *= ambientOcclusion;
 
         float directAO = mix(
@@ -10646,6 +10870,7 @@ ${lumaForgeLightflowHelpers}`
                 enumerable: false
             });
             this.materials['pbr_metallic_roughness'] = pbr_metallic_roughness;
+            this.materials['vibrant_visuals_pbr'] = vibrant_visuals_pbr;
             this.materials['pixelated_shaded_lightflow'] = pixelated_shaded_lightflow;
             this.materials['minecraft_promotional_bevel'] = minecraft_promotional_bevel;
             this.materials['cinematic_craft'] = cinematic_craft;
@@ -10951,7 +11176,23 @@ ${lumaForgeLightflowHelpers}`
             ensureUniform('uSA_SSRCameraFar', () => 1000.0);
             ensureUniform('uSA_SSRCameraIsPerspective', () => 1);
             ensureUniform('uSA_SSRCameraProjectionMatrix', () => new THREE.Matrix4());
+            ensureUniform('uSA_SSRViewToWorld', () => new THREE.Matrix4());
             ensureUniform('uSA_SSRTime', () => 0.0);
+            ensureUniform('uSA_EnvironmentEnabled', () => 0);
+            ensureUniform('uSA_EnvironmentZenith', () => new THREE.Vector3(0.47, 0.65, 1.0));
+            ensureUniform('uSA_EnvironmentHorizon', () => new THREE.Vector3(0.72, 0.82, 1.0));
+            ensureUniform('uSA_EnvironmentGround', () => new THREE.Vector3(0.2, 0.24, 0.28));
+            ensureUniform('uSA_EnvironmentCelestialDirection', () => new THREE.Vector3(0, 1, 0));
+            ensureUniform('uSA_EnvironmentCelestialColor', () => new THREE.Vector3(1.0, 0.95, 0.75));
+            ensureUniform('uSA_EnvironmentCelestialSize', () => 0.055);
+            ensureUniform('uSA_EnvironmentCloudColor', () => new THREE.Vector3(0.95, 0.96, 0.98));
+            ensureUniform('uSA_EnvironmentCloudCoverage', () => 0.54);
+            ensureUniform('uSA_EnvironmentCloudOpacity', () => 0.0);
+            ensureUniform('uSA_EnvironmentCloudTime', () => 0.0);
+            ensureUniform('uSA_EnvironmentDaylight', () => 1.0);
+            ensureUniform('uSA_EnvironmentTwilight', () => 0.0);
+            ensureUniform('uSA_EnvironmentVibrant', () => 0.0);
+            ensureUniform('uSA_EnvironmentIntensity', () => 0.0);
             return true;
         },
 
@@ -10982,6 +11223,35 @@ ${lumaForgeLightflowHelpers}`
             if (camera && camera.projectionMatrix) {
                 uniforms.uSA_SSRCameraProjectionMatrix.value.copy(camera.projectionMatrix);
             }
+            if (camera && camera.matrixWorld) {
+                uniforms.uSA_SSRViewToWorld.value.copy(camera.matrixWorld);
+            }
+            const environment = window.LightflowEnvironment?.getLightingState?.();
+            const copyEnvironmentColor = (uniformName, source, fallback) => {
+                const value = Array.isArray(source) ? source : fallback;
+                uniforms[uniformName].value.set(
+                    Number(value[0]) || 0,
+                    Number(value[1]) || 0,
+                    Number(value[2]) || 0
+                );
+            };
+            uniforms.uSA_EnvironmentEnabled.value = environment?.enabled ? 1 : 0;
+            uniforms.uSA_EnvironmentIntensity.value = environment?.enabled
+                ? Math.max(0, Number(environment.environmentIntensity) || 0)
+                : 0;
+            copyEnvironmentColor('uSA_EnvironmentZenith', environment?.zenithColor, [0.47, 0.65, 1.0]);
+            copyEnvironmentColor('uSA_EnvironmentHorizon', environment?.horizonColor, [0.72, 0.82, 1.0]);
+            copyEnvironmentColor('uSA_EnvironmentGround', environment?.groundColor, [0.2, 0.24, 0.28]);
+            copyEnvironmentColor('uSA_EnvironmentCelestialDirection', environment?.celestialDirection, [0, 1, 0]);
+            copyEnvironmentColor('uSA_EnvironmentCelestialColor', environment?.sunColor, [1.0, 0.95, 0.75]);
+            copyEnvironmentColor('uSA_EnvironmentCloudColor', environment?.cloudColor, [0.95, 0.96, 0.98]);
+            uniforms.uSA_EnvironmentCelestialSize.value = Math.max(0.001, Number(environment?.celestialSize) || 0.055);
+            uniforms.uSA_EnvironmentCloudCoverage.value = Math.max(0, Math.min(1, Number(environment?.cloudCoverage) || 0));
+            uniforms.uSA_EnvironmentCloudOpacity.value = Math.max(0, Math.min(1, Number(environment?.cloudOpacity) || 0));
+            uniforms.uSA_EnvironmentCloudTime.value = Number(environment?.cloudTime) || 0;
+            uniforms.uSA_EnvironmentDaylight.value = Math.max(0, Math.min(1, Number(environment?.daylight) || 0));
+            uniforms.uSA_EnvironmentTwilight.value = Math.max(0, Math.min(1, Number(environment?.twilight) || 0));
+            uniforms.uSA_EnvironmentVibrant.value = environment?.vibrant ? 1 : 0;
             uniforms.uSA_SSRTime.value = performance.now() * 0.001;
             material.uniformsNeedUpdate = true;
         },
@@ -11129,6 +11399,13 @@ ${lumaForgeLightflowHelpers}`
                     preview.render();
                 }
             });
+        },
+
+        invalidateEnvironment() {
+            this.states.forEach(state => {
+                state.hasCaptured = false;
+            });
+            this.refresh();
         }
     };
 
@@ -16141,8 +16418,13 @@ ${stochasticAlpha
             this.cancelPendingLightUniformUpdate();
 
             const lights = (window.LightElement && Array.isArray(window.LightElement.all))
-                ? window.LightElement.all
+                ? window.LightElement.all.slice()
                 : [];
+            const environmentLight = window.LightflowEnvironment?.getVirtualLight?.();
+            if (environmentLight && !lights.some(light => light?.uuid === environmentLight.uuid)) {
+                // Keep the environment sun/moon inside the 16-light budget.
+                lights.unshift(environmentLight);
+            }
 
             const MAX_LIGHTS = 16;
 
@@ -16439,6 +16721,7 @@ ${stochasticAlpha
             };
 
             const updatedUniformGroups = new Set();
+            const environmentState = window.LightflowEnvironment?.getLightingState?.();
             this.getLightUniformMaterials().forEach(mat => {
                 if (!mat || !mat.uniforms) return;
 
@@ -16447,6 +16730,31 @@ ${stochasticAlpha
                 updatedUniformGroups.add(uniformGroupKey);
 
                 let lightUniformsUpdated = false;
+
+                const environmentEnabled = !!environmentState?.enabled;
+                const environmentAmbient = Array.isArray(environmentState?.ambientColor)
+                    ? environmentState.ambientColor
+                    : [1, 1, 1];
+                const environmentStrength = environmentEnabled
+                    ? Math.max(0, Number(environmentState.ambientIntensity) || 0)
+                    : 0;
+                ensureUniform(mat, 'uSAEnvironmentEnabled', () => 0).value = environmentEnabled ? 1 : 0;
+                const environmentUniform = ensureUniform(
+                    mat,
+                    'uSAEnvironmentAmbient',
+                    () => new THREE.Vector3(1, 1, 1)
+                );
+                environmentUniform.value = toVector3(
+                    environmentUniform.value,
+                    () => new THREE.Vector3(1, 1, 1)
+                );
+                environmentUniform.value.set(
+                    Number(environmentAmbient[0]) || 0,
+                    Number(environmentAmbient[1]) || 0,
+                    Number(environmentAmbient[2]) || 0
+                );
+                ensureUniform(mat, 'uSAEnvironmentStrength', () => 0).value = environmentStrength;
+                lightUniformsUpdated = true;
 
                 if (mat.uniforms.max_light_number) {
                     mat.uniforms.max_light_number.value = activeLightCount;
@@ -18598,7 +18906,7 @@ ${stochasticAlpha
         author: 'MidFord327',
         description: 'Build advanced Blockbench materials with real-time Lightflow presets, editable GLSL, material instances, and deep Light Manager integration. Requires Light Manager for lights and shadows.',
         tags: ['Lightflow', 'Shaders', 'Materials', 'Rendering', 'GLSL', 'Lighting'],
-        version: '2.6.0',
+        version: '2.7.0',
         min_version: '4.9.0',
         variant: 'both',
 

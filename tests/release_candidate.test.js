@@ -11,6 +11,7 @@ const pluginFiles = [
     'light_manager.js',
     'shader_architect.js',
     'lightflow_atmosphere.js',
+    'lightflow_environment.js',
     'studio_render.js'
 ];
 
@@ -24,10 +25,11 @@ test('all independently loadable plugins parse as JavaScript', () => {
 
 test('release candidate versions stay synchronized with the README', () => {
     const expected = {
-        'light_manager.js': '1.6.1',
-        'shader_architect.js': '2.6.0',
+        'light_manager.js': '1.6.2',
+        'shader_architect.js': '2.7.0',
         'lightflow_atmosphere.js': '1.0.0',
-        'studio_render.js': '1.4.2'
+        'lightflow_environment.js': '1.0.0',
+        'studio_render.js': '1.5.0'
     };
     const readme = read('README.md');
     Object.entries(expected).forEach(([file, version]) => {
@@ -110,6 +112,46 @@ test('Bloom uses transparent depth-only texels to occlude hidden emitters withou
     assert.match(source, /gl_FragColor = vec4\(max\(emission, vec3\(0\.0\)\), clamp\(energy, 0\.0, 1\.0\)\);/);
     assert.match(source, /depthWrite: true/);
     assert.doesNotMatch(source, /if \(energy <= 0\.0005\) discard;/);
+});
+
+test('Scene Composer reuses the final Bloom and color-grade functions in realtime', () => {
+    const source = read('studio_render.js');
+    assert.match(source, /function renderViewportComposer\(preview\)/);
+    assert.match(source, /renderBloomMaskTile\(preview, maskContext/);
+    assert.match(source, /applyFinalBloom\(state\.baseCanvas, currentSettings, state\.maskCanvas\)/);
+    assert.match(source, /applyFinalColorGrade\(state\.baseCanvas, currentSettings\)/);
+    assert.match(source, /id: 'lightflow_scene_composer_toolbar'/);
+    assert.match(source, /viewport_bloom_fps/);
+    assert.doesNotMatch(source, /now - state\.lastRender < interval\) \{\s*state\.overlay\.style\.display = 'none'/);
+});
+
+test('Minecraft environment drives sky, time, ambient response, sun shadows, and project persistence', () => {
+    const source = read('lightflow_environment.js');
+    assert.match(source, /preset: 'vanilla'/);
+    assert.match(source, /vibrant_visuals:/);
+    assert.match(source, /function getLightingState\(\)/);
+    assert.match(source, /new THREE\.DirectionalLight/);
+    assert.match(source, /shadow\.camera\.left/);
+    assert.match(source, /pixelated_shadows/);
+    assert.match(source, /lightflow_environment_settings/);
+    assert.match(source, /getVirtualLight/);
+});
+
+test('Vibrant Visuals PBR uses native MER semantics, environment lighting, SSR fallback, and switchable pixel shadows', () => {
+    const source = read('shader_architect.js');
+    assert.match(source, /id: 'vibrant_visuals_pbr'/);
+    assert.match(source, /uUseBlockbenchMERMap/);
+    assert.match(source, /uSAEnvironmentAmbient/);
+    assert.match(source, /"uSAEnvironmentEnabled": \{ type: "int", value: 0, expose: false \}/);
+    assert.match(source, /saSSRSampleEnvironment/);
+    assert.match(source, /uPixelatedShadows/);
+    assert.match(source, /uniform bool PIXELATED_SHADOWS/);
+});
+
+test('Light Manager does not duplicate Three r129 punctual-light helpers', () => {
+    const source = read('light_manager.js');
+    assert.match(source, /lightManagerHasNativePunctualHelper/);
+    assert.match(source, /ShaderChunk\.lights_pars_begin\.includes\('punctualLightIntensityToIrradianceFactor'\)/);
 });
 
 test('supporting modules include Mesh and TextureMesh render elements', () => {

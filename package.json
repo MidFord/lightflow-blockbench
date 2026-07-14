@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "description": "Validation harness for the Lightflow Blockbench plugin suite",
   "scripts": {
-    "check": "node --check light_manager.js && node --check shader_architect.js && node --check lightflow_atmosphere.js && node --check studio_render.js",
+    "check": "node --check light_manager.js && node --check shader_architect.js && node --check lightflow_atmosphere.js && node --check lightflow_environment.js && node --check studio_render.js",
     "test": "node --test tests/release_candidate.test.js",
     "validate": "npm run check && npm test"
   },
