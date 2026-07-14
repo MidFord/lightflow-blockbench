@@ -1,8 +1,8 @@
 # Lightflow for Blockbench
 
-> **An in-development rendering suite for Blockbench** — animatable lights, advanced shader materials, and clean studio-quality image exports without leaving the editor.
+> **A production-oriented rendering suite for Blockbench** — animatable lights, advanced shader materials, and studio-quality image exports without leaving the editor.
 
-**Status:** Open Alpha / actively developed  
+**Status:** Release Candidate / final compatibility testing  
 **Minimum Blockbench version:** `4.9.0`  
 **Recommended environment:** Blockbench Desktop with a WebGL-capable dedicated GPU
 
@@ -10,7 +10,8 @@ Lightflow is a modular suite for artists who want more control over how Blockben
 
 1. **Light Manager** creates and animates the lighting.
 2. **Shader Architect** gives the scene a material and stylized surface response.
-3. **Studio Render** captures a polished, high-resolution final image.
+3. **Lightflow Atmosphere** adds local fog, God Rays, and procedural cloud volumes.
+4. **Studio Render** captures a polished, high-resolution final image.
 
 The plugins work independently where possible, but they are designed to be used together.
 
@@ -39,9 +40,10 @@ The plugins work independently where possible, but they are designed to be used 
 
 | Plugin | Current version | Purpose | Dependency |
 | --- | ---: | --- | --- |
-| **Light Manager** | `1.3.0` | Adds production-oriented point, spot, and directional lights with shadows, gizmos, animation support, and lighting profiles. | None |
-| **Shader Architect** | `2.0.0` | Builds and assigns advanced materials, exposes shader controls, supports editable GLSL, material instances, and `.samat` material files. | **Light Manager required** |
-| **Studio Render** | `1.0.0` | Exports clean images with tiled supersampling, adjustable render framing, transparency, and 4K/8K-safe output controls. | Works alone; integrates with the other two plugins |
+| **Light Manager** | `1.6.1` | Adds production-oriented point, spot, and directional lights with adaptive shadows, gizmos, animation support, and lighting profiles. | None |
+| **Shader Architect** | `2.6.0` | Builds and assigns advanced materials to Cubes, Meshes, and Texture Meshes with PBR controls, Blockbench render modes, editable GLSL, material instances, and automatic draw-call reduction. | **Light Manager required** |
+| **Lightflow Atmosphere** | `1.0.0` | Adds production-ready local fog, correctly occluded additive light shafts, height fog, and procedural cloud domains with render-element depth occlusion. | **Light Manager recommended**; integrates with Shader Architect and Studio Render |
+| **Studio Render** | `1.4.2` | Exports clean images with tiled supersampling, HDR/emissive Bloom with geometry occlusion, adjustable framing, transparency, and 4K/8K-safe output controls. | Works alone; integrates with the other Lightflow modules |
 
 ### Why Lightflow exists
 
@@ -55,7 +57,7 @@ Lightflow is **not** a replacement for an offline ray tracer or a game engine. I
 
 - Blockbench **4.9.0 or newer**.
 - A WebGL-capable GPU. A dedicated GPU is strongly recommended for high-resolution Studio Render output.
-- The three plugin files from the same Lightflow release.
+- The four plugin files from the same Lightflow release.
 - Save working scenes as **`.bbmodel`** when you need Shader Architect material assignments and material instances to persist.
 
 > **Important:** Shader Architect requires Light Manager. Install and enable Light Manager first.
@@ -66,16 +68,18 @@ Lightflow is **not** a replacement for an offline ray tracer or a game engine. I
 
 ### Manual installation from a release
 
-1. Download the three JavaScript files from the latest Lightflow release:
+1. Download the four JavaScript files from the latest Lightflow release:
    - `light_manager.js`
    - `shader_architect.js`
+   - `lightflow_atmosphere.js`
    - `studio_render.js`
 2. Open Blockbench.
 3. Open the Plugin menu and load each local plugin file, or drag the JavaScript files into Blockbench.
 4. Load them in this order:
    1. **Light Manager**
    2. **Shader Architect**
-   3. **Studio Render**
+   3. **Lightflow Atmosphere**
+   4. **Studio Render**
 5. Reload Blockbench or reload plugins after an update. During development, Blockbench can reload plugins with `Ctrl/Cmd + J`.
 
 ### Recommended release layout
@@ -87,6 +91,8 @@ lightflow-blockbench/
 │  │  └─ light_manager.js
 │  ├─ shader_architect/
 │  │  └─ shader_architect.js
+│  ├─ lightflow_atmosphere/
+│  │  └─ lightflow_atmosphere.js
 │  └─ studio_render/
 │     └─ studio_render.js
 ├─ docs/
@@ -127,12 +133,22 @@ With **Light Manager** enabled:
 With **Shader Architect** enabled:
 
 1. Open **Material Studio**.
-2. Choose a built-in material such as **Shaded Lightflow**, **LumaForge**, or **RealView PBR**.
-3. Apply it globally, to selected cubes, or to selected faces.
-4. Use exposed controls to tune lighting, ambient contribution, shadows, bevels, outlines, rim light, AO, or reflections as appropriate.
+2. Choose a built-in material such as **Lightflow**, **Cinematic Craft**, or **Lightflow Principled PBR**.
+3. Apply it globally or to selected Cubes, Meshes, and Texture Meshes. Cubes also support per-face overrides.
+4. Use exposed controls to tune lighting, ambient contribution, shadows, bevels, outlines, rim light, AO, or reflections as appropriate. Lightflow's **Shadows** toggle switches cast shadows without changing presets.
 5. Create a **Material Instance** when different parts of the same model need different values without duplicating the shader code.
 
-### 4. Render the image
+### 4. Add atmosphere (optional)
+
+With **Lightflow Atmosphere** enabled:
+
+1. Choose **Edit → Add Volume Domain**.
+2. Select the domain in the Outliner and fit it around selected Cubes, Meshes, or Texture Meshes when useful.
+3. Choose **Soft Mist**, **God Rays**, **Cloud Volume**, or **Stage Haze** as a starting point.
+4. For visible shafts, use a directional or spot light with shadows and enable **Receive Volumetric Shadows** on the domain.
+5. Keep viewport quality on **Balanced** while composing; use **High** or **Ultra** only for Studio Render.
+
+### 5. Render the image
 
 With **Studio Render** enabled:
 
@@ -158,8 +174,10 @@ Light Manager is the foundation of the suite. It introduces real scene lights to
 - Viewport gizmos for positioning, aiming, range, cone, clipping, and shadow bounds.
 - Shadow controls for resolution, bias, normal bias, softness, near/far planes, and directional bounds.
 - Separate **Studio Shadow Resolution** for final renders without forcing the viewport to use the same cost.
+- Render-only 8K and 16K shadow maps for professional output, automatically capped to the GPU's supported texture size.
+- Resolution-, range-, cone-, clipping-, and bounds-aware automatic bias to reduce shadow acne without detaching shadows from surfaces.
 - Lighting profiles and shadow profiles for faster setup.
-- Fit selected lights to selected cubes or groups.
+- Fit selected lights to selected Cubes, Meshes, Texture Meshes, or groups.
 - Free movement from the current camera view.
 - Animation channels for position, rotation, color, and intensity.
 
@@ -172,26 +190,61 @@ Light Manager is the foundation of the suite. It introduces real scene lights to
 
 ### Shader Architect
 
-Shader Architect is Lightflow's material and shader workspace. It can drive an entire scene with one material or assign individual material instances to cubes and faces.
+Shader Architect is Lightflow's material and shader workspace. It can drive an entire scene with one material or assign individual material instances to Cubes, Meshes, and Texture Meshes. Cubes additionally support individual face assignments.
 
 **Main capabilities**
 
-- Global scene materials, per-cube materials, and per-face overrides.
+- Global scene materials and per-element materials across Cubes, Meshes, and Texture Meshes, plus per-face Cube overrides.
 - Reusable Material Instances with independent exposed values.
 - Editable GLSL vertex and fragment shaders.
 - GLSL formatting plus compile/link validation inside Material Studio.
 - Import and export of custom `.samat` material files.
 - Exposed uniforms for artist-facing controls and advanced technical controls for shader authors.
 - Dynamic Light Manager uniforms for light positions, directions, colors, intensities, attenuation, cones, and shadow behavior.
-- Built-in surface systems including PBR-style controls, stylized lighting, voxel-style AO, shadows, screen-space reflections, bevels, alpha-edge treatment, outlines, and promotional rim lighting.
+- Built-in surface systems including PBR-style controls, thickness-aware real-time subsurface scattering, stylized lighting, voxel-style AO, shadows, screen-space reflections, bevels, alpha-edge treatment, outlines, and promotional rim lighting.
+- Independently switchable PBR layers for clearcoat, anisotropy, sheen, transmission, and iridescence, plus specular and clearcoat tint controls.
+- UV-derived tangent frames for proper tangent-space normal maps and genuinely directional anisotropic GGX highlights, even when Blockbench geometry has no exported tangent attribute.
+- Native Blockbench `MER Subsurface` support: its alpha channel becomes a per-pixel SSS mask instead of being treated as glass transmission.
+- Native Blockbench texture semantics for `emissive`, `additive`, and `layered` render modes, including MER green-channel emission.
+- **Cinematic Craft**, the successor to Luma Forge, tuned as a Minecraft-trailer-oriented hero material with alpha-aware rim/outline masking, bevel shaping, tone mapping, and dynamic Lightflow shadows.
+- One-click Material Override presets: **Balanced**, **Trailer Hero**, **Soft Daylight**, **Night Drama**, and **Clean Product**.
+- Automatic zero-thickness Cube handling: coincident faces render as separate front-facing surfaces, and a fully transparent side inherits the visible side without z-fighting or incorrect shared lighting.
+- Alpha-profile-aware cutouts, per-material-slot shadow textures, and stochastic semitransparent shadow density in the raster shadow pipeline.
 
 **Material-instance workflow**
 
 1. Choose a base material.
-2. Select the cubes or faces that should differ from the global material.
-3. Create a Material Instance.
+2. Select the render elements—or Cube faces—that should differ from the global material.
+3. Create a Material Instance, then optionally choose a quick Material Override preset.
 4. Change only the exposed values needed for that part: for example rim intensity, bevel width, metallic response, outline strength, or emissive behavior.
 5. Save as `.bbmodel` before closing the project.
+
+### Lightflow Atmosphere
+
+Lightflow Atmosphere adds bounded participating media to the Blockbench scene. Each **Volume Domain** is a normal Outliner element with position, rotation, size, visibility, save/undo support, and a wireframe editing gizmo.
+
+**Main capabilities**
+
+- Box and sphere/ellipsoid domains.
+- Uniform fog, exponential height fog, and animated procedural cloud density.
+- Beer–Lambert transmittance and Henyey–Greenstein anisotropic single scattering.
+- Separate **Physical Medium** and **Additive Light Shafts** rendering models, so a shadowed God Ray remains transparent instead of darkening the scene.
+- Artist-controlled multiple-scattering fill for softer fog and cloud shadows.
+- Direct contribution from up to four Light Manager lights.
+- Geometry-occluded volumetric shadows from up to two directional or spot lights.
+- Depth-aware stopping at Cubes, Meshes, and Texture Meshes, so light shafts and Bloom do not pass through foreground geometry.
+- Helper masking so light icons, locators, grids, selection helpers, and volume gizmos remain clear.
+- Separate viewport and Studio Render step counts and internal resolution.
+- Tile-stable spatial jitter and frozen cloud time during Studio Render to prevent seams.
+- DPI-correct viewport composition, alpha-tested foliage shadows, and camera-facing phase scattering for stable, visible God Rays.
+- SSAA-aware raymarch resolution, reusable AO depth, cached static raymarches, cached Atmosphere Bloom masks, and frustum culling for off-screen domains.
+- Lightweight alpha-aware depth-only captures when Shader Architect AO depth is unavailable.
+- Quick setups for Soft Mist, God Rays, Cloud Volume, Stage Haze, and Cinematic Dust.
+- Per-domain scattering, absorption, ambient fill, edge feather, shadow reception, and Bloom contribution.
+
+Live counters are available from the Blockbench developer console through `LightflowAtmosphere.performance()`; they report raymarches, cache hits, depth captures, and cache-hit rate.
+
+The implementation is physically grounded real-time **single scattering**. It is not path-traced multiple scattering, fluid simulation, or Blender Cycles; procedural clouds are shader density fields rather than simulated weather.
 
 ### Studio Render
 
@@ -208,6 +261,12 @@ Studio Render is the export layer. It is intended for portfolio images, social-m
 - Preview, PNG save, clipboard, and load-as-texture destinations.
 - GPU diagnostics showing the detected renderer and relevant WebGL limits.
 - Temporary Studio Render sessions that coordinate with Light Manager so final shadow settings do not permanently disturb the viewport.
+- Optional final-image Bloom with a simple strength control and advanced threshold/radius controls.
+- Emissive-only Bloom masking: emissive render-mode alpha, MER maps, dedicated emissive maps, and additive materials glow without blooming ordinary bright surfaces.
+- Atmosphere-aware Bloom masking, including per-domain Bloom contribution for bright shafts and cloud highlights.
+- Selection highlight suppression during final capture so editing state cannot leak into exported pixels.
+- A two-column, sectioned render dialog that collapses responsively on narrow windows.
+- A compact default form; tile size, GPU diagnostics, resolution scaling, and technical effect controls stay under **Advanced Controls**.
 
 ---
 
@@ -218,15 +277,26 @@ The current built-in preset library includes:
 | Preset | Best use |
 | --- | --- |
 | **Classic Shader** | Familiar Blockbench-like rendering with simple controls. |
-| **PBR Metallic/Roughness** | A more technical material workflow with metallic/roughness-style behavior. |
-| **Unshaded Lightflow** | Clean texture presentation with minimal lighting influence. |
-| **Shaded Lightflow** | General-purpose Lightflow material for real scene lights and stylized shadows. |
-| **Pixelated Shaded Lightflow** | A deliberately stepped or pixel-oriented shaded response. |
-| **LumaForge** | A more stylized studio material with artistic Lightflow features. |
-| **RealView PBR** | A presentation-oriented PBR-style material. |
+| **Lightflow Principled PBR** | Layered physically based controls for metal/roughness, SSS, clearcoat, sheen, transmission, iridescence, and reflections. |
+| **Lightflow** | General-purpose stylized lighting. Use its **Shadows** toggle for shadowed or shadow-free rendering without switching materials. |
+| **Pixelated Lightflow** | A deliberately stepped or pixel-oriented shaded response. |
+| **Cinematic Craft** | Minecraft-trailer-oriented hero lighting, promotional edge treatment, bevel shaping, alpha-aware silhouettes, and a polished default grade. Existing `luma_forge` assignments migrate automatically. |
 | **Minecraft Promotional Bevel** | A specialized promotional bevel treatment for blocky, illustrated presentation renders. |
 
 Use the preset name as a starting point, not as a guarantee of a specific visual style. A good render comes from the interaction between the preset, texture content, cube scale, lighting, camera angle, and export settings.
+
+### Subsurface scattering workflow
+
+Use **Lightflow Principled PBR** for wax, skin-like stylization, leaves, thin fabric, candles, or translucent organic materials:
+
+1. Enable **Subsurface** and raise **SSS Weight** gradually from `0.15` to `0.5`.
+2. Set **SSS Color** to the color that should appear in backlit areas.
+3. Use **SSS Radius** to control how far light wraps around the form, and **SSS Thickness** to control how much backlight survives the material.
+4. Put a point, spot, or directional light behind or beside the subject to evaluate the transmitted-light lobe.
+5. For per-pixel control, use a Blockbench **MER Subsurface** texture. Lightflow reads its alpha channel automatically while **Native PBR SSS** is enabled.
+6. Open advanced material controls to tune **SSS Direction**, **SSS Focus**, **SSS Ambient**, and **SSS Shadows**.
+
+Lightflow's SSS is a stable real-time approximation designed for Blockbench's WebGL pipeline. It models light wrapping, forward/back scattering, thickness absorption, shadow response, and texture masks, but it is not Blender Cycles' path-traced random-walk SSS.
 
 ---
 
@@ -234,7 +304,7 @@ Use the preset name as a starting point, not as a guarantee of a specific visual
 
 ### Clean Minecraft-style showcase
 
-1. Use **Shaded Lightflow** or **LumaForge**.
+1. Use **Cinematic Craft** with the **Trailer Hero** override preset, or start from **Lightflow** for a quieter result.
 2. Add one directional key light and one weak colored fill light.
 3. Enable a restrained bevel or alpha bevel only where it improves the silhouette.
 4. Add a subtle rim light to separate the model from a transparent or pale background.
@@ -242,14 +312,14 @@ Use the preset name as a starting point, not as a guarantee of a specific visual
 
 ### Sharp pixel-art render
 
-1. Start with **Pixelated Shaded Lightflow**.
+1. Start with **Pixelated Lightflow**.
 2. Keep bevel, blur-like effects, and high softness values subtle.
 3. Test native samples first; increase SSAA only when it improves the outer contour without softening the intended pixel language.
 4. Use a transparent background for later compositing.
 
 ### Product-card or thumbnail render
 
-1. Use **LumaForge** or **RealView PBR**.
+1. Use **Cinematic Craft** or **Lightflow Principled PBR**.
 2. Keep the background transparent or use a single neutral color.
 3. Frame the subject using Studio Render's adjustable capture frame.
 4. Use 4× SSAA for a final export after checking the composition with 1× or 2×.
@@ -262,17 +332,28 @@ Use the preset name as a starting point, not as a guarantee of a specific visual
 4. Use Shader Architect materials that react to Light Manager lights.
 5. Preview the animation before capture; final image capture is currently optimized around still render output.
 
+### God Rays
+
+1. Add a **God Rays** Volume Domain and place the camera inside or in front of it.
+2. Add a directional or spot light and enable its cast shadows.
+3. Place render geometry between the light and the visible part of the volume so its silhouette shapes the shafts.
+4. Raise **Anisotropy** toward `0.6–0.8` for stronger forward scattering when looking toward the light.
+5. Tune density before scattering strength; excessive density quickly hides the model.
+6. Enable Bloom in Studio Render and adjust the domain's **Bloom Contribution** only after the shaft exposure looks correct.
+
 ---
 
 ## Saving and compatibility
 
 ### Save format
 
-Save active Lightflow projects as **`.bbmodel`**. Shader Architect material assignments and instances use project/cube properties that may not survive every export format.
+Save active Lightflow projects as **`.bbmodel`**. Shader Architect material assignments, material instances, and Lightflow Atmosphere Volume Domains use custom project/outliner properties that may not survive every export format.
 
 ### Compatibility expectations
 
 - Lightflow targets Blockbench `4.9.0+`.
+- Shader Architect, Atmosphere depth occlusion, selection fitting, and Studio Render highlight cleanup support `Cube`, `Mesh`, and `TextureMesh` elements.
+- The old `luma_forge` material ID remains readable and resolves to **Cinematic Craft**, so existing `.bbmodel` and `.samat` content does not need a manual migration.
 - The plugin metadata declares support for both Desktop and Web variants, but **Desktop is recommended** for high-resolution image export and the most predictable file behavior.
 - Browser security restrictions, GPU drivers, texture size limits, and WebGL capabilities can affect the web version.
 - A shader result in the Blockbench viewport is not guaranteed to transfer to a game engine or game exporter. Lightflow materials are designed for Blockbench rendering.
@@ -288,6 +369,7 @@ Save active Lightflow projects as **`.bbmodel`**. Shader Architect material assi
 - Tile size: Auto
 - Preview shadow resolution: 512 or 1024
 - Studio shadow resolution: leave equal to preview until the final render
+- Atmosphere viewport quality: Balanced at 50–70% internal resolution
 
 ### Final promotional preset
 
@@ -296,12 +378,15 @@ Save active Lightflow projects as **`.bbmodel`**. Shader Architect material assi
 - Tile size: Auto or 2048 px
 - Transparent background when compositing is planned
 - Studio shadow resolution: 2048 or 4096 only when the model and camera need it
+- Atmosphere render quality: High at 100%; Ultra only for difficult close-up shafts or dense clouds. Atmosphere automatically compensates for Studio SSAA so 4×/8× does not multiply the raymarch resolution again.
 
 ### Important tradeoffs
 
 - Higher supersampling improves edge quality but raises render time and memory use.
 - Larger shadow maps can improve detail but will not fix poor shadow bounds, unsuitable near/far planes, or a bad camera/light relationship.
 - Many lights, high-resolution shadows, screen-space effects, and 8K output can become expensive quickly.
+- Volumetric cost grows with ray steps, internal resolution, visible domains, active lights, and shadow-map samples. Up to four visible domains are rendered at once; off-screen domains are culled and unchanged frames reuse their previous raymarch by default.
+- Semitransparent textures use stochastic alpha coverage in ordinary WebGL shadow maps. This produces proportional shadow density without requiring ray tracing; colored transmissive shadows are outside the depth-only shadow-map model.
 - Keep the scene simple while tuning. Add expensive effects only after the core composition works.
 
 ---
@@ -332,9 +417,43 @@ Install and enable **Light Manager** first, then reload Shader Architect. Shader
 
 Save the project as **`.bbmodel`**. Other formats may not preserve Lightflow's custom material-instance data.
 
+### A flat Cube flickers or lights incorrectly
+
+- Confirm the render element is using a Lightflow material after updating Shader Architect to `2.5.1` or newer.
+- Keep the intended textured face and fully transparent opposite face; Lightflow detects the collapsed axis and resolves the two-sided surface automatically.
+- If both coincident faces contain visible pixels, each remains independent and is lit from its own direction.
+
+### A transparent material casts the wrong shadow
+
+- Cutout alpha is respected by the custom depth and distance shadow materials.
+- Semitransparent alpha casts a proportional dithered shadow. Increase Studio Render samples for a cleaner final integration.
+- WebGL shadow maps store depth, not transmitted RGB color, so colored glass shadows require a future transmittance-buffer backend; see `docs/RENDER_BACKENDS.md`.
+
+### FPS drops in scenes with many Cubes
+
+- Shader Architect `2.6.0+` automatically collapses equivalent Cube face slots and pools identical materials across elements. Different face textures, transparency modes, or Material Overrides remain independent.
+- Reload Shader Architect after updating so existing scene materials are rebuilt through the optimized path.
+- In Blockbench Developer Tools, run `LightflowPerformance()` to inspect `collapsedCubes`, `savedMaterialBatches`, `estimatedSceneDrawsPerFrame`, and the renderer's latest draw-call count.
+- Compare the same camera and effect settings. AO intentionally adds scene passes, but its receiver depth now uses a lightweight cached shader rather than evaluating the complete surface lighting again.
+
 ### Gizmos appear where they should not
 
 Studio Render hides gizmos by default. Verify that **Show Gizmos** is disabled in Studio Render settings, then render again.
+
+### Volumetric shafts are missing
+
+- Confirm the Volume Domain is enabled and surrounds the visible ray path.
+- Use a directional or spot light; point-light volumetric illumination works, but point-light volumetric shadow maps are not part of this first release.
+- Enable cast shadows on the light and **Receive Volumetric Shadows** on the domain.
+- Increase density gradually and verify anisotropy is not aimed away from the camera.
+- For leaf cards or other cutout textures, keep transparent pixels at alpha 0 so the light shadow map can filter the shafts through the silhouette.
+
+### Fog is noisy, banded, or too slow
+
+- Increase viewport steps before increasing viewport resolution.
+- Use **High** at 100% for normal final renders and reserve **Ultra** for difficult scenes.
+- Disable temporal jitter for a stable viewport pattern; Studio Render freezes time across all tiles automatically.
+- Reduce the number of overlapping domains and active shadowed lights.
 
 ### A plugin error appears
 
@@ -344,46 +463,28 @@ Open Blockbench Developer Tools and include the Console error, Blockbench versio
 
 ## Project structure
 
-A public source repository should keep the suite understandable and independently releasable:
+A release-candidate checkout keeps each independently loadable plugin at the repository root, with validation and renderer notes beside it:
 
 ```text
 lightflow-blockbench/
-├─ plugins/
-│  ├─ light_manager/
-│  │  ├─ light_manager.js
-│  │  ├─ about.md
-│  │  ├─ changelog.json
-│  │  └─ icon.svg
-│  ├─ shader_architect/
-│  │  ├─ shader_architect.js
-│  │  ├─ about.md
-│  │  ├─ changelog.json
-│  │  └─ icon.svg
-│  └─ studio_render/
-│     ├─ studio_render.js
-│     ├─ about.md
-│     ├─ changelog.json
-│     └─ icon.svg
+├─ light_manager.js
+├─ shader_architect.js
+├─ lightflow_atmosphere.js
+├─ studio_render.js
 ├─ docs/
-│  ├─ screenshots/
-│  ├─ workflows/
-│  ├─ compatibility.md
-│  └─ troubleshooting.md
-├─ examples/
-│  ├─ basic_lighting.bbmodel
-│  ├─ material_instances.bbmodel
-│  └─ studio_showcase.bbmodel
+│  └─ RENDER_BACKENDS.md
+├─ tests/
+│  └─ release_candidate.test.js
+├─ package.json
 ├─ README.md
-├─ CHANGELOG.md
-├─ CONTRIBUTING.md
-├─ CODE_OF_CONDUCT.md
-└─ LICENSE
+└─ CHANGELOG.md
 ```
 
 Keep plugin IDs, JavaScript file names, and release package names consistent:
 
 - `light_manager`
 - `shader_architect`
+- `lightflow_atmosphere`
 - `studio_render`
 
 ---
@@ -413,6 +514,9 @@ This roadmap is directional, not a release promise.
 - Better first-run guidance and sample `.bbmodel` scenes.
 - More robust quality presets for low-, mid-, and high-end GPUs.
 - Refinement of AO, shadows, screen-space effects, bevel behavior, and rim consistency between viewport and final render.
+- A transmittance-buffer experiment for colored raster shadows, gated by GPU capabilities.
+- Evaluation of a future native/WebGPU renderer only when Blockbench and the browser graphics stack expose a stable ray-tracing path; the current WebGL backend does not advertise hardware RTX.
+- Higher-order multiple scattering, point-light volumetric shadows, artist-authored 3D density textures, and improved temporal accumulation for Atmosphere.
 - Expanded documentation, visual examples, and troubleshooting coverage.
 - Packaging and validation for a Blockbench Plugin Store submission.
 

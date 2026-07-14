@@ -58,6 +58,7 @@ const LIGHT_MANAGER_STORAGE_KEYS = {
 };
 
 const LIGHT_MANAGER_SHADOW_RESOLUTIONS = [256, 512, 1024, 2048, 4096];
+const LIGHT_MANAGER_STUDIO_SHADOW_RESOLUTIONS = [256, 512, 1024, 2048, 4096, 8192, 16384];
 const LIGHT_MANAGER_SHADOW_NORMAL_BIAS_DEFAULTS = {
     256: 0.3,
     512: 0.05,
@@ -65,8 +66,21 @@ const LIGHT_MANAGER_SHADOW_NORMAL_BIAS_DEFAULTS = {
     2048: 0.01,
     4096: 0.01
 };
-const LIGHT_MANAGER_SHADOW_NORMAL_BIAS_LEGACY_DEFAULTS = [0.012];
-const LIGHT_MANAGER_AUTO_NORMAL_BIAS_PROPERTIES = ['shadow_resolution', 'shadow_bounds', 'shadow_near', 'shadow_far'];
+const LIGHT_MANAGER_SHADOW_NORMAL_BIAS_LEGACY_DEFAULTS = [0.012, 0.008];
+// Three.js normalBias is expressed in world units. Voxel faces and grazing
+// directional light need several texels of separation to eliminate acne
+// reliably; the previous 0.72-texel calibration was consistently too small.
+const LIGHT_MANAGER_NORMAL_BIAS_TEXEL_FACTOR = 4.4;
+const LIGHT_MANAGER_LEGACY_NORMAL_BIAS_TEXEL_FACTOR = 0.72;
+const LIGHT_MANAGER_AUTO_NORMAL_BIAS_PROPERTIES = [
+    'light_type',
+    'shadow_resolution',
+    'shadow_bounds',
+    'shadow_near',
+    'shadow_far',
+    'distance',
+    'angle'
+];
 
 const DEFAULT_SHADOW_BIAS = -0.0005;
 const DEFAULT_SHADOW_NORMAL_BIAS = 0.01;
@@ -102,6 +116,7 @@ const LIGHT_MANAGER_BAR_ITEM_IDS = [
 const LIGHT_MANAGER_TOOLBAR_IDS = [
     'light_gizmo_tools',
     'light_quickbuttons',
+    'light_shadow_quality',
     'light_settings',
     'light_shadow_clip_settings',
     'light_shadow_bounds_settings',
@@ -110,7 +125,8 @@ const LIGHT_MANAGER_TOOLBAR_IDS = [
 
 const LIGHT_MANAGER_TOOLBAR_DEFAULT_CHILDREN = {
     light_gizmo_tools: ['light_manager_edit_tool', 'light_manager_free_move'],
-    light_quickbuttons: ['light_type_select', 'light_color_picker', '+', 'cast_shadows', 'light_shadow_resolution_select', 'light_studio_shadow_resolution_select', '#', 'light_temperature_slider'],
+    light_quickbuttons: ['light_type_select', 'light_color_picker', '#', 'light_temperature_slider'],
+    light_shadow_quality: ['cast_shadows', '#', 'light_shadow_resolution_select', 'light_studio_shadow_resolution_select'],
     light_settings: ['light_intensity_slider', '#', 'light_distance_slider', '#', 'light_cone_angle_slider', '#', 'light_cone_penumbra_slider'],
     light_shadow_clip_settings: ['light_shadow_near_sliderbox', 'light_shadow_far_sliderbox'],
     light_shadow_bounds_settings: ['light_shadow_bounds_slider'],
@@ -488,25 +504,77 @@ const LightManagerUtils = {
             light_type: this.lightType(context.light_type),
             shadow_resolution: this.shadowResolution(context.shadow_resolution),
             shadow_bounds: this.num(context.shadow_bounds, 35, 0.001, 100000),
+            distance: this.num(context.distance, 0, 0, 100000),
+            angle: this.num(context.angle, 45, 0.1, 89.9),
             shadow_near,
             shadow_far
         };
     },
 
-    defaultShadowNormalBias(source, overrides = {}) {
+    calculateShadowNormalBias(source, overrides = {}, texelFactor = LIGHT_MANAGER_NORMAL_BIAS_TEXEL_FACTOR) {
         const context = this.shadowNormalBiasContext(source, overrides);
-        const base = LIGHT_MANAGER_SHADOW_NORMAL_BIAS_DEFAULTS[context.shadow_resolution] ?? DEFAULT_SHADOW_NORMAL_BIAS;
-        let bias = base;
+        const resolution = Math.max(256, context.shadow_resolution);
+        const depthRange = Math.max(0.001, context.shadow_far - context.shadow_near);
+        let worldSpan;
 
         if (context.light_type === 'directional') {
-            const referenceBounds = context.shadow_resolution === 512 ? 17.75 : 35;
-            const boundsFactor = Math.pow(Math.max(0.25, context.shadow_bounds / referenceBounds), 2);
-            const depthRange = Math.max(0.001, context.shadow_far - context.shadow_near);
-            const depthFactor = Math.max(0.25, Math.min(2.5, 200 / depthRange));
-            bias *= boundsFactor * depthFactor;
+            worldSpan = Math.max(0.001, context.shadow_bounds * 2);
+        } else if (context.light_type === 'spot') {
+            const usefulDepth = Math.min(
+                depthRange,
+                context.distance > 0 ? context.distance : depthRange
+            );
+            worldSpan = Math.max(
+                0.001,
+                usefulDepth * 2 * Math.tan(THREE.MathUtils.degToRad(context.angle))
+            );
+        } else {
+            worldSpan = Math.max(
+                0.001,
+                Math.min(depthRange, context.distance > 0 ? context.distance : depthRange) * 2
+            );
         }
 
-        return Math.round(Math.max(0.001, Math.min(0.6, bias)) * 10000) / 10000;
+        const worldUnitsPerTexel = worldSpan / resolution;
+        const bias = worldUnitsPerTexel * Math.max(0, Number(texelFactor) || 0);
+        return Math.round(Math.max(0.00025, Math.min(0.12, bias)) * 100000) / 100000;
+    },
+
+    defaultShadowNormalBias(source, overrides = {}) {
+        return this.calculateShadowNormalBias(
+            source,
+            overrides,
+            LIGHT_MANAGER_NORMAL_BIAS_TEXEL_FACTOR
+        );
+    },
+
+    legacyShadowNormalBias(source, overrides = {}) {
+        return this.calculateShadowNormalBias(
+            source,
+            overrides,
+            LIGHT_MANAGER_LEGACY_NORMAL_BIAS_TEXEL_FACTOR
+        );
+    },
+
+    defaultShadowBias(source, overrides = {}) {
+        const context = this.shadowNormalBiasContext(source, overrides);
+        const resolutionFactor = Math.pow(1024 / Math.max(256, context.shadow_resolution), 0.72);
+        const depthRange = Math.max(0.001, context.shadow_far - context.shadow_near);
+        const depthFactor = Math.max(0.35, Math.min(2.5, depthRange / 200));
+        const boundsFactor = context.light_type === 'directional'
+            ? Math.max(0.4, Math.min(3.0, context.shadow_bounds / 35))
+            : 1.0;
+        const bias = -0.0005 * resolutionFactor * depthFactor * boundsFactor;
+        return Math.round(Math.max(-0.005, Math.min(-0.00002, bias)) * 1000000) / 1000000;
+    },
+
+    shadowBias(value, source) {
+        const automaticValues = [DEFAULT_SHADOW_BIAS, -0.00035];
+        const parsed = Number(value);
+        if (!Number.isFinite(parsed) || automaticValues.some(item => Math.abs(parsed - item) <= 0.000001)) {
+            return this.defaultShadowBias(source);
+        }
+        return this.num(parsed, this.defaultShadowBias(source), -1, 1);
     },
 
     isAutomaticShadowNormalBiasValue(value, source = null) {
@@ -517,7 +585,12 @@ const LightManagerUtils = {
             ...Object.values(LIGHT_MANAGER_SHADOW_NORMAL_BIAS_DEFAULTS),
             ...LIGHT_MANAGER_SHADOW_NORMAL_BIAS_LEGACY_DEFAULTS
         ];
-        if (source) defaults.push(this.defaultShadowNormalBias(source));
+        if (source) {
+            defaults.push(this.defaultShadowNormalBias(source));
+            // Migrate values produced by Light Manager <= 1.6.0 instead of
+            // mistaking them for intentional manual overrides.
+            defaults.push(this.legacyShadowNormalBias(source));
+        }
         return defaults.some(defaultValue => (
             Math.abs(parsed - defaultValue) <= 0.000001
         ));
@@ -544,13 +617,25 @@ const LightManagerUtils = {
     studioShadowResolution(value) {
         const parsed = this.int(value, 0, 0);
         if (parsed === 0) return 0;
-        return LIGHT_MANAGER_SHADOW_RESOLUTIONS.includes(parsed) ? parsed : 0;
+        return LIGHT_MANAGER_STUDIO_SHADOW_RESOLUTIONS.includes(parsed) ? parsed : 0;
     },
 
     getRenderShadowResolution(element, options = {}) {
         if (options && (options.studio || options.studioRender)) {
             const studioResolution = this.studioShadowResolution(element && element.studio_shadow_resolution);
-            if (studioResolution > 0) return studioResolution;
+            if (studioResolution > 0) {
+                const preview = options.preview || window.LightManagerStudioRenderPreview;
+                const gpuMaximum = Number(
+                    preview?.renderer?.capabilities?.maxTextureSize ||
+                    preview?.renderer?.getContext?.()?.getParameter?.(
+                        preview.renderer.getContext().MAX_TEXTURE_SIZE
+                    )
+                );
+                if (Number.isFinite(gpuMaximum) && gpuMaximum > 0) {
+                    return Math.min(studioResolution, gpuMaximum);
+                }
+                return studioResolution;
+            }
         }
         return this.shadowResolution(element && element.shadow_resolution);
     },
@@ -1375,20 +1460,21 @@ function syncLightManagerSingleShadowSettings(light, element, options = {}) {
     let changed = false;
     let cameraChanged = false;
 
-    const bias = LightManagerUtils.num(element.shadow_bias, DEFAULT_SHADOW_BIAS, -1, 1);
+    const activeResolution = LightManagerUtils.getRenderShadowResolution(
+        element,
+        options
+    );
+    const shadowContext = {
+        ...element,
+        shadow_resolution: activeResolution
+    };
+    const bias = LightManagerUtils.shadowBias(element.shadow_bias, shadowContext);
     if (shadow.bias !== bias) {
         shadow.bias = bias;
         changed = true;
     }
 
-    const activeResolution = LightManagerUtils.getRenderShadowResolution(
-        element,
-        options
-    );
-    const normalBias = LightManagerUtils.shadowNormalBias(element.shadow_normal_bias, {
-        ...element,
-        shadow_resolution: activeResolution
-    });
+    const normalBias = LightManagerUtils.shadowNormalBias(element.shadow_normal_bias, shadowContext);
     if (shadow.normalBias !== normalBias) {
         shadow.normalBias = normalBias;
         changed = true;
@@ -2877,6 +2963,7 @@ window.LightManagerFitTool = {
         if (typeof Cube !== 'undefined') this.addSelectionList(nodes, Cube.selected);
         if (typeof Group !== 'undefined') this.addSelectionList(nodes, Group.selected);
         if (typeof Mesh !== 'undefined') this.addSelectionList(nodes, Mesh.selected);
+        if (typeof TextureMesh !== 'undefined') this.addSelectionList(nodes, TextureMesh.selected);
         if (typeof Locator !== 'undefined') this.addSelectionList(nodes, Locator.selected);
         if (typeof NullObject !== 'undefined') this.addSelectionList(nodes, NullObject.selected);
 
@@ -3523,6 +3610,7 @@ function initialize_light_plugin() {
         'property.cone_penumbra.desc': 'Softness of the spot light cone edge (0 to 1).',
         'property.light.viewport_tools': 'Viewport Tools',
         'property.light.quickbuttons': 'Light',
+        'property.light.shadows': 'Shadows',
         'property.cast_shadows': 'Cast Shadows',
         'property.shadow_near': 'Near',
         'property.shadow_far': 'Far',
@@ -3664,6 +3752,7 @@ function initialize_light_plugin() {
         'property.cone_penumbra.desc': 'Suavidad del borde del cono spot (0 a 1).',
         'property.light.viewport_tools': 'Herramientas de viewport',
         'property.light.quickbuttons': 'Luz',
+        'property.light.shadows': 'Sombras',
         'property.cast_shadows': 'Proyecta sombras',
         'property.shadow_near': 'Cerca',
         'property.shadow_far': 'Lejos',
@@ -3833,7 +3922,7 @@ function initialize_light_plugin() {
         author: 'MidFord327',
         description: 'Add production-ready point, spot, and directional lights to Blockbench with viewport gizmos, animation support, shadows, and Studio Render controls. Provides the Lightflow lighting foundation for Shader Architect and Studio Render.',
         tags: ['Lightflow', 'Lighting', 'Shadows', 'Animation', 'Rendering', 'Studio'],
-        version: '1.3.0',
+        version: '1.6.1',
         min_version: '4.9.0',
         variant: 'both',
 
@@ -4350,7 +4439,7 @@ function initialize_light_plugin() {
                         text_node.style.lineHeight = '1.4';
                         text_node.style.maxWidth = '250px';
                     }
-                    text_node.innerHTML = this.text;
+                    text_node.textContent = String(this.text ?? '');
                     this.node.append(text_node);
                 }
 
@@ -4361,7 +4450,7 @@ function initialize_light_plugin() {
                     this.text = text;
                     this.nodes.forEach(node => {
                         let content = node.querySelector('.bar_display_content');
-                        if (content) content.innerHTML = text;
+                        if (content) content.textContent = String(text ?? '');
                     });
                     return this;
                 }
@@ -5620,7 +5709,7 @@ function initialize_light_plugin() {
                         this.content_node.style.alignItems = 'center';
                     }
 
-                    this.content_node.innerHTML = this.text;
+                    this.content_node.textContent = String(this.text ?? '');
                     this.node.append(this.content_node);
                 }
 
@@ -5631,7 +5720,7 @@ function initialize_light_plugin() {
                 setValue(value) {
                     this.text = value;
                     if (this.content_node) {
-                        this.content_node.innerHTML = value;
+                        this.content_node.textContent = String(value ?? '');
                     }
                 }
 
@@ -7311,7 +7400,9 @@ function initialize_light_plugin() {
                                     '512': '512',
                                     '1024': '1024',
                                     '2048': '2048',
-                                    '4096': '4096'
+                                    '4096': '4096',
+                                    '8192': '8192 — Render Pro',
+                                    '16384': '16384 — Render Ultra'
                                 },
                                 value: firstLight.studio_shadow_resolution ? firstLight.studio_shadow_resolution.toString() : '0',
                                 description: translateLightManager('property.studio_shadow_resolution.desc')
@@ -7443,6 +7534,7 @@ function initialize_light_plugin() {
                     'light_gizmo_tools_toolbar',
                     'light_settings_toolbar',
                     'light_quickbuttons_toolbar',
+                    'light_shadow_quality_toolbar',
                     'light_shadow_clip_settings_toolbar',
                     'light_shadow_bounds_settings_toolbar',
 
@@ -7608,14 +7700,22 @@ function initialize_light_plugin() {
                     light.render_intensity = light.intensity;
                 }
 
-                light.updateLightIcon();
-                LightElement.preview_controller?.updateSelection(light);
-                window.update_light_element_callback?.(getLightPanelUpdateOptions(property));
-                window.LightManagerViewportControls?.updateAll();
+                if (property === 'light_type') {
+                    light.updateLightIcon();
+                    LightElement.preview_controller?.updateSelection(light);
+                }
 
-                if (!['color', 'temperature', 'intensity'].includes(property)) {
+                const updateOptions = getLightPanelUpdateOptions(property);
+                window.update_light_element_callback?.(updateOptions);
+                if (updateOptions.gizmos !== false) {
+                    window.LightManagerViewportControls?.updateAll();
+                }
+
+                if (['light_type', 'has_shadow'].includes(property)) {
                     syncLightSettingsPanel(light);
-                } else {
+                } else if (normalBiasNeedsAutoUpdate) {
+                    setNumControl(light_shadow_normal_bias_sliderbox, light.shadow_normal_bias);
+                } else if (['shadow_resolution', 'studio_shadow_resolution'].includes(property)) {
                     updateConditionalLightToolbars();
                 }
 
@@ -7715,7 +7815,9 @@ function initialize_light_plugin() {
                     512: { name: '512' },
                     1024: { name: '1024' },
                     2048: { name: '2048' },
-                    4096: { name: '4096' }
+                    4096: { name: '4096' },
+                    8192: { name: '8192 — Render Pro' },
+                    16384: { name: '16384 — Render Ultra' }
                 },
                 condition: shadowLightCondition,
                 onChange: function () {
@@ -7728,7 +7830,15 @@ function initialize_light_plugin() {
                 name: 'property.light.quickbuttons',
                 label: true,
                 condition: singleLightCondition,
-                children: ['light_type_select', 'light_color_picker', '+', 'cast_shadows', 'light_shadow_resolution_select', 'light_studio_shadow_resolution_select', '#', 'light_temperature_slider']
+                children: ['light_type_select', 'light_color_picker', '#', 'light_temperature_slider']
+            });
+
+            let light_shadow_quality_toolbar = new Toolbar({
+                id: 'light_shadow_quality',
+                name: 'property.light.shadows',
+                label: true,
+                condition: singleLightCondition,
+                children: ['cast_shadows', '#', 'light_shadow_resolution_select', 'light_studio_shadow_resolution_select']
             });
 
             let light_gizmo_tools_toolbar = new Toolbar({
@@ -7996,6 +8106,7 @@ function initialize_light_plugin() {
                 light_studio_shadow_resolution_select,
                 light_gizmo_tools_toolbar,
                 light_quickbuttons_toolbar,
+                light_shadow_quality_toolbar,
                 light_shadow_near_sliderbox,
                 light_shadow_far_sliderbox,
                 light_shadow_clip_settings_toolbar,
@@ -8053,6 +8164,7 @@ function initialize_light_plugin() {
                 toolbars: [
                     light_gizmo_tools_toolbar,
                     light_quickbuttons_toolbar,
+                    light_shadow_quality_toolbar,
                     light_settings_toolbar,
                     light_shadow_clip_settings_toolbar,
                     light_shadow_bounds_settings_toolbar,
@@ -8066,8 +8178,145 @@ function initialize_light_plugin() {
                 #panel_light_properties {
                     overflow-y: auto !important;
                     overflow-x: hidden;
+                    background: var(--color-ui);
                 }
-                /* Match the native Blockbench scrollbar style. */
+                #panel_light_properties .lf-light-panel {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 14px;
+                    padding: 10px;
+                    box-sizing: border-box;
+                    color: var(--color-text);
+                }
+                #panel_light_properties .lf-light-identity {
+                    display: flex;
+                    align-items: center;
+                    gap: 10px;
+                    min-height: 48px;
+                    padding: 8px 10px;
+                    border: 1px solid var(--color-border);
+                    border-radius: 7px;
+                    background: var(--color-back);
+                }
+                #panel_light_properties .lf-light-identity > .material-icons {
+                    color: var(--color-accent);
+                    font-size: 26px;
+                }
+                #panel_light_properties .lf-light-identity strong,
+                #panel_light_properties .lf-light-identity span {
+                    display: block;
+                }
+                #panel_light_properties .lf-light-identity span {
+                    margin-top: 2px;
+                    font-size: 11px;
+                    opacity: .65;
+                    text-transform: capitalize;
+                }
+                #panel_light_properties .lf-light-section {
+                    padding-top: 2px;
+                    border-top: 1px solid var(--color-border);
+                }
+                #panel_light_properties .lf-light-section h3 {
+                    margin: 0 0 9px;
+                    font-size: 12px;
+                    font-weight: 650;
+                    letter-spacing: .04em;
+                    text-transform: uppercase;
+                    opacity: .75;
+                }
+                #panel_light_properties .lf-light-section-title {
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                }
+                #panel_light_properties .lf-light-grid {
+                    display: grid;
+                    gap: 8px;
+                    margin-bottom: 9px;
+                }
+                #panel_light_properties .lf-light-grid.two {
+                    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+                }
+                #panel_light_properties .lf-light-section label {
+                    display: flex;
+                    flex-direction: column;
+                    gap: 4px;
+                    min-width: 0;
+                    margin: 0 0 9px;
+                    font-size: 12px;
+                    color: var(--color-text);
+                    opacity: .88;
+                }
+                #panel_light_properties .lf-light-section input,
+                #panel_light_properties .lf-light-section select {
+                    width: 100%;
+                    min-height: 28px;
+                    box-sizing: border-box;
+                }
+                #panel_light_properties .lf-light-section input[type="color"] {
+                    padding: 2px;
+                    cursor: pointer;
+                }
+                #panel_light_properties .lf-light-range {
+                    position: relative;
+                    padding-right: 48px;
+                }
+                #panel_light_properties .lf-light-range input[type="range"] {
+                    min-height: 18px;
+                    margin: 2px 0 0;
+                }
+                #panel_light_properties .lf-light-range output {
+                    position: absolute;
+                    right: 0;
+                    bottom: 0;
+                    width: 42px;
+                    text-align: right;
+                    font-variant-numeric: tabular-nums;
+                    color: var(--color-light);
+                }
+                #panel_light_properties .lf-light-switch {
+                    display: inline-flex !important;
+                    flex-direction: row !important;
+                    align-items: center;
+                    width: 34px;
+                    min-width: 34px;
+                    margin: -3px 0 8px !important;
+                    cursor: pointer;
+                }
+                #panel_light_properties .lf-light-switch input { display: none; }
+                #panel_light_properties .lf-light-switch span {
+                    position: relative;
+                    display: block;
+                    width: 32px;
+                    height: 18px;
+                    border-radius: 10px;
+                    background: var(--color-button);
+                    transition: background 120ms ease;
+                }
+                #panel_light_properties .lf-light-switch span::after {
+                    content: '';
+                    position: absolute;
+                    top: 3px;
+                    left: 3px;
+                    width: 12px;
+                    height: 12px;
+                    border-radius: 50%;
+                    background: var(--color-light);
+                    transition: transform 120ms ease;
+                }
+                #panel_light_properties .lf-light-switch input:checked + span { background: var(--color-accent); }
+                #panel_light_properties .lf-light-switch input:checked + span::after { transform: translateX(14px); }
+                #panel_light_properties .lf-light-empty {
+                    display: grid;
+                    place-items: center;
+                    gap: 8px;
+                    min-height: 160px;
+                    padding: 20px;
+                    box-sizing: border-box;
+                    color: var(--color-subtle_text);
+                    text-align: center;
+                }
+                #panel_light_properties .lf-light-empty .material-icons { font-size: 30px; opacity: .65; }
                 #panel_light_properties::-webkit-scrollbar {
                     width: 6px;
                 }
@@ -8134,7 +8383,10 @@ function initialize_light_plugin() {
                         Panels.material_properties.selectTab(Panels.material_properties);
                     }
                 }
-                if (Project.mode === 'render' && LightElement.selected.length > 0 && (Cube.selected.length === 0)) {
+                const renderElementSelected = [window.Cube, window.Mesh, window.TextureMesh].some(ElementType => (
+                    ElementType && Array.isArray(ElementType.selected) && ElementType.selected.length > 0
+                ));
+                if (Project.mode === 'render' && LightElement.selected.length > 0 && !renderElementSelected) {
                     Panels.material_properties.selectTab(Panels.light_properties);
                 }
             });

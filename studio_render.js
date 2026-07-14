@@ -34,6 +34,14 @@
         shading: true,
         show_gizmos: false,
         show_tile_grid: false,
+        show_advanced: false,
+        bloom_enabled: false,
+        bloom_threshold: 0.72,
+        bloom_strength: 0.8,
+        bloom_radius: 18,
+        bloom_hdr_strength: 1.0,
+        bloom_emissive_strength: 1.35,
+        bloom_occlusion: true,
         zoom: null,
         destination: 'preview',
         file_name: 'studio_render'
@@ -47,6 +55,11 @@
     let activeDialog;
     let currentSettings = Object.assign({}, DEFAULT_SETTINGS);
     let gpuGuidanceShown = false;
+    const BLOOM_MASK_STATE = {
+        emissiveMaterials: new WeakMap(),
+        occluderMaterials: new WeakMap(),
+        resources: new Set()
+    };
 
     function clamp(value, min, max) {
         return Math.max(min, Math.min(max, value));
@@ -293,6 +306,14 @@
             'studio_render.field.shading': 'Use Shading',
             'studio_render.field.show_gizmos': 'Show Gizmos',
             'studio_render.field.show_tile_grid': 'Show Tile Grid',
+            'studio_render.field.show_advanced': 'Advanced Controls',
+            'studio_render.field.bloom_enabled': 'Bloom',
+            'studio_render.field.bloom_threshold': 'Bloom Threshold',
+            'studio_render.field.bloom_strength': 'Bloom Strength',
+            'studio_render.field.bloom_radius': 'Bloom Radius',
+            'studio_render.field.bloom_hdr_strength': 'Bright Surface Bloom',
+            'studio_render.field.bloom_emissive_strength': 'Emissive Texture Bloom',
+            'studio_render.field.bloom_occlusion': 'Block Bloom Behind Geometry',
             'studio_render.field.zoom': 'Focal Length',
             'studio_render.field.gpu': 'GPU',
             'studio_render.field.gpu_renderer': 'Renderer',
@@ -302,6 +323,7 @@
             'studio_render.group.output': 'Output',
             'studio_render.group.frame': 'Frame',
             'studio_render.group.look': 'Look',
+            'studio_render.group.effects': 'Final Effects',
             'studio_render.group.export': 'Export',
             'studio_render.option.camera.view': 'Current View',
             'studio_render.option.resolution.hd': 'HD - 1920 x 1080',
@@ -384,6 +406,14 @@
             'studio_render.field.shading': 'Usar Sombreado',
             'studio_render.field.show_gizmos': 'Mostrar Gizmos',
             'studio_render.field.show_tile_grid': 'Mostrar Tiles',
+            'studio_render.field.show_advanced': 'Controles Avanzados',
+            'studio_render.field.bloom_enabled': 'Bloom',
+            'studio_render.field.bloom_threshold': 'Umbral de Bloom',
+            'studio_render.field.bloom_strength': 'Fuerza de Bloom',
+            'studio_render.field.bloom_radius': 'Radio de Bloom',
+            'studio_render.field.bloom_hdr_strength': 'Bloom de superficies brillantes',
+            'studio_render.field.bloom_emissive_strength': 'Bloom de texturas emisivas',
+            'studio_render.field.bloom_occlusion': 'Bloquear Bloom detrás de geometría',
             'studio_render.field.zoom': 'Distancia Focal',
             'studio_render.field.gpu': 'GPU',
             'studio_render.field.gpu_renderer': 'Renderer',
@@ -393,6 +423,7 @@
             'studio_render.group.output': 'Salida',
             'studio_render.group.frame': 'Marco',
             'studio_render.group.look': 'Aspecto',
+            'studio_render.group.effects': 'Efectos Finales',
             'studio_render.group.export': 'Exportacion',
             'studio_render.option.camera.view': 'Vista Actual',
             'studio_render.option.resolution.hd': 'HD - 1920 x 1080',
@@ -462,6 +493,14 @@
             : !!settings.shading;
         settings.show_gizmos = !!settings.show_gizmos;
         settings.show_tile_grid = !!settings.show_tile_grid;
+        settings.show_advanced = !!settings.show_advanced;
+        settings.bloom_enabled = !!settings.bloom_enabled;
+        settings.bloom_threshold = clamp(toNumber(settings.bloom_threshold, 0.72), 0, 1);
+        settings.bloom_strength = clamp(toNumber(settings.bloom_strength, 0.8), 0, 3);
+        settings.bloom_radius = clamp(toNumber(settings.bloom_radius, 18), 1, 96);
+        settings.bloom_hdr_strength = clamp(toNumber(settings.bloom_hdr_strength, 1), 0, 4);
+        settings.bloom_emissive_strength = clamp(toNumber(settings.bloom_emissive_strength, 1.35), 0, 6);
+        settings.bloom_occlusion = settings.bloom_occlusion !== false;
         delete settings.gpu_status;
         return settings;
     }
@@ -643,6 +682,40 @@
         }
     }
 
+    async function withoutStudioRenderHighlights(callback) {
+        const snapshots = [];
+
+        [window.Cube, window.Mesh, window.TextureMesh].forEach(ElementType => {
+            if (ElementType && Array.isArray(ElementType.all)) ElementType.all.forEach(cube => {
+                const mesh = cube && cube.mesh;
+                const attribute = mesh?.geometry?.attributes?.highlight;
+                if (!attribute || !attribute.array) return;
+
+                let hasHighlight = false;
+                for (let index = 0; index < attribute.array.length; index++) {
+                    if (attribute.array[index] !== 0) {
+                        hasHighlight = true;
+                        break;
+                    }
+                }
+                if (!hasHighlight) return;
+
+                snapshots.push({ attribute, values: attribute.array.slice() });
+                attribute.array.fill(0);
+                attribute.needsUpdate = true;
+            });
+        });
+
+        try {
+            return await callback();
+        } finally {
+            snapshots.forEach(snapshot => {
+                snapshot.attribute.array.set(snapshot.values);
+                snapshot.attribute.needsUpdate = true;
+            });
+        }
+    }
+
     function getAnglePresetOptions() {
         const options = {
             view: 'studio_render.option.camera.view'
@@ -714,6 +787,14 @@
         settings.shading = !!settings.shading;
         settings.show_gizmos = !!settings.show_gizmos;
         settings.show_tile_grid = !!settings.show_tile_grid;
+        settings.show_advanced = !!settings.show_advanced;
+        settings.bloom_enabled = !!settings.bloom_enabled;
+        settings.bloom_threshold = clamp(toNumber(settings.bloom_threshold, 0.72), 0, 1);
+        settings.bloom_strength = clamp(toNumber(settings.bloom_strength, 0.8), 0, 3);
+        settings.bloom_radius = clamp(toNumber(settings.bloom_radius, 18), 1, 96);
+        settings.bloom_hdr_strength = clamp(toNumber(settings.bloom_hdr_strength, 1), 0, 4);
+        settings.bloom_emissive_strength = clamp(toNumber(settings.bloom_emissive_strength, 1.35), 0, 6);
+        settings.bloom_occlusion = settings.bloom_occlusion !== false;
         settings.zoom = settings.zoom === null || settings.zoom === undefined || settings.zoom === ''
             ? null
             : toNumber(settings.zoom, DEFAULT_ZOOM);
@@ -1312,6 +1393,219 @@
         }
     }
 
+    function getMaterialUniformValue(material, name, fallback) {
+        const uniform = material?.uniforms?.[name];
+        return uniform ? uniform.value : fallback;
+    }
+
+    function getMaterialTexture(material, name, fallback = null) {
+        const value = getMaterialUniformValue(material, name, null);
+        if (value && value.isTexture) return value;
+        if (name === 'map' && material?.map?.isTexture) return material.map;
+        return fallback;
+    }
+
+    function getMaterialEmissiveState(material) {
+        if (!material) return { active: false, mode: 0 };
+
+        const renderMode = String(material.sa_source_render_mode || '').toLowerCase();
+        const emissiveMode = renderMode === 'emissive' || getMaterialUniformValue(material, 'EMISSIVE', false) === true;
+        const additiveMode = renderMode === 'additive' || material.blending === THREE.AdditiveBlending;
+        const useMERMap = getMaterialUniformValue(material, 'uUseBlockbenchMERMap', false) === true;
+        const useEmissiveMap = getMaterialUniformValue(material, 'uUseEmissiveMap', false) === true && !useMERMap;
+        const emissiveStrength = Math.max(
+            0,
+            Number(getMaterialUniformValue(material, 'uEmissiveStrength', material.emissiveIntensity || 1)) || 0
+        );
+        const hasStandardEmission = !!(
+            material.emissiveMap ||
+            (material.emissive && typeof material.emissive.getHex === 'function' && material.emissive.getHex() !== 0)
+        );
+
+        return {
+            active: emissiveMode || additiveMode || useMERMap || useEmissiveMap || hasStandardEmission,
+            mode: emissiveMode ? 1 : (additiveMode ? 2 : 0),
+            useMERMap,
+            useEmissiveMap: useEmissiveMap || !!material.emissiveMap,
+            emissiveStrength,
+            baseMap: getMaterialTexture(material, 'map'),
+            emissiveMap: getMaterialTexture(material, 'uEmissiveMap', material.emissiveMap || null),
+            merMap: getMaterialTexture(material, 'uMetallicRoughnessMap'),
+            emissiveColor: getMaterialUniformValue(material, 'uEmissiveColor', material.emissive || null)
+        };
+    }
+
+    function copyColorToVector(target, value) {
+        if (!value) return target.set(1, 1, 1);
+        if (value.isColor) return target.set(value.r, value.g, value.b);
+        if (value.x !== undefined) return target.set(value.x, value.y, value.z);
+        if (value.r !== undefined) return target.set(value.r, value.g, value.b);
+        return target.set(1, 1, 1);
+    }
+
+    function getBloomMaskMaterial(sourceMaterial, emissive) {
+        const cache = emissive
+            ? BLOOM_MASK_STATE.emissiveMaterials
+            : BLOOM_MASK_STATE.occluderMaterials;
+        let material = cache.get(sourceMaterial);
+
+        if (!material) {
+            material = new THREE.ShaderMaterial({
+                uniforms: {
+                    map: { value: null },
+                    uEmissiveMap: { value: null },
+                    uMERMap: { value: null },
+                    uEmissiveColor: { value: new THREE.Vector3(1, 1, 1) },
+                    uMode: { value: 0 },
+                    uUseEmissiveMap: { value: false },
+                    uUseMERMap: { value: false },
+                    uEmissiveStrength: { value: 1 },
+                    uAlphaCutoff: { value: 0.01 },
+                    uEmit: { value: emissive }
+                },
+                vertexShader: `
+                    varying vec2 vUv;
+                    void main() {
+                        vUv = uv;
+                        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                    }
+                `,
+                fragmentShader: `
+                    precision highp float;
+                    uniform sampler2D map;
+                    uniform sampler2D uEmissiveMap;
+                    uniform sampler2D uMERMap;
+                    uniform vec3 uEmissiveColor;
+                    uniform int uMode;
+                    uniform bool uUseEmissiveMap;
+                    uniform bool uUseMERMap;
+                    uniform float uEmissiveStrength;
+                    uniform float uAlphaCutoff;
+                    uniform bool uEmit;
+                    varying vec2 vUv;
+
+                    void main() {
+                        vec4 base = texture2D(map, vUv);
+                        if (base.a < uAlphaCutoff) discard;
+
+                        if (!uEmit) {
+                            gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+                            return;
+                        }
+
+                        vec3 emission = vec3(0.0);
+                        if (uMode == 1) {
+                            // Native Blockbench/Minecraft emissive semantics.
+                            emission += base.rgb * (1.0 - base.a);
+                        } else if (uMode == 2) {
+                            emission += base.rgb * base.a;
+                        }
+                        if (uUseEmissiveMap) {
+                            emission += texture2D(uEmissiveMap, vUv).rgb * uEmissiveColor * uEmissiveStrength;
+                        }
+                        if (uUseMERMap) {
+                            emission += base.rgb * texture2D(uMERMap, vUv).g * uEmissiveStrength;
+                        }
+
+                        float energy = max(emission.r, max(emission.g, emission.b));
+                        if (energy <= 0.0005) {
+                            /*
+                                A material can contain both emissive and ordinary
+                                texels (atlas textures and MER maps). Discarding an
+                                ordinary texel also discarded its depth, turning a
+                                foreground nose/limb into a hole through which an
+                                emissive surface behind it leaked into Bloom.
+
+                                Keep the fragment in the depth buffer, but leave
+                                its mask coverage transparent. This blocks hidden
+                                emitters during the GPU depth test without making
+                                the final 2D blocker erase Bloom from every
+                                ordinary surface in a close-up render.
+                            */
+                            gl_FragColor = vec4(0.0);
+                            return;
+                        }
+                        gl_FragColor = vec4(max(emission, vec3(0.0)), clamp(energy, 0.0, 1.0));
+                    }
+                `,
+                depthTest: true,
+                depthWrite: true,
+                transparent: false,
+                blending: THREE.NoBlending,
+                side: sourceMaterial.side !== undefined ? sourceMaterial.side : THREE.FrontSide
+            });
+            material.name = emissive ? 'StudioRender_EmissiveMask' : 'StudioRender_BloomOccluder';
+            cache.set(sourceMaterial, material);
+            BLOOM_MASK_STATE.resources.add(material);
+        }
+
+        const state = getMaterialEmissiveState(sourceMaterial);
+        const fallback = sourceMaterial.map || getMaterialTexture(sourceMaterial, 'map');
+        material.uniforms.map.value = state.baseMap || fallback;
+        material.uniforms.uEmissiveMap.value = state.emissiveMap || state.baseMap || fallback;
+        material.uniforms.uMERMap.value = state.merMap || state.baseMap || fallback;
+        material.uniforms.uMode.value = state.mode || 0;
+        material.uniforms.uUseEmissiveMap.value = !!state.useEmissiveMap;
+        material.uniforms.uUseMERMap.value = !!state.useMERMap;
+        material.uniforms.uEmissiveStrength.value = state.emissiveStrength;
+        copyColorToVector(material.uniforms.uEmissiveColor.value, state.emissiveColor);
+        material.uniforms.uAlphaCutoff.value = Math.max(0.001, Number(sourceMaterial.alphaTest) || 0.01);
+        material.uniforms.uEmit.value = !!emissive;
+        material.side = sourceMaterial.side !== undefined ? sourceMaterial.side : THREE.FrontSide;
+        return material;
+    }
+
+    function renderBloomMaskTile(renderPreview, targetContext, tile, sampleFactor) {
+        if (!renderPreview?.renderer || !targetContext || !window.Canvas?.scene) return;
+
+        const scene = Canvas.scene;
+        const renderer = renderPreview.renderer;
+        const changes = [];
+
+        scene.traverse(object => {
+            if (!object || !object.visible || !(object.isMesh || object.isSprite) || !object.material) return;
+            const original = object.material;
+            const sourceMaterials = Array.isArray(original) ? original : [original];
+            const replacements = sourceMaterials.map(source => {
+                const state = getMaterialEmissiveState(source);
+                return getBloomMaskMaterial(source, state.active);
+            });
+            changes.push({ object, material: original });
+            object.material = Array.isArray(original) ? replacements : replacements[0];
+        });
+
+        const previousTarget = renderer.getRenderTarget?.();
+        const previousAutoClear = renderer.autoClear;
+        const previousShadowAutoUpdate = renderer.shadowMap ? renderer.shadowMap.autoUpdate : undefined;
+        const previousClearColor = new THREE.Color();
+        const previousClearAlpha = renderer.getClearAlpha?.() ?? 1;
+        renderer.getClearColor?.(previousClearColor);
+
+        try {
+            renderer.autoClear = true;
+            if (renderer.shadowMap) renderer.shadowMap.autoUpdate = false;
+            renderer.setRenderTarget?.(null);
+            renderer.setClearColor?.(0x000000, 0);
+            renderer.clear?.(true, true, true);
+            renderer.render(scene, renderPreview.camera);
+            if (window.LightflowAtmosphere && typeof window.LightflowAtmosphere.composite === 'function') {
+                window.LightflowAtmosphere.composite(renderPreview, {
+                    studio: true,
+                    bloomMask: true
+                });
+            }
+            drawTile(targetContext, renderPreview, tile, sampleFactor);
+        } finally {
+            for (let index = changes.length - 1; index >= 0; index--) {
+                changes[index].object.material = changes[index].material;
+            }
+            renderer.setRenderTarget?.(previousTarget || null);
+            renderer.autoClear = previousAutoClear;
+            if (renderer.shadowMap && previousShadowAutoUpdate !== undefined) renderer.shadowMap.autoUpdate = previousShadowAutoUpdate;
+            renderer.setClearColor?.(previousClearColor, previousClearAlpha);
+        }
+    }
+
     function drawTile(ctx, renderPreview, tile, sampleFactor) {
         const scale = Math.max(1, Number(sampleFactor) || 1);
 
@@ -1413,6 +1707,119 @@
         return true;
     }
 
+    function applyFinalBloom(canvas, settings, sourceMaskCanvas) {
+        if (!canvas || !settings?.bloom_enabled) return canvas;
+
+        const maxMaskDimension = 4096;
+        const scale = Math.min(
+            1,
+            maxMaskDimension / Math.max(canvas.width || 1, canvas.height || 1)
+        );
+        const width = Math.max(1, Math.round(canvas.width * scale));
+        const height = Math.max(1, Math.round(canvas.height * scale));
+        const threshold = clamp(toNumber(settings.bloom_threshold, 0.72), 0, 1);
+        const strength = clamp(toNumber(settings.bloom_strength, 0.8), 0, 3);
+        const radius = clamp(toNumber(settings.bloom_radius, 18), 1, 96) * scale;
+        const hdrStrength = clamp(toNumber(settings.bloom_hdr_strength, 1), 0, 4);
+        const emissiveStrength = clamp(toNumber(settings.bloom_emissive_strength, 1.35), 0, 6);
+        const useOcclusion = settings.bloom_occlusion !== false;
+
+        const mask = document.createElement('canvas');
+        mask.width = width;
+        mask.height = height;
+        const maskContext = mask.getContext('2d', { willReadFrequently: true });
+        maskContext.drawImage(sourceMaskCanvas || canvas, 0, 0, width, height);
+
+        const sceneSample = document.createElement('canvas');
+        sceneSample.width = width;
+        sceneSample.height = height;
+        const sceneContext = sceneSample.getContext('2d', { willReadFrequently: true });
+        sceneContext.drawImage(canvas, 0, 0, width, height);
+
+        const blocker = document.createElement('canvas');
+        blocker.width = width;
+        blocker.height = height;
+        const blockerContext = blocker.getContext('2d', { willReadFrequently: true });
+
+        const maskImage = maskContext.getImageData(0, 0, width, height);
+        const sceneImage = sceneContext.getImageData(0, 0, width, height);
+        const blockerImage = blockerContext.createImageData(width, height);
+        const pixels = maskImage.data;
+        const scenePixels = sceneImage.data;
+        const blockerPixels = blockerImage.data;
+
+        for (let index = 0; index < pixels.length; index += 4) {
+            const geometryAlpha = pixels[index + 3] / 255;
+            const emissionR = pixels[index] / 255 * emissiveStrength;
+            const emissionG = pixels[index + 1] / 255 * emissiveStrength;
+            const emissionB = pixels[index + 2] / 255 * emissiveStrength;
+            const sceneR = scenePixels[index] / 255 * hdrStrength;
+            const sceneG = scenePixels[index + 1] / 255 * hdrStrength;
+            const sceneB = scenePixels[index + 2] / 255 * hdrStrength;
+
+            const hdrSignal = geometryAlpha > 0.001
+                ? Math.max(sceneR, sceneG, sceneB)
+                : 0;
+            const emissiveSignal = Math.max(emissionR, emissionG, emissionB);
+            const signal = Math.max(hdrSignal, emissiveSignal);
+            const contribution = clamp(
+                (signal - threshold) / Math.max(0.001, 1 - threshold),
+                0,
+                1
+            );
+
+            const combinedR = Math.max(sceneR, emissionR);
+            const combinedG = Math.max(sceneG, emissionG);
+            const combinedB = Math.max(sceneB, emissionB);
+            pixels[index] = Math.round(255 * clamp(combinedR * contribution, 0, 1));
+            pixels[index + 1] = Math.round(255 * clamp(combinedG * contribution, 0, 1));
+            pixels[index + 2] = Math.round(255 * clamp(combinedB * contribution, 0, 1));
+            pixels[index + 3] = Math.round(255 * contribution);
+
+            const blockerAlpha = useOcclusion && geometryAlpha > 0.001
+                ? geometryAlpha * (1 - contribution)
+                : 0;
+            blockerPixels[index] = 0;
+            blockerPixels[index + 1] = 0;
+            blockerPixels[index + 2] = 0;
+            blockerPixels[index + 3] = Math.round(255 * clamp(blockerAlpha, 0, 1));
+        }
+        maskContext.putImageData(maskImage, 0, 0);
+        blockerContext.putImageData(blockerImage, 0, 0);
+
+        const bloomLayer = document.createElement('canvas');
+        bloomLayer.width = canvas.width;
+        bloomLayer.height = canvas.height;
+        const bloomContext = bloomLayer.getContext('2d');
+        bloomContext.globalCompositeOperation = 'lighter';
+
+        const drawBloomLayer = (blur, alpha) => {
+            bloomContext.globalAlpha = clamp(alpha * strength, 0, 1);
+            bloomContext.filter = `blur(${Math.max(0.5, blur)}px)`;
+            bloomContext.drawImage(mask, 0, 0, canvas.width, canvas.height);
+        };
+
+        drawBloomLayer(radius * 2.4, 0.20);
+        drawBloomLayer(radius * 1.05, 0.42);
+        drawBloomLayer(radius * 0.38, 0.56);
+
+        if (useOcclusion) {
+            bloomContext.globalCompositeOperation = 'destination-out';
+            bloomContext.globalAlpha = 1;
+            bloomContext.filter = 'none';
+            bloomContext.drawImage(blocker, 0, 0, canvas.width, canvas.height);
+        }
+
+        const output = canvas.getContext('2d');
+        output.save();
+        output.globalCompositeOperation = 'lighter';
+        output.globalAlpha = 1;
+        output.filter = 'none';
+        output.drawImage(bloomLayer, 0, 0);
+        output.restore();
+        return canvas;
+    }
+
     async function deliverRender(dataUrl, size, settings) {
         const name = settings.file_name.replace(/[\\/:*?"<>|]+/g, '_') || DEFAULT_SETTINGS.file_name;
         if (settings.destination === 'save') {
@@ -1479,6 +1886,15 @@
 
         const sampleFactor = clamp(parseInt(normalized.samples, 10) || 1, 1, 8);
         const { canvas, ctx } = prepareFinalCanvas(outputSize, normalized);
+        const bloomMaskCanvas = normalized.bloom_enabled
+            ? createCanvas(outputSize.width, outputSize.height)
+            : null;
+        const bloomMaskContext = bloomMaskCanvas
+            ? bloomMaskCanvas.getContext('2d', { alpha: true })
+            : null;
+        if (bloomMaskContext) {
+            bloomMaskContext.clearRect(0, 0, outputSize.width, outputSize.height);
+        }
         const blockbenchShading = window.settings && window.settings.shading;
         const oldShading = blockbenchShading ? blockbenchShading.value : undefined;
         const previousState = capturePreviewState(renderPreview);
@@ -1546,19 +1962,25 @@
                         delete renderPreview.sa_studio_render_active;
                     }
                     drawTile(ctx, renderPreview, tile, sampleFactor);
+                    if (bloomMaskContext) {
+                        renderBloomMaskTile(renderPreview, bloomMaskContext, tile, sampleFactor);
+                    }
                     StudioRenderFrame.setTileProgress(index, 'done');
                     Blockbench.setProgress((index + 1) / tiles.length);
                     if (index % 3 === 0) await waitForFrame();
                 }
             };
 
-            if (normalized.show_gizmos) {
-                await renderTiles();
-            } else {
-                await withoutStudioRenderGizmos(renderTiles);
-            }
+            await withoutStudioRenderHighlights(async () => {
+                if (normalized.show_gizmos) {
+                    await renderTiles();
+                } else {
+                    await withoutStudioRenderGizmos(renderTiles);
+                }
+            });
 
             Blockbench.setStatusBarText(translate('studio_render.status.downsample', 'Compositing final image...'));
+            applyFinalBloom(canvas, normalized, bloomMaskCanvas);
             const dataUrl = canvas.toDataURL('image/png');
             await deliverRender(dataUrl, outputSize, normalized);
         } catch (error) {
@@ -2095,7 +2517,8 @@
                 value: settings.output_scale,
                 min: 0.1,
                 max: 8,
-                step: 0.25
+                step: 0.25,
+                condition: form => !!form.show_advanced
             },
             samples: {
                 type: 'select',
@@ -2110,6 +2533,11 @@
                     8: 'studio_render.option.samples.8'
                 }
             },
+            show_advanced: {
+                type: 'checkbox',
+                label: 'studio_render.field.show_advanced',
+                value: settings.show_advanced
+            },
             tile_size: {
                 type: 'select',
                 label: 'studio_render.field.tile_size',
@@ -2120,7 +2548,8 @@
                     1536: 'studio_render.option.tile.1536',
                     2048: 'studio_render.option.tile.2048',
                     3072: 'studio_render.option.tile.3072'
-                }
+                },
+                condition: form => !!form.show_advanced
             },
             gpu_status: {
                 type: 'buttons',
@@ -2136,7 +2565,8 @@
                         getOffscreenPreview() ||
                         getPreview();
                     showGpuProfileDetails(preview && preview.renderer);
-                }
+                },
+                condition: form => !!form.show_advanced
             },
             _frame: '_',
             capture_area: {
@@ -2195,12 +2625,71 @@
             show_gizmos: {
                 type: 'checkbox',
                 label: 'studio_render.field.show_gizmos',
-                value: settings.show_gizmos
+                value: settings.show_gizmos,
+                condition: form => !!form.show_advanced
             },
             show_tile_grid: {
                 type: 'checkbox',
                 label: 'studio_render.field.show_tile_grid',
-                value: settings.show_tile_grid
+                value: settings.show_tile_grid,
+                condition: form => !!form.show_advanced
+            },
+            _effects: '_',
+            bloom_enabled: {
+                type: 'checkbox',
+                label: 'studio_render.field.bloom_enabled',
+                value: settings.bloom_enabled
+            },
+            bloom_threshold: {
+                type: 'range',
+                label: 'studio_render.field.bloom_threshold',
+                value: settings.bloom_threshold,
+                min: 0,
+                max: 1,
+                step: 0.01,
+                condition: form => !!form.bloom_enabled && !!form.show_advanced
+            },
+            bloom_strength: {
+                type: 'range',
+                label: 'studio_render.field.bloom_strength',
+                value: settings.bloom_strength,
+                min: 0,
+                max: 3,
+                step: 0.05,
+                condition: form => !!form.bloom_enabled
+            },
+            bloom_radius: {
+                type: 'range',
+                label: 'studio_render.field.bloom_radius',
+                value: settings.bloom_radius,
+                min: 1,
+                max: 96,
+                step: 1,
+                condition: form => !!form.bloom_enabled && !!form.show_advanced
+            },
+            bloom_hdr_strength: {
+                type: 'range',
+                label: 'studio_render.field.bloom_hdr_strength',
+                value: settings.bloom_hdr_strength,
+                min: 0,
+                max: 4,
+                step: 0.05,
+                condition: form => !!form.bloom_enabled && !!form.show_advanced
+            },
+            bloom_emissive_strength: {
+                type: 'range',
+                label: 'studio_render.field.bloom_emissive_strength',
+                value: settings.bloom_emissive_strength,
+                min: 0,
+                max: 6,
+                step: 0.05,
+                condition: form => !!form.bloom_enabled
+            },
+            bloom_occlusion: {
+                type: 'checkbox',
+                label: 'studio_render.field.bloom_occlusion',
+                value: settings.bloom_occlusion,
+                condition: form => !!form.bloom_enabled && !!form.show_advanced
             },
             _export: '_',
             destination: {
@@ -2492,6 +2981,10 @@
         if (frameAction) frameAction.delete();
         if (resetFrameAction) resetFrameAction.delete();
         if (stylesheet && typeof stylesheet.delete === 'function') stylesheet.delete();
+        BLOOM_MASK_STATE.resources.forEach(resource => resource?.dispose?.());
+        BLOOM_MASK_STATE.resources.clear();
+        BLOOM_MASK_STATE.emissiveMaterials = new WeakMap();
+        BLOOM_MASK_STATE.occluderMaterials = new WeakMap();
         delete window.StudioRender;
     }
 
@@ -2501,7 +2994,7 @@
         author: 'MidFord327',
         description: 'Export polished Blockbench studio renders with tiled supersampling, 4K/8K-safe output, transparency, GPU guidance, and an adjustable frame. Complements Light Manager and Shader Architect in the Lightflow suite.',
         tags: ['Lightflow', 'Rendering', 'Export', 'Screenshots', 'Studio', 'Presentation'],
-        version: '1.0.0',
+        version: '1.4.2',
         min_version: '4.9.0',
         variant: 'both',
         onload() {
