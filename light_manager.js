@@ -875,14 +875,30 @@ function configureLightManagerSceneShadowMeshes(force = false) {
     const elements = Array.isArray(window.Outliner?.elements) ? window.Outliner.elements : [];
 
     elements.forEach(element => {
-        if (!element || element.type === 'light' || (window.LightElement && element instanceof window.LightElement)) return;
+        if (
+            !element ||
+            element.type === 'light' ||
+            (window.LightElement && element instanceof window.LightElement)
+        ) return;
 
         const mesh = element.mesh;
         if (!mesh || typeof mesh.traverse !== 'function') return;
 
+        const suppressElementShadows = element.type === 'lightflow_volume';
         mesh.traverse(object => {
             if (!object || object.isLight || object.isCamera) return;
             if (object.isMesh) {
+                if (suppressElementShadows || object.userData?.lightflowNoShadow) {
+                    if (object.castShadow !== false) {
+                        object.castShadow = false;
+                        changed = true;
+                    }
+                    if (object.receiveShadow !== false) {
+                        object.receiveShadow = false;
+                        changed = true;
+                    }
+                    return;
+                }
                 if (object.castShadow !== true) {
                     object.castShadow = true;
                     changed = true;
@@ -3910,7 +3926,7 @@ function initialize_light_plugin() {
         author: 'MidFord327',
         description: 'Add production-ready point, spot, and directional lights to Blockbench with viewport gizmos, animation support, shadows, and Studio Render controls. Provides the Lightflow lighting foundation for Shader Architect and Studio Render.',
         tags: ['Lightflow', 'Lighting', 'Shadows', 'Animation', 'Rendering', 'Studio'],
-        version: '1.6.3',
+        version: '1.6.4',
         min_version: '4.9.0',
         variant: 'both',
 

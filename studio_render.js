@@ -43,8 +43,10 @@
         bloom_emissive_strength: 1.35,
         bloom_occlusion: true,
         viewport_bloom_enabled: true,
-        viewport_bloom_fps: 24,
-        viewport_bloom_quality: 'balanced',
+        // 0 follows every viewport render. A numeric value is an optional cap.
+        viewport_bloom_fps: 0,
+        viewport_bloom_quality: 'adaptive',
+        viewport_composer_revision: 2,
         color_grading_enabled: false,
         exposure: 1.0,
         contrast: 1.0,
@@ -82,9 +84,10 @@
     const VIEWPORT_COMPOSER_STATE = new Map();
 
     const VIEWPORT_BLOOM_PROFILES = {
-        performance: { scale: 0.25, maxDimension: 640, displayDpr: 1 },
-        balanced: { scale: 0.4, maxDimension: 900, displayDpr: 1 },
-        high: { scale: 0.6, maxDimension: 1280, displayDpr: 1.5 }
+        adaptive: { scale: 0.42, minScale: 0.2, maxScale: 0.7, maxDimension: 1400, adaptive: true },
+        performance: { scale: 0.25, maxDimension: 720 },
+        balanced: { scale: 0.42, maxDimension: 1100 },
+        high: { scale: 0.7, maxDimension: 1600 }
     };
 
     function clamp(value, min, max) {
@@ -131,7 +134,7 @@
     }
 
     function getViewportBloomProfile(settings) {
-        return VIEWPORT_BLOOM_PROFILES[settings?.viewport_bloom_quality] || VIEWPORT_BLOOM_PROFILES.balanced;
+        return VIEWPORT_BLOOM_PROFILES[settings?.viewport_bloom_quality] || VIEWPORT_BLOOM_PROFILES.adaptive;
     }
 
     function truncateText(text, maxLength) {
@@ -350,8 +353,9 @@
             'studio_render.field.bloom_emissive_strength': 'Emissive Texture Bloom',
             'studio_render.field.bloom_occlusion': 'Block Bloom Behind Geometry',
             'studio_render.field.viewport_bloom_enabled': 'Preview Bloom in Viewport',
-            'studio_render.field.viewport_bloom_fps': 'Viewport Bloom Refresh',
+            'studio_render.field.viewport_bloom_fps': 'Bloom FPS Limit (0 = Sync)',
             'studio_render.field.viewport_bloom_quality': 'Viewport Bloom Quality',
+            'studio_render.option.viewport_bloom.adaptive': 'Adaptive',
             'studio_render.option.viewport_bloom.performance': 'Performance',
             'studio_render.option.viewport_bloom.balanced': 'Balanced',
             'studio_render.option.viewport_bloom.high': 'High',
@@ -466,8 +470,9 @@
             'studio_render.field.bloom_emissive_strength': 'Bloom de texturas emisivas',
             'studio_render.field.bloom_occlusion': 'Bloquear Bloom detrás de geometría',
             'studio_render.field.viewport_bloom_enabled': 'Previsualizar Bloom en viewport',
-            'studio_render.field.viewport_bloom_fps': 'Actualización de Bloom en viewport',
+            'studio_render.field.viewport_bloom_fps': 'Límite FPS de Bloom (0 = sincronizado)',
             'studio_render.field.viewport_bloom_quality': 'Calidad de Bloom en viewport',
+            'studio_render.option.viewport_bloom.adaptive': 'Adaptativa',
             'studio_render.option.viewport_bloom.performance': 'Rendimiento',
             'studio_render.option.viewport_bloom.balanced': 'Equilibrada',
             'studio_render.option.viewport_bloom.high': 'Alta',
@@ -544,6 +549,7 @@
 
     function loadSettings() {
         const stored = readJSON(STORAGE_KEY, {});
+        const legacyViewportComposer = toNumber(stored.viewport_composer_revision, 0) < 2;
         const settings = Object.assign({}, DEFAULT_SETTINGS, stored);
         if (!Array.isArray(settings.resolution)) {
             settings.resolution = DEFAULT_SETTINGS.resolution.slice();
@@ -569,10 +575,13 @@
         settings.bloom_emissive_strength = clamp(toNumber(settings.bloom_emissive_strength, 1.35), 0, 6);
         settings.bloom_occlusion = settings.bloom_occlusion !== false;
         settings.viewport_bloom_enabled = settings.viewport_bloom_enabled !== false;
-        settings.viewport_bloom_fps = clamp(toNumber(settings.viewport_bloom_fps, 24), 5, 30);
+        settings.viewport_bloom_fps = legacyViewportComposer
+            ? 0
+            : clamp(toNumber(settings.viewport_bloom_fps, 0), 0, 144);
         settings.viewport_bloom_quality = VIEWPORT_BLOOM_PROFILES[settings.viewport_bloom_quality]
             ? settings.viewport_bloom_quality
-            : 'balanced';
+            : 'adaptive';
+        settings.viewport_composer_revision = 2;
         settings.color_grading_enabled = !!settings.color_grading_enabled;
         settings.exposure = clamp(toNumber(settings.exposure, 1), 0.1, 4);
         settings.contrast = clamp(toNumber(settings.contrast, 1), 0, 3);
@@ -875,10 +884,11 @@
         settings.bloom_emissive_strength = clamp(toNumber(settings.bloom_emissive_strength, 1.35), 0, 6);
         settings.bloom_occlusion = settings.bloom_occlusion !== false;
         settings.viewport_bloom_enabled = settings.viewport_bloom_enabled !== false;
-        settings.viewport_bloom_fps = clamp(toNumber(settings.viewport_bloom_fps, 24), 5, 30);
+        settings.viewport_bloom_fps = clamp(toNumber(settings.viewport_bloom_fps, 0), 0, 144);
         settings.viewport_bloom_quality = VIEWPORT_BLOOM_PROFILES[settings.viewport_bloom_quality]
             ? settings.viewport_bloom_quality
-            : 'balanced';
+            : 'adaptive';
+        settings.viewport_composer_revision = 2;
         settings.color_grading_enabled = !!settings.color_grading_enabled;
         settings.exposure = clamp(toNumber(settings.exposure, 1), 0.1, 4);
         settings.contrast = clamp(toNumber(settings.contrast, 1), 0, 3);
@@ -1973,26 +1983,78 @@
         return canvas;
     }
 
+    function configureViewportPostTarget(target, width, height) {
+        if (!target) return;
+        if (target.width !== width || target.height !== height) target.setSize(width, height);
+        target.viewport?.set?.(0, 0, width, height);
+        target.scissor?.set?.(0, 0, width, height);
+        target.scissorTest = false;
+    }
+
+    function createViewportPostTarget(width, height, name, depthBuffer = false) {
+        const target = new THREE.WebGLRenderTarget(width, height, {
+            minFilter: THREE.LinearFilter,
+            magFilter: THREE.LinearFilter,
+            format: THREE.RGBAFormat,
+            type: THREE.UnsignedByteType,
+            depthBuffer,
+            stencilBuffer: false
+        });
+        target.texture.name = name;
+        target.texture.generateMipmaps = false;
+        configureViewportPostTarget(target, width, height);
+        return target;
+    }
+
+    function restoreViewportRendererState(renderer, snapshot) {
+        if (!renderer || !snapshot) return;
+        if (snapshot.target) {
+            if (snapshot.targetViewport && snapshot.target.viewport) snapshot.target.viewport.copy(snapshot.targetViewport);
+            if (snapshot.targetScissor && snapshot.target.scissor) snapshot.target.scissor.copy(snapshot.targetScissor);
+            snapshot.target.scissorTest = snapshot.targetScissorTest;
+            renderer.setRenderTarget?.(snapshot.target);
+        } else {
+            renderer.setRenderTarget?.(null);
+            if (snapshot.viewport) renderer.setViewport?.(snapshot.viewport);
+            if (snapshot.scissor) renderer.setScissor?.(snapshot.scissor);
+            renderer.setScissorTest?.(snapshot.scissorTest);
+        }
+        renderer.autoClear = snapshot.autoClear;
+        renderer.setClearColor?.(snapshot.clearColor, snapshot.clearAlpha);
+        if (renderer.shadowMap && snapshot.shadowAutoUpdate !== undefined) {
+            renderer.shadowMap.autoUpdate = snapshot.shadowAutoUpdate;
+        }
+    }
+
+    function snapshotViewportRendererState(renderer) {
+        const target = renderer.getRenderTarget?.() || null;
+        const clearColor = new THREE.Color();
+        renderer.getClearColor?.(clearColor);
+        return {
+            target,
+            targetViewport: target?.viewport?.clone?.() || null,
+            targetScissor: target?.scissor?.clone?.() || null,
+            targetScissorTest: target?.scissorTest ?? false,
+            viewport: renderer.getViewport?.(new THREE.Vector4()) || null,
+            currentViewport: renderer.getCurrentViewport?.(new THREE.Vector4()) || null,
+            scissor: renderer.getScissor?.(new THREE.Vector4()) || null,
+            scissorTest: renderer.getScissorTest?.() ?? false,
+            autoClear: renderer.autoClear,
+            clearColor,
+            clearAlpha: renderer.getClearAlpha?.() ?? 1,
+            shadowAutoUpdate: renderer.shadowMap?.autoUpdate
+        };
+    }
+
     function renderViewportBloomMask(preview, state, width, height) {
         const renderer = preview?.renderer;
         const scene = window.Canvas?.scene;
-        if (!renderer || !scene || !THREE.WebGLRenderTarget || typeof renderer.readRenderTargetPixels !== 'function') {
-            return false;
-        }
+        if (!renderer || !scene || !THREE.WebGLRenderTarget) return false;
 
         if (!state.maskTarget) {
-            state.maskTarget = new THREE.WebGLRenderTarget(width, height, {
-                minFilter: THREE.LinearFilter,
-                magFilter: THREE.LinearFilter,
-                format: THREE.RGBAFormat,
-                type: THREE.UnsignedByteType,
-                depthBuffer: true,
-                stencilBuffer: false
-            });
-            state.maskTarget.texture.name = 'Lightflow_ViewportBloomMask';
-            state.maskTarget.texture.generateMipmaps = false;
-        } else if (state.maskTarget.width !== width || state.maskTarget.height !== height) {
-            state.maskTarget.setSize(width, height);
+            state.maskTarget = createViewportPostTarget(width, height, 'Lightflow_ViewportBloomMask', true);
+        } else {
+            configureViewportPostTarget(state.maskTarget, width, height);
         }
 
         const hiddenVisibility = new Map();
@@ -2008,8 +2070,7 @@
             const original = object.material;
             const sourceMaterials = Array.isArray(original) ? original : [original];
             const replacements = sourceMaterials.map(source => {
-                const emissive = getMaterialEmissiveState(source).active;
-                return getBloomMaskMaterial(source, emissive);
+                return getBloomMaskMaterial(source, getMaterialEmissiveState(source).active);
             });
             materialChanges.push({ object, material: original });
             object.material = Array.isArray(original) ? replacements : replacements[0];
@@ -2017,23 +2078,20 @@
         if (typeof scene.traverseVisible === 'function') scene.traverseVisible(replaceMaterial);
         else scene.traverse(replaceMaterial);
 
-        const previousTarget = renderer.getRenderTarget?.();
-        const previousAutoClear = renderer.autoClear;
-        const previousShadowAutoUpdate = renderer.shadowMap?.autoUpdate;
-        const previousViewport = renderer.getViewport?.(new THREE.Vector4()) || null;
-        const previousScissor = renderer.getScissor?.(new THREE.Vector4()) || null;
-        const previousScissorTest = renderer.getScissorTest?.() ?? false;
-        const previousClearColor = new THREE.Color();
-        const previousClearAlpha = renderer.getClearAlpha?.() ?? 1;
-        renderer.getClearColor?.(previousClearColor);
-
+        const snapshot = snapshotViewportRendererState(renderer);
         let succeeded = false;
         try {
             renderer.autoClear = true;
             if (renderer.shadowMap) renderer.shadowMap.autoUpdate = false;
+            /*
+             * In Three r129 setViewport() always multiplies by renderer DPR,
+             * even when a render target is active. The target viewport is
+             * already expressed in physical target pixels, so calling it here
+             * produced the exact 1.25x offset seen with Windows scaling at 125%.
+             * setRenderTarget() consumes target.viewport without a second DPR.
+             */
+            configureViewportPostTarget(state.maskTarget, width, height);
             renderer.setRenderTarget(state.maskTarget);
-            renderer.setViewport?.(0, 0, width, height);
-            renderer.setScissorTest?.(false);
             renderer.setClearColor?.(0x000000, 0);
             renderer.clear?.(true, true, true);
             renderer.render(scene, preview.camera);
@@ -2041,172 +2099,375 @@
                 window.LightflowAtmosphere.composite(preview, { studio: true, bloomMask: true });
                 renderer.setRenderTarget(state.maskTarget);
             }
-
-            const pixelCount = width * height * 4;
-            if (!state.maskPixels || state.maskPixels.length !== pixelCount) {
-                state.maskPixels = new Uint8Array(pixelCount);
-            }
-            renderer.readRenderTargetPixels(state.maskTarget, 0, 0, width, height, state.maskPixels);
-
-            const context = state.maskCanvas.getContext('2d', { alpha: true });
-            const image = context.createImageData(width, height);
-            const rowLength = width * 4;
-            for (let row = 0; row < height; row++) {
-                const sourceOffset = (height - row - 1) * rowLength;
-                image.data.set(state.maskPixels.subarray(sourceOffset, sourceOffset + rowLength), row * rowLength);
-            }
-            context.putImageData(image, 0, 0);
             succeeded = true;
         } finally {
             for (let index = materialChanges.length - 1; index >= 0; index--) {
                 materialChanges[index].object.material = materialChanges[index].material;
             }
             hiddenVisibility.forEach((visible, object) => { object.visible = visible; });
-            renderer.setRenderTarget?.(previousTarget || null);
-            if (previousViewport) renderer.setViewport?.(previousViewport);
-            if (previousScissor) renderer.setScissor?.(previousScissor);
-            renderer.setScissorTest?.(previousScissorTest);
-            renderer.autoClear = previousAutoClear;
-            if (renderer.shadowMap && previousShadowAutoUpdate !== undefined) {
-                renderer.shadowMap.autoUpdate = previousShadowAutoUpdate;
-            }
-            renderer.setClearColor?.(previousClearColor, previousClearAlpha);
+            restoreViewportRendererState(renderer, snapshot);
         }
         return succeeded;
     }
 
+    function createViewportComposerResources(state) {
+        if (state.postScene) return;
+        state.postCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+        state.postScene = new THREE.Scene();
+        state.postGeometry = new THREE.PlaneGeometry(2, 2);
+
+        state.downsampleMaterial = new THREE.ShaderMaterial({
+            uniforms: {
+                tInput: { value: null },
+                uTexel: { value: new THREE.Vector2(1, 1) },
+                uOffset: { value: 1 },
+                uThreshold: { value: 0.72 },
+                uEmissiveStrength: { value: 1.35 },
+                uApplyThreshold: { value: true }
+            },
+            vertexShader: `
+                varying vec2 vUv;
+                void main() {
+                    vUv = uv;
+                    gl_Position = vec4(position.xy, 0.0, 1.0);
+                }
+            `,
+            fragmentShader: `
+                precision highp float;
+                uniform sampler2D tInput;
+                uniform vec2 uTexel;
+                uniform float uOffset;
+                uniform float uThreshold;
+                uniform float uEmissiveStrength;
+                uniform bool uApplyThreshold;
+                varying vec2 vUv;
+
+                vec3 bloomSample(vec2 uv) {
+                    vec3 color = texture2D(tInput, uv).rgb;
+                    if (!uApplyThreshold) return color;
+                    color *= uEmissiveStrength;
+                    float signal = max(color.r, max(color.g, color.b));
+                    float contribution = clamp((signal - uThreshold) / max(0.001, 1.0 - uThreshold), 0.0, 1.0);
+                    return color * contribution;
+                }
+
+                void main() {
+                    vec2 d = uTexel * uOffset;
+                    vec3 color = bloomSample(vUv) * 4.0;
+                    color += bloomSample(vUv + vec2( d.x, 0.0)) * 2.0;
+                    color += bloomSample(vUv + vec2(-d.x, 0.0)) * 2.0;
+                    color += bloomSample(vUv + vec2(0.0,  d.y)) * 2.0;
+                    color += bloomSample(vUv + vec2(0.0, -d.y)) * 2.0;
+                    color += bloomSample(vUv + vec2( d.x,  d.y));
+                    color += bloomSample(vUv + vec2(-d.x,  d.y));
+                    color += bloomSample(vUv + vec2( d.x, -d.y));
+                    color += bloomSample(vUv + vec2(-d.x, -d.y));
+                    gl_FragColor = vec4(color * 0.0625, 1.0);
+                }
+            `,
+            depthTest: false,
+            depthWrite: false,
+            transparent: false,
+            blending: THREE.NoBlending
+        });
+        state.downsampleMaterial.name = 'Lightflow_ViewportBloomDownsample';
+
+        state.compositeMaterial = new THREE.ShaderMaterial({
+            uniforms: {
+                tBeauty: { value: null },
+                tMask: { value: null },
+                tBloom0: { value: null },
+                tBloom1: { value: null },
+                tBloom2: { value: null },
+                uUseBeauty: { value: false },
+                uUseBloom: { value: true },
+                uUseColorGrade: { value: false },
+                uThreshold: { value: 0.72 },
+                uBloomStrength: { value: 0.8 },
+                uEmissiveStrength: { value: 1.35 },
+                uExposure: { value: 1 },
+                uContrast: { value: 1 },
+                uSaturation: { value: 1 },
+                uTemperature: { value: 0 },
+                uTint: { value: 0 },
+                uVignette: { value: 0 }
+            },
+            vertexShader: `
+                varying vec2 vUv;
+                void main() {
+                    vUv = uv;
+                    gl_Position = vec4(position.xy, 0.0, 1.0);
+                }
+            `,
+            fragmentShader: `
+                precision highp float;
+                uniform sampler2D tBeauty;
+                uniform sampler2D tMask;
+                uniform sampler2D tBloom0;
+                uniform sampler2D tBloom1;
+                uniform sampler2D tBloom2;
+                uniform bool uUseBeauty;
+                uniform bool uUseBloom;
+                uniform bool uUseColorGrade;
+                uniform float uThreshold;
+                uniform float uBloomStrength;
+                uniform float uEmissiveStrength;
+                uniform float uExposure;
+                uniform float uContrast;
+                uniform float uSaturation;
+                uniform float uTemperature;
+                uniform float uTint;
+                uniform float uVignette;
+                varying vec2 vUv;
+
+                vec3 extractCore(vec3 color) {
+                    color *= uEmissiveStrength;
+                    float signal = max(color.r, max(color.g, color.b));
+                    float contribution = clamp((signal - uThreshold) / max(0.001, 1.0 - uThreshold), 0.0, 1.0);
+                    return color * contribution;
+                }
+
+                vec3 colorGrade(vec3 color) {
+                    color *= uExposure;
+                    color = (color - 0.5) * uContrast + 0.5;
+                    float luminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
+                    color = mix(vec3(luminance), color, uSaturation);
+                    color += vec3(uTemperature * 0.12 + uTint * 0.025, -abs(uTint) * 0.07, -uTemperature * 0.12 + uTint * 0.025);
+                    float edge = smoothstep(0.38, 0.78, length(vUv - 0.5));
+                    color *= 1.0 - edge * uVignette * 0.82;
+                    return max(color, vec3(0.0));
+                }
+
+                void main() {
+                    vec4 beauty = uUseBeauty ? texture2D(tBeauty, vUv) : vec4(0.0);
+                    vec3 bloom = vec3(0.0);
+                    if (uUseBloom) {
+                        bloom += extractCore(texture2D(tMask, vUv).rgb) * 0.10;
+                        bloom += texture2D(tBloom0, vUv).rgb * 0.42;
+                        bloom += texture2D(tBloom1, vUv).rgb * 0.30;
+                        bloom += texture2D(tBloom2, vUv).rgb * 0.18;
+                        bloom *= uBloomStrength;
+                    }
+                    vec3 color = beauty.rgb + bloom;
+                    if (uUseColorGrade) color = colorGrade(color);
+                    gl_FragColor = vec4(color, uUseBeauty ? beauty.a : 1.0);
+                }
+            `,
+            depthTest: false,
+            depthWrite: false,
+            transparent: true,
+            blending: THREE.AdditiveBlending
+        });
+        state.compositeMaterial.name = 'Lightflow_ViewportGPUComposer';
+        state.postQuad = new THREE.Mesh(state.postGeometry, state.downsampleMaterial);
+        state.postQuad.frustumCulled = false;
+        state.postScene.add(state.postQuad);
+    }
+
+    function ensureViewportBeautyTexture(state, renderer, snapshot, width, height) {
+        let needsInitialization = false;
+        if (!state.beautyTarget) {
+            state.beautyTarget = createViewportPostTarget(width, height, 'Lightflow_ViewportBeauty');
+            needsInitialization = true;
+        } else {
+            needsInitialization = state.beautyTarget.width !== width || state.beautyTarget.height !== height;
+            configureViewportPostTarget(state.beautyTarget, width, height);
+        }
+        // Initializing a WebGLRenderTarget gives r129 copyFramebufferToTexture
+        // a real GPU texture without allocating or reading a CPU-side image.
+        if (needsInitialization) {
+            renderer.setRenderTarget(state.beautyTarget);
+            restoreViewportRendererState(renderer, snapshot);
+        }
+        return state.beautyTarget.texture;
+    }
+
+    function renderViewportBloomPyramid(preview, state, maskWidth, maskHeight, viewWidth, viewHeight) {
+        const renderer = preview.renderer;
+        createViewportComposerResources(state);
+        const sizes = [2, 4, 8].map(divisor => ({
+            width: Math.max(2, Math.round(maskWidth / divisor)),
+            height: Math.max(2, Math.round(maskHeight / divisor))
+        }));
+        state.bloomTargets = state.bloomTargets || [];
+        sizes.forEach((size, index) => {
+            if (!state.bloomTargets[index]) {
+                state.bloomTargets[index] = createViewportPostTarget(
+                    size.width,
+                    size.height,
+                    'Lightflow_ViewportBloomMip' + index
+                );
+            } else {
+                configureViewportPostTarget(state.bloomTargets[index], size.width, size.height);
+            }
+        });
+
+        const material = state.downsampleMaterial;
+        const uniforms = material.uniforms;
+        const radiusInMaskPixels = clamp(toNumber(currentSettings.bloom_radius, 18), 1, 96) * maskWidth / Math.max(1, viewWidth);
+        state.postQuad.material = material;
+        renderer.autoClear = true;
+        renderer.setClearColor?.(0x000000, 0);
+
+        let input = state.maskTarget.texture;
+        let inputWidth = maskWidth;
+        let inputHeight = maskHeight;
+        for (let index = 0; index < state.bloomTargets.length; index++) {
+            const target = state.bloomTargets[index];
+            uniforms.tInput.value = input;
+            uniforms.uTexel.value.set(1 / Math.max(1, inputWidth), 1 / Math.max(1, inputHeight));
+            uniforms.uOffset.value = clamp(0.85 + radiusInMaskPixels * (0.055 + index * 0.035), 0.85, 5.5);
+            uniforms.uThreshold.value = clamp(toNumber(currentSettings.bloom_threshold, 0.72), 0, 1);
+            uniforms.uEmissiveStrength.value = clamp(toNumber(currentSettings.bloom_emissive_strength, 1.35), 0, 6);
+            uniforms.uApplyThreshold.value = index === 0;
+            renderer.setRenderTarget(target);
+            renderer.clear?.(true, false, false);
+            renderer.render(state.postScene, state.postCamera);
+            input = target.texture;
+            inputWidth = target.width;
+            inputHeight = target.height;
+        }
+        return state.bloomTargets;
+    }
+
+    function renderViewportGPUComposite(preview, state, snapshot, useBloom, useColorGrade) {
+        const renderer = preview.renderer;
+        createViewportComposerResources(state);
+        const material = state.compositeMaterial;
+        const uniforms = material.uniforms;
+        const fallback = state.maskTarget?.texture || state.beautyTarget?.texture;
+        uniforms.tBeauty.value = state.beautyTarget?.texture || fallback;
+        uniforms.tMask.value = state.maskTarget?.texture || fallback;
+        uniforms.tBloom0.value = state.bloomTargets?.[0]?.texture || fallback;
+        uniforms.tBloom1.value = state.bloomTargets?.[1]?.texture || uniforms.tBloom0.value;
+        uniforms.tBloom2.value = state.bloomTargets?.[2]?.texture || uniforms.tBloom1.value;
+        uniforms.uUseBeauty.value = !!useColorGrade;
+        uniforms.uUseBloom.value = !!useBloom;
+        uniforms.uUseColorGrade.value = !!useColorGrade;
+        uniforms.uThreshold.value = clamp(toNumber(currentSettings.bloom_threshold, 0.72), 0, 1);
+        uniforms.uBloomStrength.value = clamp(toNumber(currentSettings.bloom_strength, 0.8), 0, 3);
+        uniforms.uEmissiveStrength.value = clamp(toNumber(currentSettings.bloom_emissive_strength, 1.35), 0, 6);
+        uniforms.uExposure.value = clamp(toNumber(currentSettings.exposure, 1), 0.1, 4);
+        uniforms.uContrast.value = clamp(toNumber(currentSettings.contrast, 1), 0, 3);
+        uniforms.uSaturation.value = clamp(toNumber(currentSettings.saturation, 1), 0, 3);
+        uniforms.uTemperature.value = clamp(toNumber(currentSettings.temperature, 0), -1, 1);
+        uniforms.uTint.value = clamp(toNumber(currentSettings.tint, 0), -1, 1);
+        uniforms.uVignette.value = clamp(toNumber(currentSettings.vignette, 0), 0, 1);
+
+        state.postQuad.material = material;
+        material.transparent = !useColorGrade;
+        material.blending = useColorGrade ? THREE.NoBlending : THREE.AdditiveBlending;
+        renderer.setRenderTarget?.(null);
+        if (snapshot.viewport) renderer.setViewport?.(snapshot.viewport);
+        if (snapshot.scissor) renderer.setScissor?.(snapshot.scissor);
+        renderer.setScissorTest?.(snapshot.scissorTest);
+        renderer.autoClear = false;
+        renderer.render(state.postScene, state.postCamera);
+    }
+
     function getViewportComposerState(preview) {
-        if (!preview?.canvas || !preview.canvas.parentElement) return null;
+        if (!preview?.canvas || !preview.renderer) return null;
         let state = VIEWPORT_COMPOSER_STATE.get(preview);
         if (state) return state;
-
-        const overlay = document.createElement('canvas');
-        overlay.className = 'lightflow_scene_composer_overlay';
-        Object.assign(overlay.style, {
-            position: 'absolute',
-            pointerEvents: 'none',
-            zIndex: '4',
-            display: 'none'
-        });
-        const parent = preview.canvas.parentElement;
-        const previousParentPosition = parent.style.position;
-        if (getComputedStyle(parent).position === 'static') parent.style.position = 'relative';
-        parent.appendChild(overlay);
-
         state = {
             preview,
-            overlay,
-            parent,
-            previousParentPosition,
-            baseCanvas: document.createElement('canvas'),
-            maskCanvas: document.createElement('canvas'),
-            bloomWorkspace: {},
             maskTarget: null,
-            maskPixels: null,
+            bloomTargets: null,
+            beautyTarget: null,
+            copyPosition: new THREE.Vector2(),
+            postScene: null,
+            postCamera: null,
+            postQuad: null,
+            postGeometry: null,
+            downsampleMaterial: null,
+            compositeMaterial: null,
+            dynamicScale: VIEWPORT_BLOOM_PROFILES.adaptive.scale,
+            composerMs: 0,
+            adaptiveFrames: 0,
             lastRender: 0,
             rendering: false,
             scheduled: false,
-            scheduleHandle: null
+            disposed: false
         };
         VIEWPORT_COMPOSER_STATE.set(preview, state);
         return state;
     }
 
-    function positionViewportComposerOverlay(state) {
-        const source = state.preview.canvas;
-        const parentRect = state.parent.getBoundingClientRect();
-        const sourceRect = source.getBoundingClientRect();
-        state.overlay.style.left = (sourceRect.left - parentRect.left + state.parent.scrollLeft) + 'px';
-        state.overlay.style.top = (sourceRect.top - parentRect.top + state.parent.scrollTop) + 'px';
-        state.overlay.style.width = sourceRect.width + 'px';
-        state.overlay.style.height = sourceRect.height + 'px';
+    function hideViewportComposerOverlay() {
+        // GPU composition is drawn into the viewport framebuffer, so there is
+        // no persistent DOM overlay to hide or accidentally misalign.
     }
 
-    function hideViewportComposerOverlay(preview) {
-        const state = VIEWPORT_COMPOSER_STATE.get(preview);
-        if (state?.overlay) state.overlay.style.display = 'none';
+    function updateAdaptiveViewportBloom(state, elapsed, profile) {
+        if (!profile.adaptive) return;
+        state.composerMs = state.composerMs > 0 ? state.composerMs * 0.88 + elapsed * 0.12 : elapsed;
+        state.adaptiveFrames++;
+        if (state.adaptiveFrames < 24) return;
+        state.adaptiveFrames = 0;
+        const fpsLimit = clamp(toNumber(currentSettings.viewport_bloom_fps, 0), 0, 144);
+        const frameBudget = 1000 / Math.max(30, fpsLimit || 60);
+        if (state.composerMs > frameBudget * 0.46) {
+            state.dynamicScale = Math.max(profile.minScale, state.dynamicScale * 0.88);
+        } else if (state.composerMs < frameBudget * 0.22) {
+            state.dynamicScale = Math.min(profile.maxScale, state.dynamicScale * 1.06);
+        }
     }
 
     function renderViewportComposer(preview) {
-        if (!preview?.renderer || !preview.canvas || window.LightManagerStudioRenderSession || preview.sa_studio_render_active) {
-            hideViewportComposerOverlay(preview);
-            return;
-        }
-        if (!isLightflowRenderMode()) {
-            hideViewportComposerOverlay(preview);
-            return;
-        }
-        const active = (
-            currentSettings.viewport_bloom_enabled &&
-            currentSettings.bloom_enabled
-        ) || currentSettings.color_grading_enabled;
-        if (!active) {
-            hideViewportComposerOverlay(preview);
-            return;
-        }
+        if (!preview?.renderer || !preview.canvas || window.LightManagerStudioRenderSession || preview.sa_studio_render_active) return;
+        if (!isLightflowRenderMode()) return;
+        const useBloom = !!(currentSettings.viewport_bloom_enabled && currentSettings.bloom_enabled);
+        const useColorGrade = !!currentSettings.color_grading_enabled;
+        if (!useBloom && !useColorGrade) return;
 
         const state = getViewportComposerState(preview);
-        if (!state || state.rendering) return;
+        if (!state || state.rendering || state.disposed) return;
         const now = performance.now();
-        const interval = 1000 / clamp(toNumber(currentSettings.viewport_bloom_fps, 24), 5, 30);
-        if (now - state.lastRender < interval) {
-            // Keep the last completed post-process frame visible while the
-            // composer is throttled. Hiding it here would alternate between
-            // graded and ungraded frames on a faster viewport.
-            return;
-        }
+        const fpsLimit = clamp(toNumber(currentSettings.viewport_bloom_fps, 0), 0, 144);
+        const interval = fpsLimit > 0 ? 1000 / fpsLimit : 0;
+        if (interval > 0 && now - state.lastRender < interval) return;
 
-        const source = preview.canvas;
+        const renderer = preview.renderer;
+        const snapshot = snapshotViewportRendererState(renderer);
+        // The compositor is designed for the visible framebuffer. Nested
+        // Studio/SSR/AO render-target passes must finish before it runs.
+        if (snapshot.target) return;
+        const currentViewport = snapshot.currentViewport;
+        const drawingBuffer = renderer.getDrawingBufferSize?.(new THREE.Vector2()) || null;
+        const viewWidth = Math.max(1, Math.round(currentViewport?.z || drawingBuffer?.x || preview.canvas.width || 1));
+        const viewHeight = Math.max(1, Math.round(currentViewport?.w || drawingBuffer?.y || preview.canvas.height || 1));
         const profile = getViewportBloomProfile(currentSettings);
-        const width = Math.max(1, Math.min(
-            source.width || source.clientWidth || 1,
-            Math.round((source.clientWidth || source.width || 1) * profile.displayDpr)
-        ));
-        const height = Math.max(1, Math.min(
-            source.height || source.clientHeight || 1,
-            Math.round((source.clientHeight || source.height || 1) * profile.displayDpr)
-        ));
-        [state.baseCanvas, state.overlay].forEach(canvas => {
-            if (canvas.width !== width) canvas.width = width;
-            if (canvas.height !== height) canvas.height = height;
-        });
-        const bloomScale = Math.min(profile.scale, profile.maxDimension / Math.max(width, height));
-        const maskWidth = Math.max(2, Math.round(width * bloomScale));
-        const maskHeight = Math.max(2, Math.round(height * bloomScale));
-        if (state.maskCanvas.width !== maskWidth) state.maskCanvas.width = maskWidth;
-        if (state.maskCanvas.height !== maskHeight) state.maskCanvas.height = maskHeight;
-        positionViewportComposerOverlay(state);
+        const requestedScale = profile.adaptive ? state.dynamicScale : profile.scale;
+        const bloomScale = Math.min(requestedScale, profile.maxDimension / Math.max(viewWidth, viewHeight));
+        const maskWidth = Math.max(2, Math.round(viewWidth * bloomScale));
+        const maskHeight = Math.max(2, Math.round(viewHeight * bloomScale));
+        const started = performance.now();
 
         state.rendering = true;
-        state.lastRender = now;
         try {
-            const baseContext = state.baseCanvas.getContext('2d', { alpha: true });
-            baseContext.clearRect(0, 0, width, height);
-            baseContext.drawImage(source, 0, 0, width, height);
-
-            if (currentSettings.viewport_bloom_enabled && currentSettings.bloom_enabled) {
-                const maskContext = state.maskCanvas.getContext('2d', { alpha: true });
-                maskContext.clearRect(0, 0, maskWidth, maskHeight);
-                if (renderViewportBloomMask(preview, state, maskWidth, maskHeight)) {
-                    applyFinalBloom(state.baseCanvas, currentSettings, state.maskCanvas, {
-                        processingWidth: maskWidth,
-                        processingHeight: maskHeight,
-                        maxDimension: profile.maxDimension,
-                        emissiveOnly: true,
-                        workspace: state.bloomWorkspace
-                    });
-                }
+            if (useColorGrade) {
+                const beauty = ensureViewportBeautyTexture(state, renderer, snapshot, viewWidth, viewHeight);
+                if (!beauty || typeof renderer.copyFramebufferToTexture !== 'function') return;
+                const originX = Math.max(0, Math.round(currentViewport?.x || 0));
+                const originY = Math.max(0, Math.round(currentViewport?.y || 0));
+                renderer.copyFramebufferToTexture(state.copyPosition.set(originX, originY), beauty);
             }
-            applyFinalColorGrade(state.baseCanvas, currentSettings);
-
-            const overlayContext = state.overlay.getContext('2d', { alpha: true });
-            overlayContext.clearRect(0, 0, width, height);
-            overlayContext.drawImage(state.baseCanvas, 0, 0, width, height);
-            state.overlay.style.display = 'block';
+            let bloomReady = false;
+            if (useBloom && renderViewportBloomMask(preview, state, maskWidth, maskHeight)) {
+                renderViewportBloomPyramid(preview, state, maskWidth, maskHeight, viewWidth, viewHeight);
+                bloomReady = true;
+            }
+            renderViewportGPUComposite(preview, state, snapshot, bloomReady, useColorGrade);
+            state.lastRender = now;
         } catch (error) {
-            state.overlay.style.display = 'none';
+            if (!state.failureReported) {
+                state.failureReported = true;
+                console.warn('[Studio Render] realtime GPU composer failed', error);
+            }
         } finally {
+            restoreViewportRendererState(renderer, snapshot);
             state.rendering = false;
+            updateAdaptiveViewportBloom(state, performance.now() - started, profile);
         }
     }
 
@@ -2240,14 +2501,19 @@
         if (!state || state.scheduled) return;
         state.scheduled = true;
         const run = () => {
+            if (state.disposed) return;
             state.scheduled = false;
-            state.scheduleHandle = null;
             renderViewportComposer(preview);
         };
-        if (typeof requestAnimationFrame === 'function') {
-            state.scheduleHandle = requestAnimationFrame(run);
+        // A microtask runs after every synchronous preview wrapper (including
+        // AO and Atmosphere) but before the browser presents the frame. This
+        // avoids both the old AO load-order race and a one-frame Bloom lag.
+        if (typeof queueMicrotask === 'function') {
+            queueMicrotask(run);
+        } else if (typeof Promise !== 'undefined') {
+            Promise.resolve().then(run);
         } else {
-            state.scheduleHandle = setTimeout(run, 0);
+            setTimeout(run, 0);
         }
     }
 
@@ -2258,18 +2524,16 @@
     function disposeViewportComposers() {
         VIEWPORT_COMPOSER_STATE.forEach((state, preview) => {
             if (preview?.render === state.patchedRender) preview.render = state.originalRender;
+            state.disposed = true;
             state.maskTarget?.dispose?.();
-            if (state.scheduleHandle !== null) {
-                if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(state.scheduleHandle);
-                else clearTimeout(state.scheduleHandle);
-            }
+            state.bloomTargets?.forEach?.(target => target?.dispose?.());
+            state.beautyTarget?.dispose?.();
+            state.downsampleMaterial?.dispose?.();
+            state.compositeMaterial?.dispose?.();
+            state.postGeometry?.dispose?.();
             state.maskTarget = null;
-            state.maskPixels = null;
-            state.bloomWorkspace = null;
-            state.overlay?.remove?.();
-            if (state.parent && state.previousParentPosition !== undefined) {
-                state.parent.style.position = state.previousParentPosition;
-            }
+            state.bloomTargets = null;
+            state.beautyTarget = null;
         });
         VIEWPORT_COMPOSER_STATE.clear();
     }
@@ -3156,9 +3420,9 @@
                 type: 'range',
                 label: 'studio_render.field.viewport_bloom_fps',
                 value: settings.viewport_bloom_fps,
-                min: 5,
-                max: 30,
-                step: 5,
+                min: 0,
+                max: 144,
+                step: 1,
                 condition: form => !!form.bloom_enabled && !!form.viewport_bloom_enabled && !!form.show_advanced
             },
             viewport_bloom_quality: {
@@ -3166,6 +3430,7 @@
                 label: 'studio_render.field.viewport_bloom_quality',
                 value: settings.viewport_bloom_quality,
                 options: {
+                    adaptive: 'studio_render.option.viewport_bloom.adaptive',
                     performance: 'studio_render.option.viewport_bloom.performance',
                     balanced: 'studio_render.option.viewport_bloom.balanced',
                     high: 'studio_render.option.viewport_bloom.high'
@@ -3264,9 +3529,9 @@
                 type: 'range',
                 label: 'studio_render.field.viewport_bloom_fps',
                 value: settings.viewport_bloom_fps,
-                min: 5,
-                max: 30,
-                step: 5,
+                min: 0,
+                max: 144,
+                step: 1,
                 condition: form => !!form.viewport_bloom_enabled
             },
             viewport_bloom_quality: {
@@ -3274,6 +3539,7 @@
                 label: 'studio_render.field.viewport_bloom_quality',
                 value: settings.viewport_bloom_quality,
                 options: {
+                    adaptive: 'studio_render.option.viewport_bloom.adaptive',
                     performance: 'studio_render.option.viewport_bloom.performance',
                     balanced: 'studio_render.option.viewport_bloom.balanced',
                     high: 'studio_render.option.viewport_bloom.high'
@@ -3448,6 +3714,7 @@
             viewport_bloom_quality: {
                 type: 'select', label: 'studio_render.field.viewport_bloom_quality', value: settings.viewport_bloom_quality,
                 options: {
+                    adaptive: 'studio_render.option.viewport_bloom.adaptive',
                     performance: 'studio_render.option.viewport_bloom.performance',
                     balanced: 'studio_render.option.viewport_bloom.balanced',
                     high: 'studio_render.option.viewport_bloom.high'
@@ -3456,7 +3723,7 @@
             },
             viewport_bloom_fps: {
                 type: 'range', label: 'studio_render.field.viewport_bloom_fps', value: settings.viewport_bloom_fps,
-                min: 5, max: 30, step: 5, condition: form => !!form.viewport_bloom_enabled
+                min: 0, max: 144, step: 1, condition: form => !!form.viewport_bloom_enabled
             },
             bloom_enabled: {
                 type: 'checkbox', label: 'studio_render.field.bloom_enabled', value: settings.bloom_enabled
@@ -3850,7 +4117,7 @@
         author: 'MidFord327',
         description: 'Export polished Blockbench studio renders with tiled supersampling, 4K/8K-safe output, transparency, GPU guidance, and an adjustable frame. Complements Light Manager and Shader Architect in the Lightflow suite.',
         tags: ['Lightflow', 'Rendering', 'Export', 'Screenshots', 'Studio', 'Presentation'],
-        version: '1.5.1',
+        version: '1.6.0',
         min_version: '4.9.0',
         variant: 'both',
         onload() {

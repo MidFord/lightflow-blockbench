@@ -25,11 +25,11 @@ test('all independently loadable plugins parse as JavaScript', () => {
 
 test('release candidate versions stay synchronized with the README', () => {
     const expected = {
-        'light_manager.js': '1.6.3',
+        'light_manager.js': '1.6.4',
         'shader_architect.js': '2.7.1',
-        'lightflow_atmosphere.js': '1.0.0',
+        'lightflow_atmosphere.js': '1.0.1',
         'lightflow_environment.js': '1.1.0',
-        'studio_render.js': '1.5.1'
+        'studio_render.js': '1.6.0'
     };
     const readme = read('README.md');
     Object.entries(expected).forEach(([file, version]) => {
@@ -114,24 +114,41 @@ test('Bloom uses transparent depth-only texels to occlude hidden emitters withou
     assert.doesNotMatch(source, /if \(energy <= 0\.0005\) discard;/);
 });
 
-test('Scene Composer reuses the final Bloom and color-grade functions in realtime', () => {
+test('Scene Composer keeps realtime Bloom GPU-resident, DPI-safe, and AO-order-safe', () => {
     const source = read('studio_render.js');
     assert.match(source, /function renderViewportComposer\(preview\)/);
     assert.match(source, /function scheduleViewportComposer\(preview\)/);
     assert.match(source, /const result = originalRender\.apply\(this, arguments\);\s*scheduleViewportComposer\(this\);/);
     assert.match(source, /renderViewportBloomMask\(preview, state, maskWidth, maskHeight\)/);
-    assert.match(source, /applyFinalBloom\(state\.baseCanvas, currentSettings, state\.maskCanvas, \{/);
-    assert.match(source, /applyFinalColorGrade\(state\.baseCanvas, currentSettings\)/);
+    assert.match(source, /renderViewportBloomPyramid\(preview, state, maskWidth, maskHeight, viewWidth, viewHeight\)/);
+    assert.match(source, /renderViewportGPUComposite\(preview, state, snapshot, bloomReady, useColorGrade\)/);
+    assert.match(source, /renderer\.copyFramebufferToTexture\(state\.copyPosition\.set\(originX, originY\), beauty\)/);
+    assert.match(source, /renderer\.getCurrentViewport\?\.\(new THREE\.Vector4\(\)\)/);
+    assert.match(source, /state\.bloomTargets\[index\] = createViewportPostTarget/);
+    assert.match(source, /Lightflow_ViewportBloomDownsample/);
+    assert.match(source, /Lightflow_ViewportGPUComposer/);
+    assert.match(source, /queueMicrotask\(run\)/);
+    assert.match(source, /viewport_bloom_fps: 0/);
+    assert.match(source, /max: 144/);
+    assert.match(source, /adaptive: \{ scale:/);
     assert.match(source, /id: 'lightflow_scene_composer_toolbar'/);
     assert.match(source, /viewport_bloom_fps/);
-    assert.match(source, /emissiveOnly: true/);
     assert.match(source, /new THREE\.WebGLRenderTarget\(width, height/);
-    assert.match(source, /renderer\.readRenderTargetPixels\(state\.maskTarget/);
+    assert.doesNotMatch(source, /renderer\.readRenderTargetPixels\(state\.maskTarget/);
+    assert.doesNotMatch(source, /lightflow_scene_composer_overlay/);
+    assert.doesNotMatch(source, /state\.maskPixels/);
     assert.match(source, /collectStudioRenderHiddenObjects\(\)\.forEach/);
     assert.match(source, /if \(!isLightflowRenderMode\(\)\)/);
     assert.match(source, /condition: \{ modes: \['render'\], project: true \}/);
     assert.match(source, /attached_to: window\.Panels\?\.lightflow_environment_panel \? 'lightflow_environment_panel' : 'outliner'/);
-    assert.doesNotMatch(source, /now - state\.lastRender < interval\) \{\s*state\.overlay\.style\.display = 'none'/);
+    assert.match(source, /applyFinalBloom\(canvas, normalized, bloomMaskCanvas\)/);
+    assert.match(source, /applyFinalColorGrade\(canvas, normalized\)/);
+    const maskSection = source.slice(
+        source.indexOf('function renderViewportBloomMask'),
+        source.indexOf('function createViewportComposerResources')
+    );
+    assert.match(maskSection, /configureViewportPostTarget\(state\.maskTarget, width, height\);\s*renderer\.setRenderTarget\(state\.maskTarget\)/);
+    assert.doesNotMatch(maskSection, /renderer\.setViewport/);
 });
 
 test('Minecraft environment drives sky, time, ambient response, sun shadows, and project persistence', () => {
@@ -225,6 +242,13 @@ test('Atmosphere 1.0 keeps volume targets DPI-safe and shadowed God Rays transpa
     assert.match(source, /if \(!lightShaft\) extinctionColor \+= sigmaS \+ sigmaA/);
     assert.match(source, /accumulated \+= transmittance \* scatteringSource \* stepLength/);
     assert.match(source, /const legacyGodRays =/);
+    assert.match(source, /previousTargetViewport = previousTarget\?\.viewport\?\.clone/);
+    assert.match(source, /if \(previousTarget\) \{[\s\S]{0,500}renderer\.setRenderTarget\?\.\(previousTarget\);[\s\S]{0,120}\} else \{/);
+    assert.match(source, /proxy\.userData\.lightflowNoShadow = true/);
+    assert.match(source, /proxy\.castShadow = false/);
+    const lightManager = read('light_manager.js');
+    assert.match(lightManager, /const suppressElementShadows = element\.type === 'lightflow_volume'/);
+    assert.match(lightManager, /suppressElementShadows \|\| object\.userData\?\.lightflowNoShadow/);
 });
 
 test('Atmosphere 1.0 skips redundant realtime volume work', () => {

@@ -6,6 +6,16 @@ Lightflow uses a suite release version for public downloads. Individual plugins 
 
 ## [Unreleased]
 
+### RC 4 native GPU viewport composition
+
+- **Studio Render 1.6.0:** replaced the realtime CPU readback/Canvas2D overlay with a GPU-resident emissive mask, three-level downsample Bloom pyramid, and direct framebuffer composition.
+- Fixed the 1.25× Bloom scale/offset on Windows display scaling by never passing physical render-target dimensions through Three r129's DPR-multiplying `setViewport()` path.
+- Added Adaptive quality, automatic internal-resolution hysteresis, synchronized uncapped viewport updates, and optional FPS caps from 1–144.
+- Moved Scene Composer scheduling to a coalesced microtask after AO/Atmosphere wrappers but before browser presentation, removing the extra frame of latency.
+- **Lightflow Atmosphere 1.0.1:** preserves target-local viewport/scissor state when Atmosphere is composed into Bloom or other offscreen targets.
+- **Light Manager 1.6.4:** Volume Domain selection proxies are explicitly excluded from shadow casting and receiving.
+- Volume Domain proxy meshes now carry their own no-shadow marker and continuously enforce `castShadow = false`, preventing the invisible editing cube from occluding its contents or projecting a solid box shadow.
+
 ### RC 3 viewport and environment workflow
 
 - **Studio Render 1.5.1:** moved Scene Composer into a resizable panel attached inside **Lightflow Render** instead of occupying a generic Blockbench sidebar slot.

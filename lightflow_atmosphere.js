@@ -2,7 +2,7 @@
     'use strict';
 
     const PLUGIN_ID = 'lightflow_atmosphere';
-    const PLUGIN_VERSION = '1.0.0';
+    const PLUGIN_VERSION = '1.0.1';
     const MAX_VOLUMES = 4;
     const MAX_LIGHTS = 4;
     const MAX_SHADOWS = 2;
@@ -1193,6 +1193,9 @@
             const scene = window.Canvas?.scene;
             if (!scene || !camera) return null;
             const previousTarget = renderer.getRenderTarget?.() || null;
+            const previousTargetViewport = previousTarget?.viewport?.clone?.() || null;
+            const previousTargetScissor = previousTarget?.scissor?.clone?.() || null;
+            const previousTargetScissorTest = previousTarget?.scissorTest ?? false;
             const previousAutoClear = renderer.autoClear;
             const previousViewport = renderer.getViewport?.(new THREE.Vector4()) || null;
             const previousScissor = renderer.getScissor?.(new THREE.Vector4()) || null;
@@ -1239,10 +1242,17 @@
                     cubeDepth: state.cubeTarget.depthTexture
                 };
             } finally {
-                renderer.setRenderTarget?.(previousTarget);
-                if (previousViewport) renderer.setViewport?.(previousViewport);
-                if (previousScissor) renderer.setScissor?.(previousScissor);
-                renderer.setScissorTest?.(previousScissorTest);
+                if (previousTarget) {
+                    if (previousTargetViewport && previousTarget.viewport) previousTarget.viewport.copy(previousTargetViewport);
+                    if (previousTargetScissor && previousTarget.scissor) previousTarget.scissor.copy(previousTargetScissor);
+                    previousTarget.scissorTest = previousTargetScissorTest;
+                    renderer.setRenderTarget?.(previousTarget);
+                } else {
+                    renderer.setRenderTarget?.(null);
+                    if (previousViewport) renderer.setViewport?.(previousViewport);
+                    if (previousScissor) renderer.setScissor?.(previousScissor);
+                    renderer.setScissorTest?.(previousScissorTest);
+                }
                 renderer.autoClear = previousAutoClear;
                 renderer.setClearColor?.(clearColor, clearAlpha);
                 if (renderer.shadowMap && previousShadowAutoUpdate !== undefined) renderer.shadowMap.autoUpdate = previousShadowAutoUpdate;
@@ -1573,6 +1583,9 @@
             this.resize(state, studio);
             const frameSignature = this.computeFrameSignature(state, preview, volumes, studio);
             const previousTarget = renderer.getRenderTarget?.() || null;
+            const previousTargetViewport = previousTarget?.viewport?.clone?.() || null;
+            const previousTargetScissor = previousTarget?.scissor?.clone?.() || null;
+            const previousTargetScissorTest = previousTarget?.scissorTest ?? false;
             const previousAutoClear = renderer.autoClear;
             const previousViewport = renderer.getViewport?.(new THREE.Vector4()) || null;
             const previousScissor = renderer.getScissor?.(new THREE.Vector4()) || null;
@@ -1618,17 +1631,16 @@
                 }
 
                 renderer.autoClear = false;
-                renderer.setRenderTarget?.(previousTarget);
-                /*
-                 * getDrawingBufferSize() is expressed in physical pixels,
-                 * while setViewport() on the default framebuffer expects
-                 * logical pixels and applies renderer.pixelRatio itself.
-                 * Reusing the saved viewport prevents a second DPI scaling,
-                 * which was the source of the Windows viewport offset.
-                 */
-                if (previousViewport) renderer.setViewport?.(previousViewport);
-                else if (previousTarget) renderer.setViewport?.(0, 0, previousTarget.width, previousTarget.height);
-                renderer.setScissorTest?.(false);
+                if (previousTarget) {
+                    if (previousTargetViewport && previousTarget.viewport) previousTarget.viewport.copy(previousTargetViewport);
+                    if (previousTargetScissor && previousTarget.scissor) previousTarget.scissor.copy(previousTargetScissor);
+                    previousTarget.scissorTest = false;
+                    renderer.setRenderTarget?.(previousTarget);
+                } else {
+                    renderer.setRenderTarget?.(null);
+                    if (previousViewport) renderer.setViewport?.(previousViewport);
+                    renderer.setScissorTest?.(false);
+                }
                 state.compositeUniforms.uBloomComposite.value = !!settings.bloomMask;
                 state.compositeUniforms.uBloomMultiplier.value = useCachedBloom ? state.lastBloomMultiplier : 1;
                 renderer.render(state.compositeScene, state.postCamera);
@@ -1644,10 +1656,17 @@
                 saveSettings(this.settings);
                 return false;
             } finally {
-                renderer.setRenderTarget?.(previousTarget);
-                if (previousViewport) renderer.setViewport?.(previousViewport);
-                if (previousScissor) renderer.setScissor?.(previousScissor);
-                renderer.setScissorTest?.(previousScissorTest);
+                if (previousTarget) {
+                    if (previousTargetViewport && previousTarget.viewport) previousTarget.viewport.copy(previousTargetViewport);
+                    if (previousTargetScissor && previousTarget.scissor) previousTarget.scissor.copy(previousTargetScissor);
+                    previousTarget.scissorTest = previousTargetScissorTest;
+                    renderer.setRenderTarget?.(previousTarget);
+                } else {
+                    renderer.setRenderTarget?.(null);
+                    if (previousViewport) renderer.setViewport?.(previousViewport);
+                    if (previousScissor) renderer.setScissor?.(previousScissor);
+                    renderer.setScissorTest?.(previousScissorTest);
+                }
                 renderer.autoClear = previousAutoClear;
                 renderer.setClearColor?.(previousClearColor, previousClearAlpha);
                 state.rendering = false;
@@ -1740,6 +1759,14 @@
             mesh.sphereSelection.scale.set(size[0], size[1], size[2]);
         }
         const selected = !!volume.selected;
+        [mesh.boxSelection, mesh.sphereSelection].forEach(proxy => {
+            if (!proxy) return;
+            proxy.castShadow = false;
+            proxy.receiveShadow = false;
+            proxy.userData = proxy.userData || {};
+            proxy.userData.lightflowNoShadow = true;
+            proxy.userData.lightflowVolumeSelectionProxy = true;
+        });
         [mesh.boxGizmo, mesh.sphereGizmo].forEach(gizmo => {
             if (!gizmo?.material) return;
             gizmo.material.color.set(selected ? 0x5ba7ff : 0x67d7e8);
@@ -1868,6 +1895,8 @@
                 mesh.name = element.uuid;
                 mesh.type = element.type;
                 mesh.isElement = true;
+                mesh.userData = mesh.userData || {};
+                mesh.userData.lightflowNoShadow = true;
                 mesh.rotation.order = window.Format?.euler_order || 'ZYX';
 
                 const lineMaterial = new THREE.LineBasicMaterial({
@@ -1898,6 +1927,11 @@
                     proxy.name = element.uuid;
                     proxy.type = element.type;
                     proxy.isElement = true;
+                    proxy.castShadow = false;
+                    proxy.receiveShadow = false;
+                    proxy.userData = proxy.userData || {};
+                    proxy.userData.lightflowNoShadow = true;
+                    proxy.userData.lightflowVolumeSelectionProxy = true;
                 });
                 mesh.add(mesh.boxSelection, mesh.sphereSelection);
                 mesh.geometry = new THREE.BufferGeometry();

@@ -41,11 +41,11 @@ The plugins work independently where possible, but they are designed to be used 
 
 | Plugin | Current version | Purpose | Dependency |
 | --- | ---: | --- | --- |
-| **Light Manager** | `1.6.3` | Adds production-oriented point, spot, and directional lights with adaptive shadows, gizmos, animation support, and lighting profiles. | None |
+| **Light Manager** | `1.6.4` | Adds production-oriented point, spot, and directional lights with adaptive shadows, gizmos, animation support, and lighting profiles. | None |
 | **Lightflow Environment** | `1.1.0` | Adds editable Vanilla and Vibrant Visuals skies, custom gradients and project textures, Minecraft time, sun/moon lighting, ambient influence, and controlled shadow coverage. | **Light Manager recommended**; integrates with Shader Architect |
 | **Shader Architect** | `2.7.1` | Builds and assigns advanced materials with PBR controls, environment lighting, SSR fallback reflections, Vibrant Visuals PBR, pixel-shadow controls, editable GLSL, and material instances. | **Light Manager required** |
-| **Lightflow Atmosphere** | `1.0.0` | Adds production-ready local fog, correctly occluded additive light shafts, height fog, and procedural cloud domains with render-element depth occlusion. | **Light Manager recommended**; integrates with Shader Architect and Studio Render |
-| **Studio Render** | `1.5.1` | Adds an attached Scene Composer, optimized AO-safe realtime Bloom, color grading, tiled supersampling, transparency, and 4K/8K-safe exports. | Works alone; integrates with the other Lightflow modules |
+| **Lightflow Atmosphere** | `1.0.1` | Adds production-ready local fog, correctly occluded additive light shafts, height fog, and procedural cloud domains with render-element depth occlusion. | **Light Manager recommended**; integrates with Shader Architect and Studio Render |
+| **Studio Render** | `1.6.0` | Adds an attached GPU Scene Composer, AO-safe realtime Bloom, color grading, tiled supersampling, transparency, and 4K/8K-safe exports. | Works alone; integrates with the other Lightflow modules |
 
 ### Why Lightflow exists
 
@@ -168,7 +168,7 @@ With **Lightflow Atmosphere** enabled:
 With **Studio Render** enabled:
 
 1. Open **Scene Composer** to enable realtime viewport Bloom and tune Bloom, exposure, contrast, saturation, temperature, tint, and vignette.
-2. Open **Studio Render** or use **Quick Studio Render**. The final image reuses the same Bloom and color-grade pipeline shown by Scene Composer.
+2. Open **Studio Render** or use **Quick Studio Render**. The final image reuses the same Bloom parameters and emissive/occlusion semantics shown by Scene Composer.
 3. Choose **4K UHD** for a first high-quality export.
 4. Choose **Transparent** or **Solid Color** background.
 5. Use **Studio SSAA – 4x** for clean promotional output. Use lower samples while iterating.
@@ -297,11 +297,12 @@ Studio Render is the export layer. It is intended for portfolio images, social-m
 - GPU diagnostics showing the detected renderer and relevant WebGL limits.
 - Temporary Studio Render sessions that coordinate with Light Manager so final shadow settings do not permanently disturb the viewport.
 - Optional final-image Bloom with a simple strength control and advanced threshold/radius controls.
-- Realtime viewport Bloom that uses the same emissive/atmosphere semantics, occlusion, blur scales, threshold, radius, and strength as final output.
-- Low-resolution offscreen WebGL masks and reusable processing canvases for responsive editing without overwriting Shader Architect AO.
-- Helper/gizmo exclusion from the realtime Bloom source and three viewport quality profiles.
+- Realtime viewport Bloom that uses the same emissive/atmosphere semantics, depth occlusion, threshold, radius, and strength as final output.
+- A fully GPU-resident three-level downsample pyramid: the viewport path has no synchronous `readPixels`, `getImageData`, CPU pixel loop, Canvas2D blur, or DOM overlay.
+- Physical-pixel viewport tracking through `getCurrentViewport()`, with render-target viewport state kept separate from logical CSS/DPR state.
+- Helper/gizmo exclusion plus Adaptive, Performance, Balanced, and High viewport quality profiles.
 - An attached **Scene Composer** panel in Lightflow Render, with the full dialog retained for grading and advanced controls.
-- One shared Canvas2D color-grade path for the viewport preview and final render.
+- GPU framebuffer color grading in the viewport and the export-safe Canvas2D grading path for final tiled renders.
 - Emissive-only Bloom masking: emissive render-mode alpha, MER maps, dedicated emissive maps, and additive materials glow without blooming ordinary bright surfaces.
 - Atmosphere-aware Bloom masking, including per-domain Bloom contribution for bright shafts and cloud highlights.
 - Selection highlight suppression during final capture so editing state cannot leak into exported pixels.
@@ -493,9 +494,10 @@ Studio Render hides gizmos by default. Verify that **Show Gizmos** is disabled i
 ### Bloom differs between viewport and final render
 
 - Open **Scene Composer** and ensure **Realtime Viewport Bloom** is enabled.
-- Use the same Bloom threshold, strength, and radius that Studio Render will use; both paths share the same mask and compositing implementation.
-- Realtime Bloom is throttled by **Preview FPS** and an internal quality profile. Start with **Balanced**; use **Performance** for high-DPI or integrated-GPU viewports.
+- Use the same Bloom threshold, strength, and radius that Studio Render will use; both paths share mask and occlusion semantics while using output-appropriate GPU/Canvas compositors.
+- Use **Adaptive** for automatic internal-resolution control. Set **Bloom FPS Limit** to `0` to follow every viewport render, or choose a cap up to 144 FPS.
 - Realtime composition only runs in **Lightflow Render** mode. Gizmos are excluded from the Bloom mask and Shader Architect AO is preserved in the base frame.
+- On Windows display scaling, update to Studio Render `1.6.0+`; older versions could apply renderer DPR twice to offscreen targets and appear enlarged or shifted.
 - Transparent final output can composite differently over an external background; compare against the intended destination background when judging edge glow.
 
 ### The environment does not affect a material or reflection
@@ -581,7 +583,7 @@ This roadmap is directional, not a release promise.
 - Better first-run guidance and sample `.bbmodel` scenes.
 - More robust quality presets for low-, mid-, and high-end GPUs.
 - Refinement of AO, screen-space reflection history, bevel behavior, and rim consistency between viewport and final render.
-- Optional temporal stabilization and GPU post-processing for Scene Composer on capable hardware.
+- Optional temporal stabilization for Scene Composer on capable hardware.
 - A transmittance-buffer experiment for colored raster shadows, gated by GPU capabilities.
 - Evaluation of a future native/WebGPU renderer only when Blockbench and the browser graphics stack expose a stable ray-tracing path; the current WebGL backend does not advertise hardware RTX.
 - Higher-order multiple scattering, point-light volumetric shadows, artist-authored 3D density textures, and improved temporal accumulation for Atmosphere.
