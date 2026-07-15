@@ -2,7 +2,7 @@
     'use strict';
 
     const PLUGIN_ID = 'lightflow_environment';
-    const PLUGIN_VERSION = '1.1.0';
+    const PLUGIN_VERSION = '1.2.0';
     const STORAGE_KEY = 'lightflow_environment.settings';
     const PROJECT_PROPERTY = 'lightflow_environment_settings';
     const TWO_PI = Math.PI * 2;
@@ -95,6 +95,7 @@
     let fallbackTexture = null;
     let projectProperty = null;
     let animationFrame = null;
+    let previewRenderFrame = null;
     let lastFrameTime = 0;
     let lastRenderTime = 0;
     const deletables = [];
@@ -663,7 +664,11 @@
 
         if (window.ShaderEngine) {
             window.ShaderEngine.environmentState = state;
-            window.ShaderEngine.updateLightUniforms?.();
+            if (typeof window.ShaderEngine.requestLightUniformUpdate === 'function') {
+                window.ShaderEngine.requestLightUniformUpdate('environment_update', { render: false });
+            } else {
+                window.ShaderEngine.updateLightUniforms?.('environment_update', { render: false });
+            }
         }
         if (typeof window.LightManagerMarkShadowsDirty === 'function') {
             window.LightManagerMarkShadowsDirty();
@@ -672,11 +677,18 @@
 
     function requestPreviewRender() {
         if (window.LightManagerStudioRenderSession) return;
-        const previews = new Set();
-        if (window.Preview?.selected) previews.add(Preview.selected);
-        if (Array.isArray(window.Preview?.all)) Preview.all.forEach(preview => previews.add(preview));
-        [window.main_preview, window.MediaPreview].forEach(preview => { if (preview) previews.add(preview); });
-        previews.forEach(preview => preview?.render?.());
+        if (previewRenderFrame !== null) return;
+        const render = () => {
+            previewRenderFrame = null;
+            if (window.LightManagerStudioRenderSession) return;
+            const preview = window.Preview?.selected || window.main_preview || window.MediaPreview;
+            preview?.render?.();
+        };
+        if (typeof requestAnimationFrame === 'function') previewRenderFrame = requestAnimationFrame(render);
+        else {
+            previewRenderFrame = 'microtask';
+            queueMicrotask(render);
+        }
     }
 
     function dispatchChanged(cause) {
@@ -1172,6 +1184,8 @@
         onunload() {
             if (animationFrame !== null) cancelAnimationFrame(animationFrame);
             animationFrame = null;
+            if (typeof previewRenderFrame === 'number') cancelAnimationFrame(previewRenderFrame);
+            previewRenderFrame = null;
             disposeScene();
             deletables.splice(0).reverse().forEach(item => item?.delete?.());
             delete window.LightflowEnvironment;

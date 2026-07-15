@@ -2,7 +2,7 @@
     'use strict';
 
     const PLUGIN_ID = 'lightflow_atmosphere';
-    const PLUGIN_VERSION = '1.0.1';
+    const PLUGIN_VERSION = '1.1.0';
     const MAX_VOLUMES = 4;
     const MAX_LIGHTS = 4;
     const MAX_SHADOWS = 2;
@@ -77,6 +77,7 @@
     let settingsAction = null;
     let stylesheet = null;
     let animationFrame = null;
+    let previewRenderFrame = null;
     let lastAnimatedFrame = 0;
     let lastPreviewPatchCheck = 0;
     let syncingPanel = false;
@@ -186,9 +187,19 @@
 
     function requestPreviewRender() {
         if (window.LightManagerStudioRenderSession) return;
-        const preview = window.Preview && Preview.selected;
-        if (preview && typeof preview.render === 'function') preview.render();
-        else if (window.Canvas && typeof Canvas.updateView === 'function') Canvas.updateView({ elements: [], element_aspects: {} });
+        if (previewRenderFrame !== null) return;
+        const render = () => {
+            previewRenderFrame = null;
+            if (window.LightManagerStudioRenderSession) return;
+            const preview = window.Preview && Preview.selected;
+            if (preview && typeof preview.render === 'function') preview.render();
+            else if (window.Canvas && typeof Canvas.updateView === 'function') Canvas.updateView({ elements: [], element_aspects: {} });
+        };
+        if (typeof requestAnimationFrame === 'function') previewRenderFrame = requestAnimationFrame(render);
+        else {
+            previewRenderFrame = 'microtask';
+            queueMicrotask(render);
+        }
     }
 
     const FULLSCREEN_VERTEX_SHADER = `
@@ -772,7 +783,19 @@
 
         invalidateSceneCache() {
             this.scenePartitionCache = null;
+            this.invalidateDepthCache();
+        },
+
+        invalidateDepthCache() {
             this.sceneRevision = (this.sceneRevision + 1) >>> 0;
+            this.states.forEach(state => {
+                state.lastFrameSignature = null;
+                state.lastNormalVolumeReady = false;
+                state.lastDepthSignature = null;
+            });
+        },
+
+        invalidateVolumeCache() {
             this.states.forEach(state => {
                 state.lastFrameSignature = null;
                 state.lastNormalVolumeReady = false;
@@ -937,8 +960,10 @@
                 lastNormalStudio: false,
                 lastBloomMultiplier: 1,
                 lastFrameSignature: null,
+                lastDepthSignature: null,
                 lastDepthSources: null,
                 lightCandidates: [],
+                lightElementByUuid: new Map(),
                 scratch: {
                     scaleMatrix: new THREE.Matrix4(),
                     worldMatrix: new THREE.Matrix4(),
@@ -994,6 +1019,7 @@
                 configureRenderTarget(state.sceneTarget, volumeWidth, volumeHeight);
                 configureRenderTarget(state.cubeTarget, volumeWidth, volumeHeight);
                 state.lastFrameSignature = null;
+                state.lastDepthSignature = null;
             }
             state.compositeUniforms.uBilateralUpsample.value = volumeWidth < sceneWidth || volumeHeight < sceneHeight;
         },
@@ -1331,6 +1357,11 @@
         updateLightUniforms(state) {
             const uniforms = state.volumeUniforms;
             const candidates = state.lightCandidates;
+            const elementByUuid = state.lightElementByUuid;
+            elementByUuid.clear();
+            window.LightElement?.all?.forEach?.(element => {
+                if (element?.uuid) elementByUuid.set(element.uuid, element);
+            });
             let candidateCount = 0;
             const lights = window.three_lights || {};
             for (const uuid in lights) {
@@ -1360,7 +1391,7 @@
                     continue;
                 }
                 const { uuid, light } = entry;
-                const element = window.LightElement?.all?.find?.(candidate => candidate?.uuid === uuid);
+                const element = elementByUuid.get(uuid);
                 light.getWorldPosition?.(position);
                 if (light.target?.getWorldPosition) {
                     light.target.getWorldPosition(targetPosition);
@@ -1510,6 +1541,29 @@
             return hash >>> 0;
         },
 
+        computeDepthSignature(state, preview, studio) {
+            let hash = 2166136261;
+            hash = this.hashNumber(hash, this.sceneRevision);
+            hash = this.hashNumber(hash, state.depthWidth);
+            hash = this.hashNumber(hash, state.depthHeight);
+            hash = this.hashNumber(hash, this.settings.helper_mask ? 1 : 0);
+            const camera = preview.camera;
+            hash = this.hashArray(hash, camera?.matrixWorld?.elements);
+            hash = this.hashArray(hash, camera?.projectionMatrix?.elements);
+            hash = this.hashNumber(hash, camera?.near);
+            hash = this.hashNumber(hash, camera?.far);
+            const tile = studio && this.studioTile?.preview === preview ? this.studioTile.tile : null;
+            if (tile) {
+                hash = this.hashNumber(hash, tile.viewX);
+                hash = this.hashNumber(hash, tile.viewY);
+                hash = this.hashNumber(hash, tile.viewWidth);
+                hash = this.hashNumber(hash, tile.viewHeight);
+                hash = this.hashNumber(hash, tile.sampleX);
+                hash = this.hashNumber(hash, tile.sampleY);
+            }
+            return hash >>> 0;
+        },
+
         performance() {
             const result = { states: this.states.size, raymarches: 0, cacheHits: 0, depthCaptures: 0, cacheHitRate: 0 };
             this.states.forEach(state => {
@@ -1582,6 +1636,7 @@
             state.rendering = true;
             this.resize(state, studio);
             const frameSignature = this.computeFrameSignature(state, preview, volumes, studio);
+            const depthSignature = this.computeDepthSignature(state, preview, studio);
             const previousTarget = renderer.getRenderTarget?.() || null;
             const previousTargetViewport = previousTarget?.viewport?.clone?.() || null;
             const previousTargetScissor = previousTarget?.scissor?.clone?.() || null;
@@ -1604,9 +1659,14 @@
                     // pipeline. Reuse its fresh depth buffers when they cover
                     // every visible cube; this removes two full scene draws
                     // per tile while preserving alpha-tested foliage depth.
-                    const depthSources = this.findFreshSharedDepthSources(preview, state) || this.captureDepth(state, preview);
+                    const sharedDepth = this.findFreshSharedDepthSources(preview, state);
+                    const cachedDepth = state.lastDepthSignature === depthSignature
+                        ? state.lastDepthSources
+                        : null;
+                    const depthSources = sharedDepth || cachedDepth || this.captureDepth(state, preview);
                     if (!depthSources) return false;
                     state.lastDepthSources = depthSources;
+                    state.lastDepthSignature = depthSignature;
                     this.updateUniforms(state, preview, volumes, studio, !!settings.bloomMask, depthSources);
                     renderer.autoClear = true;
                     renderer.setScissorTest?.(false);
@@ -1948,7 +2008,7 @@
             updateTransform(element) {
                 NodePreviewController.prototype.updateTransform.call(this, element);
                 updateVolumeGizmo(element);
-                AtmosphereManager.invalidateSceneCache();
+                AtmosphereManager.invalidateDepthCache();
                 requestPreviewRender();
                 this.dispatchEvent('update_transform', { element });
             },
@@ -1994,11 +2054,20 @@
 
     function applyVolumeConfig(volume, config) {
         if (!volume || !config) return;
+        const transformKeys = new Set(['position', 'rotation', 'size', 'shape', 'visibility']);
+        let transformChanged = false;
         Object.keys(config).forEach(key => {
-            if (VolumeElement.properties[key]) volume[key] = Array.isArray(config[key]) ? config[key].slice() : config[key];
+            if (!VolumeElement.properties[key]) return;
+            volume[key] = Array.isArray(config[key]) ? config[key].slice() : config[key];
+            if (transformKeys.has(key)) transformChanged = true;
         });
         sanitizeVolume(volume);
-        VolumeElement.preview_controller?.updateTransform(volume);
+        if (transformChanged) {
+            VolumeElement.preview_controller?.updateTransform(volume);
+        } else {
+            updateVolumeGizmo(volume);
+            AtmosphereManager.invalidateVolumeCache();
+        }
         VolumeElement.preview_controller?.updateSelection(volume);
     }
 
@@ -2480,10 +2549,7 @@
             window.LightflowAtmosphere = AtmosphereManager;
 
             const studioListener = Blockbench.on('studio_render_pre_tile', event => AtmosphereManager.prepareStudioTile(event));
-            const selectionListener = Blockbench.on('update_selection', () => {
-                AtmosphereManager.invalidateSceneCache();
-                syncAtmospherePanel();
-            });
+            const selectionListener = Blockbench.on('update_selection', () => syncAtmospherePanel());
             const projectListener = Blockbench.on('select_project', () => {
                 AtmosphereManager.invalidateSceneCache();
                 AtmosphereManager.patchAllPreviews();
@@ -2496,12 +2562,14 @@
                 requestPreviewRender();
             };
             window.addEventListener('light_manager_initialized', lightManagerListener);
+            const depthMutationListeners = [
+                'update_transform', 'update_geometry', 'update_faces', 'update_uv'
+            ].map(eventName => Blockbench.on(eventName, () => AtmosphereManager.invalidateDepthCache()));
             const sceneMutationListeners = [
-                'update_transform', 'update_geometry', 'update_faces', 'update_uv',
                 'add_cube', 'add_mesh', 'add_texture_mesh', 'remove_cube', 'remove_mesh',
                 'undo', 'redo', 'load_project'
             ].map(eventName => Blockbench.on(eventName, () => AtmosphereManager.invalidateSceneCache()));
-            deletables.push(studioListener, selectionListener, projectListener, ...sceneMutationListeners, {
+            deletables.push(studioListener, selectionListener, projectListener, ...depthMutationListeners, ...sceneMutationListeners, {
                 delete() { window.removeEventListener('light_manager_initialized', lightManagerListener); }
             });
             syncAtmospherePanel();
@@ -2512,6 +2580,8 @@
         onunload() {
             if (animationFrame !== null) cancelAnimationFrame(animationFrame);
             animationFrame = null;
+            if (typeof previewRenderFrame === 'number') cancelAnimationFrame(previewRenderFrame);
+            previewRenderFrame = null;
             AtmosphereManager.dispose();
             deletables.splice(0).reverse().forEach(item => item?.delete?.());
             if (VolumeElement?.all) {

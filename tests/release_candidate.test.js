@@ -25,11 +25,11 @@ test('all independently loadable plugins parse as JavaScript', () => {
 
 test('release candidate versions stay synchronized with the README', () => {
     const expected = {
-        'light_manager.js': '1.6.4',
-        'shader_architect.js': '2.7.1',
-        'lightflow_atmosphere.js': '1.0.1',
-        'lightflow_environment.js': '1.1.0',
-        'studio_render.js': '1.6.0'
+        'light_manager.js': '1.6.5',
+        'shader_architect.js': '2.8.0',
+        'lightflow_atmosphere.js': '1.1.0',
+        'lightflow_environment.js': '1.2.0',
+        'studio_render.js': '1.6.1'
     };
     const readme = read('README.md');
     Object.entries(expected).forEach(([file, version]) => {
@@ -149,6 +149,40 @@ test('Scene Composer keeps realtime Bloom GPU-resident, DPI-safe, and AO-order-s
     );
     assert.match(maskSection, /configureViewportPostTarget\(state\.maskTarget, width, height\);\s*renderer\.setRenderTarget\(state\.maskTarget\)/);
     assert.doesNotMatch(maskSection, /renderer\.setViewport/);
+    assert.match(source, /material\.blending = THREE\.CustomBlending/);
+    assert.match(source, /material\.blendSrcAlpha = THREE\.ZeroFactor/);
+    assert.match(source, /material\.blendDstAlpha = THREE\.OneFactor/);
+});
+
+test('interactive transforms avoid global lighting and material rebuild work', () => {
+    const source = read('shader_architect.js');
+    assert.doesNotMatch(source, /Blockbench\.on\('update_transform',[\s\S]{0,160}requestLightUniformUpdate/);
+    assert.match(source, /const changedElement = event\?\.element \|\| event\?\.object \|\| event\?\.cube/);
+    assert.match(source, /\{ partial: true, cubes: changedElements \}/);
+    assert.match(source, /getLightUniformScratch\(MAX_LIGHTS\)/);
+    assert.match(source, /'uLightShadowIndex', 'uSAEnvironmentEnabled'/);
+    const lightUpdateStart = source.indexOf('updateLightUniforms(cause =');
+    const lightUpdateEnd = source.indexOf('\n        }\n    };', lightUpdateStart);
+    const lightUpdate = source.slice(lightUpdateStart, lightUpdateEnd);
+    assert.doesNotMatch(lightUpdate, /window\.LightManagerPrepareRender\s*\(/);
+    assert.match(source, /const preview =[\s\S]{0,180}Preview\.selected/);
+    const previewRequestStart = source.indexOf('requestPreviewRender(options = {})');
+    const previewRequestEnd = source.indexOf('cancelPendingPreviewRender()', previewRequestStart);
+    assert.doesNotMatch(
+        source.slice(previewRequestStart, previewRequestEnd),
+        /Preview\.all\.forEach\(preview => \{[\s\S]{0,100}preview\.render/
+    );
+});
+
+test('light updates and environment animation are coalesced without redundant scene work', () => {
+    const lights = read('light_manager.js');
+    const environment = read('lightflow_environment.js');
+    assert.match(lights, /activeUuids: new Set\(\)/);
+    assert.match(lights, /worldPosition: new THREE\.Vector3\(\)/);
+    assert.match(lights, /update_light_element_callback\?\.\(\{ shadows: true, scene: false, gizmos: true \}\)/);
+    assert.match(environment, /requestLightUniformUpdate\('environment_update', \{ render: false \}\)/);
+    assert.match(environment, /if \(previewRenderFrame !== null\) return/);
+    assert.match(environment, /const preview = window\.Preview\?\.selected \|\| window\.main_preview/);
 });
 
 test('Minecraft environment drives sky, time, ambient response, sun shadows, and project persistence', () => {
@@ -261,6 +295,13 @@ test('Atmosphere 1.0 skips redundant realtime volume work', () => {
     assert.match(source, /useDepthOnlyCubeMaterials\(\)/);
     assert.match(source, /findFreshSharedDepthSources/);
     assert.match(source, /performance\(\) \{/);
+    assert.match(source, /computeDepthSignature\(state, preview, studio\)/);
+    assert.match(source, /state\.lastDepthSignature === depthSignature/);
+    assert.match(source, /sharedDepth \|\| cachedDepth \|\| this\.captureDepth/);
+    assert.match(source, /invalidateDepthCache\(\)/);
+    assert.match(source, /invalidateVolumeCache\(\)/);
+    assert.match(source, /const selectionListener = Blockbench\.on\('update_selection', \(\) => syncAtmospherePanel\(\)\)/);
+    assert.match(source, /lightElementByUuid: new Map\(\)/);
 });
 
 test('renderer documentation does not misrepresent WebGL as hardware RTX', () => {

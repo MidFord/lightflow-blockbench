@@ -13879,6 +13879,7 @@ ${lumaForgeLightflowHelpers}`
         pendingSceneUpdateCauses: null,
         pendingLightUniformFrame: null,
         pendingLightUniformCause: null,
+        pendingLightUniformRender: false,
         pendingPreviewRenderFrame: null,
         pendingPreviewRenderLightOnly: false,
         currentPreviewRenderLightOnly: false,
@@ -13888,6 +13889,7 @@ ${lumaForgeLightflowHelpers}`
         animationUniformTargetCacheDirty: true,
         sharedFrameUniforms: null,
         sharedLightUniforms: null,
+        lightUniformScratch: null,
         materialPool: new Map(),
         materialPoolObjectIds: new WeakMap(),
         nextMaterialPoolObjectId: 1,
@@ -13921,7 +13923,8 @@ ${lumaForgeLightflowHelpers}`
                 'max_light_number', 'uLightPos', 'uLightDir', 'uLightColor',
                 'uLightIntensity', 'uLightDistance', 'uLightConeAngle',
                 'uLightType', 'uLightPenumbra', 'uLightCastShadow',
-                'uLightShadowIndex'
+                'uLightShadowIndex', 'uSAEnvironmentEnabled',
+                'uSAEnvironmentAmbient', 'uSAEnvironmentStrength'
             ].forEach(name => {
                 const uniform = material.uniforms[name];
                 if (!uniform) return;
@@ -14390,23 +14393,29 @@ ${lumaForgeLightflowHelpers}`
             this.pendingSceneUpdatePartial = false;
         },
 
-        requestLightUniformUpdate(cause = 'light_update') {
+        requestLightUniformUpdate(cause = 'light_update', options = {}) {
             this.pendingLightUniformCause = cause;
+            this.pendingLightUniformRender = this.pendingLightUniformRender || options.render !== false;
 
             if (this.pendingLightUniformFrame !== null) return;
 
             const flush = () => {
                 const pendingCause = this.pendingLightUniformCause || 'light_update';
+                const shouldRender = this.pendingLightUniformRender;
                 this.pendingLightUniformFrame = null;
                 this.pendingLightUniformCause = null;
-                this.updateLightUniforms(pendingCause);
+                this.pendingLightUniformRender = false;
+                this.updateLightUniforms(pendingCause, { render: shouldRender });
             };
 
-            if (typeof requestAnimationFrame === 'function') {
-                this.pendingLightUniformFrame = requestAnimationFrame(flush);
-            } else if (typeof queueMicrotask === 'function') {
+            // Light Manager already batches slider traffic to one animation
+            // frame. A microtask merges all callbacks from that update while
+            // keeping the resulting uniforms available to the next paint.
+            if (typeof queueMicrotask === 'function') {
                 this.pendingLightUniformFrame = 'microtask';
                 queueMicrotask(flush);
+            } else if (typeof requestAnimationFrame === 'function') {
+                this.pendingLightUniformFrame = requestAnimationFrame(flush);
             } else {
                 this.pendingLightUniformFrame = 'promise';
                 Promise.resolve().then(flush);
@@ -14423,6 +14432,7 @@ ${lumaForgeLightflowHelpers}`
 
             this.pendingLightUniformFrame = null;
             this.pendingLightUniformCause = null;
+            this.pendingLightUniformRender = false;
         },
 
         requestPreviewRender(options = {}) {
@@ -14441,8 +14451,6 @@ ${lumaForgeLightflowHelpers}`
                 this.pendingPreviewRenderFrame = null;
                 this.pendingPreviewRenderLightOnly = false;
 
-                if (!window.Preview || !Array.isArray(Preview.all)) return;
-
                 /*
                  * Studio Render owns the offscreen preview and renders every
                  * tile itself. A queued Shader Architect preview refresh must
@@ -14458,11 +14466,12 @@ ${lumaForgeLightflowHelpers}`
 
                 this.currentPreviewRenderLightOnly = renderLightOnly;
                 try {
-                    Preview.all.forEach(preview => {
-                        if (preview && typeof preview.render === 'function') {
-                            preview.render();
-                        }
-                    });
+                    const preview =
+                        (window.Preview && Preview.selected) ||
+                        window.main_preview ||
+                        window.MediaPreview ||
+                        null;
+                    preview?.render?.();
                 } finally {
                     this.currentPreviewRenderLightOnly = false;
                 }
@@ -16483,7 +16492,48 @@ ${stochasticAlpha
             return materials;
         },
 
-        updateLightUniforms() {
+        getLightUniformScratch(maxLights) {
+            const size = Math.max(1, maxLights | 0);
+            if (!this.lightUniformScratch || this.lightUniformScratch.size !== size) {
+                const vectors = fallback => Array.from({ length: size }, () => new THREE.Vector3(...fallback));
+                this.lightUniformScratch = {
+                    size,
+                    posArray: vectors([0, 0, 0]),
+                    dirArray: vectors([0, -1, 0]),
+                    colArray: vectors([0, 0, 0]),
+                    intArray: new Array(size).fill(0),
+                    distanceArray: new Array(size).fill(0),
+                    coneAngleArray: new Array(size).fill(0),
+                    penumbraArray: new Array(size).fill(0),
+                    lightTypeArray: new Array(size).fill(0),
+                    castShadowArray: new Array(size).fill(0),
+                    shadowIndexArray: new Array(size).fill(-1),
+                    lightPosition: new THREE.Vector3(),
+                    targetPosition: new THREE.Vector3(),
+                    quaternion: new THREE.Quaternion(),
+                    shadowIndexByThreeUuid: new Map(),
+                    updatedUniformGroups: new Set()
+                };
+            }
+            const scratch = this.lightUniformScratch;
+            for (let index = 0; index < size; index++) {
+                scratch.posArray[index].set(0, 0, 0);
+                scratch.dirArray[index].set(0, -1, 0);
+                scratch.colArray[index].set(0, 0, 0);
+                scratch.intArray[index] = 0;
+                scratch.distanceArray[index] = 0;
+                scratch.coneAngleArray[index] = 0;
+                scratch.penumbraArray[index] = 0;
+                scratch.lightTypeArray[index] = 0;
+                scratch.castShadowArray[index] = 0;
+                scratch.shadowIndexArray[index] = -1;
+            }
+            scratch.shadowIndexByThreeUuid.clear();
+            scratch.updatedUniformGroups.clear();
+            return scratch;
+        },
+
+        updateLightUniforms(cause = 'light_update', options = {}) {
             this.cancelPendingLightUniformUpdate();
 
             const lights = (window.LightElement && Array.isArray(window.LightElement.all))
@@ -16496,38 +16546,20 @@ ${stochasticAlpha
             }
 
             const MAX_LIGHTS = 16;
+            const scratch = this.getLightUniformScratch(MAX_LIGHTS);
+            const {
+                posArray, dirArray, colArray, intArray, distanceArray,
+                coneAngleArray, penumbraArray, lightTypeArray,
+                castShadowArray, shadowIndexArray
+            } = scratch;
 
-            const posArray = [];
-            const dirArray = [];
-            const colArray = [];
-            const intArray = [];
-            const distanceArray = [];
-            const coneAngleArray = [];
-            const penumbraArray = [];
-            const lightTypeArray = [];
-            const castShadowArray = [];
-            const shadowIndexArray = [];
-
-            if (!this._preparingLightUniformRender && typeof window.LightManagerPrepareRender === 'function') {
-                this._preparingLightUniformRender = true;
-                try {
-                    const preview =
-                        window.LightManagerStudioRenderPreview ||
-                        (typeof Preview !== 'undefined' && Preview.selected) ||
-                        window.main_preview ||
-                        window.MediaPreview ||
-                        window.Screencam?.NoAAPreview ||
-                        null;
-                    window.LightManagerPrepareRender(preview, {
-                        shadows: true,
-                        scene: true,
-                        gizmos: false,
-                        studio: !!window.LightManagerStudioRenderActive
-                    });
-                } finally {
-                    this._preparingLightUniformRender = false;
-                }
-            }
+            /*
+             * Do not call LightManagerPrepareRender from this uniform-only
+             * path. Light Manager invokes us after synchronizing its THREE
+             * lights, and each actual renderer prepares its own shadows. The
+             * old call performed a full shadow/scene preparation for every
+             * slider step and then requested another preview render.
+             */
 
             const threeLights = window.three_lights || {};
             const threeLightsGroup = window.three_lights_group || null;
@@ -16559,9 +16591,9 @@ ${stochasticAlpha
                 return 0;
             };
 
-            const getLightColor = (element, threeLight) => {
+            const getLightColor = (element, threeLight, target) => {
                 if (threeLight && threeLight.color) {
-                    return new THREE.Vector3(
+                    return target.set(
                         threeLight.color.r,
                         threeLight.color.g,
                         threeLight.color.b
@@ -16570,7 +16602,7 @@ ${stochasticAlpha
 
                 const color = element.render_color || element.color || [255, 255, 255];
 
-                return new THREE.Vector3(
+                return target.set(
                     Math.max(0, Math.min(1, Number(color[0] ?? 255) / 255)),
                     Math.max(0, Math.min(1, Number(color[1] ?? 255) / 255)),
                     Math.max(0, Math.min(1, Number(color[2] ?? 255) / 255))
@@ -16583,20 +16615,17 @@ ${stochasticAlpha
                 return isUsableThreeLight(threeLight) ? threeLight : null;
             };
 
-            const getWorldDirectionFromThreeLight = (threeLight, fallbackMesh) => {
-                const direction = new THREE.Vector3(0, 0, -1);
+            const getWorldDirectionFromThreeLight = (threeLight, fallbackMesh, direction) => {
+                direction.set(0, 0, -1);
 
                 if (threeLight && threeLight.target) {
-                    const lightPos = new THREE.Vector3();
-                    const targetPos = new THREE.Vector3();
-
                     threeLight.updateMatrixWorld(true);
                     threeLight.target.updateMatrixWorld(true);
 
-                    threeLight.getWorldPosition(lightPos);
-                    threeLight.target.getWorldPosition(targetPos);
+                    threeLight.getWorldPosition(scratch.lightPosition);
+                    threeLight.target.getWorldPosition(scratch.targetPosition);
 
-                    direction.copy(targetPos).sub(lightPos);
+                    direction.copy(scratch.targetPosition).sub(scratch.lightPosition);
 
                     if (direction.lengthSq() > 1e-8) {
                         return direction.normalize();
@@ -16604,17 +16633,16 @@ ${stochasticAlpha
                 }
 
                 if (fallbackMesh) {
-                    const quat = new THREE.Quaternion();
                     fallbackMesh.updateMatrixWorld(true);
-                    fallbackMesh.getWorldQuaternion(quat);
-                    direction.applyQuaternion(quat);
+                    fallbackMesh.getWorldQuaternion(scratch.quaternion);
+                    direction.applyQuaternion(scratch.quaternion);
 
                     if (direction.lengthSq() > 1e-8) {
                         return direction.normalize();
                     }
                 }
 
-                return new THREE.Vector3(0, -1, 0);
+                return direction.set(0, -1, 0);
             };
 
             /*
@@ -16622,7 +16650,7 @@ ${stochasticAlpha
                 Three.js does not use the LightElement.all index.
                 Use the actual THREE light order from the scene/group.
             */
-            const shadowIndexByThreeUuid = new Map();
+            const shadowIndexByThreeUuid = scratch.shadowIndexByThreeUuid;
 
             let directionalShadowIndex = 0;
             let spotShadowIndex = 0;
@@ -16666,7 +16694,7 @@ ${stochasticAlpha
                 const threeLight = getThreeLightForElement(element);
                 const typeId = getLightTypeIdFromElement(element);
 
-                const worldPos = new THREE.Vector3();
+                const worldPos = posArray[activeLightCount];
 
                 if (threeLight) {
                     threeLight.updateMatrixWorld(true);
@@ -16676,7 +16704,11 @@ ${stochasticAlpha
                     element.mesh.getWorldPosition(worldPos);
                 }
 
-                const worldDir = getWorldDirectionFromThreeLight(threeLight, element.mesh);
+                getWorldDirectionFromThreeLight(
+                    threeLight,
+                    element.mesh,
+                    dirArray[activeLightCount]
+                );
 
                 const castsShadow =
                     !!threeLight &&
@@ -16689,52 +16721,37 @@ ${stochasticAlpha
                     ? shadowIndexByThreeUuid.get(threeLight.uuid)
                     : -1;
 
-                posArray.push(worldPos);
-                dirArray.push(worldDir);
-                lightTypeArray.push(typeId);
-                colArray.push(getLightColor(element, threeLight));
+                lightTypeArray[activeLightCount] = typeId;
+                getLightColor(element, threeLight, colArray[activeLightCount]);
 
-                intArray.push(
+                intArray[activeLightCount] =
                     element.render_intensity !== undefined
                         ? Math.max(0, Number(element.render_intensity) || 0)
                         : Math.max(0, Number(element.intensity) || 0)
-                );
+                ;
 
-                distanceArray.push(
+                distanceArray[activeLightCount] =
                     element.distance !== undefined
                         ? Math.max(0, Number(element.distance) || 0)
                         : 0.0
-                );
+                ;
 
-                coneAngleArray.push(
+                coneAngleArray[activeLightCount] =
                     THREE.MathUtils.degToRad(
                         Math.max(0.001, Math.min(89.9, Number(element.angle) || 45))
                     )
-                );
+                ;
 
-                penumbraArray.push(
+                penumbraArray[activeLightCount] =
                     element.penumbra !== undefined
                         ? Math.max(0, Math.min(1, Number(element.penumbra) || 0))
                         : 0.0
-                );
+                ;
 
-                castShadowArray.push(castsShadow ? 1 : 0);
-                shadowIndexArray.push(shadowIndex);
+                castShadowArray[activeLightCount] = castsShadow ? 1 : 0;
+                shadowIndexArray[activeLightCount] = shadowIndex;
 
                 activeLightCount++;
-            }
-
-            for (let i = activeLightCount; i < MAX_LIGHTS; i++) {
-                posArray.push(new THREE.Vector3(0, 0, 0));
-                dirArray.push(new THREE.Vector3(0, -1, 0));
-                colArray.push(new THREE.Vector3(0, 0, 0));
-                intArray.push(0.0);
-                distanceArray.push(0.0);
-                coneAngleArray.push(0.0);
-                penumbraArray.push(0.0);
-                lightTypeArray.push(0);
-                castShadowArray.push(0);
-                shadowIndexArray.push(-1);
             }
 
             const ensureUniform = (mat, name, valueFactory) => {
@@ -16789,7 +16806,7 @@ ${stochasticAlpha
                 return uniform;
             };
 
-            const updatedUniformGroups = new Set();
+            const updatedUniformGroups = scratch.updatedUniformGroups;
             const environmentState = window.LightflowEnvironment?.getLightingState?.();
             this.getLightUniformMaterials().forEach(mat => {
                 if (!mat || !mat.uniforms) return;
@@ -16869,7 +16886,9 @@ ${stochasticAlpha
                 }
             });
 
-            this.requestPreviewRender({ lightOnly: true });
+            if (options.render !== false) {
+                this.requestPreviewRender({ lightOnly: true, cause });
+            }
         }
     };
 
@@ -18934,7 +18953,7 @@ ${stochasticAlpha
             UpdateShaderArchitectLights: window.UpdateShaderArchitectLights,
             on_light_element_updated: window.on_light_element_updated
         };
-        const updateShaderLights = () => ShaderEngine.updateLightUniforms('light_element_update');
+        const updateShaderLights = () => ShaderEngine.requestLightUniformUpdate('light_element_update');
 
         window.updateLights = updateShaderLights;
         window.UpdateShaderArchitectLights = updateShaderLights;
@@ -18975,7 +18994,7 @@ ${stochasticAlpha
         author: 'MidFord327',
         description: 'Build advanced Blockbench materials with real-time Lightflow presets, editable GLSL, material instances, and deep Light Manager integration. Requires Light Manager for lights and shadows.',
         tags: ['Lightflow', 'Shaders', 'Materials', 'Rendering', 'GLSL', 'Lighting'],
-        version: '2.7.1',
+        version: '2.8.0',
         min_version: '4.9.0',
         variant: 'both',
 
@@ -20856,13 +20875,24 @@ ${stochasticAlpha
                     const controller = ElementType.preview_controller;
                     if (!controller || typeof controller.on !== 'function') return;
                     ['update_uv', 'update_faces', 'update_geometry'].forEach(eventName => {
-                        const previewEvent = controller.on(eventName, () => {
+                        const previewEvent = controller.on(eventName, (event) => {
                             if (!Project.parsed || Blockbench.hasFlag('switching_project')) return;
                             if (eventName === 'update_uv' && window.TextureAnimator && window.TextureAnimator.isPlaying) {
                                 ShaderEngine.requestPreviewRender({ cause: 'texture_animation_frame' });
                                 return;
                             }
-                            ShaderEngine.requestSceneUpdate(`${ElementType.name || 'element'}_${eventName}`);
+                            const changedElement = event?.element || event?.object || event?.cube || null;
+                            const changedElements = changedElement
+                                ? [changedElement]
+                                : getSelectedShaderElements();
+                            if (changedElements.length) {
+                                ShaderEngine.requestSceneUpdate(
+                                    `${ElementType.name || 'element'}_${eventName}`,
+                                    { partial: true, cubes: changedElements }
+                                );
+                            } else {
+                                ShaderEngine.requestSceneUpdate(`${ElementType.name || 'element'}_${eventName}`);
+                            }
                         });
                         if (previewEvent) deletables.push(previewEvent);
                     });
@@ -20881,11 +20911,6 @@ ${stochasticAlpha
                 ['add_cube', 'add_mesh', 'add_texture_mesh'].forEach(eventName => {
                     deletables.push(Blockbench.on(eventName, applyAddedElement));
                 });
-
-                let transformEvent = Blockbench.on('update_transform', () => {
-                    ShaderEngine.requestLightUniformUpdate('update_transform');
-                });
-                deletables.push(transformEvent);
 
                 const updateProjectEvent = (project) => {
                     if (!project) project = MaterialManager.getActiveProject();

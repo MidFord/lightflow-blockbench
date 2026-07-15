@@ -2356,7 +2356,23 @@
 
         state.postQuad.material = material;
         material.transparent = !useColorGrade;
-        material.blending = useColorGrade ? THREE.NoBlending : THREE.AdditiveBlending;
+        if (useColorGrade) {
+            material.blending = THREE.NoBlending;
+        } else {
+            /*
+             * Add Bloom to RGB without touching the destination alpha. The
+             * Blockbench checkerboard is CSS behind a transparent WebGL
+             * canvas; ordinary AdditiveBlending also adds source alpha and
+             * turns those transparent pixels opaque black.
+             */
+            material.blending = THREE.CustomBlending;
+            material.blendEquation = THREE.AddEquation;
+            material.blendSrc = THREE.OneFactor;
+            material.blendDst = THREE.OneFactor;
+            material.blendEquationAlpha = THREE.AddEquation;
+            material.blendSrcAlpha = THREE.ZeroFactor;
+            material.blendDstAlpha = THREE.OneFactor;
+        }
         renderer.setRenderTarget?.(null);
         if (snapshot.viewport) renderer.setViewport?.(snapshot.viewport);
         if (snapshot.scissor) renderer.setScissor?.(snapshot.scissor);
@@ -4117,7 +4133,7 @@
         author: 'MidFord327',
         description: 'Export polished Blockbench studio renders with tiled supersampling, 4K/8K-safe output, transparency, GPU guidance, and an adjustable frame. Complements Light Manager and Shader Architect in the Lightflow suite.',
         tags: ['Lightflow', 'Rendering', 'Export', 'Screenshots', 'Studio', 'Presentation'],
-        version: '1.6.0',
+        version: '1.6.1',
         min_version: '4.9.0',
         variant: 'both',
         onload() {

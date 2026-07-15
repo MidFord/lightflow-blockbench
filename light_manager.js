@@ -218,7 +218,11 @@ const LIGHT_MANAGER_UPDATE_STATE = {
     running: false,
     rerun: false,
     options: null,
-    preparingLights: false
+    preparingLights: false,
+    activeUuids: new Set(),
+    worldPosition: new THREE.Vector3(),
+    worldQuaternion: new THREE.Quaternion(),
+    worldDirection: new THREE.Vector3()
 };
 
 const LIGHT_MANAGER_DEFAULT_UPDATE_OPTIONS = {
@@ -3363,7 +3367,8 @@ function runLightManagerElementUpdate(options = LIGHT_MANAGER_DEFAULT_UPDATE_OPT
     }
 
     // Keep track of active UUIDs to remove deleted lights
-    const activeUuids = new Set();
+    const activeUuids = LIGHT_MANAGER_UPDATE_STATE.activeUuids;
+    activeUuids.clear();
 
     if (typeof LightElement !== 'undefined' && LightElement.all) {
         LightElement.all.forEach(element => {
@@ -3439,15 +3444,15 @@ function runLightManagerElementUpdate(options = LIGHT_MANAGER_DEFAULT_UPDATE_OPT
 
             // Sync Position and Rotation
             if (element.mesh) {
-                let worldPos = new THREE.Vector3();
-                let worldQuat = new THREE.Quaternion();
+                const worldPos = LIGHT_MANAGER_UPDATE_STATE.worldPosition;
+                const worldQuat = LIGHT_MANAGER_UPDATE_STATE.worldQuaternion;
                 element.mesh.getWorldPosition(worldPos);
                 element.mesh.getWorldQuaternion(worldQuat);
 
                 light.position.copy(worldPos);
 
                 if (light.target) {
-                    let direction = new THREE.Vector3(0, 0, -1);
+                    const direction = LIGHT_MANAGER_UPDATE_STATE.worldDirection.set(0, 0, -1);
                     direction.applyQuaternion(worldQuat);
                     light.target.position.copy(worldPos).add(direction);
                     light.target.updateMatrixWorld(true);
@@ -3926,7 +3931,7 @@ function initialize_light_plugin() {
         author: 'MidFord327',
         description: 'Add production-ready point, spot, and directional lights to Blockbench with viewport gizmos, animation support, shadows, and Studio Render controls. Provides the Lightflow lighting foundation for Shader Architect and Studio Render.',
         tags: ['Lightflow', 'Lighting', 'Shadows', 'Animation', 'Rendering', 'Studio'],
-        version: '1.6.4',
+        version: '1.6.5',
         min_version: '4.9.0',
         variant: 'both',
 
@@ -6922,7 +6927,7 @@ function initialize_light_plugin() {
                     element.mesh.fix_position.copy(element.mesh.position);
                     element.mesh.fix_rotation.copy(element.mesh.rotation);
                     this.updateWindowSize(element);
-                    window.update_light_element_callback?.();
+                    window.update_light_element_callback?.({ shadows: true, scene: false, gizmos: true });
                 },
                 updateSelection(element) {
                     let { mesh } = element;

@@ -6,6 +6,17 @@ Lightflow uses a suite release version for public downloads. Individual plugins 
 
 ## [Unreleased]
 
+### RC 5 interactive performance and transparency
+
+- **Studio Render 1.6.1:** preserves the destination alpha during additive viewport Bloom, so Blockbench's transparent checkerboard remains visible instead of becoming an opaque black background.
+- **Shader Architect 2.8.0:** removes the full light/shadow preparation accidentally triggered by uniform-only updates and no longer treats ordinary Cube transforms as lighting changes.
+- Geometry, face, and UV events now rebuild only the affected render element; light arrays, vectors, shadow-index maps, and active-preview rendering are reused or coalesced instead of recreated for every slider step.
+- **Light Manager 1.6.5:** light transforms explicitly skip scene shadow-mesh traversal and reuse update scratch objects rather than allocating world-space vectors for every light and frame.
+- **Lightflow Atmosphere 1.1.0:** separates depth and volume signatures. Light/color/intensity changes reuse the unchanged scene depth and rerun only the volumetric lighting pass; optical volume edits also retain depth, while actual geometry transforms invalidate it without rebuilding the scene partition.
+- Atmosphere selection updates no longer invalidate volumetric rendering, preview requests are frame-coalesced, and light-element lookup no longer performs a repeated linear search inside the raymarch setup.
+- **Lightflow Environment 1.2.0:** coalesces environment uniform updates and renders only the active preview, avoiding a second full render of every Blockbench preview during time animation and live panel edits.
+- These changes target high-refresh interactive editing, but the achieved frame rate still depends on GPU, viewport size, shadow resolution, volume quality, scene complexity, and Blockbench itself.
+
 ### RC 4 native GPU viewport composition
 
 - **Studio Render 1.6.0:** replaced the realtime CPU readback/Canvas2D overlay with a GPU-resident emissive mask, three-level downsample Bloom pyramid, and direct framebuffer composition.
