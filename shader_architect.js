@@ -2091,6 +2091,44 @@ vec3 saApplyBlockbenchRenderModeEmission(vec3 litColor, vec3 baseColor, float al
         return target;
     }
 
+    /*
+        Three r129 defines this helper in <bsdfs>, while <lights_pars_begin>
+        calls it. Lightflow's custom shaders intentionally do not include
+        <bsdfs> because they provide their own BRDF functions. Keep the
+        compatibility overloads local to those shaders instead of mutating
+        THREE.ShaderChunk.common and breaking stock Lambert/Phong programs.
+    */
+    const LIGHTFLOW_PUNCTUAL_LIGHT_COMPAT = `
+#ifndef SA_PUNCTUAL_LIGHT_COMPAT
+#define SA_PUNCTUAL_LIGHT_COMPAT
+float punctualLightIntensityToIrradianceFactor(
+    const in float lightDistance,
+    const in float cutoffDistance,
+    const in float decayExponent
+) {
+#if defined(PHYSICALLY_CORRECT_LIGHTS)
+    float distanceFalloff = 1.0 / max(pow(lightDistance, decayExponent), 0.01);
+    if (cutoffDistance > 0.0) {
+        distanceFalloff *= pow2(saturate(1.0 - pow4(lightDistance / cutoffDistance)));
+    }
+    return distanceFalloff;
+#else
+    if (cutoffDistance > 0.0 && decayExponent > 0.0) {
+        return pow(saturate(-lightDistance / cutoffDistance + 1.0), decayExponent);
+    }
+    return 1.0;
+#endif
+}
+
+float punctualLightIntensityToIrradianceFactor(
+    const in float lightDistance,
+    const in float cutoffDistance
+) {
+    return punctualLightIntensityToIrradianceFactor(lightDistance, cutoffDistance, 1.0);
+}
+#endif
+`;
+
     const SCREEN_SPACE_REFLECTIONS_PARS_FRAGMENT = `
 #define SA_SSR_STEPS 56
 
@@ -4807,6 +4845,7 @@ void main() {
 }`,
                 fragment: `#include <common>
 #include <packing>
+${LIGHTFLOW_PUNCTUAL_LIGHT_COMPAT}
 #include <lights_pars_begin>
 #include <shadowmap_pars_fragment>
 ${SCREEN_SPACE_REFLECTIONS_PARS_FRAGMENT}
@@ -6756,6 +6795,7 @@ void main() {
 }`,
                 fragment: `#include <common>
 #include <packing>
+${LIGHTFLOW_PUNCTUAL_LIGHT_COMPAT}
 #include <lights_pars_begin>
 #include <shadowmap_pars_fragment>
 ${SCREEN_SPACE_REFLECTIONS_PARS_FRAGMENT}
@@ -7332,6 +7372,7 @@ void main() {
 
                 fragment: `#include <common>
 #include <packing>
+${LIGHTFLOW_PUNCTUAL_LIGHT_COMPAT}
 #include <lights_pars_begin>
 #include <shadowmap_pars_fragment>
 
@@ -7352,6 +7393,9 @@ uniform float uLightPenumbra[16];
 uniform int uLightType[16];
 uniform vec3 uLightColor[16];
 uniform int max_light_number;
+
+uniform int uLightCastShadow[16];
+uniform int uLightShadowIndex[16];
 
 /* Ambient */
 uniform float uAmbient;
@@ -10454,6 +10498,7 @@ varying vec4 vSA_SSRClipPosition;
 uniform sampler2D map;`,
                     `#include <common>
 #include <packing>
+${LIGHTFLOW_PUNCTUAL_LIGHT_COMPAT}
 #include <lights_pars_begin>
 #include <shadowmap_pars_fragment>
 ${SCREEN_SPACE_REFLECTIONS_PARS_FRAGMENT}
@@ -10750,6 +10795,7 @@ ${lumaForgeLightflowHelpers}`
                 fragment: `
                                 #include <common>
                                 #include <packing>
+                                ${LIGHTFLOW_PUNCTUAL_LIGHT_COMPAT}
                                 #include <lights_pars_begin>
                                 #include <shadowmap_pars_fragment>
                                 #include <shadowmask_pars_fragment>
@@ -11361,32 +11407,55 @@ ${lumaForgeLightflowHelpers}`
             const previousTarget = renderer.getRenderTarget();
             const previousAutoClear = renderer.autoClear;
             const hiddenMeshes = this.setReflectiveMeshesVisible(false);
+            const fallbackTexture = this.getFallbackTexture();
+            let captureSucceeded = false;
+
+            /*
+                Never sample captureTarget while it is the active framebuffer.
+                Reflective meshes are hidden for the clean capture, but pooled
+                materials or auxiliary preview objects can still retain the
+                same SSR uniforms. Binding the fallback closes that path and
+                prevents WebGL feedback-loop errors.
+            */
+            materials.forEach(material => {
+                if (!this.ensureMaterialUniforms(material)) return;
+                material.uniforms.uSA_SSRScene.value = fallbackTexture;
+                material.uniforms.uSA_SSRDepth.value = fallbackTexture;
+                material.uniforms.uSA_SSRHasDepth.value = 0;
+                material.uniformsNeedUpdate = true;
+            });
 
             try {
                 renderer.autoClear = true;
                 renderer.setRenderTarget(state.captureTarget);
                 renderer.clear(true, true, true);
                 renderer.render(Canvas.scene, camera);
-                renderer.setRenderTarget(previousTarget);
-                renderer.autoClear = previousAutoClear;
-                this.restoreMeshVisibility(hiddenMeshes);
-                this.invalidateShadowMaps(preview, {
-                    studio: !!preview.sa_studio_render_active
-                });
                 state.hasCaptured = true;
                 state.lastCaptureFrame = state.frameIndex;
-
-                materials.forEach(material => {
-                    this.updateMaterialUniformsForPreview(material, state, camera);
-                });
+                captureSucceeded = true;
             } catch (error) {
+                state.hasCaptured = false;
+            } finally {
                 renderer.setRenderTarget(previousTarget);
                 renderer.autoClear = previousAutoClear;
                 this.restoreMeshVisibility(hiddenMeshes);
                 this.invalidateShadowMaps(preview, {
                     studio: !!preview.sa_studio_render_active
                 });
-            } finally {
+
+                if (captureSucceeded) {
+                    materials.forEach(material => {
+                        this.updateMaterialUniformsForPreview(material, state, camera);
+                    });
+                } else {
+                    materials.forEach(material => {
+                        if (!this.ensureMaterialUniforms(material)) return;
+                        material.uniforms.uSA_SSRScene.value = fallbackTexture;
+                        material.uniforms.uSA_SSRDepth.value = fallbackTexture;
+                        material.uniforms.uSA_SSRHasDepth.value = 0;
+                        material.uniformsNeedUpdate = true;
+                    });
+                }
                 state.capturing = false;
             }
         },
@@ -18906,7 +18975,7 @@ ${stochasticAlpha
         author: 'MidFord327',
         description: 'Build advanced Blockbench materials with real-time Lightflow presets, editable GLSL, material instances, and deep Light Manager integration. Requires Light Manager for lights and shadows.',
         tags: ['Lightflow', 'Shaders', 'Materials', 'Rendering', 'GLSL', 'Lighting'],
-        version: '2.7.0',
+        version: '2.7.1',
         min_version: '4.9.0',
         variant: 'both',
 

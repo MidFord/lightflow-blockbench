@@ -2,7 +2,7 @@
     'use strict';
 
     const PLUGIN_ID = 'lightflow_environment';
-    const PLUGIN_VERSION = '1.0.0';
+    const PLUGIN_VERSION = '1.0.1';
     const STORAGE_KEY = 'lightflow_environment.settings';
     const PROJECT_PROPERTY = 'lightflow_environment_settings';
     const TWO_PI = Math.PI * 2;
@@ -245,7 +245,7 @@
         '    vec4 clipPosition = projectionMatrix * rotationOnlyView * vec4(position, 1.0);',
         '    gl_Position = clipPosition.xyww;',
         '}'
-    ].join('\\n');
+    ].join('\n');
 
     const SKY_FRAGMENT = [
         'precision highp float;',
@@ -310,7 +310,7 @@
         '    }',
         '    gl_FragColor=vec4(max(color,vec3(0)),1);',
         '}'
-    ].join('\\n');
+    ].join('\n');
 
     function createSky() {
         if (!window.THREE || !window.Canvas?.scene || skyMesh) return false;

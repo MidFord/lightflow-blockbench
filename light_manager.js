@@ -3315,36 +3315,12 @@ window.LightManagerFitTool = {
 };
 
 /*
- * Older Three.js builds did not expose the distance helper used by the light
- * chunks. Blockbench 5 / Three r129 already defines it in
- * lights_pars_begin. Injecting a second body into <common> makes every stock
- * Lambert/Phong material fail to compile in WebGL2, so only install the
- * compatibility helper when the active light chunk genuinely lacks it.
+ * Do not patch THREE.ShaderChunk.common here. Three r129 owns the punctual
+ * attenuation helper in <bsdfs>; a global copy collides with stock
+ * Lambert/Phong materials. Shader Architect provides its compatibility
+ * overload only inside custom shaders that consume <lights_pars_begin>
+ * without also consuming <bsdfs>.
  */
-const lightManagerHasNativePunctualHelper = !!(
-    THREE.ShaderChunk.lights_pars_begin &&
-    THREE.ShaderChunk.lights_pars_begin.includes('punctualLightIntensityToIrradianceFactor')
-);
-
-if (!lightManagerHasNativePunctualHelper && !THREE.ShaderChunk.common.includes('PUNCTUAL_LIGHT_PATCH')) {
-    THREE.ShaderChunk.common += `\n
-    #ifndef PUNCTUAL_LIGHT_PATCH
-    #define PUNCTUAL_LIGHT_PATCH
-    float punctualLightIntensityToIrradianceFactor( const in float lightDistance, const in float cutoffDistance, const in float decayExponent ) {
-        if( cutoffDistance > 0.0 && decayExponent > 0.0 ) {
-            return pow( clamp( -lightDistance / cutoffDistance + 1.0, 0.0, 1.0 ), decayExponent );
-        }
-        return 1.0;
-    }
-    float punctualLightIntensityToIrradianceFactor( const in float lightDistance, const in float cutoffDistance ) {
-        if( cutoffDistance > 0.0 ) {
-            return clamp( 1.0 - lightDistance / cutoffDistance, 0.0, 1.0 );
-        }
-        return 1.0;
-    }
-    #endif
-    `;
-}
 
 if (typeof window.on_light_element_updated !== 'function') {
     window.on_light_element_updated = () => { };
@@ -3934,7 +3910,7 @@ function initialize_light_plugin() {
         author: 'MidFord327',
         description: 'Add production-ready point, spot, and directional lights to Blockbench with viewport gizmos, animation support, shadows, and Studio Render controls. Provides the Lightflow lighting foundation for Shader Architect and Studio Render.',
         tags: ['Lightflow', 'Lighting', 'Shadows', 'Animation', 'Rendering', 'Studio'],
-        version: '1.6.2',
+        version: '1.6.3',
         min_version: '4.9.0',
         variant: 'both',
 

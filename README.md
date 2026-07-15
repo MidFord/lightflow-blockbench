@@ -41,9 +41,9 @@ The plugins work independently where possible, but they are designed to be used 
 
 | Plugin | Current version | Purpose | Dependency |
 | --- | ---: | --- | --- |
-| **Light Manager** | `1.6.2` | Adds production-oriented point, spot, and directional lights with adaptive shadows, gizmos, animation support, and lighting profiles. | None |
-| **Lightflow Environment** | `1.0.0` | Adds procedural Vanilla and Vibrant Visuals sky presets, Minecraft time, sun/moon lighting, ambient sky influence, and controlled shadow coverage. | **Light Manager recommended**; integrates with Shader Architect |
-| **Shader Architect** | `2.7.0` | Builds and assigns advanced materials with PBR controls, environment lighting, SSR fallback reflections, Vibrant Visuals PBR, pixel-shadow controls, editable GLSL, and material instances. | **Light Manager required** |
+| **Light Manager** | `1.6.3` | Adds production-oriented point, spot, and directional lights with adaptive shadows, gizmos, animation support, and lighting profiles. | None |
+| **Lightflow Environment** | `1.0.1` | Adds procedural Vanilla and Vibrant Visuals sky presets, Minecraft time, sun/moon lighting, ambient sky influence, and controlled shadow coverage. | **Light Manager recommended**; integrates with Shader Architect |
+| **Shader Architect** | `2.7.1` | Builds and assigns advanced materials with PBR controls, environment lighting, SSR fallback reflections, Vibrant Visuals PBR, pixel-shadow controls, editable GLSL, and material instances. | **Light Manager required** |
 | **Lightflow Atmosphere** | `1.0.0` | Adds production-ready local fog, correctly occluded additive light shafts, height fog, and procedural cloud domains with render-element depth occlusion. | **Light Manager recommended**; integrates with Shader Architect and Studio Render |
 | **Studio Render** | `1.5.0` | Adds Scene Composer, final-parity realtime Bloom and color grading, plus tiled supersampling, geometry-occluded emissive Bloom, transparency, and 4K/8K-safe exports. | Works alone; integrates with the other Lightflow modules |
 

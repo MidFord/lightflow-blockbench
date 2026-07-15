@@ -25,10 +25,10 @@ test('all independently loadable plugins parse as JavaScript', () => {
 
 test('release candidate versions stay synchronized with the README', () => {
     const expected = {
-        'light_manager.js': '1.6.2',
-        'shader_architect.js': '2.7.0',
+        'light_manager.js': '1.6.3',
+        'shader_architect.js': '2.7.1',
         'lightflow_atmosphere.js': '1.0.0',
-        'lightflow_environment.js': '1.0.0',
+        'lightflow_environment.js': '1.0.1',
         'studio_render.js': '1.5.0'
     };
     const readme = read('README.md');
@@ -135,6 +135,22 @@ test('Minecraft environment drives sky, time, ambient response, sun shadows, and
     assert.match(source, /pixelated_shadows/);
     assert.match(source, /lightflow_environment_settings/);
     assert.match(source, /getVirtualLight/);
+    assert.equal((source.match(/\.join\('\\n'\)/g) || []).length, 2);
+    assert.doesNotMatch(source, /\.join\('\\\\n'\)/);
+});
+
+test('environment sky shaders assemble with real line breaks', () => {
+    const source = read('lightflow_environment.js');
+    const start = source.indexOf('const SKY_VERTEX =');
+    const end = source.indexOf('function createSky()', start);
+    assert.ok(start >= 0 && end > start);
+
+    const buildShaders = new Function(`${source.slice(start, end)}\nreturn { SKY_VERTEX, SKY_FRAGMENT };`);
+    const { SKY_VERTEX, SKY_FRAGMENT } = buildShaders();
+    [SKY_VERTEX, SKY_FRAGMENT].forEach(shader => {
+        assert.match(shader, /\nvoid main\(\)/);
+        assert.doesNotMatch(shader, /\\\\n/);
+    });
 });
 
 test('Vibrant Visuals PBR uses native MER semantics, environment lighting, SSR fallback, and switchable pixel shadows', () => {
@@ -146,12 +162,25 @@ test('Vibrant Visuals PBR uses native MER semantics, environment lighting, SSR f
     assert.match(source, /saSSRSampleEnvironment/);
     assert.match(source, /uPixelatedShadows/);
     assert.match(source, /uniform bool PIXELATED_SHADOWS/);
+    assert.match(source, /\/\* Lightflow lights \*\/[\s\S]*?uniform int uLightCastShadow\[16\];[\s\S]*?uniform int uLightShadowIndex\[16\];/);
 });
 
-test('Light Manager does not duplicate Three r129 punctual-light helpers', () => {
-    const source = read('light_manager.js');
-    assert.match(source, /lightManagerHasNativePunctualHelper/);
-    assert.match(source, /ShaderChunk\.lights_pars_begin\.includes\('punctualLightIntensityToIrradianceFactor'\)/);
+test('Three r129 punctual-light compatibility stays local to custom shaders', () => {
+    const lights = read('light_manager.js');
+    const shaders = read('shader_architect.js');
+    assert.doesNotMatch(lights, /ShaderChunk\.common\s*\+=/);
+    assert.doesNotMatch(lights, /float punctualLightIntensityToIrradianceFactor/);
+    assert.match(shaders, /const LIGHTFLOW_PUNCTUAL_LIGHT_COMPAT/);
+    assert.equal((shaders.match(/\$\{LIGHTFLOW_PUNCTUAL_LIGHT_COMPAT\}/g) || []).length, 5);
+});
+
+test('SSR capture never samples the render target currently being written', () => {
+    const source = read('shader_architect.js');
+    const suspend = source.indexOf('material.uniforms.uSA_SSRScene.value = fallbackTexture');
+    const bind = source.indexOf('renderer.setRenderTarget(state.captureTarget)', suspend);
+    assert.ok(suspend >= 0 && bind > suspend);
+    assert.match(source, /material\.uniforms\.uSA_SSRDepth\.value = fallbackTexture/);
+    assert.match(source, /material\.uniforms\.uSA_SSRHasDepth\.value = 0/);
 });
 
 test('supporting modules include Mesh and TextureMesh render elements', () => {

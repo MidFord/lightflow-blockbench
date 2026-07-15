@@ -6,6 +6,14 @@ Lightflow uses a suite release version for public downloads. Individual plugins 
 
 ## [Unreleased]
 
+### RC 2 shader hotfixes
+
+- **Lightflow Environment 1.0.1:** fixed sky vertex/fragment assembly so array lines are joined with real newline characters instead of emitting literal `\\n` tokens into GLSL.
+- **Shader Architect 2.7.1:** added punctual-light compatibility overloads locally to custom shaders that include `<lights_pars_begin>` without Three's `<bsdfs>` chunk.
+- Added the missing custom shadow-index uniforms to Pixelated Lightflow.
+- Suspended SSR capture samplers while their render target is bound, preventing framebuffer/texture feedback loops.
+- **Light Manager 1.6.3:** removed global mutation of `THREE.ShaderChunk.common`; stock Lambert/Phong shaders now retain Three r129's single native punctual helper.
+
 ### Lightflow Environment 1.0.0
 
 - Added a separately loadable procedural environment module with Minecraft time (`0`–`23999`), controllable day length, realtime playback, sun azimuth, moon phases, stars, and block-shaped clouds.
