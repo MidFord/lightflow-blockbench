@@ -43,7 +43,8 @@
         bloom_emissive_strength: 1.35,
         bloom_occlusion: true,
         viewport_bloom_enabled: true,
-        viewport_bloom_fps: 30,
+        viewport_bloom_fps: 24,
+        viewport_bloom_quality: 'balanced',
         color_grading_enabled: false,
         exposure: 1.0,
         contrast: 1.0,
@@ -66,6 +67,8 @@
     let sceneComposerPanel;
     let sceneComposerToolbar;
     let sceneComposerProjectListener;
+    let sceneComposerModeListener;
+    let syncingSceneComposerPanel = false;
     let activeComposerDialog;
     let stylesheet;
     let activeDialog;
@@ -77,6 +80,12 @@
         resources: new Set()
     };
     const VIEWPORT_COMPOSER_STATE = new Map();
+
+    const VIEWPORT_BLOOM_PROFILES = {
+        performance: { scale: 0.25, maxDimension: 640, displayDpr: 1 },
+        balanced: { scale: 0.4, maxDimension: 900, displayDpr: 1 },
+        high: { scale: 0.6, maxDimension: 1280, displayDpr: 1.5 }
+    };
 
     function clamp(value, min, max) {
         return Math.max(min, Math.min(max, value));
@@ -114,6 +123,15 @@
         if (typeof tl !== 'function') return fallback || key;
         const value = tl(key);
         return value === key ? (fallback || key) : value;
+    }
+
+    function isLightflowRenderMode() {
+        const selected = window.Modes?.selected;
+        return !!selected && (selected.id === 'render' || selected === window.Modes?.render);
+    }
+
+    function getViewportBloomProfile(settings) {
+        return VIEWPORT_BLOOM_PROFILES[settings?.viewport_bloom_quality] || VIEWPORT_BLOOM_PROFILES.balanced;
     }
 
     function truncateText(text, maxLength) {
@@ -333,6 +351,11 @@
             'studio_render.field.bloom_occlusion': 'Block Bloom Behind Geometry',
             'studio_render.field.viewport_bloom_enabled': 'Preview Bloom in Viewport',
             'studio_render.field.viewport_bloom_fps': 'Viewport Bloom Refresh',
+            'studio_render.field.viewport_bloom_quality': 'Viewport Bloom Quality',
+            'studio_render.option.viewport_bloom.performance': 'Performance',
+            'studio_render.option.viewport_bloom.balanced': 'Balanced',
+            'studio_render.option.viewport_bloom.high': 'High',
+            'studio_render.action.open_advanced': 'Advanced Scene Composer...',
             'studio_render.field.color_grading_enabled': 'Color Grading',
             'studio_render.field.exposure': 'Exposure',
             'studio_render.field.contrast': 'Contrast',
@@ -444,6 +467,11 @@
             'studio_render.field.bloom_occlusion': 'Bloquear Bloom detrás de geometría',
             'studio_render.field.viewport_bloom_enabled': 'Previsualizar Bloom en viewport',
             'studio_render.field.viewport_bloom_fps': 'Actualización de Bloom en viewport',
+            'studio_render.field.viewport_bloom_quality': 'Calidad de Bloom en viewport',
+            'studio_render.option.viewport_bloom.performance': 'Rendimiento',
+            'studio_render.option.viewport_bloom.balanced': 'Equilibrada',
+            'studio_render.option.viewport_bloom.high': 'Alta',
+            'studio_render.action.open_advanced': 'Compositor de escena avanzado...',
             'studio_render.field.color_grading_enabled': 'Gradación de color',
             'studio_render.field.exposure': 'Exposición',
             'studio_render.field.contrast': 'Contraste',
@@ -541,7 +569,10 @@
         settings.bloom_emissive_strength = clamp(toNumber(settings.bloom_emissive_strength, 1.35), 0, 6);
         settings.bloom_occlusion = settings.bloom_occlusion !== false;
         settings.viewport_bloom_enabled = settings.viewport_bloom_enabled !== false;
-        settings.viewport_bloom_fps = clamp(toNumber(settings.viewport_bloom_fps, 30), 5, 60);
+        settings.viewport_bloom_fps = clamp(toNumber(settings.viewport_bloom_fps, 24), 5, 30);
+        settings.viewport_bloom_quality = VIEWPORT_BLOOM_PROFILES[settings.viewport_bloom_quality]
+            ? settings.viewport_bloom_quality
+            : 'balanced';
         settings.color_grading_enabled = !!settings.color_grading_enabled;
         settings.exposure = clamp(toNumber(settings.exposure, 1), 0.1, 4);
         settings.contrast = clamp(toNumber(settings.contrast, 1), 0, 3);
@@ -844,7 +875,10 @@
         settings.bloom_emissive_strength = clamp(toNumber(settings.bloom_emissive_strength, 1.35), 0, 6);
         settings.bloom_occlusion = settings.bloom_occlusion !== false;
         settings.viewport_bloom_enabled = settings.viewport_bloom_enabled !== false;
-        settings.viewport_bloom_fps = clamp(toNumber(settings.viewport_bloom_fps, 30), 5, 60);
+        settings.viewport_bloom_fps = clamp(toNumber(settings.viewport_bloom_fps, 24), 5, 30);
+        settings.viewport_bloom_quality = VIEWPORT_BLOOM_PROFILES[settings.viewport_bloom_quality]
+            ? settings.viewport_bloom_quality
+            : 'balanced';
         settings.color_grading_enabled = !!settings.color_grading_enabled;
         settings.exposure = clamp(toNumber(settings.exposure, 1), 0.1, 4);
         settings.contrast = clamp(toNumber(settings.contrast, 1), 0, 3);
@@ -1764,45 +1798,58 @@
         return true;
     }
 
-    function applyFinalBloom(canvas, settings, sourceMaskCanvas) {
+    function applyFinalBloom(canvas, settings, sourceMaskCanvas, options = {}) {
         if (!canvas || !settings?.bloom_enabled) return canvas;
 
-        const maxMaskDimension = 4096;
-        const scale = Math.min(
+        const sourceMask = sourceMaskCanvas || canvas;
+        const maxMaskDimension = Math.max(64, Number(options.maxDimension) || 4096);
+        const sourceScale = Math.min(
             1,
             maxMaskDimension / Math.max(canvas.width || 1, canvas.height || 1)
         );
-        const width = Math.max(1, Math.round(canvas.width * scale));
-        const height = Math.max(1, Math.round(canvas.height * scale));
+        const width = Math.max(1, Math.round(Number(options.processingWidth) || canvas.width * sourceScale));
+        const height = Math.max(1, Math.round(Number(options.processingHeight) || canvas.height * sourceScale));
+        const radiusScale = Math.min(width / Math.max(canvas.width || 1, 1), height / Math.max(canvas.height || 1, 1));
         const threshold = clamp(toNumber(settings.bloom_threshold, 0.72), 0, 1);
         const strength = clamp(toNumber(settings.bloom_strength, 0.8), 0, 3);
-        const radius = clamp(toNumber(settings.bloom_radius, 18), 1, 96) * scale;
+        const radius = clamp(toNumber(settings.bloom_radius, 18), 1, 96) * radiusScale;
         const hdrStrength = clamp(toNumber(settings.bloom_hdr_strength, 1), 0, 4);
         const emissiveStrength = clamp(toNumber(settings.bloom_emissive_strength, 1.35), 0, 6);
         const useOcclusion = settings.bloom_occlusion !== false;
+        const includeSceneSignal = options.emissiveOnly !== true;
+        const workspace = options.workspace || null;
+        const getWorkingCanvas = key => {
+            let target = workspace?.[key];
+            if (!target) {
+                target = document.createElement('canvas');
+                if (workspace) workspace[key] = target;
+            }
+            if (target.width !== width) target.width = width;
+            if (target.height !== height) target.height = height;
+            return target;
+        };
 
-        const mask = document.createElement('canvas');
-        mask.width = width;
-        mask.height = height;
+        const mask = getWorkingCanvas('processingMask');
         const maskContext = mask.getContext('2d', { willReadFrequently: true });
-        maskContext.drawImage(sourceMaskCanvas || canvas, 0, 0, width, height);
+        maskContext.clearRect(0, 0, width, height);
+        maskContext.drawImage(sourceMask, 0, 0, width, height);
 
-        const sceneSample = document.createElement('canvas');
-        sceneSample.width = width;
-        sceneSample.height = height;
-        const sceneContext = sceneSample.getContext('2d', { willReadFrequently: true });
-        sceneContext.drawImage(canvas, 0, 0, width, height);
+        let sceneImage = null;
+        if (includeSceneSignal) {
+            const sceneSample = getWorkingCanvas('sceneSample');
+            const sceneContext = sceneSample.getContext('2d', { willReadFrequently: true });
+            sceneContext.clearRect(0, 0, width, height);
+            sceneContext.drawImage(canvas, 0, 0, width, height);
+            sceneImage = sceneContext.getImageData(0, 0, width, height);
+        }
 
-        const blocker = document.createElement('canvas');
-        blocker.width = width;
-        blocker.height = height;
+        const blocker = getWorkingCanvas('blocker');
         const blockerContext = blocker.getContext('2d', { willReadFrequently: true });
 
         const maskImage = maskContext.getImageData(0, 0, width, height);
-        const sceneImage = sceneContext.getImageData(0, 0, width, height);
         const blockerImage = blockerContext.createImageData(width, height);
         const pixels = maskImage.data;
-        const scenePixels = sceneImage.data;
+        const scenePixels = sceneImage?.data || null;
         const blockerPixels = blockerImage.data;
 
         for (let index = 0; index < pixels.length; index += 4) {
@@ -1810,9 +1857,9 @@
             const emissionR = pixels[index] / 255 * emissiveStrength;
             const emissionG = pixels[index + 1] / 255 * emissiveStrength;
             const emissionB = pixels[index + 2] / 255 * emissiveStrength;
-            const sceneR = scenePixels[index] / 255 * hdrStrength;
-            const sceneG = scenePixels[index + 1] / 255 * hdrStrength;
-            const sceneB = scenePixels[index + 2] / 255 * hdrStrength;
+            const sceneR = scenePixels ? scenePixels[index] / 255 * hdrStrength : 0;
+            const sceneG = scenePixels ? scenePixels[index + 1] / 255 * hdrStrength : 0;
+            const sceneB = scenePixels ? scenePixels[index + 2] / 255 * hdrStrength : 0;
 
             const hdrSignal = geometryAlpha > 0.001
                 ? Math.max(sceneR, sceneG, sceneB)
@@ -1844,16 +1891,15 @@
         maskContext.putImageData(maskImage, 0, 0);
         blockerContext.putImageData(blockerImage, 0, 0);
 
-        const bloomLayer = document.createElement('canvas');
-        bloomLayer.width = canvas.width;
-        bloomLayer.height = canvas.height;
+        const bloomLayer = getWorkingCanvas('bloomLayer');
         const bloomContext = bloomLayer.getContext('2d');
+        bloomContext.clearRect(0, 0, width, height);
         bloomContext.globalCompositeOperation = 'lighter';
 
         const drawBloomLayer = (blur, alpha) => {
             bloomContext.globalAlpha = clamp(alpha * strength, 0, 1);
             bloomContext.filter = `blur(${Math.max(0.5, blur)}px)`;
-            bloomContext.drawImage(mask, 0, 0, canvas.width, canvas.height);
+            bloomContext.drawImage(mask, 0, 0, width, height);
         };
 
         drawBloomLayer(radius * 2.4, 0.20);
@@ -1864,7 +1910,7 @@
             bloomContext.globalCompositeOperation = 'destination-out';
             bloomContext.globalAlpha = 1;
             bloomContext.filter = 'none';
-            bloomContext.drawImage(blocker, 0, 0, canvas.width, canvas.height);
+            bloomContext.drawImage(blocker, 0, 0, width, height);
         }
 
         const output = canvas.getContext('2d');
@@ -1872,7 +1918,7 @@
         output.globalCompositeOperation = 'lighter';
         output.globalAlpha = 1;
         output.filter = 'none';
-        output.drawImage(bloomLayer, 0, 0);
+        output.drawImage(bloomLayer, 0, 0, canvas.width, canvas.height);
         output.restore();
         return canvas;
     }
@@ -1927,6 +1973,108 @@
         return canvas;
     }
 
+    function renderViewportBloomMask(preview, state, width, height) {
+        const renderer = preview?.renderer;
+        const scene = window.Canvas?.scene;
+        if (!renderer || !scene || !THREE.WebGLRenderTarget || typeof renderer.readRenderTargetPixels !== 'function') {
+            return false;
+        }
+
+        if (!state.maskTarget) {
+            state.maskTarget = new THREE.WebGLRenderTarget(width, height, {
+                minFilter: THREE.LinearFilter,
+                magFilter: THREE.LinearFilter,
+                format: THREE.RGBAFormat,
+                type: THREE.UnsignedByteType,
+                depthBuffer: true,
+                stencilBuffer: false
+            });
+            state.maskTarget.texture.name = 'Lightflow_ViewportBloomMask';
+            state.maskTarget.texture.generateMipmaps = false;
+        } else if (state.maskTarget.width !== width || state.maskTarget.height !== height) {
+            state.maskTarget.setSize(width, height);
+        }
+
+        const hiddenVisibility = new Map();
+        collectStudioRenderHiddenObjects().forEach(object => {
+            if (!object || hiddenVisibility.has(object)) return;
+            hiddenVisibility.set(object, object.visible);
+            object.visible = false;
+        });
+
+        const materialChanges = [];
+        const replaceMaterial = object => {
+            if (!object?.visible || !(object.isMesh || object.isSprite) || !object.material) return;
+            const original = object.material;
+            const sourceMaterials = Array.isArray(original) ? original : [original];
+            const replacements = sourceMaterials.map(source => {
+                const emissive = getMaterialEmissiveState(source).active;
+                return getBloomMaskMaterial(source, emissive);
+            });
+            materialChanges.push({ object, material: original });
+            object.material = Array.isArray(original) ? replacements : replacements[0];
+        };
+        if (typeof scene.traverseVisible === 'function') scene.traverseVisible(replaceMaterial);
+        else scene.traverse(replaceMaterial);
+
+        const previousTarget = renderer.getRenderTarget?.();
+        const previousAutoClear = renderer.autoClear;
+        const previousShadowAutoUpdate = renderer.shadowMap?.autoUpdate;
+        const previousViewport = renderer.getViewport?.(new THREE.Vector4()) || null;
+        const previousScissor = renderer.getScissor?.(new THREE.Vector4()) || null;
+        const previousScissorTest = renderer.getScissorTest?.() ?? false;
+        const previousClearColor = new THREE.Color();
+        const previousClearAlpha = renderer.getClearAlpha?.() ?? 1;
+        renderer.getClearColor?.(previousClearColor);
+
+        let succeeded = false;
+        try {
+            renderer.autoClear = true;
+            if (renderer.shadowMap) renderer.shadowMap.autoUpdate = false;
+            renderer.setRenderTarget(state.maskTarget);
+            renderer.setViewport?.(0, 0, width, height);
+            renderer.setScissorTest?.(false);
+            renderer.setClearColor?.(0x000000, 0);
+            renderer.clear?.(true, true, true);
+            renderer.render(scene, preview.camera);
+            if (window.LightflowAtmosphere?.composite) {
+                window.LightflowAtmosphere.composite(preview, { studio: true, bloomMask: true });
+                renderer.setRenderTarget(state.maskTarget);
+            }
+
+            const pixelCount = width * height * 4;
+            if (!state.maskPixels || state.maskPixels.length !== pixelCount) {
+                state.maskPixels = new Uint8Array(pixelCount);
+            }
+            renderer.readRenderTargetPixels(state.maskTarget, 0, 0, width, height, state.maskPixels);
+
+            const context = state.maskCanvas.getContext('2d', { alpha: true });
+            const image = context.createImageData(width, height);
+            const rowLength = width * 4;
+            for (let row = 0; row < height; row++) {
+                const sourceOffset = (height - row - 1) * rowLength;
+                image.data.set(state.maskPixels.subarray(sourceOffset, sourceOffset + rowLength), row * rowLength);
+            }
+            context.putImageData(image, 0, 0);
+            succeeded = true;
+        } finally {
+            for (let index = materialChanges.length - 1; index >= 0; index--) {
+                materialChanges[index].object.material = materialChanges[index].material;
+            }
+            hiddenVisibility.forEach((visible, object) => { object.visible = visible; });
+            renderer.setRenderTarget?.(previousTarget || null);
+            if (previousViewport) renderer.setViewport?.(previousViewport);
+            if (previousScissor) renderer.setScissor?.(previousScissor);
+            renderer.setScissorTest?.(previousScissorTest);
+            renderer.autoClear = previousAutoClear;
+            if (renderer.shadowMap && previousShadowAutoUpdate !== undefined) {
+                renderer.shadowMap.autoUpdate = previousShadowAutoUpdate;
+            }
+            renderer.setClearColor?.(previousClearColor, previousClearAlpha);
+        }
+        return succeeded;
+    }
+
     function getViewportComposerState(preview) {
         if (!preview?.canvas || !preview.canvas.parentElement) return null;
         let state = VIEWPORT_COMPOSER_STATE.get(preview);
@@ -1952,8 +2100,13 @@
             previousParentPosition,
             baseCanvas: document.createElement('canvas'),
             maskCanvas: document.createElement('canvas'),
+            bloomWorkspace: {},
+            maskTarget: null,
+            maskPixels: null,
             lastRender: 0,
-            rendering: false
+            rendering: false,
+            scheduled: false,
+            scheduleHandle: null
         };
         VIEWPORT_COMPOSER_STATE.set(preview, state);
         return state;
@@ -1979,6 +2132,10 @@
             hideViewportComposerOverlay(preview);
             return;
         }
+        if (!isLightflowRenderMode()) {
+            hideViewportComposerOverlay(preview);
+            return;
+        }
         const active = (
             currentSettings.viewport_bloom_enabled &&
             currentSettings.bloom_enabled
@@ -1991,7 +2148,7 @@
         const state = getViewportComposerState(preview);
         if (!state || state.rendering) return;
         const now = performance.now();
-        const interval = 1000 / clamp(toNumber(currentSettings.viewport_bloom_fps, 30), 5, 60);
+        const interval = 1000 / clamp(toNumber(currentSettings.viewport_bloom_fps, 24), 5, 30);
         if (now - state.lastRender < interval) {
             // Keep the last completed post-process frame visible while the
             // composer is throttled. Hiding it here would alternate between
@@ -2000,12 +2157,24 @@
         }
 
         const source = preview.canvas;
-        const width = Math.max(1, source.width || source.clientWidth || 1);
-        const height = Math.max(1, source.height || source.clientHeight || 1);
-        [state.baseCanvas, state.maskCanvas, state.overlay].forEach(canvas => {
+        const profile = getViewportBloomProfile(currentSettings);
+        const width = Math.max(1, Math.min(
+            source.width || source.clientWidth || 1,
+            Math.round((source.clientWidth || source.width || 1) * profile.displayDpr)
+        ));
+        const height = Math.max(1, Math.min(
+            source.height || source.clientHeight || 1,
+            Math.round((source.clientHeight || source.height || 1) * profile.displayDpr)
+        ));
+        [state.baseCanvas, state.overlay].forEach(canvas => {
             if (canvas.width !== width) canvas.width = width;
             if (canvas.height !== height) canvas.height = height;
         });
+        const bloomScale = Math.min(profile.scale, profile.maxDimension / Math.max(width, height));
+        const maskWidth = Math.max(2, Math.round(width * bloomScale));
+        const maskHeight = Math.max(2, Math.round(height * bloomScale));
+        if (state.maskCanvas.width !== maskWidth) state.maskCanvas.width = maskWidth;
+        if (state.maskCanvas.height !== maskHeight) state.maskCanvas.height = maskHeight;
         positionViewportComposerOverlay(state);
 
         state.rendering = true;
@@ -2017,22 +2186,16 @@
 
             if (currentSettings.viewport_bloom_enabled && currentSettings.bloom_enabled) {
                 const maskContext = state.maskCanvas.getContext('2d', { alpha: true });
-                maskContext.clearRect(0, 0, width, height);
-                renderBloomMaskTile(preview, maskContext, {
-                    outputX: 0,
-                    outputY: 0,
-                    outputWidth: width,
-                    outputHeight: height,
-                    sampleWidth: width,
-                    sampleHeight: height,
-                    renderWidth: width,
-                    renderHeight: height,
-                    cropX: 0,
-                    cropY: 0,
-                    cropRight: 0,
-                    cropBottom: 0
-                }, 1);
-                applyFinalBloom(state.baseCanvas, currentSettings, state.maskCanvas);
+                maskContext.clearRect(0, 0, maskWidth, maskHeight);
+                if (renderViewportBloomMask(preview, state, maskWidth, maskHeight)) {
+                    applyFinalBloom(state.baseCanvas, currentSettings, state.maskCanvas, {
+                        processingWidth: maskWidth,
+                        processingHeight: maskHeight,
+                        maxDimension: profile.maxDimension,
+                        emissiveOnly: true,
+                        workspace: state.bloomWorkspace
+                    });
+                }
             }
             applyFinalColorGrade(state.baseCanvas, currentSettings);
 
@@ -2062,7 +2225,7 @@
         const originalRender = preview.render;
         const patchedRender = function lightflowSceneComposerRender() {
             const result = originalRender.apply(this, arguments);
-            renderViewportComposer(this);
+            scheduleViewportComposer(this);
             return result;
         };
         const state = getViewportComposerState(preview);
@@ -2072,6 +2235,22 @@
         preview.render = patchedRender;
     }
 
+    function scheduleViewportComposer(preview) {
+        const state = getViewportComposerState(preview);
+        if (!state || state.scheduled) return;
+        state.scheduled = true;
+        const run = () => {
+            state.scheduled = false;
+            state.scheduleHandle = null;
+            renderViewportComposer(preview);
+        };
+        if (typeof requestAnimationFrame === 'function') {
+            state.scheduleHandle = requestAnimationFrame(run);
+        } else {
+            state.scheduleHandle = setTimeout(run, 0);
+        }
+    }
+
     function patchAllViewportComposers() {
         collectStudioRenderPreviews().forEach(patchViewportComposer);
     }
@@ -2079,6 +2258,14 @@
     function disposeViewportComposers() {
         VIEWPORT_COMPOSER_STATE.forEach((state, preview) => {
             if (preview?.render === state.patchedRender) preview.render = state.originalRender;
+            state.maskTarget?.dispose?.();
+            if (state.scheduleHandle !== null) {
+                if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(state.scheduleHandle);
+                else clearTimeout(state.scheduleHandle);
+            }
+            state.maskTarget = null;
+            state.maskPixels = null;
+            state.bloomWorkspace = null;
             state.overlay?.remove?.();
             if (state.parent && state.previousParentPosition !== undefined) {
                 state.parent.style.position = state.previousParentPosition;
@@ -2970,8 +3157,19 @@
                 label: 'studio_render.field.viewport_bloom_fps',
                 value: settings.viewport_bloom_fps,
                 min: 5,
-                max: 60,
+                max: 30,
                 step: 5,
+                condition: form => !!form.bloom_enabled && !!form.viewport_bloom_enabled && !!form.show_advanced
+            },
+            viewport_bloom_quality: {
+                type: 'select',
+                label: 'studio_render.field.viewport_bloom_quality',
+                value: settings.viewport_bloom_quality,
+                options: {
+                    performance: 'studio_render.option.viewport_bloom.performance',
+                    balanced: 'studio_render.option.viewport_bloom.balanced',
+                    high: 'studio_render.option.viewport_bloom.high'
+                },
                 condition: form => !!form.bloom_enabled && !!form.viewport_bloom_enabled && !!form.show_advanced
             },
             color_grading_enabled: {
@@ -3067,8 +3265,19 @@
                 label: 'studio_render.field.viewport_bloom_fps',
                 value: settings.viewport_bloom_fps,
                 min: 5,
-                max: 60,
+                max: 30,
                 step: 5,
+                condition: form => !!form.viewport_bloom_enabled
+            },
+            viewport_bloom_quality: {
+                type: 'select',
+                label: 'studio_render.field.viewport_bloom_quality',
+                value: settings.viewport_bloom_quality,
+                options: {
+                    performance: 'studio_render.option.viewport_bloom.performance',
+                    balanced: 'studio_render.option.viewport_bloom.balanced',
+                    high: 'studio_render.option.viewport_bloom.high'
+                },
                 condition: form => !!form.viewport_bloom_enabled
             },
             _bloom: '_',
@@ -3231,6 +3440,58 @@
         collectStudioRenderPreviews().forEach(preview => preview?.render?.());
     }
 
+    function createSceneComposerPanelForm(settings) {
+        return {
+            viewport_bloom_enabled: {
+                type: 'checkbox', label: 'studio_render.field.viewport_bloom_enabled', value: settings.viewport_bloom_enabled
+            },
+            viewport_bloom_quality: {
+                type: 'select', label: 'studio_render.field.viewport_bloom_quality', value: settings.viewport_bloom_quality,
+                options: {
+                    performance: 'studio_render.option.viewport_bloom.performance',
+                    balanced: 'studio_render.option.viewport_bloom.balanced',
+                    high: 'studio_render.option.viewport_bloom.high'
+                },
+                condition: form => !!form.viewport_bloom_enabled
+            },
+            viewport_bloom_fps: {
+                type: 'range', label: 'studio_render.field.viewport_bloom_fps', value: settings.viewport_bloom_fps,
+                min: 5, max: 30, step: 5, condition: form => !!form.viewport_bloom_enabled
+            },
+            bloom_enabled: {
+                type: 'checkbox', label: 'studio_render.field.bloom_enabled', value: settings.bloom_enabled
+            },
+            bloom_strength: {
+                type: 'range', label: 'studio_render.field.bloom_strength', value: settings.bloom_strength,
+                min: 0, max: 3, step: 0.05, condition: form => !!form.bloom_enabled
+            },
+            bloom_threshold: {
+                type: 'range', label: 'studio_render.field.bloom_threshold', value: settings.bloom_threshold,
+                min: 0, max: 1, step: 0.01, condition: form => !!form.bloom_enabled
+            },
+            bloom_radius: {
+                type: 'range', label: 'studio_render.field.bloom_radius', value: settings.bloom_radius,
+                min: 1, max: 96, step: 1, condition: form => !!form.bloom_enabled
+            },
+            bloom_emissive_strength: {
+                type: 'range', label: 'studio_render.field.bloom_emissive_strength', value: settings.bloom_emissive_strength,
+                min: 0, max: 6, step: 0.05, condition: form => !!form.bloom_enabled
+            },
+            composer_advanced: {
+                type: 'buttons', buttons: ['studio_render.action.open_advanced'],
+                click() { openSceneComposerDialog(); }
+            }
+        };
+    }
+
+    function syncSceneComposerPanel() {
+        if (!sceneComposerPanel?.form || syncingSceneComposerPanel) return;
+        syncingSceneComposerPanel = true;
+        sceneComposerPanel.form.form_config = createSceneComposerPanelForm(currentSettings);
+        sceneComposerPanel.form.buildForm();
+        syncingSceneComposerPanel = false;
+    }
+
     function applySceneComposerForm(form, persist) {
         const next = Object.assign({}, currentSettings, form || {});
         delete next.environment_enabled;
@@ -3241,16 +3502,18 @@
         if (persist) saveSettings(currentSettings);
 
         if (window.LightflowEnvironment && form) {
-            window.LightflowEnvironment.setSettings({
-                enabled: form.environment_enabled,
-                preset: form.environment_preset,
-                time: form.environment_time,
-                environment_strength: form.environment_strength
-            }, {
-                cause: 'scene_composer',
-                render: false,
-                forceShadow: false
-            });
+            const environmentSettings = {};
+            if (Object.prototype.hasOwnProperty.call(form, 'environment_enabled')) environmentSettings.enabled = form.environment_enabled;
+            if (Object.prototype.hasOwnProperty.call(form, 'environment_preset')) environmentSettings.preset = form.environment_preset;
+            if (Object.prototype.hasOwnProperty.call(form, 'environment_time')) environmentSettings.time = form.environment_time;
+            if (Object.prototype.hasOwnProperty.call(form, 'environment_strength')) environmentSettings.environment_strength = form.environment_strength;
+            if (Object.keys(environmentSettings).length) {
+                window.LightflowEnvironment.setSettings(environmentSettings, {
+                    cause: 'scene_composer',
+                    render: false,
+                    forceShadow: false
+                });
+            }
         }
 
         if (viewportBloomToggle) {
@@ -3571,6 +3834,7 @@
         if (sceneComposerToolbar) sceneComposerToolbar.delete();
         if (sceneComposerPanel) sceneComposerPanel.delete();
         if (sceneComposerProjectListener) sceneComposerProjectListener.delete?.();
+        if (sceneComposerModeListener) sceneComposerModeListener.delete?.();
         disposeViewportComposers();
         if (stylesheet && typeof stylesheet.delete === 'function') stylesheet.delete();
         BLOOM_MASK_STATE.resources.forEach(resource => resource?.dispose?.());
@@ -3586,7 +3850,7 @@
         author: 'MidFord327',
         description: 'Export polished Blockbench studio renders with tiled supersampling, 4K/8K-safe output, transparency, GPU guidance, and an adjustable frame. Complements Light Manager and Shader Architect in the Lightflow suite.',
         tags: ['Lightflow', 'Rendering', 'Export', 'Screenshots', 'Studio', 'Presentation'],
-        version: '1.5.0',
+        version: '1.5.1',
         min_version: '4.9.0',
         variant: 'both',
         onload() {
@@ -3655,6 +3919,7 @@
                 onChange(value) {
                     currentSettings.viewport_bloom_enabled = !!value;
                     saveSettings(normalizeForm(currentSettings));
+                    syncSceneComposerPanel();
                     refreshSceneComposerPreviews();
                 }
             });
@@ -3672,6 +3937,7 @@
                     currentSettings.bloom_strength = clamp(toNumber(this.value, 0.8), 0, 3);
                     currentSettings.bloom_enabled = currentSettings.bloom_strength > 0;
                     saveSettings(normalizeForm(currentSettings));
+                    syncSceneComposerPanel();
                     refreshSceneComposerPreviews();
                 }
             });
@@ -3689,13 +3955,38 @@
             sceneComposerPanel = new Panel('lightflow_scene_composer_panel', {
                 name: 'studio_render.action.scene_composer',
                 icon: 'auto_fix_high',
-                condition: () => !!window.Project,
+                growable: true,
+                resizable: true,
+                expand_button: true,
+                condition: { modes: ['render'], project: true },
                 default_position: {
                     slot: 'right_bar',
-                    height: 58,
-                    folded: false
+                    float_position: [0, 0],
+                    float_size: [340, 420],
+                    height: 360,
+                    folded: false,
+                    attached_to: window.Panels?.lightflow_environment_panel ? 'lightflow_environment_panel' : 'outliner',
+                    attached_index: 2,
+                    sidebar_index: 2
                 },
-                toolbars: [sceneComposerToolbar]
+                mode_positions: {
+                    render: {
+                        slot: 'right_bar',
+                        height: 360,
+                        folded: false,
+                        attached_to: window.Panels?.lightflow_environment_panel ? 'lightflow_environment_panel' : 'outliner',
+                        attached_index: 2,
+                        sidebar_index: 2
+                    }
+                },
+                insert_after: window.Panels?.lightflow_environment_panel ? 'lightflow_environment_panel' : 'outliner',
+                toolbars: [sceneComposerToolbar],
+                form: createSceneComposerPanelForm(currentSettings)
+            });
+
+            sceneComposerPanel.form.on('change', ({ result }) => {
+                if (syncingSceneComposerPanel) return;
+                applySceneComposerForm(result, true);
             });
 
             MenuBar.addAction(exportAction, 'file.export');
@@ -3709,7 +4000,11 @@
             patchAllViewportComposers();
             sceneComposerProjectListener = Blockbench.on('select_project', () => {
                 currentSettings = loadSettings();
+                syncSceneComposerPanel();
                 patchAllViewportComposers();
+                refreshSceneComposerPreviews();
+            });
+            sceneComposerModeListener = Blockbench.on('select_mode', () => {
                 refreshSceneComposerPreviews();
             });
 
@@ -3723,6 +4018,7 @@
                 setComposerSettings(next) {
                     currentSettings = normalizeForm(Object.assign({}, currentSettings, next || {}));
                     saveSettings(currentSettings);
+                    syncSceneComposerPanel();
                     refreshSceneComposerPreviews();
                     return Object.assign({}, currentSettings);
                 },

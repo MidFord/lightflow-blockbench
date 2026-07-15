@@ -6,6 +6,16 @@ Lightflow uses a suite release version for public downloads. Individual plugins 
 
 ## [Unreleased]
 
+### RC 3 viewport and environment workflow
+
+- **Studio Render 1.5.1:** moved Scene Composer into a resizable panel attached inside **Lightflow Render** instead of occupying a generic Blockbench sidebar slot.
+- Replaced the realtime full-resolution visible-canvas Bloom capture with a reduced offscreen WebGL mask, reusable processing canvases, DPI-aware quality profiles, and a 30 FPS safety cap.
+- Realtime Bloom now preserves the Shader Architect AO-composited base frame, excludes Blockbench helpers/gizmos from its mask, and only runs in Lightflow Render mode.
+- **Lightflow Environment 1.1.0:** replaced the toolbar-only panel with an attached, resizable Lightflow Render panel and a complete advanced composer.
+- Added custom day, sunrise, night, lower-sky, sun, moon, and cloud colors plus gradient, stars, cloud appearance, motion, and contrast controls.
+- Added generated Vanilla-style cloud textures and project-texture selection for clouds, sun, and moon without bundling game assets.
+- Stopped the animated day cycle from disposing and recreating the directional shadow map on every update.
+
 ### RC 2 shader hotfixes
 
 - **Lightflow Environment 1.0.1:** fixed sky vertex/fragment assembly so array lines are joined with real newline characters instead of emitting literal `\\n` tokens into GLSL.

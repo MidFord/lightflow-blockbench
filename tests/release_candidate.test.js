@@ -28,8 +28,8 @@ test('release candidate versions stay synchronized with the README', () => {
         'light_manager.js': '1.6.3',
         'shader_architect.js': '2.7.1',
         'lightflow_atmosphere.js': '1.0.0',
-        'lightflow_environment.js': '1.0.1',
-        'studio_render.js': '1.5.0'
+        'lightflow_environment.js': '1.1.0',
+        'studio_render.js': '1.5.1'
     };
     const readme = read('README.md');
     Object.entries(expected).forEach(([file, version]) => {
@@ -117,11 +117,20 @@ test('Bloom uses transparent depth-only texels to occlude hidden emitters withou
 test('Scene Composer reuses the final Bloom and color-grade functions in realtime', () => {
     const source = read('studio_render.js');
     assert.match(source, /function renderViewportComposer\(preview\)/);
-    assert.match(source, /renderBloomMaskTile\(preview, maskContext/);
-    assert.match(source, /applyFinalBloom\(state\.baseCanvas, currentSettings, state\.maskCanvas\)/);
+    assert.match(source, /function scheduleViewportComposer\(preview\)/);
+    assert.match(source, /const result = originalRender\.apply\(this, arguments\);\s*scheduleViewportComposer\(this\);/);
+    assert.match(source, /renderViewportBloomMask\(preview, state, maskWidth, maskHeight\)/);
+    assert.match(source, /applyFinalBloom\(state\.baseCanvas, currentSettings, state\.maskCanvas, \{/);
     assert.match(source, /applyFinalColorGrade\(state\.baseCanvas, currentSettings\)/);
     assert.match(source, /id: 'lightflow_scene_composer_toolbar'/);
     assert.match(source, /viewport_bloom_fps/);
+    assert.match(source, /emissiveOnly: true/);
+    assert.match(source, /new THREE\.WebGLRenderTarget\(width, height/);
+    assert.match(source, /renderer\.readRenderTargetPixels\(state\.maskTarget/);
+    assert.match(source, /collectStudioRenderHiddenObjects\(\)\.forEach/);
+    assert.match(source, /if \(!isLightflowRenderMode\(\)\)/);
+    assert.match(source, /condition: \{ modes: \['render'\], project: true \}/);
+    assert.match(source, /attached_to: window\.Panels\?\.lightflow_environment_panel \? 'lightflow_environment_panel' : 'outliner'/);
     assert.doesNotMatch(source, /now - state\.lastRender < interval\) \{\s*state\.overlay\.style\.display = 'none'/);
 });
 
@@ -135,6 +144,15 @@ test('Minecraft environment drives sky, time, ambient response, sun shadows, and
     assert.match(source, /pixelated_shadows/);
     assert.match(source, /lightflow_environment_settings/);
     assert.match(source, /getVirtualLight/);
+    assert.match(source, /palette_mode: 'preset'/);
+    assert.match(source, /cloud_mode: 'vanilla'/);
+    assert.match(source, /sun_texture_uuid/);
+    assert.match(source, /moon_texture_uuid/);
+    assert.match(source, /cloud_texture_uuid/);
+    assert.match(source, /Generated Vanilla-style Texture/);
+    assert.match(source, /condition: \{ modes: \['render'\], project: true \}/);
+    assert.match(source, /attached_to: 'outliner'/);
+    assert.match(source, /updateScene\(\{ forceShadow: false \}\);\s*dispatchChanged\('animation'\)/);
     assert.equal((source.match(/\.join\('\\n'\)/g) || []).length, 2);
     assert.doesNotMatch(source, /\.join\('\\\\n'\)/);
 });
@@ -151,6 +169,10 @@ test('environment sky shaders assemble with real line breaks', () => {
         assert.match(shader, /\nvoid main\(\)/);
         assert.doesNotMatch(shader, /\\\\n/);
     });
+    assert.match(SKY_FRAGMENT, /uniform sampler2D uSunTexture;/);
+    assert.match(SKY_FRAGMENT, /uniform sampler2D uMoonTexture;/);
+    assert.match(SKY_FRAGMENT, /uniform sampler2D uCloudTexture;/);
+    assert.match(SKY_FRAGMENT, /uniform int uCloudMode;/);
 });
 
 test('Vibrant Visuals PBR uses native MER semantics, environment lighting, SSR fallback, and switchable pixel shadows', () => {

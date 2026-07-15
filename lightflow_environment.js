@@ -2,7 +2,7 @@
     'use strict';
 
     const PLUGIN_ID = 'lightflow_environment';
-    const PLUGIN_VERSION = '1.0.1';
+    const PLUGIN_VERSION = '1.1.0';
     const STORAGE_KEY = 'lightflow_environment.settings';
     const PROJECT_PROPERTY = 'lightflow_environment_settings';
     const TWO_PI = Math.PI * 2;
@@ -14,19 +14,42 @@
         animate_time: false,
         day_length_seconds: 120,
         sun_azimuth: 0,
+        palette_mode: 'preset',
+        zenith_color: '#78a7ff',
+        horizon_color: '#b8d2ff',
+        sunrise_zenith_color: '#647db5',
+        sunrise_horizon_color: '#f59a62',
+        night_zenith_color: '#05091d',
+        night_horizon_color: '#151d3d',
+        ground_color: '#536b78',
+        sun_color: '#fff3c4',
+        moon_color: '#dbe4ff',
+        cloud_color: '#f3f5f7',
         sky_intensity: 1,
+        sky_gradient_power: 2.3,
+        star_density: 1,
         environment_strength: 0.75,
         sun_enabled: true,
         sun_intensity: 2.2,
         moon_intensity: 0.28,
         celestial_size: 0.055,
         moon_phase: 0,
+        sun_mode: 'vanilla',
+        moon_mode: 'vanilla',
+        sun_texture_uuid: '',
+        moon_texture_uuid: '',
         stars_enabled: true,
         star_brightness: 0.72,
         clouds_enabled: true,
+        cloud_mode: 'vanilla',
+        cloud_texture_uuid: '',
         cloud_coverage: 0.54,
         cloud_opacity: 0.78,
         cloud_speed: 0.016,
+        cloud_scale: 1,
+        cloud_direction: 0,
+        cloud_contrast: 1,
+        cloud_brightness: 1,
         sun_cast_shadows: true,
         shadow_area: 48,
         shadow_near: 0.1,
@@ -66,6 +89,10 @@
     let settingsAction = null;
     let timeSlider = null;
     let animateToggle = null;
+    let environmentPanel = null;
+    let syncingEnvironmentPanel = false;
+    let vanillaCloudTexture = null;
+    let fallbackTexture = null;
     let projectProperty = null;
     let animationFrame = null;
     let lastFrameTime = 0;
@@ -91,6 +118,11 @@
         return translated === key ? (fallback || key) : translated;
     }
 
+    function normalizeHex(value, fallback) {
+        const match = String(value || '').trim().match(/^#?([0-9a-f]{6})$/i);
+        return match ? '#' + match[1].toLowerCase() : fallback;
+    }
+
     function normalizeSettings(source) {
         const result = Object.assign({}, DEFAULT_SETTINGS, source || {});
         result.enabled = result.enabled !== false;
@@ -99,19 +131,42 @@
         result.animate_time = !!result.animate_time;
         result.day_length_seconds = clamp(finite(result.day_length_seconds, 120), 10, 3600);
         result.sun_azimuth = mod(finite(result.sun_azimuth, 0), 360);
+        result.palette_mode = result.palette_mode === 'custom' ? 'custom' : 'preset';
+        result.zenith_color = normalizeHex(result.zenith_color, DEFAULT_SETTINGS.zenith_color);
+        result.horizon_color = normalizeHex(result.horizon_color, DEFAULT_SETTINGS.horizon_color);
+        result.sunrise_zenith_color = normalizeHex(result.sunrise_zenith_color, DEFAULT_SETTINGS.sunrise_zenith_color);
+        result.sunrise_horizon_color = normalizeHex(result.sunrise_horizon_color, DEFAULT_SETTINGS.sunrise_horizon_color);
+        result.night_zenith_color = normalizeHex(result.night_zenith_color, DEFAULT_SETTINGS.night_zenith_color);
+        result.night_horizon_color = normalizeHex(result.night_horizon_color, DEFAULT_SETTINGS.night_horizon_color);
+        result.ground_color = normalizeHex(result.ground_color, DEFAULT_SETTINGS.ground_color);
+        result.sun_color = normalizeHex(result.sun_color, DEFAULT_SETTINGS.sun_color);
+        result.moon_color = normalizeHex(result.moon_color, DEFAULT_SETTINGS.moon_color);
+        result.cloud_color = normalizeHex(result.cloud_color, DEFAULT_SETTINGS.cloud_color);
         result.sky_intensity = clamp(finite(result.sky_intensity, 1), 0, 4);
+        result.sky_gradient_power = clamp(finite(result.sky_gradient_power, 2.3), 0.5, 8);
+        result.star_density = clamp(finite(result.star_density, 1), 0.1, 4);
         result.environment_strength = clamp(finite(result.environment_strength, 0.75), 0, 4);
         result.sun_enabled = result.sun_enabled !== false;
         result.sun_intensity = clamp(finite(result.sun_intensity, 2.2), 0, 20);
         result.moon_intensity = clamp(finite(result.moon_intensity, 0.28), 0, 5);
         result.celestial_size = clamp(finite(result.celestial_size, 0.055), 0.012, 0.18);
         result.moon_phase = Math.round(clamp(finite(result.moon_phase, 0), 0, 7));
+        result.sun_mode = ['vanilla', 'texture', 'hidden'].includes(result.sun_mode) ? result.sun_mode : 'vanilla';
+        result.moon_mode = ['vanilla', 'texture', 'hidden'].includes(result.moon_mode) ? result.moon_mode : 'vanilla';
+        result.sun_texture_uuid = typeof result.sun_texture_uuid === 'string' ? result.sun_texture_uuid : '';
+        result.moon_texture_uuid = typeof result.moon_texture_uuid === 'string' ? result.moon_texture_uuid : '';
         result.stars_enabled = result.stars_enabled !== false;
         result.star_brightness = clamp(finite(result.star_brightness, 0.72), 0, 3);
         result.clouds_enabled = result.clouds_enabled !== false;
+        result.cloud_mode = ['procedural', 'vanilla', 'texture'].includes(result.cloud_mode) ? result.cloud_mode : 'vanilla';
+        result.cloud_texture_uuid = typeof result.cloud_texture_uuid === 'string' ? result.cloud_texture_uuid : '';
         result.cloud_coverage = clamp(finite(result.cloud_coverage, 0.54), 0, 1);
         result.cloud_opacity = clamp(finite(result.cloud_opacity, 0.78), 0, 1);
         result.cloud_speed = clamp(finite(result.cloud_speed, 0.016), -1, 1);
+        result.cloud_scale = clamp(finite(result.cloud_scale, 1), 0.05, 16);
+        result.cloud_direction = mod(finite(result.cloud_direction, 0), 360);
+        result.cloud_contrast = clamp(finite(result.cloud_contrast, 1), 0.1, 4);
+        result.cloud_brightness = clamp(finite(result.cloud_brightness, 1), 0, 4);
         result.sun_cast_shadows = result.sun_cast_shadows !== false;
         result.shadow_area = clamp(finite(result.shadow_area, 48), 2, 1024);
         result.shadow_near = clamp(finite(result.shadow_near, 0.1), 0.001, 10000);
@@ -174,6 +229,93 @@
         return t * t * (3 - 2 * t);
     }
 
+    function getPalette() {
+        if (settings.palette_mode !== 'custom') return PRESETS[settings.preset] || PRESETS.vanilla;
+        return {
+            name: 'Custom',
+            zenith: settings.zenith_color,
+            horizon: settings.horizon_color,
+            sunrise_zenith: settings.sunrise_zenith_color,
+            sunrise_horizon: settings.sunrise_horizon_color,
+            night_zenith: settings.night_zenith_color,
+            night_horizon: settings.night_horizon_color,
+            ground: settings.ground_color,
+            sun: settings.sun_color,
+            moon: settings.moon_color,
+            cloud: settings.cloud_color,
+            ambient_day: (PRESETS[settings.preset] || PRESETS.vanilla).ambient_day,
+            ambient_night: (PRESETS[settings.preset] || PRESETS.vanilla).ambient_night
+        };
+    }
+
+    function getTextureOptions() {
+        const options = { '': tr('lightflow_environment.option.texture_none', 'Select a project texture') };
+        if (typeof Texture !== 'undefined' && Array.isArray(Texture.all)) {
+            Texture.all.forEach((texture, index) => {
+                if (!texture?.uuid) return;
+                options[texture.uuid] = texture.name || texture.path || `Texture ${index + 1}`;
+            });
+        }
+        return options;
+    }
+
+    function getBlockbenchTextureMap(uuid) {
+        if (!uuid || typeof Texture === 'undefined' || !Array.isArray(Texture.all)) return null;
+        const texture = Texture.all.find(candidate => candidate?.uuid === uuid);
+        if (!texture) return null;
+        const material = texture.getOwnMaterial?.() || texture.getMaterial?.() || texture.material;
+        const map = material?.map || material?.uniforms?.map?.value || texture.texture || texture.three_texture;
+        if (map?.isTexture) return map;
+        const image = texture.canvas || texture.img || texture.image;
+        if (!image || !window.THREE) return null;
+        if (!texture._lightflowEnvironmentTexture) {
+            texture._lightflowEnvironmentTexture = new THREE.Texture(image);
+            texture._lightflowEnvironmentTexture.needsUpdate = true;
+        }
+        return texture._lightflowEnvironmentTexture;
+    }
+
+    function createCanvasTexture(canvas, name) {
+        const texture = THREE.CanvasTexture ? new THREE.CanvasTexture(canvas) : new THREE.Texture(canvas);
+        texture.name = name;
+        texture.minFilter = THREE.NearestFilter;
+        texture.magFilter = THREE.NearestFilter;
+        texture.wrapS = THREE.RepeatWrapping;
+        texture.wrapT = THREE.RepeatWrapping;
+        texture.generateMipmaps = false;
+        texture.needsUpdate = true;
+        return texture;
+    }
+
+    function ensureSkyTextures() {
+        if (!window.THREE || typeof document === 'undefined') return;
+        if (!fallbackTexture) {
+            const canvas = document.createElement('canvas');
+            canvas.width = canvas.height = 1;
+            const context = canvas.getContext('2d');
+            context.fillStyle = '#ffffff';
+            context.fillRect(0, 0, 1, 1);
+            fallbackTexture = createCanvasTexture(canvas, 'Lightflow_Environment_Fallback');
+        }
+        if (!vanillaCloudTexture) {
+            const canvas = document.createElement('canvas');
+            canvas.width = canvas.height = 64;
+            const context = canvas.getContext('2d');
+            context.clearRect(0, 0, 64, 64);
+            for (let y = 0; y < 16; y++) {
+                for (let x = 0; x < 16; x++) {
+                    const seed = Math.sin((x + 19) * 12.9898 + (y + 7) * 78.233) * 43758.5453;
+                    const value = seed - Math.floor(seed);
+                    if (value < 0.48) continue;
+                    const shade = Math.round(214 + value * 41);
+                    context.fillStyle = `rgba(${shade},${shade},${shade},${0.72 + value * 0.28})`;
+                    context.fillRect(x * 4, y * 4, 4, 4);
+                }
+            }
+            vanillaCloudTexture = createCanvasTexture(canvas, 'Lightflow_VanillaStyle_Clouds');
+        }
+    }
+
     function getSunDirection(timeValue = settings.time) {
         const angle = mod(timeValue, 24000) / 24000 * TWO_PI;
         const azimuth = settings.sun_azimuth / 180 * Math.PI;
@@ -186,7 +328,7 @@
     }
 
     function getLightingState() {
-        const preset = PRESETS[settings.preset] || PRESETS.vanilla;
+        const preset = getPalette();
         const sunDirection = getSunDirection();
         const sunHeight = sunDirection[1];
         const daylight = smoothstep(-0.12, 0.16, sunHeight);
@@ -225,8 +367,15 @@
             cloudColor: hexToRgb(preset.cloud),
             cloudCoverage: settings.cloud_coverage,
             cloudOpacity: settings.clouds_enabled ? settings.cloud_opacity : 0,
+            cloudMode: settings.cloud_mode,
+            cloudScale: settings.cloud_scale,
+            cloudDirection: settings.cloud_direction,
+            cloudContrast: settings.cloud_contrast,
+            cloudBrightness: settings.cloud_brightness,
             cloudTime: settings.time / 24000 * 180 +
                 performance.now() * 0.001 * settings.cloud_speed,
+            skyGradientPower: settings.sky_gradient_power,
+            starDensity: settings.star_density,
             vibrant: settings.preset === 'vibrant_visuals',
             ambientColor,
             ambientIntensity,
@@ -267,6 +416,18 @@
         'uniform float uCloudOpacity;',
         'uniform float uCloudTime;',
         'uniform float uVibrant;',
+        'uniform float uSkyGradientPower;',
+        'uniform float uStarDensity;',
+        'uniform int uSunMode;',
+        'uniform int uMoonMode;',
+        'uniform int uCloudMode;',
+        'uniform sampler2D uSunTexture;',
+        'uniform sampler2D uMoonTexture;',
+        'uniform sampler2D uCloudTexture;',
+        'uniform float uCloudScale;',
+        'uniform float uCloudDirection;',
+        'uniform float uCloudContrast;',
+        'uniform float uCloudBrightness;',
         'varying vec3 vSkyDirection;',
         'float hash21(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }',
         'float valueNoise(vec2 p) {',
@@ -288,24 +449,40 @@
         '}',
         'void main() {',
         '    vec3 d=normalize(vSkyDirection); float up=d.y;',
-        '    float h=pow(1.0-clamp(abs(up),0.0,1.0),mix(2.3,3.4,uVibrant));',
+        '    float h=pow(1.0-clamp(abs(up),0.0,1.0),max(.1,uSkyGradientPower+uVibrant*1.1));',
         '    vec3 color=up>=0.0?mix(uZenith,uHorizon,h):mix(uGround,uHorizon,exp(up*7.0));',
-        '    float sun=squareDisc(celestialCoordinates(d,uSunDirection),uCelestialSize);',
+        '    vec2 sunCoord=celestialCoordinates(d,uSunDirection);',
+        '    vec2 sunUv=sunCoord/max(uCelestialSize*2.0,.001)+.5;',
+        '    float sunInside=step(0.0,sunUv.x)*step(sunUv.x,1.0)*step(0.0,sunUv.y)*step(sunUv.y,1.0);',
+        '    vec4 sunTex=texture2D(uSunTexture,clamp(sunUv,0.0,1.0));',
+        '    float sunTexMask=sunTex.a<.999?sunTex.a:max(sunTex.r,max(sunTex.g,sunTex.b));',
+        '    float sun=uSunMode==0?squareDisc(sunCoord,uCelestialSize):(uSunMode==1?sunInside*sunTexMask:0.0);',
         '    vec2 moonUv=celestialCoordinates(d,-uSunDirection)/max(uCelestialSize,.001);',
-        '    float moonSquare=squareDisc(moonUv*uCelestialSize,uCelestialSize);',
+        '    vec2 moonTexUv=moonUv*.5+.5;',
+        '    float moonInside=step(0.0,moonTexUv.x)*step(moonTexUv.x,1.0)*step(0.0,moonTexUv.y)*step(moonTexUv.y,1.0);',
+        '    vec4 moonTex=texture2D(uMoonTexture,clamp(moonTexUv,0.0,1.0));',
+        '    float moonTexMask=moonTex.a<.999?moonTex.a:max(moonTex.r,max(moonTex.g,moonTex.b));',
+        '    float moonSquare=uMoonMode==0?squareDisc(moonUv*uCelestialSize,uCelestialSize):(uMoonMode==1?moonInside*moonTexMask:0.0);',
         '    float phaseShift=(uMoonPhase-3.5)/4.0;',
         '    float moon=moonSquare*smoothstep(-.12,.12,.78-abs(moonUv.x+phaseShift));',
-        '    color=mix(color,uSunColor,sun*uDaylight); color=mix(color,uMoonColor,moon*uNight);',
+        '    vec3 sunDisplay=uSunMode==1?sunTex.rgb*uSunColor:uSunColor;',
+        '    vec3 moonDisplay=uMoonMode==1?moonTex.rgb*uMoonColor:uMoonColor;',
+        '    color=mix(color,sunDisplay,sun*uDaylight); color=mix(color,moonDisplay,moon*uNight);',
         '    if(uStars>0.0&&up>.02){',
         '        vec2 sph=vec2(atan(d.z,d.x)/(2.0*PI),asin(d.y)/PI); vec2 cell=floor(sph*vec2(420,220));',
-        '        float star=step(.9915,hash21(cell))*(.45+.55*hash21(cell+9.7));',
+        '        float star=step(1.0-.0085*clamp(uStarDensity,.1,4.0),hash21(cell))*(.45+.55*hash21(cell+9.7));',
         '        color+=vec3(star*smoothstep(.02,.24,up)*uNight*uStars);',
         '    }',
         '    if(uCloudOpacity>0.0&&up>.025){',
-        '        vec2 uv=d.xz/max(up,.035)*7.5+vec2(uCloudTime,uCloudTime*.37);',
-        '        float cloud=smoothstep(uCloudCoverage-.08,uCloudCoverage+.08,blockClouds(uv));',
+        '        float cs=cos(uCloudDirection), sn=sin(uCloudDirection);',
+        '        vec2 drift=vec2(cs,sn)*uCloudTime;',
+        '        vec2 uv=(d.xz/max(up,.035)*7.5+drift)*max(uCloudScale,.01);',
+        '        float cloudSource=blockClouds(uv);',
+        '        if(uCloudMode>0){vec4 cloudTex=texture2D(uCloudTexture,fract(uv*.035)); cloudSource=cloudTex.a<.999?cloudTex.a:dot(cloudTex.rgb,vec3(.299,.587,.114));}',
+        '        cloudSource=clamp((cloudSource-.5)*uCloudContrast+.5,0.0,1.0);',
+        '        float cloud=smoothstep(uCloudCoverage-.08,uCloudCoverage+.08,cloudSource);',
         '        cloud*=smoothstep(.025,.13,up)*uCloudOpacity;',
-        '        vec3 lit=mix(uCloudColor*.24,uCloudColor,.18+.82*uDaylight);',
+        '        vec3 lit=mix(uCloudColor*.24,uCloudColor,.18+.82*uDaylight)*uCloudBrightness;',
         '        lit=mix(lit,vec3(1.0,.42,.22),uTwilight*.34*(1.0-uVibrant)); color=mix(color,lit,cloud);',
         '    }',
         '    gl_FragColor=vec4(max(color,vec3(0)),1);',
@@ -314,6 +491,7 @@
 
     function createSky() {
         if (!window.THREE || !window.Canvas?.scene || skyMesh) return false;
+        ensureSkyTextures();
         skyMaterial = new THREE.ShaderMaterial({
             name: 'Lightflow_Minecraft_Sky',
             uniforms: {
@@ -330,7 +508,17 @@
                 uStars: { value: settings.star_brightness },
                 uCloudCoverage: { value: settings.cloud_coverage },
                 uCloudOpacity: { value: settings.cloud_opacity },
-                uCloudTime: { value: 0 }, uVibrant: { value: 0 }
+                uCloudTime: { value: 0 }, uVibrant: { value: 0 },
+                uSkyGradientPower: { value: settings.sky_gradient_power },
+                uStarDensity: { value: settings.star_density },
+                uSunMode: { value: 0 }, uMoonMode: { value: 0 }, uCloudMode: { value: 1 },
+                uSunTexture: { value: fallbackTexture },
+                uMoonTexture: { value: fallbackTexture },
+                uCloudTexture: { value: vanillaCloudTexture || fallbackTexture },
+                uCloudScale: { value: settings.cloud_scale },
+                uCloudDirection: { value: settings.cloud_direction / 180 * Math.PI },
+                uCloudContrast: { value: settings.cloud_contrast },
+                uCloudBrightness: { value: settings.cloud_brightness }
             },
             vertexShader: SKY_VERTEX,
             fragmentShader: SKY_FRAGMENT,
@@ -414,8 +602,9 @@
         createSky();
         createSunLight();
         ensureSunLightParent();
+        ensureSkyTextures();
         const state = getLightingState();
-        const preset = PRESETS[settings.preset] || PRESETS.vanilla;
+        const preset = getPalette();
 
         if (skyMesh) skyMesh.visible = !!settings.enabled;
         if (skyMaterial) {
@@ -437,6 +626,27 @@
             skyMaterial.uniforms.uCloudTime.value = settings.time / 24000 * 180 +
                 performance.now() * 0.001 * settings.cloud_speed;
             skyMaterial.uniforms.uVibrant.value = settings.preset === 'vibrant_visuals' ? 1 : 0;
+            skyMaterial.uniforms.uSkyGradientPower.value = settings.sky_gradient_power;
+            skyMaterial.uniforms.uStarDensity.value = settings.star_density;
+            const sunTexture = getBlockbenchTextureMap(settings.sun_texture_uuid);
+            const moonTexture = getBlockbenchTextureMap(settings.moon_texture_uuid);
+            const customCloudTexture = getBlockbenchTextureMap(settings.cloud_texture_uuid);
+            skyMaterial.uniforms.uSunMode.value = settings.sun_mode === 'hidden'
+                ? 2
+                : (settings.sun_mode === 'texture' && sunTexture ? 1 : 0);
+            skyMaterial.uniforms.uMoonMode.value = settings.moon_mode === 'hidden'
+                ? 2
+                : (settings.moon_mode === 'texture' && moonTexture ? 1 : 0);
+            skyMaterial.uniforms.uCloudMode.value = settings.cloud_mode === 'procedural' ? 0 : 1;
+            skyMaterial.uniforms.uSunTexture.value = sunTexture || fallbackTexture;
+            skyMaterial.uniforms.uMoonTexture.value = moonTexture || fallbackTexture;
+            skyMaterial.uniforms.uCloudTexture.value = settings.cloud_mode === 'texture' && customCloudTexture
+                ? customCloudTexture
+                : (vanillaCloudTexture || fallbackTexture);
+            skyMaterial.uniforms.uCloudScale.value = settings.cloud_scale;
+            skyMaterial.uniforms.uCloudDirection.value = settings.cloud_direction / 180 * Math.PI;
+            skyMaterial.uniforms.uCloudContrast.value = settings.cloud_contrast;
+            skyMaterial.uniforms.uCloudBrightness.value = settings.cloud_brightness;
         }
 
         if (sunLight) {
@@ -491,6 +701,7 @@
         settings = normalizeSettings(Object.assign({}, settings, next || {}));
         saveSettings();
         syncToolbar();
+        if (options.syncPanel !== false) syncEnvironmentPanel();
         updateScene({ forceShadow: options.forceShadow !== false });
         dispatchChanged(options.cause || 'settings');
         if (options.render !== false) requestPreviewRender();
@@ -502,6 +713,7 @@
         const vibrant = preset === 'vibrant_visuals';
         return applySettings({
             preset,
+            palette_mode: 'preset',
             sky_intensity: vibrant ? 1.08 : 1,
             environment_strength: vibrant ? 0.92 : 0.75,
             sun_intensity: vibrant ? 2.8 : 2.2,
@@ -510,7 +722,10 @@
             pixel_shadow_steps: vibrant ? 4 : settings.pixel_shadow_steps,
             pixel_shadow_scale: vibrant ? 2 : settings.pixel_shadow_scale,
             cloud_coverage: vibrant ? 0.5 : 0.54,
-            cloud_opacity: vibrant ? 0.86 : 0.78
+            cloud_opacity: vibrant ? 0.86 : 0.78,
+            cloud_mode: 'vanilla',
+            sun_mode: 'vanilla',
+            moon_mode: 'vanilla'
         }, { cause: options.cause || 'preset', forceShadow: true });
     }
 
@@ -532,6 +747,7 @@
     }
 
     function createDialogForm() {
+        const textureOptions = getTextureOptions();
         return {
             preset: { type: 'select', label: 'lightflow_environment.field.preset', value: settings.preset,
                 options: { vanilla: 'Minecraft Vanilla', vibrant_visuals: 'Minecraft Vibrant Visuals' } },
@@ -541,21 +757,52 @@
             animate_time: { type: 'checkbox', label: 'lightflow_environment.field.animate', value: settings.animate_time },
             day_length_seconds: { type: 'number', label: 'lightflow_environment.field.day_length', value: settings.day_length_seconds, min: 10, max: 3600, step: 10, condition: form => !!form.animate_time },
             sun_azimuth: { type: 'range', label: 'lightflow_environment.field.azimuth', value: settings.sun_azimuth, min: 0, max: 360, step: 1 },
-            _lighting: '_',
+            _sky_colors: '_',
+            palette_mode: { type: 'select', label: 'lightflow_environment.field.palette_mode', value: settings.palette_mode,
+                options: { preset: 'lightflow_environment.option.palette_preset', custom: 'lightflow_environment.option.palette_custom' } },
+            zenith_color: { type: 'color', label: 'lightflow_environment.field.zenith_color', value: settings.zenith_color, condition: form => form.palette_mode === 'custom' },
+            horizon_color: { type: 'color', label: 'lightflow_environment.field.horizon_color', value: settings.horizon_color, condition: form => form.palette_mode === 'custom' },
+            sunrise_zenith_color: { type: 'color', label: 'lightflow_environment.field.sunrise_zenith_color', value: settings.sunrise_zenith_color, condition: form => form.palette_mode === 'custom' },
+            sunrise_horizon_color: { type: 'color', label: 'lightflow_environment.field.sunrise_horizon_color', value: settings.sunrise_horizon_color, condition: form => form.palette_mode === 'custom' },
+            night_zenith_color: { type: 'color', label: 'lightflow_environment.field.night_zenith_color', value: settings.night_zenith_color, condition: form => form.palette_mode === 'custom' },
+            night_horizon_color: { type: 'color', label: 'lightflow_environment.field.night_horizon_color', value: settings.night_horizon_color, condition: form => form.palette_mode === 'custom' },
+            ground_color: { type: 'color', label: 'lightflow_environment.field.ground_color', value: settings.ground_color, condition: form => form.palette_mode === 'custom' },
+            sun_color: { type: 'color', label: 'lightflow_environment.field.sun_color', value: settings.sun_color, condition: form => form.palette_mode === 'custom' },
+            moon_color: { type: 'color', label: 'lightflow_environment.field.moon_color', value: settings.moon_color, condition: form => form.palette_mode === 'custom' },
+            cloud_color: { type: 'color', label: 'lightflow_environment.field.cloud_color', value: settings.cloud_color, condition: form => form.palette_mode === 'custom' },
             sky_intensity: { type: 'range', label: 'lightflow_environment.field.sky_intensity', value: settings.sky_intensity, min: 0, max: 4, step: 0.05 },
+            sky_gradient_power: { type: 'range', label: 'lightflow_environment.field.gradient_power', value: settings.sky_gradient_power, min: 0.5, max: 8, step: 0.05 },
             environment_strength: { type: 'range', label: 'lightflow_environment.field.environment', value: settings.environment_strength, min: 0, max: 4, step: 0.05 },
+            _celestial: '_',
             sun_enabled: { type: 'checkbox', label: 'lightflow_environment.field.sun_enabled', value: settings.sun_enabled },
             sun_intensity: { type: 'range', label: 'lightflow_environment.field.sun_intensity', value: settings.sun_intensity, min: 0, max: 10, step: 0.05, condition: form => !!form.sun_enabled },
             moon_intensity: { type: 'range', label: 'lightflow_environment.field.moon_intensity', value: settings.moon_intensity, min: 0, max: 2, step: 0.02, condition: form => !!form.sun_enabled },
             celestial_size: { type: 'range', label: 'lightflow_environment.field.celestial_size', value: settings.celestial_size, min: 0.012, max: 0.18, step: 0.002 },
             moon_phase: { type: 'range', label: 'lightflow_environment.field.moon_phase', value: settings.moon_phase, min: 0, max: 7, step: 1 },
+            sun_mode: { type: 'select', label: 'lightflow_environment.field.sun_mode', value: settings.sun_mode,
+                options: { vanilla: 'lightflow_environment.option.celestial_vanilla', texture: 'lightflow_environment.option.celestial_texture', hidden: 'lightflow_environment.option.hidden' } },
+            sun_texture_uuid: { type: 'select', label: 'lightflow_environment.field.sun_texture', value: settings.sun_texture_uuid,
+                options: textureOptions, condition: form => form.sun_mode === 'texture' },
+            moon_mode: { type: 'select', label: 'lightflow_environment.field.moon_mode', value: settings.moon_mode,
+                options: { vanilla: 'lightflow_environment.option.celestial_vanilla', texture: 'lightflow_environment.option.celestial_texture', hidden: 'lightflow_environment.option.hidden' } },
+            moon_texture_uuid: { type: 'select', label: 'lightflow_environment.field.moon_texture', value: settings.moon_texture_uuid,
+                options: textureOptions, condition: form => form.moon_mode === 'texture' },
             _sky: '_',
             stars_enabled: { type: 'checkbox', label: 'lightflow_environment.field.stars', value: settings.stars_enabled },
             star_brightness: { type: 'range', label: 'lightflow_environment.field.star_brightness', value: settings.star_brightness, min: 0, max: 3, step: 0.05, condition: form => !!form.stars_enabled },
+            star_density: { type: 'range', label: 'lightflow_environment.field.star_density', value: settings.star_density, min: 0.1, max: 4, step: 0.05, condition: form => !!form.stars_enabled },
             clouds_enabled: { type: 'checkbox', label: 'lightflow_environment.field.clouds', value: settings.clouds_enabled },
+            cloud_mode: { type: 'select', label: 'lightflow_environment.field.cloud_mode', value: settings.cloud_mode,
+                options: { procedural: 'lightflow_environment.option.cloud_procedural', vanilla: 'lightflow_environment.option.cloud_vanilla', texture: 'lightflow_environment.option.cloud_texture' }, condition: form => !!form.clouds_enabled },
+            cloud_texture_uuid: { type: 'select', label: 'lightflow_environment.field.cloud_texture', value: settings.cloud_texture_uuid,
+                options: textureOptions, condition: form => !!form.clouds_enabled && form.cloud_mode === 'texture' },
             cloud_coverage: { type: 'range', label: 'lightflow_environment.field.cloud_coverage', value: settings.cloud_coverage, min: 0, max: 1, step: 0.01, condition: form => !!form.clouds_enabled },
             cloud_opacity: { type: 'range', label: 'lightflow_environment.field.cloud_opacity', value: settings.cloud_opacity, min: 0, max: 1, step: 0.01, condition: form => !!form.clouds_enabled },
             cloud_speed: { type: 'range', label: 'lightflow_environment.field.cloud_speed', value: settings.cloud_speed, min: -0.2, max: 0.2, step: 0.002, condition: form => !!form.clouds_enabled },
+            cloud_scale: { type: 'range', label: 'lightflow_environment.field.cloud_scale', value: settings.cloud_scale, min: 0.05, max: 16, step: 0.05, condition: form => !!form.clouds_enabled },
+            cloud_direction: { type: 'range', label: 'lightflow_environment.field.cloud_direction', value: settings.cloud_direction, min: 0, max: 360, step: 1, condition: form => !!form.clouds_enabled },
+            cloud_contrast: { type: 'range', label: 'lightflow_environment.field.cloud_contrast', value: settings.cloud_contrast, min: 0.1, max: 4, step: 0.05, condition: form => !!form.clouds_enabled },
+            cloud_brightness: { type: 'range', label: 'lightflow_environment.field.cloud_brightness', value: settings.cloud_brightness, min: 0, max: 4, step: 0.05, condition: form => !!form.clouds_enabled },
             _shadows: '_',
             sun_cast_shadows: { type: 'checkbox', label: 'lightflow_environment.field.cast_shadows', value: settings.sun_cast_shadows, condition: form => !!form.sun_enabled },
             shadow_area: { type: 'number', label: 'lightflow_environment.field.shadow_area', value: settings.shadow_area, min: 2, max: 1024, step: 1, condition: form => !!form.sun_cast_shadows },
@@ -571,16 +818,39 @@
         };
     }
 
+    function createPanelForm() {
+        return {
+            enabled: { type: 'checkbox', label: 'lightflow_environment.field.enabled', value: settings.enabled },
+            preset: { type: 'select', label: 'lightflow_environment.field.preset', value: settings.preset,
+                options: { vanilla: 'Minecraft Vanilla', vibrant_visuals: 'Minecraft Vibrant Visuals' } },
+            time: { type: 'range', label: 'lightflow_environment.field.time', value: settings.time, min: 0, max: 23999, step: 100 },
+            animate_time: { type: 'checkbox', label: 'lightflow_environment.field.animate', value: settings.animate_time },
+            sky_intensity: { type: 'range', label: 'lightflow_environment.field.sky_intensity', value: settings.sky_intensity, min: 0, max: 4, step: 0.05 },
+            environment_strength: { type: 'range', label: 'lightflow_environment.field.environment', value: settings.environment_strength, min: 0, max: 4, step: 0.05 },
+            cloud_mode: { type: 'select', label: 'lightflow_environment.field.cloud_mode', value: settings.cloud_mode,
+                options: { procedural: 'lightflow_environment.option.cloud_procedural', vanilla: 'lightflow_environment.option.cloud_vanilla', texture: 'lightflow_environment.option.cloud_texture' } },
+            panel_advanced: { type: 'buttons', buttons: ['lightflow_environment.action.open'], click() { openSettingsDialog(); } }
+        };
+    }
+
+    function syncEnvironmentPanel() {
+        if (!environmentPanel?.form || syncingEnvironmentPanel) return;
+        syncingEnvironmentPanel = true;
+        environmentPanel.form.form_config = createPanelForm();
+        environmentPanel.form.buildForm();
+        syncingEnvironmentPanel = false;
+    }
+
     function openSettingsDialog() {
         new Dialog('lightflow_environment_composer_dialog', {
             title: 'lightflow_environment.dialog.title',
             width: 720,
             form: createDialogForm(),
             onFormChange(form) {
-                applySettings(form, { cause: 'dialog_preview', forceShadow: false });
+                applySettings(form, { cause: 'dialog_preview', forceShadow: false, syncPanel: false });
             },
             onConfirm(form) {
-                applySettings(form, { cause: 'dialog_confirm', forceShadow: true });
+                applySettings(form, { cause: 'dialog_confirm', forceShadow: true, syncPanel: true });
             }
         }).show();
     }
@@ -602,7 +872,7 @@
             value: settings.time,
             min: 0, max: 23999, step: 100,
             onChange() {
-                applySettings({ time: this.value }, { cause: 'time_slider', forceShadow: true });
+                applySettings({ time: this.value }, { cause: 'time_slider', forceShadow: false });
             }
         });
         animateToggle = new Toggle('lightflow_environment_animate', {
@@ -620,15 +890,33 @@
             name: 'lightflow_environment.plugin.title',
             children: ['lightflow_environment_composer', 'lightflow_environment_time', 'lightflow_environment_animate']
         });
-        const panel = new Panel('lightflow_environment_panel', {
+        environmentPanel = new Panel('lightflow_environment_panel', {
             name: 'lightflow_environment.plugin.title',
             icon: 'wb_twilight',
-            condition: () => !!window.Project,
-            default_position: { slot: 'right_bar', height: 58, folded: false },
-            toolbars: [toolbar]
+            growable: true,
+            resizable: true,
+            expand_button: true,
+            condition: { modes: ['render'], project: true },
+            default_position: {
+                slot: 'right_bar', float_position: [0, 0], float_size: [340, 460], height: 390,
+                folded: false, attached_to: 'outliner', attached_index: 1, sidebar_index: 1
+            },
+            mode_positions: {
+                render: {
+                    slot: 'right_bar', height: 390, folded: false,
+                    attached_to: 'outliner', attached_index: 1, sidebar_index: 1
+                }
+            },
+            insert_after: 'outliner',
+            toolbars: [toolbar],
+            form: createPanelForm()
+        });
+        environmentPanel.form.on('change', ({ result }) => {
+            if (syncingEnvironmentPanel) return;
+            applySettings(result, { cause: 'environment_panel', forceShadow: false, syncPanel: false });
         });
         MenuBar.menus.view.addAction(settingsAction, '9');
-        deletables.push(settingsAction, timeSlider, animateToggle, toolbar, panel);
+        deletables.push(settingsAction, timeSlider, animateToggle, toolbar, environmentPanel);
         syncToolbar();
     }
 
@@ -644,19 +932,51 @@
             'lightflow_environment.field.animate': 'Animate Day Cycle',
             'lightflow_environment.field.day_length': 'Full Day Length (seconds)',
             'lightflow_environment.field.azimuth': 'Sun Path Rotation',
+            'lightflow_environment.field.palette_mode': 'Sky Color Source',
+            'lightflow_environment.option.palette_preset': 'Use Preset Palette',
+            'lightflow_environment.option.palette_custom': 'Custom Palette',
+            'lightflow_environment.field.zenith_color': 'Day Zenith',
+            'lightflow_environment.field.horizon_color': 'Day Horizon',
+            'lightflow_environment.field.sunrise_zenith_color': 'Sunrise Zenith',
+            'lightflow_environment.field.sunrise_horizon_color': 'Sunrise Horizon',
+            'lightflow_environment.field.night_zenith_color': 'Night Zenith',
+            'lightflow_environment.field.night_horizon_color': 'Night Horizon',
+            'lightflow_environment.field.ground_color': 'Lower Sky / Ground',
+            'lightflow_environment.field.sun_color': 'Sun Color',
+            'lightflow_environment.field.moon_color': 'Moon Color',
+            'lightflow_environment.field.cloud_color': 'Cloud Color',
             'lightflow_environment.field.sky_intensity': 'Sky Brightness',
+            'lightflow_environment.field.gradient_power': 'Sky Gradient Shape',
             'lightflow_environment.field.environment': 'Environment Influence',
             'lightflow_environment.field.sun_enabled': 'Sun / Moon Light',
             'lightflow_environment.field.sun_intensity': 'Sun Intensity',
             'lightflow_environment.field.moon_intensity': 'Moon Intensity',
             'lightflow_environment.field.celestial_size': 'Sun / Moon Size',
             'lightflow_environment.field.moon_phase': 'Moon Phase',
+            'lightflow_environment.field.sun_mode': 'Sun Appearance',
+            'lightflow_environment.field.moon_mode': 'Moon Appearance',
+            'lightflow_environment.field.sun_texture': 'Sun Project Texture',
+            'lightflow_environment.field.moon_texture': 'Moon Project Texture',
+            'lightflow_environment.option.celestial_vanilla': 'Vanilla-style Square',
+            'lightflow_environment.option.celestial_texture': 'Project Texture',
+            'lightflow_environment.option.hidden': 'Hidden',
+            'lightflow_environment.option.texture_none': 'Select a project texture',
             'lightflow_environment.field.stars': 'Stars',
             'lightflow_environment.field.star_brightness': 'Star Brightness',
+            'lightflow_environment.field.star_density': 'Star Density',
             'lightflow_environment.field.clouds': 'Minecraft Clouds',
+            'lightflow_environment.field.cloud_mode': 'Cloud Source',
+            'lightflow_environment.field.cloud_texture': 'Cloud Project Texture',
+            'lightflow_environment.option.cloud_procedural': 'Procedural Blocks',
+            'lightflow_environment.option.cloud_vanilla': 'Generated Vanilla-style Texture',
+            'lightflow_environment.option.cloud_texture': 'Project Texture',
             'lightflow_environment.field.cloud_coverage': 'Cloud Coverage',
             'lightflow_environment.field.cloud_opacity': 'Cloud Opacity',
             'lightflow_environment.field.cloud_speed': 'Cloud Speed',
+            'lightflow_environment.field.cloud_scale': 'Cloud Scale',
+            'lightflow_environment.field.cloud_direction': 'Cloud Direction',
+            'lightflow_environment.field.cloud_contrast': 'Cloud Contrast',
+            'lightflow_environment.field.cloud_brightness': 'Cloud Brightness',
             'lightflow_environment.field.cast_shadows': 'Sun Cast Shadows',
             'lightflow_environment.field.shadow_area': 'Shadow Capture Area',
             'lightflow_environment.field.shadow_resolution': 'Shadow Resolution',
@@ -677,7 +997,39 @@
             'lightflow_environment.field.enabled': 'Renderizar entorno',
             'lightflow_environment.field.time': 'Hora de Minecraft',
             'lightflow_environment.field.animate': 'Animar ciclo del día',
+            'lightflow_environment.field.palette_mode': 'Origen de colores del cielo',
+            'lightflow_environment.option.palette_preset': 'Usar paleta del preset',
+            'lightflow_environment.option.palette_custom': 'Paleta personalizada',
+            'lightflow_environment.field.zenith_color': 'Cénit diurno',
+            'lightflow_environment.field.horizon_color': 'Horizonte diurno',
+            'lightflow_environment.field.sunrise_zenith_color': 'Cénit del amanecer',
+            'lightflow_environment.field.sunrise_horizon_color': 'Horizonte del amanecer',
+            'lightflow_environment.field.night_zenith_color': 'Cénit nocturno',
+            'lightflow_environment.field.night_horizon_color': 'Horizonte nocturno',
+            'lightflow_environment.field.ground_color': 'Cielo inferior / suelo',
+            'lightflow_environment.field.sun_color': 'Color del sol',
+            'lightflow_environment.field.moon_color': 'Color de la luna',
+            'lightflow_environment.field.cloud_color': 'Color de las nubes',
+            'lightflow_environment.field.gradient_power': 'Forma del gradiente del cielo',
             'lightflow_environment.field.environment': 'Influencia del entorno',
+            'lightflow_environment.field.sun_mode': 'Apariencia del sol',
+            'lightflow_environment.field.moon_mode': 'Apariencia de la luna',
+            'lightflow_environment.field.sun_texture': 'Textura del proyecto para el sol',
+            'lightflow_environment.field.moon_texture': 'Textura del proyecto para la luna',
+            'lightflow_environment.option.celestial_vanilla': 'Cuadrado estilo Vanilla',
+            'lightflow_environment.option.celestial_texture': 'Textura del proyecto',
+            'lightflow_environment.option.hidden': 'Oculto',
+            'lightflow_environment.option.texture_none': 'Selecciona una textura del proyecto',
+            'lightflow_environment.field.star_density': 'Densidad de estrellas',
+            'lightflow_environment.field.cloud_mode': 'Origen de las nubes',
+            'lightflow_environment.field.cloud_texture': 'Textura del proyecto para nubes',
+            'lightflow_environment.option.cloud_procedural': 'Bloques procedurales',
+            'lightflow_environment.option.cloud_vanilla': 'Textura estilo Vanilla generada',
+            'lightflow_environment.option.cloud_texture': 'Textura del proyecto',
+            'lightflow_environment.field.cloud_scale': 'Escala de nubes',
+            'lightflow_environment.field.cloud_direction': 'Dirección de nubes',
+            'lightflow_environment.field.cloud_contrast': 'Contraste de nubes',
+            'lightflow_environment.field.cloud_brightness': 'Brillo de nubes',
             'lightflow_environment.field.cast_shadows': 'El sol proyecta sombras',
             'lightflow_environment.field.shadow_area': 'Área de captura de sombras',
             'lightflow_environment.field.pixelated_shadows': 'Sombras pixeladas Vibrant Visuals'
@@ -709,6 +1061,7 @@
             settings = loadSettings();
         }
         syncToolbar();
+        syncEnvironmentPanel();
         updateScene({ forceShadow: true });
         dispatchChanged('project_load');
         requestPreviewRender();
@@ -726,7 +1079,7 @@
             if (timestamp - lastRenderTime < 33) return;
             lastRenderTime = timestamp;
             syncToolbar();
-            updateScene({ forceShadow: true });
+            updateScene({ forceShadow: false });
             dispatchChanged('animation');
             requestPreviewRender();
         };
@@ -743,10 +1096,20 @@
         skyMesh?.parent?.remove?.(skyMesh);
         skyMesh?.geometry?.dispose?.();
         skyMaterial?.dispose?.();
+        vanillaCloudTexture?.dispose?.();
+        fallbackTexture?.dispose?.();
+        if (typeof Texture !== 'undefined' && Array.isArray(Texture.all)) {
+            Texture.all.forEach(texture => {
+                texture?._lightflowEnvironmentTexture?.dispose?.();
+                if (texture) delete texture._lightflowEnvironmentTexture;
+            });
+        }
         sunLight = null;
         sunTarget = null;
         skyMesh = null;
         skyMaterial = null;
+        vanillaCloudTexture = null;
+        fallbackTexture = null;
         delete window.LightflowEnvironmentSunLight;
     }
 
@@ -786,12 +1149,19 @@
             const selectListener = Blockbench.on('select_project', event => loadProjectSettings(event?.project));
             const loadListener = Blockbench.on('load_project', event => loadProjectSettings(event?.project));
             const parsedListener = window.Codecs?.project?.on?.('parsed', () => loadProjectSettings(window.Project));
+            const textureChanged = () => {
+                syncEnvironmentPanel();
+                updateScene({ forceShadow: false });
+                requestPreviewRender();
+            };
+            const textureListeners = ['add_texture', 'remove_texture', 'update_texture']
+                .map(eventName => Blockbench.on(eventName, textureChanged));
             const lightManagerListener = () => {
                 ensureSunLightParent();
                 updateScene({ forceShadow: true });
             };
             window.addEventListener('light_manager_initialized', lightManagerListener);
-            deletables.push(selectListener, loadListener, parsedListener, {
+            deletables.push(selectListener, loadListener, parsedListener, ...textureListeners, {
                 delete() { window.removeEventListener('light_manager_initialized', lightManagerListener); }
             });
             startAnimation();

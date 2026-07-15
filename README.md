@@ -42,10 +42,10 @@ The plugins work independently where possible, but they are designed to be used 
 | Plugin | Current version | Purpose | Dependency |
 | --- | ---: | --- | --- |
 | **Light Manager** | `1.6.3` | Adds production-oriented point, spot, and directional lights with adaptive shadows, gizmos, animation support, and lighting profiles. | None |
-| **Lightflow Environment** | `1.0.1` | Adds procedural Vanilla and Vibrant Visuals sky presets, Minecraft time, sun/moon lighting, ambient sky influence, and controlled shadow coverage. | **Light Manager recommended**; integrates with Shader Architect |
+| **Lightflow Environment** | `1.1.0` | Adds editable Vanilla and Vibrant Visuals skies, custom gradients and project textures, Minecraft time, sun/moon lighting, ambient influence, and controlled shadow coverage. | **Light Manager recommended**; integrates with Shader Architect |
 | **Shader Architect** | `2.7.1` | Builds and assigns advanced materials with PBR controls, environment lighting, SSR fallback reflections, Vibrant Visuals PBR, pixel-shadow controls, editable GLSL, and material instances. | **Light Manager required** |
 | **Lightflow Atmosphere** | `1.0.0` | Adds production-ready local fog, correctly occluded additive light shafts, height fog, and procedural cloud domains with render-element depth occlusion. | **Light Manager recommended**; integrates with Shader Architect and Studio Render |
-| **Studio Render** | `1.5.0` | Adds Scene Composer, final-parity realtime Bloom and color grading, plus tiled supersampling, geometry-occluded emissive Bloom, transparency, and 4K/8K-safe exports. | Works alone; integrates with the other Lightflow modules |
+| **Studio Render** | `1.5.1` | Adds an attached Scene Composer, optimized AO-safe realtime Bloom, color grading, tiled supersampling, transparency, and 4K/8K-safe exports. | Works alone; integrates with the other Lightflow modules |
 
 ### Why Lightflow exists
 
@@ -212,10 +212,12 @@ Lightflow Environment is a procedural preview-scene module. It drives a sky dome
 
 - Minecraft time from `0` to `23999`, realtime playback, configurable day length, and sun azimuth.
 - **Vanilla** and **Vibrant Visuals** presets with tailored day, sunset, night, cloud, sun, moon, and ambient palettes.
-- Procedural square sun, moon phases, stars, and block-shaped clouds without bundled game textures.
+- Procedural or generated Vanilla-style block clouds, with project-texture overrides for clouds, sun, and moon.
+- Complete custom sky palette controls for day/night zenith, horizon, sunrise, lower sky, sun, moon, and clouds.
+- Adjustable gradient shape, star density, cloud scale, direction, contrast, brightness, opacity, coverage, and speed.
 - Directional sun and moon lights with editable shadow area, near/far range, resolution, bias, normal bias, and pixelated shadow controls.
 - Sky, horizon, and ground ambient colors exposed to Shader Architect for material tinting and SSR miss-ray reflections.
-- Project persistence and a compact Environment panel for time and preset changes.
+- Project persistence and a resizable Environment panel attached below the Outliner in **Lightflow Render** mode.
 
 The presets are independent procedural approximations tuned to reproduce the visual behavior of the named Minecraft render modes; they do not copy Minecraft source code or bundled textures.
 
@@ -295,8 +297,10 @@ Studio Render is the export layer. It is intended for portfolio images, social-m
 - GPU diagnostics showing the detected renderer and relevant WebGL limits.
 - Temporary Studio Render sessions that coordinate with Light Manager so final shadow settings do not permanently disturb the viewport.
 - Optional final-image Bloom with a simple strength control and advanced threshold/radius controls.
-- Realtime viewport Bloom that uses the same emissive/atmosphere mask, occlusion, blur scales, threshold, radius, and strength as final output.
-- **Scene Composer** controls for viewport Bloom, preview refresh rate, exposure, contrast, saturation, temperature, tint, vignette, and environment settings.
+- Realtime viewport Bloom that uses the same emissive/atmosphere semantics, occlusion, blur scales, threshold, radius, and strength as final output.
+- Low-resolution offscreen WebGL masks and reusable processing canvases for responsive editing without overwriting Shader Architect AO.
+- Helper/gizmo exclusion from the realtime Bloom source and three viewport quality profiles.
+- An attached **Scene Composer** panel in Lightflow Render, with the full dialog retained for grading and advanced controls.
 - One shared Canvas2D color-grade path for the viewport preview and final render.
 - Emissive-only Bloom masking: emissive render-mode alpha, MER maps, dedicated emissive maps, and additive materials glow without blooming ordinary bright surfaces.
 - Atmosphere-aware Bloom masking, including per-domain Bloom contribution for bright shafts and cloud highlights.
@@ -490,7 +494,8 @@ Studio Render hides gizmos by default. Verify that **Show Gizmos** is disabled i
 
 - Open **Scene Composer** and ensure **Realtime Viewport Bloom** is enabled.
 - Use the same Bloom threshold, strength, and radius that Studio Render will use; both paths share the same mask and compositing implementation.
-- Realtime Bloom is throttled by **Preview FPS** to keep editing responsive. Raise it only when the GPU has enough headroom.
+- Realtime Bloom is throttled by **Preview FPS** and an internal quality profile. Start with **Balanced**; use **Performance** for high-DPI or integrated-GPU viewports.
+- Realtime composition only runs in **Lightflow Render** mode. Gizmos are excluded from the Bloom mask and Shader Architect AO is preserved in the base frame.
 - Transparent final output can composite differently over an external background; compare against the intended destination background when judging edge glow.
 
 ### The environment does not affect a material or reflection
