@@ -53,6 +53,256 @@ async function generateIconBase64(iconName, size, {
 
 window.generateIconBase64 = generateIconBase64;
 
+/*
+ * Shared project lifecycle for the Lightflow suite.
+ *
+ * Blockbench only deserializes properties and custom outliner types that are
+ * registered when the project codec starts parsing. A plugin installed or
+ * enabled after a project is already open therefore needs the original model
+ * JSON to recover those fields. Keep that recovery in one place and give all
+ * Lightflow plugins the same project-generation guard so work queued by the
+ * previous project can never render into the next one.
+ */
+function createLightflowLifecycleRuntime() {
+    const modelByProject = new WeakMap();
+    const modelRequestByProject = new WeakMap();
+    const hydrators = new Map();
+    const listeners = [];
+    let activeProject = typeof Project !== 'undefined' ? (Project || null) : null;
+    let generation = activeProject ? 1 : 0;
+    let disposed = false;
+    let ownerAttached = true;
+    let runtimeApi = null;
+
+    const parseModel = content => {
+        if (content && typeof content === 'object') return content;
+        if (typeof content !== 'string' || !content.trim()) return null;
+        try {
+            return typeof autoParseJSON === 'function'
+                ? autoParseJSON(content, false)
+                : JSON.parse(content);
+        } catch (error) {
+            return null;
+        }
+    };
+
+    const captureModel = (project, model) => {
+        if (!project || !model || typeof model !== 'object') return null;
+        modelByProject.set(project, model);
+        return model;
+    };
+
+    const readProjectModel = project => {
+        if (!project) return Promise.resolve(null);
+        const captured = modelByProject.get(project);
+        if (captured) return Promise.resolve(captured);
+        const pending = modelRequestByProject.get(project);
+        if (pending) return pending;
+
+        const path = project.save_path || project.path || '';
+        if (!path || typeof Blockbench?.read !== 'function') return Promise.resolve(null);
+
+        const request = new Promise(resolve => {
+            let settled = false;
+            const fallbackTimer = setTimeout(() => finish(null), 5000);
+            const finish = value => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(fallbackTimer);
+                resolve(value || null);
+            };
+            try {
+                const result = Blockbench.read([path], { errorbox: false }, files => {
+                    const model = parseModel(files?.[0]?.content);
+                    if (model) captureModel(project, model);
+                    finish(model);
+                });
+                if (result === false) finish(null);
+            } catch (error) {
+                finish(null);
+            }
+        });
+        modelRequestByProject.set(project, request);
+        return request;
+    };
+
+    const isCurrent = (project, expectedGeneration = generation) => {
+        return !disposed && expectedGeneration === generation && project === activeProject && project === window.Project;
+    };
+
+    const runHydrator = async (entry, reason) => {
+        if (!entry || entry.lastGeneration === generation) return;
+        const runGeneration = generation;
+        const project = activeProject;
+        entry.lastGeneration = runGeneration;
+        let model = project ? (modelByProject.get(project) || null) : null;
+        if (project && !model && (project.save_path || project.path)) {
+            model = await readProjectModel(project);
+        }
+        if (disposed || runGeneration !== generation || project !== activeProject) return;
+        try {
+            await entry.callback({
+                project,
+                model,
+                reason,
+                generation: runGeneration,
+                isCurrent: () => isCurrent(project, runGeneration)
+            });
+        } catch (error) {
+            console.warn(`[Lightflow] Project hydration failed for ${entry.id}`, error);
+        }
+    };
+
+    const hydrateAll = reason => {
+        hydrators.forEach(entry => runHydrator(entry, reason));
+    };
+
+    const notifyDeferredTransition = reason => {
+        const transitionGeneration = generation;
+        const project = activeProject;
+        hydrators.forEach(entry => {
+            try {
+                Promise.resolve(entry.callback({
+                    project,
+                    model: project ? (modelByProject.get(project) || null) : null,
+                    reason,
+                    deferred: true,
+                    generation: transitionGeneration,
+                    isCurrent: () => isCurrent(project, transitionGeneration)
+                })).catch(error => {
+                    console.warn(`[Lightflow] Project transition failed for ${entry.id}`, error);
+                });
+            } catch (error) {
+                console.warn(`[Lightflow] Project transition failed for ${entry.id}`, error);
+            }
+        });
+    };
+
+    const begin = (project, reason, model, options = {}) => {
+        const nextProject = project || null;
+        if (model && nextProject) captureModel(nextProject, model);
+        const changed = nextProject !== activeProject || options.force === true;
+        if (changed) {
+            activeProject = nextProject;
+            generation += 1;
+        }
+        if (changed && options.deferHydration === true) {
+            notifyDeferredTransition(reason);
+        } else if (changed || options.hydrate === true) {
+            hydrateAll(reason);
+        }
+    };
+
+    const registerHydrator = (id, callback) => {
+        const entry = { id, callback, lastGeneration: -1 };
+        hydrators.set(id, entry);
+        Promise.resolve().then(() => runHydrator(entry, 'plugin_ready'));
+        return {
+            delete() {
+                if (hydrators.get(id) === entry) hydrators.delete(id);
+                if (!ownerAttached && hydrators.size === 0) disposeRuntime();
+            }
+        };
+    };
+
+    const restoreCustomElements = (model, type, ElementType) => {
+        if (!model || !Array.isArray(model.elements) || !ElementType || !window.Outliner) {
+            return { restored: 0, updated: 0 };
+        }
+        let restored = 0;
+        let updated = 0;
+        model.elements.filter(template => template?.type === type && template.uuid).forEach(template => {
+            const existing = (Outliner.elements || []).find(element => element?.uuid === template.uuid);
+            if (existing instanceof ElementType) {
+                existing.extend?.(template);
+                updated += 1;
+                return;
+            }
+
+            const parent = existing?.parent || 'root';
+            const parentArray = existing?.getParentArray?.() || (parent === 'root' ? Outliner.root : parent?.children);
+            const index = Array.isArray(parentArray) ? parentArray.indexOf(existing) : -1;
+            const wasSelected = !!existing?.selected;
+            existing?.remove?.();
+
+            const replacement = new ElementType(template, template.uuid).init();
+            replacement.addTo(parent, index >= 0 ? index : -1);
+            if (wasSelected) replacement.markAsSelected?.();
+            restored += 1;
+        });
+        if (restored && typeof Blockbench?.dispatchEvent === 'function') {
+            Blockbench.dispatchEvent('update_selection');
+        }
+        return { restored, updated };
+    };
+
+    if (typeof Blockbench?.on === 'function') {
+        listeners.push(Blockbench.on('load_project', event => {
+            const project = window.Project || activeProject;
+            if (project && event?.model) captureModel(project, event.model);
+            begin(project, 'load_project', event?.model, { force: true, deferHydration: true });
+        }));
+        listeners.push(Blockbench.on('select_project', event => {
+            const project = event?.project || window.Project || null;
+            begin(project, 'select_project', null, { force: true, deferHydration: true });
+            const selectedGeneration = generation;
+            Promise.resolve().then(() => {
+                if (disposed || selectedGeneration !== generation || project !== activeProject) return;
+                begin(project, 'select_project_ready', null, { hydrate: true });
+            });
+        }));
+        listeners.push(Blockbench.on('new_project', event => {
+            begin(event?.project || window.Project || null, 'new_project', null, { force: true, hydrate: true });
+        }));
+        listeners.push(Blockbench.on('close_project', () => {
+            // Blockbench emits close_project before it clears ProjectData and
+            // Outliner registries. Cancel old work immediately, then hydrate
+            // the empty state once its synchronous close cleanup has run.
+            begin(null, 'close_project', null, { force: true, deferHydration: true });
+            const closeGeneration = generation;
+            Promise.resolve().then(() => {
+                if (disposed || closeGeneration !== generation || activeProject !== null) return;
+                begin(null, 'close_project_ready', null, { hydrate: true });
+            });
+        }));
+    }
+    const parsedListener = window.Codecs?.project?.on?.('parsed', () => {
+        begin(window.Project || activeProject, 'parsed', null, { hydrate: true });
+    });
+    if (parsedListener) listeners.push(parsedListener);
+
+    const disposeRuntime = () => {
+        if (disposed) return;
+        disposed = true;
+        generation += 1;
+        hydrators.clear();
+        listeners.splice(0).forEach(listener => listener?.delete?.());
+        if (window.LightflowLifecycle === runtimeApi) delete window.LightflowLifecycle;
+    };
+
+    runtimeApi = {
+        apiVersion: 1,
+        get disposed() { return disposed; },
+        get hydratorCount() { return hydrators.size; },
+        get generation() { return generation; },
+        get project() { return activeProject; },
+        captureModel,
+        readProjectModel,
+        isCurrent,
+        registerHydrator,
+        restoreCustomElements,
+        attachOwner() {
+            if (!disposed) ownerAttached = true;
+        },
+        releaseOwner() {
+            ownerAttached = false;
+            if (hydrators.size === 0) disposeRuntime();
+        },
+        dispose: disposeRuntime
+    };
+    return runtimeApi;
+}
+
 const LIGHT_MANAGER_STORAGE_KEYS = {
     areaGizmos: 'light_manager_show_area_gizmos'
 };
@@ -212,7 +462,9 @@ const LIGHT_MANAGER_DEFAULT_UPDATE_OPTIONS = {
     shadows: true,
     scene: true,
     gizmos: true,
-    studio: false
+    studio: false,
+    elements: null,
+    cleanup: true
 };
 
 function translateLightManager(key, fallback) {
@@ -814,14 +1066,14 @@ function configureLightManagerRendererShadows(renderer) {
     }
 
     /*
-     * A resolution change disposes shadow.map and creates a fresh GPU target.
-     * Do not lock WebGLShadowMap in manual mode here: with autoUpdate = false,
-     * a later normal preview render can sample the newly allocated-but-empty
-     * target before a shadow pass has populated it, which makes the whole
-     * scene look fully occluded.
+     * Shadow maps are the most expensive part of an otherwise simple slider
+     * interaction. Lightflow tracks every transform, geometry and shadow
+     * mutation, so normal viewports can render them on demand. Studio Render
+     * temporarily opts its own renderer back into automatic updates while it
+     * owns the shared shadow targets.
      */
-    if (renderer.shadowMap.autoUpdate !== true) {
-        renderer.shadowMap.autoUpdate = true;
+    if (renderer.shadowMap.autoUpdate !== false) {
+        renderer.shadowMap.autoUpdate = false;
         changed = true;
     }
 
@@ -1873,22 +2125,33 @@ function cancelLightManagerElementUpdate() {
 }
 
 function normalizeLightManagerUpdateOptions(options = {}) {
+    const requestedElements = Array.isArray(options.elements)
+        ? options.elements.filter(Boolean)
+        : (options.element ? [options.element] : null);
     return {
         shadows: options.shadows !== false,
         scene: options.scene !== false,
         gizmos: options.gizmos !== false,
-        studio: !!(options.studio || options.studioRender)
+        studio: !!(options.studio || options.studioRender),
+        elements: requestedElements,
+        cleanup: options.cleanup !== false && !requestedElements
     };
 }
 
 function mergeLightManagerUpdateOptions(previous, next) {
     if (!previous) return next;
 
+    const elements = previous.elements === null || next.elements === null
+        ? null
+        : Array.from(new Set([...(previous.elements || []), ...(next.elements || [])]));
+
     return {
         shadows: previous.shadows || next.shadows,
         scene: previous.scene || next.scene,
         gizmos: previous.gizmos || next.gizmos,
-        studio: previous.studio || next.studio
+        studio: previous.studio || next.studio,
+        elements,
+        cleanup: previous.cleanup || next.cleanup || elements === null
     };
 }
 
@@ -2753,11 +3016,13 @@ window.LightManagerViewportControls = {
             if (property === 'rotation' || property === 'position') {
                 LightElement.preview_controller.updateTransform(light);
             }
-            LightElement.preview_controller.updateSelection(light);
+            LightElement.preview_controller.updateSelection(light, { gizmos: false });
         }
-        window.update_light_element_callback?.(this.getLightUpdateOptions(property));
-        window.LightManagerAreaGizmos?.updateAll();
-        this.updateAll();
+        window.update_light_element_callback?.({
+            ...this.getLightUpdateOptions(property),
+            elements: [light],
+            cleanup: false
+        });
     },
 
     getMovableSelection() {
@@ -2881,15 +3146,21 @@ window.LightManagerViewportControls = {
         if (window.Canvas && typeof Canvas.updateView === 'function') {
             Canvas.updateView({
                 elements,
-                element_aspects: { transform: true, geometry: true }
+                element_aspects: { transform: true }
             });
         }
         lightElements.forEach(light => {
             LightManagerUtils.sanitizeLight(light);
-            LightElement.preview_controller?.updateSelection(light);
+            LightElement.preview_controller?.updateSelection(light, { gizmos: false });
         });
         if (lightElements.length) {
-            window.update_light_element_callback?.({ shadows: true, scene: false, gizmos: true });
+            window.update_light_element_callback?.({
+                shadows: true,
+                scene: false,
+                gizmos: false,
+                elements: lightElements,
+                cleanup: false
+            });
         }
         window.LightManagerAreaGizmos?.updateAll();
         this.updateAll();
@@ -3377,14 +3648,23 @@ function runLightManagerElementUpdate(options = LIGHT_MANAGER_DEFAULT_UPDATE_OPT
         window.scene.add(window.three_lights_group);
     }
 
-    // Keep track of active UUIDs to remove deleted lights
-    const activeUuids = LIGHT_MANAGER_UPDATE_STATE.activeUuids;
-    activeUuids.clear();
+    // A direct control edit only needs to touch the edited light. Full
+    // registry scans are reserved for project/lifecycle and deletion updates.
+    const allLights = typeof LightElement !== 'undefined' && Array.isArray(LightElement.all)
+        ? LightElement.all
+        : [];
+    const targetLights = updateOptions.elements
+        ? updateOptions.elements.filter(element => allLights.includes(element))
+        : allLights;
 
-    if (typeof LightElement !== 'undefined' && LightElement.all) {
-        LightElement.all.forEach(element => {
+    // Keep track of active UUIDs to remove deleted lights on full updates.
+    const activeUuids = LIGHT_MANAGER_UPDATE_STATE.activeUuids;
+    if (updateOptions.cleanup) activeUuids.clear();
+
+    if (targetLights.length) {
+        targetLights.forEach(element => {
             LightManagerUtils.sanitizeLight(element);
-            activeUuids.add(element.uuid);
+            if (updateOptions.cleanup) activeUuids.add(element.uuid);
 
             let light = window.three_lights[element.uuid];
 
@@ -3472,16 +3752,19 @@ function runLightManagerElementUpdate(options = LIGHT_MANAGER_DEFAULT_UPDATE_OPT
         });
     }
 
-    // Cleanup deleted lights
-    for (const uuid in window.three_lights) {
-        if (!activeUuids.has(uuid)) {
+    // Cleanup deleted lights only when the caller requested a registry pass.
+    if (updateOptions.cleanup) {
+        for (const uuid in window.three_lights) {
             const light = window.three_lights[uuid];
-            if (light) {
-                window.three_lights_group.remove(light);
-                if (light.target) window.three_lights_group.remove(light.target);
-                if (light.dispose) light.dispose();
+            if (light?.userData?.lightflowEnvironmentVirtual) continue;
+            if (!activeUuids.has(uuid)) {
+                if (light) {
+                    window.three_lights_group.remove(light);
+                    if (light.target) window.three_lights_group.remove(light.target);
+                    if (light.dispose) light.dispose();
+                }
+                delete window.three_lights[uuid];
             }
-            delete window.three_lights[uuid];
         }
     }
 
@@ -4929,12 +5212,14 @@ function initialize_light_plugin() {
     let lightManagerUIApi = null;
     let lightTextures = {}; // THREE.Texture instances will be loaded here
     let originalAnimatorPreview = null;
+    let lightflowLifecycle = null;
 
     const animationSign = Blockbench.isNewerThan('4.99') ? 1 : -1;
 
     function markLightManagerAnimationFrameShadowsDirty() {
         if (!lightManagerHasActiveShadowLights()) return;
         markLightManagerShadowsDirty();
+        invalidateLightManagerShadowMaps();
     }
 
     function patchLightManagerAnimatorPreview() {
@@ -5154,7 +5439,7 @@ function initialize_light_plugin() {
         author: 'MidFord327',
         description: 'Add production-ready point, spot, and directional lights to Blockbench with viewport gizmos, animation support, shadows, and Studio Render controls. Provides the Lightflow lighting foundation for Shader Architect and Studio Render.',
         tags: ['Lightflow', 'Lighting', 'Shadows', 'Animation', 'Rendering', 'Studio'],
-        version: '1.6.5',
+        version: '1.7.0',
         min_version: '4.9.0',
         variant: 'both',
 
@@ -5167,6 +5452,19 @@ function initialize_light_plugin() {
             resetLightManagerShadowState();
             window.LightManagerMarkShadowsDirty = markLightManagerShadowsDirty;
             patchLightManagerAnimatorPreview();
+            const existingLifecycle = window.LightflowLifecycle;
+            if (
+                existingLifecycle?.apiVersion === 1 &&
+                existingLifecycle.disposed === false &&
+                typeof existingLifecycle.registerHydrator === 'function'
+            ) {
+                lightflowLifecycle = existingLifecycle;
+                lightflowLifecycle.attachOwner?.();
+            } else {
+                existingLifecycle?.dispose?.();
+                lightflowLifecycle = createLightflowLifecycleRuntime();
+                window.LightflowLifecycle = lightflowLifecycle;
+            }
 
             // Shared condition/disabled-state support for Light Manager custom FormElements.
             // `show_condition` is normalized to Blockbench's native form condition path. The
@@ -8588,12 +8886,29 @@ function initialize_light_plugin() {
             deletables.push(compactWidgetStyles);
 
 
-            // Configure three-dimensional textures based on the base64 dictionary
-            for (let key in light_icons_b64) {
-                let tex = new THREE.TextureLoader().load(light_icons_b64[key]);
-                tex.magFilter = tex.minFilter = THREE.NearestFilter;
-                lightTextures[key] = tex;
-            }
+            const installLightIconTextures = sources => {
+                Object.entries(sources || {}).forEach(([key, source]) => {
+                    if (!source) return;
+                    const previous = lightTextures[key];
+                    let texture = null;
+                    texture = new THREE.TextureLoader().load(source, () => {
+                        if (lightTextures[key] !== texture) {
+                            texture.dispose?.();
+                            return;
+                        }
+                        if (previous && previous !== texture) previous.dispose?.();
+                        window.LightElement?.all?.forEach?.(element => {
+                            if (element?.light_type === key) {
+                                window.LightElement.preview_controller?.updateSelection?.(element, { gizmos: false });
+                            }
+                        });
+                    });
+                    texture.magFilter = texture.minFilter = THREE.NearestFilter;
+                    lightTextures[key] = texture;
+                });
+            };
+            installLightIconTextures(light_icons_b64);
+            window.LightManagerRefreshIconTextures = installLightIconTextures;
 
             class LightElement extends OutlinerElement {
                 constructor(data, uuid) {
@@ -8830,9 +9145,15 @@ function initialize_light_plugin() {
                     element.mesh.fix_position.copy(element.mesh.position);
                     element.mesh.fix_rotation.copy(element.mesh.rotation);
                     this.updateWindowSize(element);
-                    window.update_light_element_callback?.({ shadows: true, scene: false, gizmos: true });
+                    window.update_light_element_callback?.({
+                        shadows: true,
+                        scene: false,
+                        gizmos: true,
+                        elements: [element],
+                        cleanup: false
+                    });
                 },
-                updateSelection(element) {
+                updateSelection(element, options = {}) {
                     let { mesh } = element;
 
                     let desiredTexture = lightTextures[element.light_type] || lightTextures.point;
@@ -8884,8 +9205,10 @@ function initialize_light_plugin() {
                     mesh.sprite.material.depthTest = !element.selected;
                     mesh.renderOrder = element.selected ? 100 : 0;
 
-                    window.LightManagerAreaGizmos?.updateAll();
-                    window.LightManagerViewportControls?.updateAll();
+                    if (options.gizmos !== false) {
+                        window.LightManagerAreaGizmos?.updateAll();
+                        window.LightManagerViewportControls?.updateAll();
+                    }
                     this.dispatchEvent('update_selection', { element });
                 },
                 updateWindowSize(element) {
@@ -8895,6 +9218,32 @@ function initialize_light_plugin() {
                     }
                 }
             });
+
+            const lightProjectHydrator = lightflowLifecycle?.registerHydrator?.(
+                'light_manager_elements',
+                ({ project, model, isCurrent, deferred }) => {
+                    cancelLightManagerElementUpdate();
+                    if (deferred) return;
+                    if (project && !isCurrent()) return;
+                    if (project) {
+                        lightflowLifecycle.restoreCustomElements(model, 'light', LightElement);
+                    }
+                    if (project && !isCurrent()) return;
+
+                    // A project can legitimately contain no lights. Always do
+                    // one full registry pass so lights owned by the previous
+                    // tab/project are removed instead of leaking into it.
+                    markLightManagerShadowsDirty({ scene: true });
+                    window.update_light_element_callback?.({
+                        immediate: true,
+                        shadows: true,
+                        scene: true,
+                        gizmos: !!project,
+                        cleanup: true
+                    });
+                }
+            );
+            if (lightProjectHydrator) deletables.push(lightProjectHydrator);
 
             // -------------------------------------------------------------
             // TIMELINE OVERRIDES
@@ -9058,7 +9407,13 @@ function initialize_light_plugin() {
                     if (!this.muted.intensity) this.displayIntensity(this.interpolate('intensity'), multiplier);
 
                     this.element.mesh.updateMatrixWorld();
-                    window.update_light_element_callback?.();
+                    window.update_light_element_callback?.({
+                        shadows: true,
+                        scene: false,
+                        gizmos: false,
+                        elements: [this.element],
+                        cleanup: false
+                    });
                 }
             }
 
@@ -9444,9 +9799,14 @@ function initialize_light_plugin() {
                 }
             };
 
-            const getLightPanelUpdateOptions = (property) => {
+            const getLightPanelUpdateOptions = (property, light) => {
+                const partial = {
+                    elements: light ? [light] : [],
+                    cleanup: false
+                };
                 if (property === 'studio_shadow_resolution') {
                     return {
+                        ...partial,
                         shadows: false,
                         scene: false,
                         gizmos: false
@@ -9455,6 +9815,7 @@ function initialize_light_plugin() {
 
                 if (['color', 'temperature', 'intensity'].includes(property)) {
                     return {
+                        ...partial,
                         shadows: false,
                         scene: false,
                         gizmos: false
@@ -9463,6 +9824,7 @@ function initialize_light_plugin() {
 
                 if (['distance'].includes(property)) {
                     return {
+                        ...partial,
                         shadows: false,
                         scene: false,
                         gizmos: true
@@ -9471,13 +9833,30 @@ function initialize_light_plugin() {
 
                 if (['shadow_bias', 'shadow_normal_bias', 'shadow_softness'].includes(property)) {
                     return {
+                        ...partial,
                         shadows: true,
                         scene: false,
                         gizmos: false
                     };
                 }
 
-                return {};
+                if (property === 'has_shadow') {
+                    return {
+                        ...partial,
+                        shadows: true,
+                        // Caster/receiver flags only need the expensive scene
+                        // walk when the first active shadow is enabled.
+                        scene: light?.has_shadow !== false && LIGHT_MANAGER_SHADOW_STATE.sceneDirty,
+                        gizmos: true
+                    };
+                }
+
+                return {
+                    ...partial,
+                    shadows: true,
+                    scene: false,
+                    gizmos: true
+                };
             };
 
             const applyLightPanelValue = (property, value, undoLabel) => {
@@ -9543,15 +9922,14 @@ function initialize_light_plugin() {
 
                 if (property === 'light_type') {
                     light.updateLightIcon();
-                    LightElement.preview_controller?.updateSelection(light);
+                    LightElement.preview_controller?.updateSelection(light, { gizmos: false });
                 }
 
                 if (['temperature', 'color', 'intensity'].includes(property)) {
-                    LightElement.preview_controller?.updateSelection(light);
-                    window.LightManagerAreaGizmos?.updateAll();
+                    LightElement.preview_controller?.updateSelection(light, { gizmos: false });
                 }
 
-                const updateOptions = getLightPanelUpdateOptions(property);
+                const updateOptions = getLightPanelUpdateOptions(property, light);
                 window.update_light_element_callback?.(updateOptions);
                 if (updateOptions.gizmos !== false) {
                     window.LightManagerViewportControls?.updateAll();
@@ -10360,16 +10738,47 @@ function initialize_light_plugin() {
 
                 if (!touchesElements && !touchesGroups) return;
 
-                const sceneChanged = touchesGroups || elements.some(element => {
-                    return element && element.type !== 'light' && !(window.LightElement && element instanceof window.LightElement);
+                const sceneTopologyChanged = elements.some(element => {
+                    const renderElement = element && element.type !== 'light' && !(window.LightElement && element instanceof window.LightElement);
+                    return !!(renderElement && elementAspects.geometry);
                 });
-                syncLightManagerShadows({ scene: sceneChanged });
+                // Transforms change the shadow image, not caster/receiver
+                // membership. Avoid walking every scene mesh while dragging a
+                // Cube or Group; only newly replaced geometry needs that pass.
+                syncLightManagerShadows({ scene: sceneTopologyChanged });
             });
             deletables.push(viewUpdateShadowListener);
 
-            ['finish_edit', 'undo', 'redo', 'load_undo_save', 'select_project'].forEach(eventName => {
+            const finishEditShadowListener = Blockbench.on('finish_edit', ({ aspects } = {}) => {
+                // Direct light controls and transform previews already enqueue
+                // their precise updates. Only an outliner edit can add/remove
+                // registry entries and needs the full cleanup pass.
+                if (!aspects?.outliner) return;
+                window.update_light_element_callback?.({
+                    shadows: true,
+                    scene: false,
+                    gizmos: false,
+                    cleanup: true
+                });
+            });
+            deletables.push(finishEditShadowListener);
+
+            ['undo', 'redo', 'load_undo_save'].forEach(eventName => {
                 const listener = Blockbench.on(eventName, () => {
-                    syncLightManagerShadows({ scene: true });
+                    markLightManagerShadowsDirty({ scene: true });
+                    window.update_light_element_callback?.({
+                        shadows: true,
+                        scene: true,
+                        gizmos: true,
+                        cleanup: true
+                    });
+                });
+                deletables.push(listener);
+            });
+
+            ['add_cube', 'add_mesh', 'add_texture_mesh', 'add_lightflow_volume'].forEach(eventName => {
+                const listener = Blockbench.on(eventName, () => {
+                    markLightManagerShadowsDirty({ scene: true });
                 });
                 deletables.push(listener);
             });
@@ -10452,7 +10861,12 @@ function initialize_light_plugin() {
             delete window.LightManagerMarkShadowsDirty;
             delete window.LightManagerDebugShadows;
             delete window.LightManagerSyncLights;
+            delete window.LightManagerRefreshIconTextures;
             delete window.update_light_element_callback;
+            if (window.LightflowLifecycle === lightflowLifecycle) {
+                lightflowLifecycle?.releaseOwner?.();
+            }
+            lightflowLifecycle = null;
             restoreLightManagerAnimatorPreview();
             restoreLightManagerRendererShadowSettings();
             resetLightManagerShadowState();
@@ -10469,22 +10883,35 @@ async function load_textures() {
         ['spot', 'highlight', 'S']
     ];
 
-    for (const [key, icon, fallbackLabel] of specs) {
+    const generated = await Promise.all(specs.map(async ([key, icon, fallbackLabel]) => {
         try {
-            light_icons_b64[key] = await generateIconBase64(icon, 128, {
+            const source = await generateIconBase64(icon, 128, {
                 fontFamily: 'Material Icons',
                 color: 'rgba(255, 255, 255, 1)'
             });
+            return [key, source];
         } catch (error) {
-            light_icons_b64[key] = lightManagerFallbackIconDataUrl(fallbackLabel);
+            return [key, lightManagerFallbackIconDataUrl(fallbackLabel)];
         }
-    }
+    }));
+    generated.forEach(([key, source]) => { light_icons_b64[key] = source; });
+    window.LightManagerRefreshIconTextures?.(light_icons_b64);
 }
 
-load_textures().catch(() => {
-    light_icons_b64.point = lightManagerFallbackIconDataUrl('P');
-    light_icons_b64.directional = lightManagerFallbackIconDataUrl('D');
-    light_icons_b64.spot = lightManagerFallbackIconDataUrl('S');
-}).then(() => {
-    initialize_light_plugin();
+// Register the plugin and its custom outliner type synchronously. Icon polish
+// is cosmetic and must never delay project parsing.
+light_icons_b64.point = lightManagerFallbackIconDataUrl('P');
+light_icons_b64.directional = lightManagerFallbackIconDataUrl('D');
+light_icons_b64.spot = lightManagerFallbackIconDataUrl('S');
+initialize_light_plugin();
+
+const scheduleLightManagerIconUpgrade = callback => {
+    if (typeof requestIdleCallback === 'function') {
+        requestIdleCallback(callback, { timeout: 1800 });
+    } else {
+        setTimeout(callback, 0);
+    }
+};
+scheduleLightManagerIconUpgrade(() => {
+    load_textures().catch(() => { /* SVG fallback icons are already active. */ });
 });

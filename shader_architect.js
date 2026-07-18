@@ -14371,6 +14371,11 @@ ${lumaForgeLightflowHelpers}`
         pendingPreviewRenderFrame: null,
         pendingPreviewRenderLightOnly: false,
         currentPreviewRenderLightOnly: false,
+        projectRevision: 0,
+        activeProject: typeof Project !== 'undefined' ? Project : null,
+        pendingSceneUpdateRevision: null,
+        pendingLightUniformRevision: null,
+        pendingPreviewRenderRevision: null,
         lightUniformMaterialCache: null,
         lightUniformMaterialCacheDirty: true,
         animationUniformTargets: null,
@@ -14771,7 +14776,21 @@ ${lumaForgeLightflowHelpers}`
         },
 
         isSceneUpdateReady() {
-            return !!Project?.parsed && !Blockbench.hasFlag('switching_project');
+            return !!(
+                Project?.parsed &&
+                this.activeProject === Project &&
+                !Blockbench.hasFlag('switching_project')
+            );
+        },
+
+        beginProjectLifecycle(project) {
+            this.projectRevision += 1;
+            this.activeProject = project || null;
+            this.cancelPendingSceneUpdate();
+            this.cancelPendingLightUniformUpdate();
+            this.cancelPendingPreviewRender();
+            this.invalidateLightUniformMaterialCache();
+            this.animationUniformTargetCacheDirty = true;
         },
 
         pickSceneUpdateCause(causes = []) {
@@ -14809,8 +14828,19 @@ ${lumaForgeLightflowHelpers}`
 
             if (this.pendingSceneUpdateFrame !== null) return;
 
+            const scheduledRevision = this.projectRevision;
+            const scheduledProject = this.activeProject;
+            this.pendingSceneUpdateRevision = scheduledRevision;
+
             const flush = () => {
+                if (
+                    scheduledRevision !== this.projectRevision ||
+                    scheduledProject !== this.activeProject ||
+                    scheduledProject !== (window.Project || null) ||
+                    this.pendingSceneUpdateRevision !== scheduledRevision
+                ) return;
                 this.pendingSceneUpdateFrame = null;
+                this.pendingSceneUpdateRevision = null;
                 this.flushPendingSceneUpdate();
             };
 
@@ -14872,6 +14902,7 @@ ${lumaForgeLightflowHelpers}`
                 cancelAnimationFrame(this.pendingSceneUpdateFrame);
             }
             this.pendingSceneUpdateFrame = null;
+            this.pendingSceneUpdateRevision = null;
             if (this.pendingSceneUpdateCauses) {
                 this.pendingSceneUpdateCauses.clear();
             }
@@ -14887,10 +14918,21 @@ ${lumaForgeLightflowHelpers}`
 
             if (this.pendingLightUniformFrame !== null) return;
 
+            const scheduledRevision = this.projectRevision;
+            const scheduledProject = this.activeProject;
+            this.pendingLightUniformRevision = scheduledRevision;
+
             const flush = () => {
+                if (
+                    scheduledRevision !== this.projectRevision ||
+                    scheduledProject !== this.activeProject ||
+                    scheduledProject !== (window.Project || null) ||
+                    this.pendingLightUniformRevision !== scheduledRevision
+                ) return;
                 const pendingCause = this.pendingLightUniformCause || 'light_update';
                 const shouldRender = this.pendingLightUniformRender;
                 this.pendingLightUniformFrame = null;
+                this.pendingLightUniformRevision = null;
                 this.pendingLightUniformCause = null;
                 this.pendingLightUniformRender = false;
                 this.updateLightUniforms(pendingCause, { render: shouldRender });
@@ -14919,6 +14961,7 @@ ${lumaForgeLightflowHelpers}`
             }
 
             this.pendingLightUniformFrame = null;
+            this.pendingLightUniformRevision = null;
             this.pendingLightUniformCause = null;
             this.pendingLightUniformRender = false;
         },
@@ -14933,10 +14976,20 @@ ${lumaForgeLightflowHelpers}`
             }
 
             this.pendingPreviewRenderLightOnly = lightOnly;
+            const scheduledRevision = this.projectRevision;
+            const scheduledProject = this.activeProject;
+            this.pendingPreviewRenderRevision = scheduledRevision;
 
             const flush = () => {
+                if (
+                    scheduledRevision !== this.projectRevision ||
+                    scheduledProject !== this.activeProject ||
+                    scheduledProject !== (window.Project || null) ||
+                    this.pendingPreviewRenderRevision !== scheduledRevision
+                ) return;
                 const renderLightOnly = this.pendingPreviewRenderLightOnly;
                 this.pendingPreviewRenderFrame = null;
+                this.pendingPreviewRenderRevision = null;
                 this.pendingPreviewRenderLightOnly = false;
 
                 /*
@@ -14985,6 +15038,7 @@ ${lumaForgeLightflowHelpers}`
             }
 
             this.pendingPreviewRenderFrame = null;
+            this.pendingPreviewRenderRevision = null;
             this.pendingPreviewRenderLightOnly = false;
             this.currentPreviewRenderLightOnly = false;
         },
@@ -19328,39 +19382,6 @@ ${stochasticAlpha
     // =========================================================================
     // 6. PLUGIN INITIALIZATION & MENUS
     // =========================================================================
-    function waitForPluginLightManager(timeout = 5000) {
-        return new Promise((resolve, reject) => {
-
-            // Use the existing ready flag when Light Manager has already loaded.
-            if (window.LIGHT_MANAGER_LOADED && window.LightManagerUI && typeof window.applyIndestructibleFormGroups === 'function') {
-                resolve(window.LightManagerUI);
-                return;
-            }
-
-            let finished = false;
-
-            const timer = setTimeout(() => {
-                if (finished) return;
-                finished = true;
-
-                window.removeEventListener('light_manager_initialized', onReady);
-
-                reject(new Error(`Light Manager is not available after waiting for ${timeout}ms. Shader Architect requires Light Manager to function properly. Please ensure Light Manager is installed and enabled.`));
-            }, timeout);
-
-            function onReady(event) {
-                if (finished) return;
-                if (!window.LIGHT_MANAGER_LOADED || !window.LightManagerUI || typeof window.applyIndestructibleFormGroups !== 'function') return;
-                finished = true;
-
-                clearTimeout(timer);
-                resolve(window.LightManagerUI);
-            }
-
-            window.addEventListener('light_manager_initialized', onReady, { once: true });
-        });
-    }
-
     /**
      * Wraps an existing function to dispatch a Blockbench event before or after its execution.
      * The wrapped function perfectly preserves the original arguments, 'this' context, and return value.
@@ -19472,6 +19493,53 @@ ${stochasticAlpha
         });
     }
 
+    function hydrateShaderArchitectProject(context = {}) {
+        const project = context.project || null;
+        ShaderEngine.beginProjectLifecycle(project);
+        if (context.deferred) return;
+        if (!project) return;
+        if (typeof context.isCurrent === 'function' && !context.isCurrent()) return;
+
+        const model = context.model;
+        if (
+            !project[PROJECT_MATERIAL_INSTANCES_PROP] &&
+            typeof model?.[PROJECT_MATERIAL_INSTANCES_PROP] === 'string'
+        ) {
+            project[PROJECT_MATERIAL_INSTANCES_PROP] = model[PROJECT_MATERIAL_INSTANCES_PROP];
+        }
+
+        if (Array.isArray(model?.elements)) {
+            const rawByUuid = new Map(
+                model.elements
+                    .filter(element => element?.uuid)
+                    .map(element => [element.uuid, element])
+            );
+            const assignmentProperties = [
+                'sa_material_id',
+                'sa_material_instance_id',
+                CUBE_MATERIAL_INSTANCES_FALLBACK_PROP,
+                FACE_MATERIAL_INSTANCES_PROP
+            ];
+            getAllShaderElements().forEach(element => {
+                const raw = rawByUuid.get(element?.uuid);
+                if (!raw) return;
+                assignmentProperties.forEach(property => {
+                    if (element[property]) return;
+                    if (!Object.prototype.hasOwnProperty.call(raw, property)) return;
+                    element[property] = raw[property];
+                });
+            });
+        }
+
+        if (context.reason === 'new_project') {
+            MaterialManager.materialInstancePersistenceWarningShown = false;
+        }
+        project.parsed = true;
+        MaterialManager.syncMaterialInstancesFromProject(project);
+        invalidateTextureAlphaProfiles();
+        ShaderEngine.requestSceneUpdate('project_update');
+    }
+
     function registerNativeMethodEvent(owner, methodName, eventName, options = {}) {
         if (!owner) return;
 
@@ -19498,17 +19566,14 @@ ${stochasticAlpha
         author: 'MidFord327',
         description: 'Build advanced Blockbench materials with real-time Lightflow presets, editable GLSL, material instances, and deep Light Manager integration. Requires Light Manager for lights and shadows.',
         tags: ['Lightflow', 'Shaders', 'Materials', 'Rendering', 'GLSL', 'Lighting'],
-        version: '2.8.0',
+        version: '2.9.0',
         min_version: '4.9.0',
         variant: 'both',
         dependencies: ['light_manager'],
 
-        onload: async function () {
+        onload: function () {
 
-            try {
-                await waitForPluginLightManager();
-            }
-            catch (e) {
+            if (!window.LIGHT_MANAGER_LOADED || !window.LightManagerUI || typeof window.applyIndestructibleFormGroups !== 'function') {
                 Blockbench.showToastNotification({
                     text: tl('shader_architect.message.light_manager_required'),
                     icon: 'error',
@@ -21374,16 +21439,11 @@ ${stochasticAlpha
                     deletables.push(Blockbench.on(eventName, applyAddedElement));
                 });
 
-                const updateProjectEvent = (project) => {
-                    if (!project) project = MaterialManager.getActiveProject();
-                    if (!project) return;
-                    Project.parsed = true;
-                    MaterialManager.syncMaterialInstancesFromProject(project);
-                    ShaderEngine.requestSceneUpdate('project_update');
-                };
-
                 let onParseProjectEvent = Codecs.project.on('parse', () => {
                     Project.parsed = false;
+                    ShaderEngine.cancelPendingSceneUpdate();
+                    ShaderEngine.cancelPendingLightUniformUpdate();
+                    ShaderEngine.cancelPendingPreviewRender();
                     const projectInstancesProp = MaterialManager.registerProjectMaterialInstanceProperty();
                     if (projectInstancesProp && !deletables.includes(projectInstancesProp)) {
                         deletables.push(projectInstancesProp);
@@ -21392,30 +21452,22 @@ ${stochasticAlpha
 
                 deletables.push(onParseProjectEvent);
 
-                let loadProjectEvent = Codecs.project.on('parsed', () => {
-                    Project.parsed = true;
-                    updateProjectEvent();
-                });
-
-                deletables.push(loadProjectEvent);
-
-                let selectProjectEvent = Blockbench.on('select_project', (args) => {
-                    updateProjectEvent(args.project);
-                });
-
-                deletables.push(selectProjectEvent);
-
-                let loadGenericProjectEvent = Blockbench.on('load_project', (args) => {
-                    const project = args && args.project || MaterialManager.getActiveProject();
-                    updateProjectEvent(project);
-                });
-                deletables.push(loadGenericProjectEvent);
-
-                let newProjectEvent = Blockbench.on('new_project', () => {
-                    MaterialManager.materialInstancePersistenceWarningShown = false;
-                    updateProjectEvent(MaterialManager.getActiveProject());
-                });
-                deletables.push(newProjectEvent);
+                const projectHydrator = window.LightflowLifecycle?.registerHydrator?.(
+                    'shader_architect',
+                    hydrateShaderArchitectProject
+                );
+                if (projectHydrator) {
+                    deletables.push(projectHydrator);
+                } else {
+                    hydrateShaderArchitectProject({ project: MaterialManager.getActiveProject() });
+                    const loadProjectEvent = Codecs.project.on('parsed', () => {
+                        hydrateShaderArchitectProject({ project: MaterialManager.getActiveProject(), reason: 'parsed' });
+                    });
+                    const selectProjectEvent = Blockbench.on('select_project', args => {
+                        hydrateShaderArchitectProject({ project: args?.project || MaterialManager.getActiveProject(), reason: 'select_project' });
+                    });
+                    deletables.push(loadProjectEvent, selectProjectEvent);
+                }
 
                 let updateSelectionEvent = Blockbench.on('update_selection', () => {
                     if (!Project.parsed) return;
@@ -21435,6 +21487,7 @@ ${stochasticAlpha
         },
 
         onunload() {
+            ShaderEngine.beginProjectLifecycle(null);
             ShaderEngine.stopAnimationLoop();
             ShaderEngine.disposeMaterialPool();
             MinecraftPromotionalSilhouetteManager.dispose();

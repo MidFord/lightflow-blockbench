@@ -67,6 +67,10 @@
     let sceneComposerPanel;
     let sceneComposerProjectListener;
     let sceneComposerModeListener;
+    let sceneComposerCloseListener;
+    let sceneComposerLifecycleHydrator;
+    let sceneComposerRefreshFrame = null;
+    let sceneComposerRevision = 0;
     let syncingSceneComposerPanel = false;
     let activeComposerDialog;
     let stylesheet;
@@ -1784,10 +1788,6 @@
             await waitForFrame();
             window.LightManagerPrepareRender(sourcePreview, { force: true, studio: false });
             sourcePreview.render();
-
-            await waitForFrame();
-            window.LightManagerPrepareRender(sourcePreview, { force: true, studio: false });
-            sourcePreview.render();
         }
     }
 
@@ -2515,9 +2515,14 @@
         const state = getViewportComposerState(preview);
         if (!state || state.scheduled) return;
         state.scheduled = true;
+        const scheduledRevision = sceneComposerRevision;
+        const scheduledProject = window.Project || null;
         const run = () => {
-            if (state.disposed) return;
             state.scheduled = false;
+            if (state.disposed) return;
+            if (scheduledRevision !== sceneComposerRevision || scheduledProject !== (window.Project || null)) return;
+            const activePreview = getPreview();
+            if (activePreview && preview !== activePreview) return;
             renderViewportComposer(preview);
         };
         // A microtask runs after every synchronous preview wrapper (including
@@ -2534,6 +2539,17 @@
 
     function patchAllViewportComposers() {
         collectStudioRenderPreviews().forEach(patchViewportComposer);
+    }
+
+    function resetSceneComposerLifecycle() {
+        sceneComposerRevision += 1;
+        if (typeof sceneComposerRefreshFrame === 'number' && typeof cancelAnimationFrame === 'function') {
+            cancelAnimationFrame(sceneComposerRefreshFrame);
+        }
+        sceneComposerRefreshFrame = null;
+        VIEWPORT_COMPOSER_STATE.forEach(state => {
+            state.scheduled = false;
+        });
     }
 
     function disposeViewportComposers() {
@@ -3717,8 +3733,24 @@
     }
 
     function refreshSceneComposerPreviews() {
-        patchAllViewportComposers();
-        collectStudioRenderPreviews().forEach(preview => preview?.render?.());
+        const preview = getPreview();
+        if (!preview) return;
+        patchViewportComposer(preview);
+        if (sceneComposerRefreshFrame !== null) return;
+        const revision = sceneComposerRevision;
+        const project = window.Project || null;
+        const render = () => {
+            sceneComposerRefreshFrame = null;
+            if (revision !== sceneComposerRevision || project !== (window.Project || null)) return;
+            const activePreview = getPreview();
+            activePreview?.render?.();
+        };
+        if (typeof requestAnimationFrame === 'function') {
+            sceneComposerRefreshFrame = requestAnimationFrame(render);
+        } else {
+            sceneComposerRefreshFrame = 'microtask';
+            queueMicrotask(render);
+        }
     }
 
     function createSceneComposerPanelForm(settings) {
@@ -4134,6 +4166,9 @@
         if (sceneComposerPanel) sceneComposerPanel.delete();
         if (sceneComposerProjectListener) sceneComposerProjectListener.delete?.();
         if (sceneComposerModeListener) sceneComposerModeListener.delete?.();
+        if (sceneComposerCloseListener) sceneComposerCloseListener.delete?.();
+        if (sceneComposerLifecycleHydrator) sceneComposerLifecycleHydrator.delete?.();
+        resetSceneComposerLifecycle();
         disposeViewportComposers();
         if (stylesheet && typeof stylesheet.delete === 'function') stylesheet.delete();
         BLOOM_MASK_STATE.resources.forEach(resource => resource?.dispose?.());
@@ -4149,7 +4184,7 @@
         author: 'MidFord327',
         description: 'Export polished Blockbench studio renders with tiled supersampling, 4K/8K-safe output, transparency, GPU guidance, and an adjustable frame. Complements Light Manager and Shader Architect in the Lightflow suite.',
         tags: ['Lightflow', 'Rendering', 'Export', 'Screenshots', 'Studio', 'Presentation'],
-        version: '1.6.1',
+        version: '1.7.0',
         min_version: '4.9.0',
         variant: 'both',
         onload() {
@@ -4254,12 +4289,25 @@
             MenuBar.addAction(sceneComposerAction, 'view');
 
             patchAllViewportComposers();
-            sceneComposerProjectListener = Blockbench.on('select_project', () => {
-                currentSettings = loadSettings();
-                syncSceneComposerPanel();
-                patchAllViewportComposers();
-                refreshSceneComposerPreviews();
-            });
+            sceneComposerLifecycleHydrator = window.LightflowLifecycle?.registerHydrator?.(
+                'studio_render',
+                ({ project, deferred }) => {
+                    resetSceneComposerLifecycle();
+                    if (deferred || !project) return;
+                    currentSettings = loadSettings();
+                    syncSceneComposerPanel();
+                    refreshSceneComposerPreviews();
+                }
+            );
+            if (!sceneComposerLifecycleHydrator) {
+                sceneComposerProjectListener = Blockbench.on('select_project', () => {
+                    resetSceneComposerLifecycle();
+                    currentSettings = loadSettings();
+                    syncSceneComposerPanel();
+                    refreshSceneComposerPreviews();
+                });
+                sceneComposerCloseListener = Blockbench.on('close_project', resetSceneComposerLifecycle);
+            }
             sceneComposerModeListener = Blockbench.on('select_mode', () => {
                 refreshSceneComposerPreviews();
             });

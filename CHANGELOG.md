@@ -6,6 +6,19 @@ Lightflow uses a suite release version for public downloads. Individual plugins 
 
 ## [Unreleased]
 
+### RC 6 startup, project hydration, and interaction latency
+
+- **Light Manager 1.7.0:** registers the plugin and its custom `light` outliner type synchronously. Material-icon generation now runs later during idle time and can no longer delay `.bbmodel` parsing.
+- Added a shared, generation-guarded Lightflow project lifecycle. If the suite becomes available after a scene is already open, it reads the current project model and restores saved lights, Volume Domains, Environment settings, material assignments, face assignments, and material instances without requiring the project to be closed and reopened.
+- Project close and tab switching now cancel stale queued scene, light-uniform, Environment, Atmosphere, and Scene Composer work. A full light-registry pass also removes lights belonging to the previous project, including when the next project contains no lights.
+- Light edits now update only the affected light. Type, color, intensity, range, shadow bias, animation, and viewport-drag paths no longer rescan every Lightflow light, every preview, and every scene mesh on each input step.
+- Viewport shadow maps now use explicit invalidation. Ordinary Cube and Group transforms update the shadow image without rewalking all caster/receiver meshes, and finishing an edit performs a lightweight light cleanup instead of a full scene traversal.
+- **Lightflow Environment 1.3.0:** keeps the directional-light topology stable while Environment or Sun is toggled, updates shadow projection and targets only when their signature changes, and limits animated sun-shadow refreshes while keeping sky and light uniforms fluid.
+- **Shader Architect 2.9.0:** isolates queued material and uniform work by project revision and hydrates saved root, element, and face material state when loaded late.
+- **Lightflow Atmosphere 1.2.0:** restores late-loaded Volume Domains and prevents a queued volume render from crossing a project transition.
+- **Studio Render 1.7.0:** coalesces Scene Composer refreshes, composites only the active viewport, discards stale work after close/switch, and removes the redundant second preview/shadow recovery render after Studio Render.
+- Added regression coverage for synchronous registration, late hydration, project isolation, partial light updates, manual shadow invalidation, stable Environment topology, and active-preview-only Scene Composer refreshes.
+
 ### RC 5 interactive performance and transparency
 
 - **Studio Render 1.6.1:** preserves the destination alpha during additive viewport Bloom, so Blockbench's transparent checkerboard remains visible instead of becoming an opaque black background.

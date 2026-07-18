@@ -2,7 +2,7 @@
     'use strict';
 
     const PLUGIN_ID = 'lightflow_environment';
-    const PLUGIN_VERSION = '1.2.0';
+    const PLUGIN_VERSION = '1.3.0';
     const STORAGE_KEY = 'lightflow_environment.settings';
     const PROJECT_PROPERTY = 'lightflow_environment_settings';
     const TWO_PI = Math.PI * 2;
@@ -105,6 +105,12 @@
     let previewRenderFrame = null;
     let lastFrameTime = 0;
     let lastRenderTime = 0;
+    let environmentRevision = 0;
+    let environmentProject = null;
+    let lastSunShadowConfig = '';
+    let lastSunShadowDirection = null;
+    let lastSunShadowRefresh = 0;
+    let lastSunShadowGizmoSignature = '';
     const deletables = [];
 
     function clamp(value, min, max) {
@@ -128,30 +134,6 @@
 
     function markerColor(index, tone = 'pastel', fallback = 'var(--color-accent)') {
         return window.LightManagerUI?.markerColor?.(index, tone, fallback) || fallback;
-    }
-
-    function waitForLightManager(timeout = 5000) {
-        return new Promise((resolve, reject) => {
-            if (window.LIGHT_MANAGER_LOADED && window.LightManagerUI && typeof window.applyIndestructibleFormGroups === 'function') {
-                resolve(window.LightManagerUI);
-                return;
-            }
-            let finished = false;
-            const timer = setTimeout(() => {
-                if (finished) return;
-                finished = true;
-                window.removeEventListener('light_manager_initialized', onReady);
-                reject(new Error('Lightflow Environment requires Light Manager.'));
-            }, timeout);
-            function onReady() {
-                if (finished || !window.LightManagerUI || typeof window.applyIndestructibleFormGroups !== 'function') return;
-                finished = true;
-                clearTimeout(timer);
-                window.removeEventListener('light_manager_initialized', onReady);
-                resolve(window.LightManagerUI);
-            }
-            window.addEventListener('light_manager_initialized', onReady);
-        });
     }
 
     function normalizeHex(value, fallback) {
@@ -757,8 +739,8 @@
         settings.shadow_fit_corners = corners.flatMap(corner => corner.toArray());
     }
 
-    function configureSunShadow(force) {
-        if (!sunLight?.shadow) return;
+    function configureSunShadow(force, options = {}) {
+        if (!sunLight?.shadow) return false;
         const renderer = window.Preview?.selected?.renderer || window.main_preview?.renderer;
         let maxTextureSize = 4096;
         try {
@@ -771,22 +753,67 @@
         const frustum = getActiveShadowFrustum();
         const area = frustum.area;
         const shadow = sunLight.shadow;
-        const recreate = force || shadow.mapSize.width !== resolution || shadow.mapSize.height !== resolution;
-        sunLight.castShadow = !!settings.sun_cast_shadows;
-        shadow.mapSize.set(resolution, resolution);
-        Object.assign(shadow.camera, {
+        const state = options.state || getLightingState();
+        // Keep shadow-light topology stable while Environment/Sun is toggled.
+        // Manual shadow invalidation means an intensity-zero light does not
+        // keep paying for shadow passes, while Three can reuse its programs.
+        const castsShadow = !!settings.sun_cast_shadows;
+        const radius = settings.pixelated_shadows ? 0 : 1;
+        const configSignature = [
+            castsShadow ? 1 : 0,
+            resolution,
+            area,
+            frustum.near,
+            frustum.far,
+            settings.shadow_bias,
+            settings.shadow_normal_bias,
+            radius
+        ].map(value => Number(value).toFixed(5)).join('|');
+        const configChanged = configSignature !== lastSunShadowConfig;
+        const resolutionChanged = shadow.mapSize.width !== resolution || shadow.mapSize.height !== resolution;
+        let cameraChanged = false;
+
+        if (sunLight.castShadow !== castsShadow) sunLight.castShadow = castsShadow;
+        if (resolutionChanged) {
+            shadow.mapSize.set(resolution, resolution);
+            if (shadow.map?.setSize) {
+                shadow.map.setSize(resolution, resolution);
+            } else if (shadow.map) {
+                shadow.map.dispose?.();
+                shadow.map = null;
+            }
+        }
+        const cameraValues = {
             left: -area, right: area, top: area, bottom: -area,
             near: frustum.near, far: frustum.far
+        };
+        Object.entries(cameraValues).forEach(([key, value]) => {
+            if (shadow.camera[key] === value) return;
+            shadow.camera[key] = value;
+            cameraChanged = true;
         });
-        shadow.bias = settings.shadow_bias;
-        shadow.normalBias = settings.shadow_normal_bias;
-        shadow.radius = settings.pixelated_shadows ? 0 : 1;
-        shadow.camera.updateProjectionMatrix?.();
-        if (recreate && shadow.map) {
-            shadow.map.dispose?.();
-            shadow.map = null;
+        if (shadow.bias !== settings.shadow_bias) shadow.bias = settings.shadow_bias;
+        if (shadow.normalBias !== settings.shadow_normal_bias) shadow.normalBias = settings.shadow_normal_bias;
+        if (shadow.radius !== radius) shadow.radius = radius;
+        if (cameraChanged) shadow.camera.updateProjectionMatrix?.();
+
+        const direction = sunLight.position.clone().sub(sunTarget?.position || new THREE.Vector3()).normalize();
+        const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+        const directionAngle = lastSunShadowDirection
+            ? Math.acos(clamp(lastSunShadowDirection.dot(direction), -1, 1))
+            : Infinity;
+        const animatedDirectionDue = options.animation === true
+            ? (directionAngle >= THREE.MathUtils.degToRad(0.35) || now - lastSunShadowRefresh >= 100)
+            : directionAngle > 0.000001;
+        const changed = !!(force || configChanged || resolutionChanged || cameraChanged || animatedDirectionDue);
+        lastSunShadowConfig = configSignature;
+        if (changed) {
+            if (!lastSunShadowDirection) lastSunShadowDirection = new THREE.Vector3();
+            lastSunShadowDirection.copy(direction);
+            lastSunShadowRefresh = now;
+            shadow.needsUpdate = true;
         }
-        shadow.needsUpdate = true;
+        return changed;
     }
 
     function registerSunShadowCanvasGizmo(object) {
@@ -1133,15 +1160,39 @@
             skyMaterial.uniforms.uCloudBrightness.value = settings.cloud_brightness;
         }
 
+        let shadowChanged = false;
         if (sunLight) {
-            sunLight.visible = !!(settings.enabled && settings.sun_enabled && state.sunIntensity > 0.0001);
-            sunLight.intensity = state.sunIntensity;
+            const activeSun = !!(settings.enabled && settings.sun_enabled && state.sunIntensity > 0.0001);
+            // Keep the directional light in Three's light list. Toggling
+            // Object3D.visible changes NUM_DIR_LIGHTS and recompiles every
+            // material; intensity zero is visually identical without the
+            // shader-program hitch.
+            sunLight.visible = true;
+            sunLight.intensity = activeSun ? state.sunIntensity : 0;
             setColor(sunLight.color, state.sunColor);
             updateSunShadowPlacement(state.celestialDirection);
-            configureSunShadow(!!options.forceShadow);
+            shadowChanged = configureSunShadow(!!options.forceShadow, {
+                animation: !!options.animation,
+                state
+            });
             sunLight.updateMatrixWorld(true);
             sunTarget.updateMatrixWorld(true);
-            updateSunShadowGizmo();
+            const frustum = getActiveShadowFrustum();
+            const gizmoSignature = [
+                settings.show_shadow_gizmo ? 1 : 0,
+                settings.enabled ? 1 : 0,
+                settings.sun_enabled ? 1 : 0,
+                settings.sun_cast_shadows ? 1 : 0,
+                settings.shadow_auto_fit ? 1 : 0,
+                frustum.area,
+                frustum.near,
+                frustum.far,
+                Array.isArray(settings.shadow_fit_corners) ? settings.shadow_fit_corners.join(',') : ''
+            ].join('|');
+            if (gizmoSignature !== lastSunShadowGizmoSignature) {
+                lastSunShadowGizmoSignature = gizmoSignature;
+                updateSunShadowGizmo();
+            }
         }
 
         if (window.ShaderEngine) {
@@ -1152,10 +1203,10 @@
                 window.ShaderEngine.updateLightUniforms?.('environment_update', { render: false });
             }
         }
-        if (typeof window.LightManagerMarkShadowsDirty === 'function') {
+        if (shadowChanged && typeof window.LightManagerMarkShadowsDirty === 'function') {
             window.LightManagerMarkShadowsDirty({ scene: !!options.forceShadow });
         }
-        if (typeof window.LightManagerPrepareRender === 'function') {
+        if (shadowChanged && typeof window.LightManagerPrepareRender === 'function') {
             const preview = window.Preview?.selected || window.main_preview || window.MediaPreview || null;
             window.LightManagerPrepareRender(preview, { force: !!options.forceShadow });
         }
@@ -1164,9 +1215,16 @@
     function requestPreviewRender() {
         if (window.LightManagerStudioRenderSession) return;
         if (previewRenderFrame !== null) return;
+        const revision = environmentRevision;
+        const project = window.Project || null;
         const render = () => {
             previewRenderFrame = null;
             if (window.LightManagerStudioRenderSession) return;
+            if (
+                revision !== environmentRevision ||
+                project !== environmentProject ||
+                project !== (window.Project || null)
+            ) return;
             const preview = window.Preview?.selected || window.main_preview || window.MediaPreview;
             preview?.render?.();
         };
@@ -1235,7 +1293,10 @@
         if (shouldCaptureFitRegion) captureShadowFitRegion(manualFrustum);
         saveSettings();
         if (options.syncPanel !== false) syncEnvironmentPanel();
-        updateScene({ forceShadow: options.forceShadow !== false });
+        updateScene({
+            forceShadow: options.forceShadow === true,
+            animation: !!options.animation
+        });
         dispatchChanged(options.cause || 'settings');
         if (options.render !== false) requestPreviewRender();
         return Object.assign({}, settings);
@@ -1723,10 +1784,36 @@
         return projectProperty;
     }
 
-    function loadProjectSettings(project) {
-        const activeProject = project || window.Project;
-        if (!activeProject) return;
+    function beginEnvironmentProject(project) {
+        environmentRevision += 1;
+        environmentProject = project || null;
+        if (typeof previewRenderFrame === 'number' && typeof cancelAnimationFrame === 'function') {
+            cancelAnimationFrame(previewRenderFrame);
+        }
+        previewRenderFrame = null;
+        lastSunShadowConfig = '';
+        lastSunShadowDirection = null;
+        lastSunShadowRefresh = 0;
+        lastSunShadowGizmoSignature = '';
+    }
+
+    function loadProjectSettings(project, model) {
+        const activeProject = project || null;
+        beginEnvironmentProject(activeProject);
+        if (!activeProject) {
+            if (skyMesh) skyMesh.visible = false;
+            if (sunLight) {
+                sunLight.intensity = 0;
+            }
+            return;
+        }
         effectiveShadowFrustum = null;
+        if (
+            (!activeProject[PROJECT_PROPERTY] || !String(activeProject[PROJECT_PROPERTY]).trim()) &&
+            typeof model?.[PROJECT_PROPERTY] === 'string'
+        ) {
+            activeProject[PROJECT_PROPERTY] = model[PROJECT_PROPERTY];
+        }
         const raw = activeProject[PROJECT_PROPERTY];
         if (typeof raw === 'string' && raw.trim()) {
             try {
@@ -1738,7 +1825,7 @@
             settings = loadSettings();
         }
         syncEnvironmentPanel();
-        updateScene({ forceShadow: true });
+        updateScene({ forceShadow: true, animation: false });
         dispatchChanged('project_load');
         requestPreviewRender();
     }
@@ -1755,7 +1842,7 @@
             if (timestamp - lastRenderTime < 33) return;
             lastRenderTime = timestamp;
             syncEnvironmentPanel({ timeOnly: true });
-            updateScene({ forceShadow: false });
+            updateScene({ forceShadow: false, animation: true });
             dispatchChanged('animation');
             requestPreviewRender();
         };
@@ -1803,10 +1890,8 @@
         variant: 'both',
         dependencies: ['light_manager'],
 
-        async onload() {
-            try {
-                await waitForLightManager();
-            } catch (error) {
+        onload() {
+            if (!window.LIGHT_MANAGER_LOADED || !window.LightManagerUI || typeof window.applyIndestructibleFormGroups !== 'function') {
                 Blockbench.showToastNotification({
                     text: tr('lightflow_environment.message.light_manager_required', 'Lightflow Environment requires Light Manager.'),
                     icon: 'error',
@@ -1818,7 +1903,6 @@
             installUI();
             createSky();
             createSunLight();
-            updateScene({ forceShadow: true });
             installSunShadowGizmoInteraction();
 
             window.LightflowEnvironment = {
@@ -1835,9 +1919,25 @@
                 }
             };
 
-            const selectListener = Blockbench.on('select_project', event => loadProjectSettings(event?.project));
-            const loadListener = Blockbench.on('load_project', event => loadProjectSettings(event?.project));
-            const parsedListener = window.Codecs?.project?.on?.('parsed', () => loadProjectSettings(window.Project));
+            const lifecycleHydrator = window.LightflowLifecycle?.registerHydrator?.(
+                'lightflow_environment',
+                ({ project, model, isCurrent, deferred }) => {
+                    if (deferred) {
+                        beginEnvironmentProject(project);
+                        return;
+                    }
+                    if (project && !isCurrent()) return;
+                    loadProjectSettings(project, model);
+                }
+            );
+            if (lifecycleHydrator) {
+                deletables.push(lifecycleHydrator);
+            } else {
+                loadProjectSettings(window.Project || null, null);
+                const selectListener = Blockbench.on('select_project', event => loadProjectSettings(event?.project || window.Project, null));
+                const parsedListener = window.Codecs?.project?.on?.('parsed', () => loadProjectSettings(window.Project || null, null));
+                deletables.push(selectListener, parsedListener);
+            }
             const textureChanged = () => {
                 syncEnvironmentPanel();
                 updateScene({ forceShadow: false });
@@ -1851,15 +1951,14 @@
                 updateScene({ forceShadow: true });
             };
             window.addEventListener('light_manager_initialized', lightManagerListener);
-            deletables.push(selectListener, loadListener, parsedListener, ...textureListeners, viewListener, {
+            deletables.push(...textureListeners, viewListener, {
                 delete() { window.removeEventListener('light_manager_initialized', lightManagerListener); }
             });
             startAnimation();
-            dispatchChanged('load');
-            requestPreviewRender();
         },
 
         onunload() {
+            beginEnvironmentProject(null);
             if (animationFrame !== null) cancelAnimationFrame(animationFrame);
             animationFrame = null;
             if (typeof previewRenderFrame === 'number') cancelAnimationFrame(previewRenderFrame);
@@ -1868,7 +1967,6 @@
             deletables.splice(0).reverse().forEach(item => item?.delete?.());
             delete window.LightflowEnvironment;
             window.ShaderEngine?.updateLightUniforms?.();
-            requestPreviewRender();
         }
     });
 })();

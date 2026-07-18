@@ -2,7 +2,7 @@
     'use strict';
 
     const PLUGIN_ID = 'lightflow_atmosphere';
-    const PLUGIN_VERSION = '1.1.0';
+    const PLUGIN_VERSION = '1.2.0';
     const MAX_VOLUMES = 4;
     const MAX_LIGHTS = 4;
     const MAX_SHADOWS = 2;
@@ -81,6 +81,8 @@
     let lastAnimatedFrame = 0;
     let lastPreviewPatchCheck = 0;
     let syncingPanel = false;
+    let atmosphereRevision = 0;
+    let atmosphereProject = null;
     const deletables = [];
 
     function clamp(value, min, max) {
@@ -117,30 +119,6 @@
 
     function markerColor(index, tone = 'pastel', fallback = 'var(--color-accent)') {
         return window.LightManagerUI?.markerColor?.(index, tone, fallback) || fallback;
-    }
-
-    function waitForLightManager(timeout = 5000) {
-        return new Promise((resolve, reject) => {
-            if (window.LIGHT_MANAGER_LOADED && window.LightManagerUI && typeof window.applyIndestructibleFormGroups === 'function') {
-                resolve(window.LightManagerUI);
-                return;
-            }
-            let finished = false;
-            const timer = setTimeout(() => {
-                if (finished) return;
-                finished = true;
-                window.removeEventListener('light_manager_initialized', onReady);
-                reject(new Error('Lightflow Atmosphere requires Light Manager.'));
-            }, timeout);
-            function onReady() {
-                if (finished || !window.LightManagerUI || typeof window.applyIndestructibleFormGroups !== 'function') return;
-                finished = true;
-                clearTimeout(timer);
-                window.removeEventListener('light_manager_initialized', onReady);
-                resolve(window.LightManagerUI);
-            }
-            window.addEventListener('light_manager_initialized', onReady);
-        });
     }
 
     function colorArrayToHex(value) {
@@ -216,9 +194,16 @@
     function requestPreviewRender() {
         if (window.LightManagerStudioRenderSession) return;
         if (previewRenderFrame !== null) return;
+        const revision = atmosphereRevision;
+        const project = window.Project || null;
         const render = () => {
             previewRenderFrame = null;
             if (window.LightManagerStudioRenderSession) return;
+            if (
+                revision !== atmosphereRevision ||
+                project !== atmosphereProject ||
+                project !== (window.Project || null)
+            ) return;
             const preview = window.Preview && Preview.selected;
             if (preview && typeof preview.render === 'function') preview.render();
             else if (window.Canvas && typeof Canvas.updateView === 'function') Canvas.updateView({ elements: [], element_aspects: {} });
@@ -228,6 +213,15 @@
             previewRenderFrame = 'microtask';
             queueMicrotask(render);
         }
+    }
+
+    function beginAtmosphereProject(project) {
+        atmosphereRevision += 1;
+        atmosphereProject = project || null;
+        if (typeof previewRenderFrame === 'number' && typeof cancelAnimationFrame === 'function') {
+            cancelAnimationFrame(previewRenderFrame);
+        }
+        previewRenderFrame = null;
     }
 
     const FULLSCREEN_VERTEX_SHADER = `
@@ -2630,10 +2624,8 @@
         variant: 'both',
         dependencies: ['light_manager'],
 
-        async onload() {
-            try {
-                await waitForLightManager();
-            } catch (error) {
+        onload() {
+            if (!window.LIGHT_MANAGER_LOADED || !window.LightManagerUI || typeof window.applyIndestructibleFormGroups !== 'function') {
                 Blockbench.showToastNotification({
                     text: tr('lightflow_atmosphere.message.light_manager_required', 'Lightflow Atmosphere requires Light Manager.'),
                     icon: 'error',
@@ -2649,12 +2641,25 @@
 
             const studioListener = Blockbench.on('studio_render_pre_tile', event => AtmosphereManager.prepareStudioTile(event));
             const selectionListener = Blockbench.on('update_selection', () => syncAtmospherePanel());
-            const projectListener = Blockbench.on('select_project', () => {
-                AtmosphereManager.invalidateSceneCache();
-                AtmosphereManager.patchAllPreviews();
-                syncAtmospherePanel();
-                requestPreviewRender();
-            });
+            const lifecycleHydrator = window.LightflowLifecycle?.registerHydrator?.(
+                'lightflow_atmosphere',
+                ({ project, model, isCurrent, deferred }) => {
+                    beginAtmosphereProject(project);
+                    if (deferred) return;
+                    if (!project || !isCurrent()) {
+                        AtmosphereManager.invalidateSceneCache();
+                        return;
+                    }
+                    window.LightflowLifecycle.restoreCustomElements(model, 'lightflow_volume', VolumeElement);
+                    if (!isCurrent()) return;
+                    AtmosphereManager.invalidateSceneCache();
+                    AtmosphereManager.patchAllPreviews();
+                    syncAtmospherePanel();
+                    requestPreviewRender();
+                }
+            );
+            if (lifecycleHydrator) deletables.push(lifecycleHydrator);
+            else beginAtmosphereProject(window.Project || null);
             const lightManagerListener = () => {
                 AtmosphereManager.invalidateSceneCache();
                 AtmosphereManager.patchAllPreviews();
@@ -2666,9 +2671,9 @@
             ].map(eventName => Blockbench.on(eventName, () => AtmosphereManager.invalidateDepthCache()));
             const sceneMutationListeners = [
                 'add_cube', 'add_mesh', 'add_texture_mesh', 'remove_cube', 'remove_mesh',
-                'undo', 'redo', 'load_project'
+                'undo', 'redo'
             ].map(eventName => Blockbench.on(eventName, () => AtmosphereManager.invalidateSceneCache()));
-            deletables.push(studioListener, selectionListener, projectListener, ...depthMutationListeners, ...sceneMutationListeners, {
+            deletables.push(studioListener, selectionListener, ...depthMutationListeners, ...sceneMutationListeners, {
                 delete() { window.removeEventListener('light_manager_initialized', lightManagerListener); }
             });
             syncAtmospherePanel();
@@ -2677,6 +2682,7 @@
         },
 
         onunload() {
+            beginAtmosphereProject(null);
             if (animationFrame !== null) cancelAnimationFrame(animationFrame);
             animationFrame = null;
             if (typeof previewRenderFrame === 'number') cancelAnimationFrame(previewRenderFrame);

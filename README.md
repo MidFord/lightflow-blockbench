@@ -41,11 +41,11 @@ The plugins work independently where possible, but they are designed to be used 
 
 | Plugin | Current version | Purpose | Dependency |
 | --- | ---: | --- | --- |
-| **Light Manager** | `1.6.5` | Adds production-oriented point, spot, and directional lights with adaptive shadows, gizmos, animation support, and lighting profiles. | None |
-| **Lightflow Environment** | `1.2.0` | Adds editable Vanilla and Vibrant Visuals skies, custom gradients and project textures, Minecraft time, sun/moon lighting, ambient influence, and controlled shadow coverage. | **Light Manager recommended**; integrates with Shader Architect |
-| **Shader Architect** | `2.8.0` | Builds and assigns advanced materials with PBR controls, environment lighting, SSR fallback reflections, Vibrant Visuals PBR, pixel-shadow controls, editable GLSL, and material instances. | **Light Manager required** |
-| **Lightflow Atmosphere** | `1.1.0` | Adds production-ready local fog, correctly occluded additive light shafts, height fog, and procedural cloud domains with render-element depth occlusion. | **Light Manager recommended**; integrates with Shader Architect and Studio Render |
-| **Studio Render** | `1.6.1` | Adds an attached GPU Scene Composer, AO-safe realtime Bloom, color grading, tiled supersampling, transparency, and 4K/8K-safe exports. | Works alone; integrates with the other Lightflow modules |
+| **Light Manager** | `1.7.0` | Adds production-oriented point, spot, and directional lights with adaptive shadows, gizmos, animation support, and lighting profiles. | None |
+| **Lightflow Environment** | `1.3.0` | Adds editable Vanilla and Vibrant Visuals skies, custom gradients and project textures, Minecraft time, sun/moon lighting, ambient influence, and controlled shadow coverage. | **Light Manager recommended**; integrates with Shader Architect |
+| **Shader Architect** | `2.9.0` | Builds and assigns advanced materials with PBR controls, environment lighting, SSR fallback reflections, Vibrant Visuals PBR, pixel-shadow controls, editable GLSL, and material instances. | **Light Manager required** |
+| **Lightflow Atmosphere** | `1.2.0` | Adds production-ready local fog, correctly occluded additive light shafts, height fog, and procedural cloud domains with render-element depth occlusion. | **Light Manager recommended**; integrates with Shader Architect and Studio Render |
+| **Studio Render** | `1.7.0` | Adds an attached GPU Scene Composer, AO-safe realtime Bloom, color grading, tiled supersampling, transparency, and 4K/8K-safe exports. | Works alone; integrates with the other Lightflow modules |
 
 ### Why Lightflow exists
 
