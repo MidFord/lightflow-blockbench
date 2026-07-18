@@ -2,7 +2,7 @@
     'use strict';
 
     const PLUGIN_ID = 'lightflow_atmosphere';
-    const PLUGIN_VERSION = '1.0.0';
+    const PLUGIN_VERSION = '1.2.0';
     const MAX_VOLUMES = 4;
     const MAX_LIGHTS = 4;
     const MAX_SHADOWS = 2;
@@ -77,9 +77,12 @@
     let settingsAction = null;
     let stylesheet = null;
     let animationFrame = null;
+    let previewRenderFrame = null;
     let lastAnimatedFrame = 0;
     let lastPreviewPatchCheck = 0;
     let syncingPanel = false;
+    let atmosphereRevision = 0;
+    let atmosphereProject = null;
     const deletables = [];
 
     function clamp(value, min, max) {
@@ -112,6 +115,10 @@
         if (typeof tl !== 'function') return fallback || key;
         const translated = tl(key);
         return translated === key ? (fallback || key) : translated;
+    }
+
+    function markerColor(index, tone = 'pastel', fallback = 'var(--color-accent)') {
+        return window.LightManagerUI?.markerColor?.(index, tone, fallback) || fallback;
     }
 
     function colorArrayToHex(value) {
@@ -186,9 +193,35 @@
 
     function requestPreviewRender() {
         if (window.LightManagerStudioRenderSession) return;
-        const preview = window.Preview && Preview.selected;
-        if (preview && typeof preview.render === 'function') preview.render();
-        else if (window.Canvas && typeof Canvas.updateView === 'function') Canvas.updateView({ elements: [], element_aspects: {} });
+        if (previewRenderFrame !== null) return;
+        const revision = atmosphereRevision;
+        const project = window.Project || null;
+        const render = () => {
+            previewRenderFrame = null;
+            if (window.LightManagerStudioRenderSession) return;
+            if (
+                revision !== atmosphereRevision ||
+                project !== atmosphereProject ||
+                project !== (window.Project || null)
+            ) return;
+            const preview = window.Preview && Preview.selected;
+            if (preview && typeof preview.render === 'function') preview.render();
+            else if (window.Canvas && typeof Canvas.updateView === 'function') Canvas.updateView({ elements: [], element_aspects: {} });
+        };
+        if (typeof requestAnimationFrame === 'function') previewRenderFrame = requestAnimationFrame(render);
+        else {
+            previewRenderFrame = 'microtask';
+            queueMicrotask(render);
+        }
+    }
+
+    function beginAtmosphereProject(project) {
+        atmosphereRevision += 1;
+        atmosphereProject = project || null;
+        if (typeof previewRenderFrame === 'number' && typeof cancelAnimationFrame === 'function') {
+            cancelAnimationFrame(previewRenderFrame);
+        }
+        previewRenderFrame = null;
     }
 
     const FULLSCREEN_VERTEX_SHADER = `
@@ -772,7 +805,19 @@
 
         invalidateSceneCache() {
             this.scenePartitionCache = null;
+            this.invalidateDepthCache();
+        },
+
+        invalidateDepthCache() {
             this.sceneRevision = (this.sceneRevision + 1) >>> 0;
+            this.states.forEach(state => {
+                state.lastFrameSignature = null;
+                state.lastNormalVolumeReady = false;
+                state.lastDepthSignature = null;
+            });
+        },
+
+        invalidateVolumeCache() {
             this.states.forEach(state => {
                 state.lastFrameSignature = null;
                 state.lastNormalVolumeReady = false;
@@ -937,8 +982,10 @@
                 lastNormalStudio: false,
                 lastBloomMultiplier: 1,
                 lastFrameSignature: null,
+                lastDepthSignature: null,
                 lastDepthSources: null,
                 lightCandidates: [],
+                lightElementByUuid: new Map(),
                 scratch: {
                     scaleMatrix: new THREE.Matrix4(),
                     worldMatrix: new THREE.Matrix4(),
@@ -994,6 +1041,7 @@
                 configureRenderTarget(state.sceneTarget, volumeWidth, volumeHeight);
                 configureRenderTarget(state.cubeTarget, volumeWidth, volumeHeight);
                 state.lastFrameSignature = null;
+                state.lastDepthSignature = null;
             }
             state.compositeUniforms.uBilateralUpsample.value = volumeWidth < sceneWidth || volumeHeight < sceneHeight;
         },
@@ -1193,6 +1241,9 @@
             const scene = window.Canvas?.scene;
             if (!scene || !camera) return null;
             const previousTarget = renderer.getRenderTarget?.() || null;
+            const previousTargetViewport = previousTarget?.viewport?.clone?.() || null;
+            const previousTargetScissor = previousTarget?.scissor?.clone?.() || null;
+            const previousTargetScissorTest = previousTarget?.scissorTest ?? false;
             const previousAutoClear = renderer.autoClear;
             const previousViewport = renderer.getViewport?.(new THREE.Vector4()) || null;
             const previousScissor = renderer.getScissor?.(new THREE.Vector4()) || null;
@@ -1239,10 +1290,17 @@
                     cubeDepth: state.cubeTarget.depthTexture
                 };
             } finally {
-                renderer.setRenderTarget?.(previousTarget);
-                if (previousViewport) renderer.setViewport?.(previousViewport);
-                if (previousScissor) renderer.setScissor?.(previousScissor);
-                renderer.setScissorTest?.(previousScissorTest);
+                if (previousTarget) {
+                    if (previousTargetViewport && previousTarget.viewport) previousTarget.viewport.copy(previousTargetViewport);
+                    if (previousTargetScissor && previousTarget.scissor) previousTarget.scissor.copy(previousTargetScissor);
+                    previousTarget.scissorTest = previousTargetScissorTest;
+                    renderer.setRenderTarget?.(previousTarget);
+                } else {
+                    renderer.setRenderTarget?.(null);
+                    if (previousViewport) renderer.setViewport?.(previousViewport);
+                    if (previousScissor) renderer.setScissor?.(previousScissor);
+                    renderer.setScissorTest?.(previousScissorTest);
+                }
                 renderer.autoClear = previousAutoClear;
                 renderer.setClearColor?.(clearColor, clearAlpha);
                 if (renderer.shadowMap && previousShadowAutoUpdate !== undefined) renderer.shadowMap.autoUpdate = previousShadowAutoUpdate;
@@ -1321,6 +1379,11 @@
         updateLightUniforms(state) {
             const uniforms = state.volumeUniforms;
             const candidates = state.lightCandidates;
+            const elementByUuid = state.lightElementByUuid;
+            elementByUuid.clear();
+            window.LightElement?.all?.forEach?.(element => {
+                if (element?.uuid) elementByUuid.set(element.uuid, element);
+            });
             let candidateCount = 0;
             const lights = window.three_lights || {};
             for (const uuid in lights) {
@@ -1350,7 +1413,7 @@
                     continue;
                 }
                 const { uuid, light } = entry;
-                const element = window.LightElement?.all?.find?.(candidate => candidate?.uuid === uuid);
+                const element = elementByUuid.get(uuid);
                 light.getWorldPosition?.(position);
                 if (light.target?.getWorldPosition) {
                     light.target.getWorldPosition(targetPosition);
@@ -1500,6 +1563,29 @@
             return hash >>> 0;
         },
 
+        computeDepthSignature(state, preview, studio) {
+            let hash = 2166136261;
+            hash = this.hashNumber(hash, this.sceneRevision);
+            hash = this.hashNumber(hash, state.depthWidth);
+            hash = this.hashNumber(hash, state.depthHeight);
+            hash = this.hashNumber(hash, this.settings.helper_mask ? 1 : 0);
+            const camera = preview.camera;
+            hash = this.hashArray(hash, camera?.matrixWorld?.elements);
+            hash = this.hashArray(hash, camera?.projectionMatrix?.elements);
+            hash = this.hashNumber(hash, camera?.near);
+            hash = this.hashNumber(hash, camera?.far);
+            const tile = studio && this.studioTile?.preview === preview ? this.studioTile.tile : null;
+            if (tile) {
+                hash = this.hashNumber(hash, tile.viewX);
+                hash = this.hashNumber(hash, tile.viewY);
+                hash = this.hashNumber(hash, tile.viewWidth);
+                hash = this.hashNumber(hash, tile.viewHeight);
+                hash = this.hashNumber(hash, tile.sampleX);
+                hash = this.hashNumber(hash, tile.sampleY);
+            }
+            return hash >>> 0;
+        },
+
         performance() {
             const result = { states: this.states.size, raymarches: 0, cacheHits: 0, depthCaptures: 0, cacheHitRate: 0 };
             this.states.forEach(state => {
@@ -1572,7 +1658,11 @@
             state.rendering = true;
             this.resize(state, studio);
             const frameSignature = this.computeFrameSignature(state, preview, volumes, studio);
+            const depthSignature = this.computeDepthSignature(state, preview, studio);
             const previousTarget = renderer.getRenderTarget?.() || null;
+            const previousTargetViewport = previousTarget?.viewport?.clone?.() || null;
+            const previousTargetScissor = previousTarget?.scissor?.clone?.() || null;
+            const previousTargetScissorTest = previousTarget?.scissorTest ?? false;
             const previousAutoClear = renderer.autoClear;
             const previousViewport = renderer.getViewport?.(new THREE.Vector4()) || null;
             const previousScissor = renderer.getScissor?.(new THREE.Vector4()) || null;
@@ -1591,9 +1681,14 @@
                     // pipeline. Reuse its fresh depth buffers when they cover
                     // every visible cube; this removes two full scene draws
                     // per tile while preserving alpha-tested foliage depth.
-                    const depthSources = this.findFreshSharedDepthSources(preview, state) || this.captureDepth(state, preview);
+                    const sharedDepth = this.findFreshSharedDepthSources(preview, state);
+                    const cachedDepth = state.lastDepthSignature === depthSignature
+                        ? state.lastDepthSources
+                        : null;
+                    const depthSources = sharedDepth || cachedDepth || this.captureDepth(state, preview);
                     if (!depthSources) return false;
                     state.lastDepthSources = depthSources;
+                    state.lastDepthSignature = depthSignature;
                     this.updateUniforms(state, preview, volumes, studio, !!settings.bloomMask, depthSources);
                     renderer.autoClear = true;
                     renderer.setScissorTest?.(false);
@@ -1618,17 +1713,16 @@
                 }
 
                 renderer.autoClear = false;
-                renderer.setRenderTarget?.(previousTarget);
-                /*
-                 * getDrawingBufferSize() is expressed in physical pixels,
-                 * while setViewport() on the default framebuffer expects
-                 * logical pixels and applies renderer.pixelRatio itself.
-                 * Reusing the saved viewport prevents a second DPI scaling,
-                 * which was the source of the Windows viewport offset.
-                 */
-                if (previousViewport) renderer.setViewport?.(previousViewport);
-                else if (previousTarget) renderer.setViewport?.(0, 0, previousTarget.width, previousTarget.height);
-                renderer.setScissorTest?.(false);
+                if (previousTarget) {
+                    if (previousTargetViewport && previousTarget.viewport) previousTarget.viewport.copy(previousTargetViewport);
+                    if (previousTargetScissor && previousTarget.scissor) previousTarget.scissor.copy(previousTargetScissor);
+                    previousTarget.scissorTest = false;
+                    renderer.setRenderTarget?.(previousTarget);
+                } else {
+                    renderer.setRenderTarget?.(null);
+                    if (previousViewport) renderer.setViewport?.(previousViewport);
+                    renderer.setScissorTest?.(false);
+                }
                 state.compositeUniforms.uBloomComposite.value = !!settings.bloomMask;
                 state.compositeUniforms.uBloomMultiplier.value = useCachedBloom ? state.lastBloomMultiplier : 1;
                 renderer.render(state.compositeScene, state.postCamera);
@@ -1644,10 +1738,17 @@
                 saveSettings(this.settings);
                 return false;
             } finally {
-                renderer.setRenderTarget?.(previousTarget);
-                if (previousViewport) renderer.setViewport?.(previousViewport);
-                if (previousScissor) renderer.setScissor?.(previousScissor);
-                renderer.setScissorTest?.(previousScissorTest);
+                if (previousTarget) {
+                    if (previousTargetViewport && previousTarget.viewport) previousTarget.viewport.copy(previousTargetViewport);
+                    if (previousTargetScissor && previousTarget.scissor) previousTarget.scissor.copy(previousTargetScissor);
+                    previousTarget.scissorTest = previousTargetScissorTest;
+                    renderer.setRenderTarget?.(previousTarget);
+                } else {
+                    renderer.setRenderTarget?.(null);
+                    if (previousViewport) renderer.setViewport?.(previousViewport);
+                    if (previousScissor) renderer.setScissor?.(previousScissor);
+                    renderer.setScissorTest?.(previousScissorTest);
+                }
                 renderer.autoClear = previousAutoClear;
                 renderer.setClearColor?.(previousClearColor, previousClearAlpha);
                 state.rendering = false;
@@ -1740,6 +1841,14 @@
             mesh.sphereSelection.scale.set(size[0], size[1], size[2]);
         }
         const selected = !!volume.selected;
+        [mesh.boxSelection, mesh.sphereSelection].forEach(proxy => {
+            if (!proxy) return;
+            proxy.castShadow = false;
+            proxy.receiveShadow = false;
+            proxy.userData = proxy.userData || {};
+            proxy.userData.lightflowNoShadow = true;
+            proxy.userData.lightflowVolumeSelectionProxy = true;
+        });
         [mesh.boxGizmo, mesh.sphereGizmo].forEach(gizmo => {
             if (!gizmo?.material) return;
             gizmo.material.color.set(selected ? 0x5ba7ff : 0x67d7e8);
@@ -1868,6 +1977,8 @@
                 mesh.name = element.uuid;
                 mesh.type = element.type;
                 mesh.isElement = true;
+                mesh.userData = mesh.userData || {};
+                mesh.userData.lightflowNoShadow = true;
                 mesh.rotation.order = window.Format?.euler_order || 'ZYX';
 
                 const lineMaterial = new THREE.LineBasicMaterial({
@@ -1898,6 +2009,11 @@
                     proxy.name = element.uuid;
                     proxy.type = element.type;
                     proxy.isElement = true;
+                    proxy.castShadow = false;
+                    proxy.receiveShadow = false;
+                    proxy.userData = proxy.userData || {};
+                    proxy.userData.lightflowNoShadow = true;
+                    proxy.userData.lightflowVolumeSelectionProxy = true;
                 });
                 mesh.add(mesh.boxSelection, mesh.sphereSelection);
                 mesh.geometry = new THREE.BufferGeometry();
@@ -1914,7 +2030,7 @@
             updateTransform(element) {
                 NodePreviewController.prototype.updateTransform.call(this, element);
                 updateVolumeGizmo(element);
-                AtmosphereManager.invalidateSceneCache();
+                AtmosphereManager.invalidateDepthCache();
                 requestPreviewRender();
                 this.dispatchEvent('update_transform', { element });
             },
@@ -1960,11 +2076,20 @@
 
     function applyVolumeConfig(volume, config) {
         if (!volume || !config) return;
+        const transformKeys = new Set(['position', 'rotation', 'size', 'shape', 'visibility']);
+        let transformChanged = false;
         Object.keys(config).forEach(key => {
-            if (VolumeElement.properties[key]) volume[key] = Array.isArray(config[key]) ? config[key].slice() : config[key];
+            if (!VolumeElement.properties[key]) return;
+            volume[key] = Array.isArray(config[key]) ? config[key].slice() : config[key];
+            if (transformKeys.has(key)) transformChanged = true;
         });
         sanitizeVolume(volume);
-        VolumeElement.preview_controller?.updateTransform(volume);
+        if (transformChanged) {
+            VolumeElement.preview_controller?.updateTransform(volume);
+        } else {
+            updateVolumeGizmo(volume);
+            AtmosphereManager.invalidateVolumeCache();
+        }
         VolumeElement.preview_controller?.updateSelection(volume);
     }
 
@@ -2137,22 +2262,63 @@
                 type: 'bar_display', value: volume.name, icon: volume.density_mode === 'cloud' ? 'cloud' : 'blur_on',
                 paragraph: false, expand: true, color: 'var(--color-text)'
             },
-            panel_enabled: { type: 'checkbox', label: 'lightflow_atmosphere.field.enabled', value: volume.enabled !== false },
+            panel_enabled: {
+                type: 'action_toggle', value: volume.enabled !== false, description: 'lightflow_atmosphere.field.enabled',
+                icon_on: 'blur_on', icon_off: 'blur_off', bg_on: markerColor(0, 'standard', '#58C0FF'),
+                color_on: 'var(--color-ui)', color_off: 'var(--color-subtle_text)', icon_size: '22px'
+            },
             panel_mode: {
-                type: 'select', label: 'lightflow_atmosphere.field.density_mode', value: volume.density_mode,
-                options: { uniform: 'lightflow_atmosphere.option.uniform', height: 'lightflow_atmosphere.option.height', cloud: 'lightflow_atmosphere.option.cloud' }
+                type: 'compact_select', label: 'lightflow_atmosphere.field.density_mode', hide_label: true,
+                description: 'lightflow_atmosphere.field.density_mode', background: 'transparent', value: volume.density_mode,
+                options: {
+                    uniform: { name: 'lightflow_atmosphere.option.uniform', icon: 'blur_on', color: markerColor(9, 'pastel', '#E0E9FB') },
+                    height: { name: 'lightflow_atmosphere.option.height', icon: 'gradient', color: markerColor(0, 'pastel', '#A2EBFF') },
+                    cloud: { name: 'lightflow_atmosphere.option.cloud', icon: 'cloud', color: markerColor(4, 'pastel', '#C5A6E8') }
+                }
             },
             panel_composite: {
-                type: 'select', label: 'lightflow_atmosphere.field.composite_mode', value: volume.composite_mode,
-                options: { physical: 'lightflow_atmosphere.option.physical', shafts: 'lightflow_atmosphere.option.shafts' }
+                type: 'compact_select', label: 'lightflow_atmosphere.field.composite_mode', hide_label: true,
+                description: 'lightflow_atmosphere.field.composite_mode', background: 'transparent', value: volume.composite_mode,
+                options: {
+                    physical: { name: 'lightflow_atmosphere.option.physical', icon: 'air', color: markerColor(6, 'pastel', '#7BFFA3') },
+                    shafts: { name: 'lightflow_atmosphere.option.shafts', icon: 'flare', color: markerColor(1, 'pastel', '#FFF899') }
+                }
             },
-            panel_density: { type: 'range', label: 'lightflow_atmosphere.field.density', value: volume.density, min: 0, max: 0.3, step: 0.001 },
-            panel_scattering: { type: 'range', label: 'lightflow_atmosphere.field.scattering', value: volume.scattering_strength, min: 0, max: 4, step: 0.01 },
-            panel_anisotropy: { type: 'range', label: 'lightflow_atmosphere.field.anisotropy', value: volume.anisotropy, min: -0.92, max: 0.92, step: 0.01 },
-            panel_shadows: { type: 'checkbox', label: 'lightflow_atmosphere.field.receive_shadows', value: volume.receive_shadows !== false },
+            panel_density: {
+                type: 'combo_slider', label: 'lightflow_atmosphere.field.density', icon: 'opacity',
+                color: markerColor(0, 'pastel', '#A2EBFF'), value: volume.density,
+                resettable: true, reset_value: 0.032, min: 0, max: 0.3, step: 0.001
+            },
+            optics_label: {
+                type: 'bar_display', icon: 'lens_blur', paragraph: false, expand: false,
+                color: 'var(--color-subtle_text)', description: 'lightflow_atmosphere.field.scattering'
+            },
+            panel_scattering: {
+                type: 'combo_slider', label: 'lightflow_atmosphere.field.scattering', icon: 'light_mode',
+                background: 'transparent', color: markerColor(1, 'pastel', '#FFF899'),
+                icon_color: markerColor(1, 'pastel', '#FFF899'), compact: true, popup_width: '300px',
+                value: volume.scattering_strength, resettable: true, reset_value: 1, min: 0, max: 4, step: 0.01
+            },
+            panel_anisotropy: {
+                type: 'combo_slider', label: 'lightflow_atmosphere.field.anisotropy', icon: 'compare_arrows',
+                background: 'transparent', color: markerColor(8, 'pastel', '#FFA5D5'),
+                icon_color: markerColor(8, 'pastel', '#FFA5D5'), compact: true, popup_width: '300px',
+                value: volume.anisotropy, resettable: true, reset_value: 0.18,
+                min: -0.92, max: 0.92, step: 0.01, allow_lower: true
+            },
+            panel_shadows: {
+                type: 'action_toggle', value: volume.receive_shadows !== false,
+                description: 'lightflow_atmosphere.field.receive_shadows', icon_on: 'ev_shadow', icon_off: 'contrast_rtl_off',
+                bg_on: markerColor(5, 'standard', '#4D89FF'), color_on: 'var(--color-ui)',
+                color_off: markerColor(5, 'pastel', '#A6C8FF')
+            },
             advanced: {
-                type: 'buttons', buttons: ['lightflow_atmosphere.button.advanced'],
-                click() { openVolumeDialog(); }
+                type: 'action_button', icon: 'tune', description: 'lightflow_atmosphere.button.advanced',
+                color: markerColor(4, 'pastel', '#C5A6E8'), click: openVolumeDialog
+            },
+            quality: {
+                type: 'action_button', icon: 'speed', description: 'lightflow_atmosphere.action.settings',
+                color: markerColor(6, 'pastel', '#7BFFA3'), click: openSettingsDialog
             }
         };
     }
@@ -2173,12 +2339,12 @@
             resizable: true,
             condition: { modes: ['edit', 'render'], method: () => getSelectedVolumes().length > 0 },
             default_position: {
-                slot: 'right_bar', float_position: [0, 0], float_size: [320, 430], height: 430,
+                slot: 'right_bar', float_position: [0, 0], float_size: [314, 200], height: 200,
                 attached_to: 'transform', attached_index: 1, sidebar_index: 2
             },
             mode_positions: {
-                edit: { slot: 'right_bar', height: 430, attached_to: 'transform', attached_index: 1, sidebar_index: 2 },
-                render: { slot: 'left_bar', height: 430, attached_to: 'material_properties', attached_index: 2, sidebar_index: 2 }
+                edit: { slot: 'right_bar', height: 200, attached_to: 'transform', attached_index: 1, sidebar_index: 2 },
+                render: { slot: 'left_bar', height: 200, attached_to: 'material_properties', attached_index: 2, sidebar_index: 2 }
             },
             form: panelForm(getSelectedVolumes()[0])
         });
@@ -2202,7 +2368,24 @@
             Undo.finishEdit(tr('lightflow_atmosphere.undo.edit', 'Edit Volume Domain'));
             requestPreviewRender();
         });
-        deletables.push(atmospherePanel);
+        window.applyIndestructibleFormGroups(atmospherePanel.form, [
+            {
+                elements: ['summary', '+', 'panel_enabled', 'panel_mode', 'panel_composite'], gap: '2px',
+                divider_color: 'var(--color-grid)',
+                flex: { summary: '1 1 auto', panel_enabled: '0 0 auto', panel_mode: '0 0 auto', panel_composite: '0 0 auto' }
+            },
+            { elements: ['panel_density'], gap: '2px', flex: { panel_density: '1 1 100%' } },
+            {
+                elements: ['optics_label', 'panel_scattering', 'panel_anisotropy', '+', 'panel_shadows', 'advanced', 'quality'], gap: '2px',
+                divider_color: 'var(--color-grid)',
+                flex: {
+                    optics_label: '0 0 auto', panel_scattering: '0 0 auto', panel_anisotropy: '0 0 auto',
+                    panel_shadows: '0 0 auto', advanced: '0 0 auto', quality: '0 0 auto'
+                }
+            }
+        ]);
+        const panelStyles = window.LightManagerUI.addCompactPanelStyles('lightflow_atmosphere_properties');
+        deletables.push(atmospherePanel, panelStyles);
     }
 
     function openSettingsDialog() {
@@ -2284,7 +2467,7 @@
             'lightflow_atmosphere.action.edit': 'Edit Volume Domain',
             'lightflow_atmosphere.action.fit': 'Fit Volume to Selection',
             'lightflow_atmosphere.action.settings': 'Atmosphere Quality...',
-            'lightflow_atmosphere.panel.title': 'ATMOSPHERE',
+            'lightflow_atmosphere.panel.title': 'VOLUME',
             'lightflow_atmosphere.panel.none': 'Select a Volume Domain',
             'lightflow_atmosphere.dialog.edit': 'Volume Domain',
             'lightflow_atmosphere.dialog.edit_many': 'Edit Volume Domains',
@@ -2339,7 +2522,8 @@
             'lightflow_atmosphere.undo.add': 'Add Volume Domain',
             'lightflow_atmosphere.undo.edit': 'Edit Volume Domain',
             'lightflow_atmosphere.undo.fit': 'Fit Volume Domain',
-            'lightflow_atmosphere.message.render_failed': 'Atmosphere disabled after a GPU render error'
+            'lightflow_atmosphere.message.render_failed': 'Atmosphere disabled after a GPU render error',
+            'lightflow_atmosphere.message.light_manager_required': 'Lightflow Atmosphere requires Light Manager.'
         });
         Language.addTranslations('es', {
             'lightflow_atmosphere.plugin.title': 'Atmósfera Lightflow',
@@ -2348,7 +2532,7 @@
             'lightflow_atmosphere.action.edit': 'Editar dominio volumétrico',
             'lightflow_atmosphere.action.fit': 'Ajustar volumen a la selección',
             'lightflow_atmosphere.action.settings': 'Calidad de atmósfera...',
-            'lightflow_atmosphere.panel.title': 'ATMÓSFERA',
+            'lightflow_atmosphere.panel.title': 'VOLUMEN',
             'lightflow_atmosphere.panel.none': 'Selecciona un dominio volumétrico',
             'lightflow_atmosphere.dialog.edit': 'Dominio volumétrico',
             'lightflow_atmosphere.dialog.edit_many': 'Editar dominios volumétricos',
@@ -2403,7 +2587,8 @@
             'lightflow_atmosphere.undo.add': 'Añadir dominio volumétrico',
             'lightflow_atmosphere.undo.edit': 'Editar dominio volumétrico',
             'lightflow_atmosphere.undo.fit': 'Ajustar dominio volumétrico',
-            'lightflow_atmosphere.message.render_failed': 'La atmósfera se desactivó tras un error de render de la GPU'
+            'lightflow_atmosphere.message.render_failed': 'La atmósfera se desactivó tras un error de render de la GPU',
+            'lightflow_atmosphere.message.light_manager_required': 'Lightflow Atmosphere requiere Light Manager.'
         });
     }
 
@@ -2437,8 +2622,17 @@
         version: PLUGIN_VERSION,
         min_version: '4.9.0',
         variant: 'both',
+        dependencies: ['light_manager'],
 
         onload() {
+            if (!window.LIGHT_MANAGER_LOADED || !window.LightManagerUI || typeof window.applyIndestructibleFormGroups !== 'function') {
+                Blockbench.showToastNotification({
+                    text: tr('lightflow_atmosphere.message.light_manager_required', 'Lightflow Atmosphere requires Light Manager.'),
+                    icon: 'error',
+                    expire: 10000
+                });
+                return;
+            }
             registerVolumeElement();
             installActions();
             createAtmospherePanel();
@@ -2446,28 +2640,40 @@
             window.LightflowAtmosphere = AtmosphereManager;
 
             const studioListener = Blockbench.on('studio_render_pre_tile', event => AtmosphereManager.prepareStudioTile(event));
-            const selectionListener = Blockbench.on('update_selection', () => {
-                AtmosphereManager.invalidateSceneCache();
-                syncAtmospherePanel();
-            });
-            const projectListener = Blockbench.on('select_project', () => {
-                AtmosphereManager.invalidateSceneCache();
-                AtmosphereManager.patchAllPreviews();
-                syncAtmospherePanel();
-                requestPreviewRender();
-            });
+            const selectionListener = Blockbench.on('update_selection', () => syncAtmospherePanel());
+            const lifecycleHydrator = window.LightflowLifecycle?.registerHydrator?.(
+                'lightflow_atmosphere',
+                ({ project, model, isCurrent, deferred }) => {
+                    beginAtmosphereProject(project);
+                    if (deferred) return;
+                    if (!project || !isCurrent()) {
+                        AtmosphereManager.invalidateSceneCache();
+                        return;
+                    }
+                    window.LightflowLifecycle.restoreCustomElements(model, 'lightflow_volume', VolumeElement);
+                    if (!isCurrent()) return;
+                    AtmosphereManager.invalidateSceneCache();
+                    AtmosphereManager.patchAllPreviews();
+                    syncAtmospherePanel();
+                    requestPreviewRender();
+                }
+            );
+            if (lifecycleHydrator) deletables.push(lifecycleHydrator);
+            else beginAtmosphereProject(window.Project || null);
             const lightManagerListener = () => {
                 AtmosphereManager.invalidateSceneCache();
                 AtmosphereManager.patchAllPreviews();
                 requestPreviewRender();
             };
             window.addEventListener('light_manager_initialized', lightManagerListener);
+            const depthMutationListeners = [
+                'update_transform', 'update_geometry', 'update_faces', 'update_uv'
+            ].map(eventName => Blockbench.on(eventName, () => AtmosphereManager.invalidateDepthCache()));
             const sceneMutationListeners = [
-                'update_transform', 'update_geometry', 'update_faces', 'update_uv',
                 'add_cube', 'add_mesh', 'add_texture_mesh', 'remove_cube', 'remove_mesh',
-                'undo', 'redo', 'load_project'
+                'undo', 'redo'
             ].map(eventName => Blockbench.on(eventName, () => AtmosphereManager.invalidateSceneCache()));
-            deletables.push(studioListener, selectionListener, projectListener, ...sceneMutationListeners, {
+            deletables.push(studioListener, selectionListener, ...depthMutationListeners, ...sceneMutationListeners, {
                 delete() { window.removeEventListener('light_manager_initialized', lightManagerListener); }
             });
             syncAtmospherePanel();
@@ -2476,8 +2682,11 @@
         },
 
         onunload() {
+            beginAtmosphereProject(null);
             if (animationFrame !== null) cancelAnimationFrame(animationFrame);
             animationFrame = null;
+            if (typeof previewRenderFrame === 'number') cancelAnimationFrame(previewRenderFrame);
+            previewRenderFrame = null;
             AtmosphereManager.dispose();
             deletables.splice(0).reverse().forEach(item => item?.delete?.());
             if (VolumeElement?.all) {

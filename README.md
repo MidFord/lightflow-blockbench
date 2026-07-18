@@ -9,9 +9,10 @@
 Lightflow is a modular suite for artists who want more control over how Blockbench scenes look before they are shown, shared, or exported. It is designed around a simple pipeline:
 
 1. **Light Manager** creates and animates the lighting.
-2. **Shader Architect** gives the scene a material and stylized surface response.
-3. **Lightflow Atmosphere** adds local fog, God Rays, and procedural cloud volumes.
-4. **Studio Render** captures a polished, high-resolution final image.
+2. **Lightflow Environment** creates a controllable Minecraft-inspired sky, sun, moon, and ambient light.
+3. **Shader Architect** gives the scene a material and stylized surface response.
+4. **Lightflow Atmosphere** adds local fog, God Rays, and procedural cloud volumes.
+5. **Studio Render** previews the final post-process stack and captures a polished, high-resolution image.
 
 The plugins work independently where possible, but they are designed to be used together.
 
@@ -40,10 +41,11 @@ The plugins work independently where possible, but they are designed to be used 
 
 | Plugin | Current version | Purpose | Dependency |
 | --- | ---: | --- | --- |
-| **Light Manager** | `1.6.1` | Adds production-oriented point, spot, and directional lights with adaptive shadows, gizmos, animation support, and lighting profiles. | None |
-| **Shader Architect** | `2.6.0` | Builds and assigns advanced materials to Cubes, Meshes, and Texture Meshes with PBR controls, Blockbench render modes, editable GLSL, material instances, and automatic draw-call reduction. | **Light Manager required** |
-| **Lightflow Atmosphere** | `1.0.0` | Adds production-ready local fog, correctly occluded additive light shafts, height fog, and procedural cloud domains with render-element depth occlusion. | **Light Manager recommended**; integrates with Shader Architect and Studio Render |
-| **Studio Render** | `1.4.2` | Exports clean images with tiled supersampling, HDR/emissive Bloom with geometry occlusion, adjustable framing, transparency, and 4K/8K-safe output controls. | Works alone; integrates with the other Lightflow modules |
+| **Light Manager** | `1.7.0` | Adds production-oriented point, spot, and directional lights with adaptive shadows, gizmos, animation support, and lighting profiles. | None |
+| **Lightflow Environment** | `1.3.0` | Adds editable Vanilla and Vibrant Visuals skies, custom gradients and project textures, Minecraft time, sun/moon lighting, ambient influence, and controlled shadow coverage. | **Light Manager recommended**; integrates with Shader Architect |
+| **Shader Architect** | `2.9.0` | Builds and assigns advanced materials with PBR controls, environment lighting, SSR fallback reflections, Vibrant Visuals PBR, pixel-shadow controls, editable GLSL, and material instances. | **Light Manager required** |
+| **Lightflow Atmosphere** | `1.2.0` | Adds production-ready local fog, correctly occluded additive light shafts, height fog, and procedural cloud domains with render-element depth occlusion. | **Light Manager recommended**; integrates with Shader Architect and Studio Render |
+| **Studio Render** | `1.7.0` | Adds an attached GPU Scene Composer, AO-safe realtime Bloom, color grading, tiled supersampling, transparency, and 4K/8K-safe exports. | Works alone; integrates with the other Lightflow modules |
 
 ### Why Lightflow exists
 
@@ -57,7 +59,7 @@ Lightflow is **not** a replacement for an offline ray tracer or a game engine. I
 
 - Blockbench **4.9.0 or newer**.
 - A WebGL-capable GPU. A dedicated GPU is strongly recommended for high-resolution Studio Render output.
-- The four plugin files from the same Lightflow release.
+- The five plugin files from the same Lightflow release.
 - Save working scenes as **`.bbmodel`** when you need Shader Architect material assignments and material instances to persist.
 
 > **Important:** Shader Architect requires Light Manager. Install and enable Light Manager first.
@@ -68,8 +70,9 @@ Lightflow is **not** a replacement for an offline ray tracer or a game engine. I
 
 ### Manual installation from a release
 
-1. Download the four JavaScript files from the latest Lightflow release:
+1. Download the five JavaScript files from the latest Lightflow release:
    - `light_manager.js`
+   - `lightflow_environment.js`
    - `shader_architect.js`
    - `lightflow_atmosphere.js`
    - `studio_render.js`
@@ -77,9 +80,10 @@ Lightflow is **not** a replacement for an offline ray tracer or a game engine. I
 3. Open the Plugin menu and load each local plugin file, or drag the JavaScript files into Blockbench.
 4. Load them in this order:
    1. **Light Manager**
-   2. **Shader Architect**
-   3. **Lightflow Atmosphere**
-   4. **Studio Render**
+   2. **Lightflow Environment**
+   3. **Shader Architect**
+   4. **Lightflow Atmosphere**
+   5. **Studio Render**
 5. Reload Blockbench or reload plugins after an update. During development, Blockbench can reload plugins with `Ctrl/Cmd + J`.
 
 ### Recommended release layout
@@ -89,6 +93,8 @@ lightflow-blockbench/
 ├─ plugins/
 │  ├─ light_manager/
 │  │  └─ light_manager.js
+│  ├─ lightflow_environment/
+│  │  └─ lightflow_environment.js
 │  ├─ shader_architect/
 │  │  └─ shader_architect.js
 │  ├─ lightflow_atmosphere/
@@ -128,17 +134,26 @@ With **Light Manager** enabled:
 3. Use the Light Properties panel to adjust color, intensity, distance, cone angle, penumbra, and shadow settings.
 4. Start with a directional key light for broad shape definition, then add a soft point or spot fill light only where it helps.
 
-### 3. Apply a material
+### 3. Set the environment (optional)
+
+With **Lightflow Environment** enabled:
+
+1. Open **Environment Composer** and choose **Vanilla** or **Vibrant Visuals**.
+2. Set Minecraft time from `0` to `23999`, or enable realtime animation.
+3. Adjust sun azimuth, shadow coverage, bias, and preview shadow resolution around the subject.
+4. Tune sky ambient strength when materials should pick up the blue sky or warm horizon colors.
+
+### 4. Apply a material
 
 With **Shader Architect** enabled:
 
 1. Open **Material Studio**.
-2. Choose a built-in material such as **Lightflow**, **Cinematic Craft**, or **Lightflow Principled PBR**.
+2. Choose a built-in material such as **Lightflow**, **Cinematic Craft**, **Lightflow Principled PBR**, or **Vibrant Visuals PBR**.
 3. Apply it globally or to selected Cubes, Meshes, and Texture Meshes. Cubes also support per-face overrides.
 4. Use exposed controls to tune lighting, ambient contribution, shadows, bevels, outlines, rim light, AO, or reflections as appropriate. Lightflow's **Shadows** toggle switches cast shadows without changing presets.
 5. Create a **Material Instance** when different parts of the same model need different values without duplicating the shader code.
 
-### 4. Add atmosphere (optional)
+### 5. Add atmosphere (optional)
 
 With **Lightflow Atmosphere** enabled:
 
@@ -148,16 +163,17 @@ With **Lightflow Atmosphere** enabled:
 4. For visible shafts, use a directional or spot light with shadows and enable **Receive Volumetric Shadows** on the domain.
 5. Keep viewport quality on **Balanced** while composing; use **High** or **Ultra** only for Studio Render.
 
-### 5. Render the image
+### 6. Compose and render the image
 
 With **Studio Render** enabled:
 
-1. Open **Studio Render** or use **Quick Studio Render**.
-2. Choose **4K UHD** for a first high-quality export.
-3. Choose **Transparent** or **Solid Color** background.
-4. Use **Studio SSAA – 4x** for clean promotional output. Use lower samples while iterating.
-5. Select a full composition or the adjustable render frame.
-6. Click **Render** and choose whether to preview, save, copy, or load the image as a texture.
+1. Open **Scene Composer** to enable realtime viewport Bloom and tune Bloom, exposure, contrast, saturation, temperature, tint, and vignette.
+2. Open **Studio Render** or use **Quick Studio Render**. The final image reuses the same Bloom parameters and emissive/occlusion semantics shown by Scene Composer.
+3. Choose **4K UHD** for a first high-quality export.
+4. Choose **Transparent** or **Solid Color** background.
+5. Use **Studio SSAA – 4x** for clean promotional output. Use lower samples while iterating.
+6. Select a full composition or the adjustable render frame.
+7. Click **Render** and choose whether to preview, save, copy, or load the image as a texture.
 
 ---
 
@@ -188,6 +204,23 @@ Light Manager is the foundation of the suite. It introduces real scene lights to
 - Keep shadow bounds tight around the subject. Large directional bounds reduce useful shadow-map detail.
 - Use a low-to-medium preview shadow resolution while you work, then raise only the Studio Shadow Resolution for final output.
 
+### Lightflow Environment
+
+Lightflow Environment is a procedural preview-scene module. It drives a sky dome, Minecraft-style day cycle, square sun and moon, stars, clouds, directional lighting, and the ambient colors consumed by Lightflow materials and SSR.
+
+**Main capabilities**
+
+- Minecraft time from `0` to `23999`, realtime playback, configurable day length, and sun azimuth.
+- **Vanilla** and **Vibrant Visuals** presets with tailored day, sunset, night, cloud, sun, moon, and ambient palettes.
+- Procedural or generated Vanilla-style block clouds, with project-texture overrides for clouds, sun, and moon.
+- Complete custom sky palette controls for day/night zenith, horizon, sunrise, lower sky, sun, moon, and clouds.
+- Adjustable gradient shape, star density, cloud scale, direction, contrast, brightness, opacity, coverage, and speed.
+- Directional sun and moon lights with editable shadow area, near/far range, resolution, bias, normal bias, and pixelated shadow controls.
+- Sky, horizon, and ground ambient colors exposed to Shader Architect for material tinting and SSR miss-ray reflections.
+- Project persistence and a resizable Environment panel attached below the Outliner in **Lightflow Render** mode.
+
+The presets are independent procedural approximations tuned to reproduce the visual behavior of the named Minecraft render modes; they do not copy Minecraft source code or bundled textures.
+
 ### Shader Architect
 
 Shader Architect is Lightflow's material and shader workspace. It can drive an entire scene with one material or assign individual material instances to Cubes, Meshes, and Texture Meshes. Cubes additionally support individual face assignments.
@@ -201,6 +234,7 @@ Shader Architect is Lightflow's material and shader workspace. It can drive an e
 - Import and export of custom `.samat` material files.
 - Exposed uniforms for artist-facing controls and advanced technical controls for shader authors.
 - Dynamic Light Manager uniforms for light positions, directions, colors, intensities, attenuation, cones, and shadow behavior.
+- Procedural environment ambient lighting and world-space SSR fallback reflections when a screen-space ray leaves the viewport or misses visible geometry.
 - Built-in surface systems including PBR-style controls, thickness-aware real-time subsurface scattering, stylized lighting, voxel-style AO, shadows, screen-space reflections, bevels, alpha-edge treatment, outlines, and promotional rim lighting.
 - Independently switchable PBR layers for clearcoat, anisotropy, sheen, transmission, and iridescence, plus specular and clearcoat tint controls.
 - UV-derived tangent frames for proper tangent-space normal maps and genuinely directional anisotropic GGX highlights, even when Blockbench geometry has no exported tangent attribute.
@@ -210,6 +244,7 @@ Shader Architect is Lightflow's material and shader workspace. It can drive an e
 - One-click Material Override presets: **Balanced**, **Trailer Hero**, **Soft Daylight**, **Night Drama**, and **Clean Product**.
 - Automatic zero-thickness Cube handling: coincident faces render as separate front-facing surfaces, and a fully transparent side inherits the visible side without z-fighting or incorrect shared lighting.
 - Alpha-profile-aware cutouts, per-material-slot shadow textures, and stochastic semitransparent shadow density in the raster shadow pipeline.
+- A **Vibrant Visuals PBR** preset and a **Pixelated Shadows** toggle with adjustable steps and pixel scale.
 
 **Material-instance workflow**
 
@@ -262,6 +297,12 @@ Studio Render is the export layer. It is intended for portfolio images, social-m
 - GPU diagnostics showing the detected renderer and relevant WebGL limits.
 - Temporary Studio Render sessions that coordinate with Light Manager so final shadow settings do not permanently disturb the viewport.
 - Optional final-image Bloom with a simple strength control and advanced threshold/radius controls.
+- Realtime viewport Bloom that uses the same emissive/atmosphere semantics, depth occlusion, threshold, radius, and strength as final output.
+- A fully GPU-resident three-level downsample pyramid: the viewport path has no synchronous `readPixels`, `getImageData`, CPU pixel loop, Canvas2D blur, or DOM overlay.
+- Physical-pixel viewport tracking through `getCurrentViewport()`, with render-target viewport state kept separate from logical CSS/DPR state.
+- Helper/gizmo exclusion plus Adaptive, Performance, Balanced, and High viewport quality profiles.
+- An attached **Scene Composer** panel in Lightflow Render, with the full dialog retained for grading and advanced controls.
+- GPU framebuffer color grading in the viewport and the export-safe Canvas2D grading path for final tiled renders.
 - Emissive-only Bloom masking: emissive render-mode alpha, MER maps, dedicated emissive maps, and additive materials glow without blooming ordinary bright surfaces.
 - Atmosphere-aware Bloom masking, including per-domain Bloom contribution for bright shafts and cloud highlights.
 - Selection highlight suppression during final capture so editing state cannot leak into exported pixels.
@@ -278,8 +319,9 @@ The current built-in preset library includes:
 | --- | --- |
 | **Classic Shader** | Familiar Blockbench-like rendering with simple controls. |
 | **Lightflow Principled PBR** | Layered physically based controls for metal/roughness, SSS, clearcoat, sheen, transmission, iridescence, and reflections. |
+| **Vibrant Visuals PBR** | A Vibrant Visuals-oriented PBR starting point with environment response, SSR, restrained roughness, and pixel-shadow defaults. |
 | **Lightflow** | General-purpose stylized lighting. Use its **Shadows** toggle for shadowed or shadow-free rendering without switching materials. |
-| **Pixelated Lightflow** | A deliberately stepped or pixel-oriented shaded response. |
+| **Pixelated Lightflow** | A deliberately stepped or pixel-oriented shaded response with independently switchable pixelated shadows. |
 | **Cinematic Craft** | Minecraft-trailer-oriented hero lighting, promotional edge treatment, bevel shaping, alpha-aware silhouettes, and a polished default grade. Existing `luma_forge` assignments migrate automatically. |
 | **Minecraft Promotional Bevel** | A specialized promotional bevel treatment for blocky, illustrated presentation renders. |
 
@@ -313,9 +355,18 @@ Lightflow's SSS is a stable real-time approximation designed for Blockbench's We
 ### Sharp pixel-art render
 
 1. Start with **Pixelated Lightflow**.
-2. Keep bevel, blur-like effects, and high softness values subtle.
-3. Test native samples first; increase SSAA only when it improves the outer contour without softening the intended pixel language.
-4. Use a transparent background for later compositing.
+2. Enable **Pixelated Shadows**, then tune shadow steps and pixel scale for the model scale and camera distance.
+3. Keep bevel, blur-like effects, and high softness values subtle.
+4. Test native samples first; increase SSAA only when it improves the outer contour without softening the intended pixel language.
+5. Use a transparent background for later compositing.
+
+### Vibrant Visuals scene
+
+1. Choose the **Vibrant Visuals** Environment preset and set the Minecraft time.
+2. Apply **Vibrant Visuals PBR** to the subject.
+3. Keep environment ambient and SSR enabled so the sky and horizon influence rough materials and reflections.
+4. Enable pixelated shadows where the stylized shadow edge is desired; disable it for a continuous PCF edge without changing material.
+5. Finish Bloom and grading in Scene Composer, then use the same settings in Studio Render.
 
 ### Product-card or thumbnail render
 
@@ -347,7 +398,7 @@ Lightflow's SSS is a stable real-time approximation designed for Blockbench's We
 
 ### Save format
 
-Save active Lightflow projects as **`.bbmodel`**. Shader Architect material assignments, material instances, and Lightflow Atmosphere Volume Domains use custom project/outliner properties that may not survive every export format.
+Save active Lightflow projects as **`.bbmodel`**. Shader Architect material assignments, material instances, Lightflow Environment settings, and Lightflow Atmosphere Volume Domains use custom project/outliner properties that may not survive every export format.
 
 ### Compatibility expectations
 
@@ -440,6 +491,22 @@ Save the project as **`.bbmodel`**. Other formats may not preserve Lightflow's c
 
 Studio Render hides gizmos by default. Verify that **Show Gizmos** is disabled in Studio Render settings, then render again.
 
+### Bloom differs between viewport and final render
+
+- Open **Scene Composer** and ensure **Realtime Viewport Bloom** is enabled.
+- Use the same Bloom threshold, strength, and radius that Studio Render will use; both paths share mask and occlusion semantics while using output-appropriate GPU/Canvas compositors.
+- Use **Adaptive** for automatic internal-resolution control. Set **Bloom FPS Limit** to `0` to follow every viewport render, or choose a cap up to 144 FPS.
+- Realtime composition only runs in **Lightflow Render** mode. Gizmos are excluded from the Bloom mask and Shader Architect AO is preserved in the base frame.
+- On Windows display scaling, update to Studio Render `1.6.0+`; older versions could apply renderer DPR twice to offscreen targets and appear enlarged or shifted.
+- Transparent final output can composite differently over an external background; compare against the intended destination background when judging edge glow.
+
+### The environment does not affect a material or reflection
+
+- Confirm Lightflow Environment and Shader Architect `2.7.0+` are both enabled.
+- Use **Lightflow Principled PBR**, **Vibrant Visuals PBR**, or another environment-aware Lightflow preset.
+- Raise environment ambient strength for diffuse tinting and enable SSR for reflections.
+- SSR reflects visible screen geometry first and uses the procedural environment only for miss rays; fully off-screen objects are not reconstructed.
+
 ### Volumetric shafts are missing
 
 - Confirm the Volume Domain is enabled and surrounds the visible ray path.
@@ -468,6 +535,7 @@ A release-candidate checkout keeps each independently loadable plugin at the rep
 ```text
 lightflow-blockbench/
 ├─ light_manager.js
+├─ lightflow_environment.js
 ├─ shader_architect.js
 ├─ lightflow_atmosphere.js
 ├─ studio_render.js
@@ -483,6 +551,7 @@ lightflow-blockbench/
 Keep plugin IDs, JavaScript file names, and release package names consistent:
 
 - `light_manager`
+- `lightflow_environment`
 - `shader_architect`
 - `lightflow_atmosphere`
 - `studio_render`
@@ -513,7 +582,8 @@ This roadmap is directional, not a release promise.
 - More artist-friendly preset packs and reusable lighting rigs.
 - Better first-run guidance and sample `.bbmodel` scenes.
 - More robust quality presets for low-, mid-, and high-end GPUs.
-- Refinement of AO, shadows, screen-space effects, bevel behavior, and rim consistency between viewport and final render.
+- Refinement of AO, screen-space reflection history, bevel behavior, and rim consistency between viewport and final render.
+- Optional temporal stabilization for Scene Composer on capable hardware.
 - A transmittance-buffer experiment for colored raster shadows, gated by GPU capabilities.
 - Evaluation of a future native/WebGPU renderer only when Blockbench and the browser graphics stack expose a stable ray-tracing path; the current WebGL backend does not advertise hardware RTX.
 - Higher-order multiple scattering, point-light volumetric shadows, artist-authored 3D density textures, and improved temporal accumulation for Atmosphere.

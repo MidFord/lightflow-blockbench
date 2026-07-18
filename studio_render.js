@@ -42,6 +42,18 @@
         bloom_hdr_strength: 1.0,
         bloom_emissive_strength: 1.35,
         bloom_occlusion: true,
+        viewport_bloom_enabled: true,
+        // 0 follows every viewport render. A numeric value is an optional cap.
+        viewport_bloom_fps: 0,
+        viewport_bloom_quality: 'adaptive',
+        viewport_composer_revision: 2,
+        color_grading_enabled: false,
+        exposure: 1.0,
+        contrast: 1.0,
+        saturation: 1.0,
+        temperature: 0.0,
+        tint: 0.0,
+        vignette: 0.0,
         zoom: null,
         destination: 'preview',
         file_name: 'studio_render'
@@ -51,6 +63,16 @@
     let quickRenderAction;
     let frameAction;
     let resetFrameAction;
+    let sceneComposerAction;
+    let sceneComposerPanel;
+    let sceneComposerProjectListener;
+    let sceneComposerModeListener;
+    let sceneComposerCloseListener;
+    let sceneComposerLifecycleHydrator;
+    let sceneComposerRefreshFrame = null;
+    let sceneComposerRevision = 0;
+    let syncingSceneComposerPanel = false;
+    let activeComposerDialog;
     let stylesheet;
     let activeDialog;
     let currentSettings = Object.assign({}, DEFAULT_SETTINGS);
@@ -59,6 +81,14 @@
         emissiveMaterials: new WeakMap(),
         occluderMaterials: new WeakMap(),
         resources: new Set()
+    };
+    const VIEWPORT_COMPOSER_STATE = new Map();
+
+    const VIEWPORT_BLOOM_PROFILES = {
+        adaptive: { scale: 0.42, minScale: 0.2, maxScale: 0.7, maxDimension: 1400, adaptive: true },
+        performance: { scale: 0.25, maxDimension: 720 },
+        balanced: { scale: 0.42, maxDimension: 1100 },
+        high: { scale: 0.7, maxDimension: 1600 }
     };
 
     function clamp(value, min, max) {
@@ -97,6 +127,15 @@
         if (typeof tl !== 'function') return fallback || key;
         const value = tl(key);
         return value === key ? (fallback || key) : value;
+    }
+
+    function isLightflowRenderMode() {
+        const selected = window.Modes?.selected;
+        return !!selected && (selected.id === 'render' || selected === window.Modes?.render);
+    }
+
+    function getViewportBloomProfile(settings) {
+        return VIEWPORT_BLOOM_PROFILES[settings?.viewport_bloom_quality] || VIEWPORT_BLOOM_PROFILES.adaptive;
     }
 
     function truncateText(text, maxLength) {
@@ -314,6 +353,24 @@
             'studio_render.field.bloom_hdr_strength': 'Bright Surface Bloom',
             'studio_render.field.bloom_emissive_strength': 'Emissive Texture Bloom',
             'studio_render.field.bloom_occlusion': 'Block Bloom Behind Geometry',
+            'studio_render.field.viewport_bloom_enabled': 'Preview Bloom in Viewport',
+            'studio_render.field.viewport_bloom_fps': 'Bloom FPS Limit (0 = Sync)',
+            'studio_render.field.viewport_bloom_quality': 'Viewport Bloom Quality',
+            'studio_render.option.viewport_bloom.adaptive': 'Adaptive',
+            'studio_render.option.viewport_bloom.performance': 'Performance',
+            'studio_render.option.viewport_bloom.balanced': 'Balanced',
+            'studio_render.option.viewport_bloom.high': 'High',
+            'studio_render.action.open_advanced': 'Advanced Scene Composer...',
+            'studio_render.field.color_grading_enabled': 'Color Grading',
+            'studio_render.field.exposure': 'Exposure',
+            'studio_render.field.contrast': 'Contrast',
+            'studio_render.field.saturation': 'Saturation',
+            'studio_render.field.temperature': 'Temperature',
+            'studio_render.field.tint': 'Tint',
+            'studio_render.field.vignette': 'Vignette',
+            'studio_render.action.scene_composer': 'Scene Composer...',
+            'studio_render.action.scene_composer.desc': 'Match realtime viewport post-processing to Studio Render and coordinate the Lightflow environment',
+            'studio_render.panel.composer': 'COMPOSER',
             'studio_render.field.zoom': 'Focal Length',
             'studio_render.field.gpu': 'GPU',
             'studio_render.field.gpu_renderer': 'Renderer',
@@ -414,6 +471,24 @@
             'studio_render.field.bloom_hdr_strength': 'Bloom de superficies brillantes',
             'studio_render.field.bloom_emissive_strength': 'Bloom de texturas emisivas',
             'studio_render.field.bloom_occlusion': 'Bloquear Bloom detrás de geometría',
+            'studio_render.field.viewport_bloom_enabled': 'Previsualizar Bloom en viewport',
+            'studio_render.field.viewport_bloom_fps': 'Límite FPS de Bloom (0 = sincronizado)',
+            'studio_render.field.viewport_bloom_quality': 'Calidad de Bloom en viewport',
+            'studio_render.option.viewport_bloom.adaptive': 'Adaptativa',
+            'studio_render.option.viewport_bloom.performance': 'Rendimiento',
+            'studio_render.option.viewport_bloom.balanced': 'Equilibrada',
+            'studio_render.option.viewport_bloom.high': 'Alta',
+            'studio_render.action.open_advanced': 'Compositor de escena avanzado...',
+            'studio_render.field.color_grading_enabled': 'Gradación de color',
+            'studio_render.field.exposure': 'Exposición',
+            'studio_render.field.contrast': 'Contraste',
+            'studio_render.field.saturation': 'Saturación',
+            'studio_render.field.temperature': 'Temperatura',
+            'studio_render.field.tint': 'Tinte',
+            'studio_render.field.vignette': 'Viñeta',
+            'studio_render.action.scene_composer': 'Compositor de escena...',
+            'studio_render.action.scene_composer.desc': 'Iguala el postprocesado del viewport con Studio Render y coordina el entorno Lightflow',
+            'studio_render.panel.composer': 'COMPOSITOR',
             'studio_render.field.zoom': 'Distancia Focal',
             'studio_render.field.gpu': 'GPU',
             'studio_render.field.gpu_renderer': 'Renderer',
@@ -477,6 +552,7 @@
 
     function loadSettings() {
         const stored = readJSON(STORAGE_KEY, {});
+        const legacyViewportComposer = toNumber(stored.viewport_composer_revision, 0) < 2;
         const settings = Object.assign({}, DEFAULT_SETTINGS, stored);
         if (!Array.isArray(settings.resolution)) {
             settings.resolution = DEFAULT_SETTINGS.resolution.slice();
@@ -501,6 +577,21 @@
         settings.bloom_hdr_strength = clamp(toNumber(settings.bloom_hdr_strength, 1), 0, 4);
         settings.bloom_emissive_strength = clamp(toNumber(settings.bloom_emissive_strength, 1.35), 0, 6);
         settings.bloom_occlusion = settings.bloom_occlusion !== false;
+        settings.viewport_bloom_enabled = settings.viewport_bloom_enabled !== false;
+        settings.viewport_bloom_fps = legacyViewportComposer
+            ? 0
+            : clamp(toNumber(settings.viewport_bloom_fps, 0), 0, 144);
+        settings.viewport_bloom_quality = VIEWPORT_BLOOM_PROFILES[settings.viewport_bloom_quality]
+            ? settings.viewport_bloom_quality
+            : 'adaptive';
+        settings.viewport_composer_revision = 2;
+        settings.color_grading_enabled = !!settings.color_grading_enabled;
+        settings.exposure = clamp(toNumber(settings.exposure, 1), 0.1, 4);
+        settings.contrast = clamp(toNumber(settings.contrast, 1), 0, 3);
+        settings.saturation = clamp(toNumber(settings.saturation, 1), 0, 3);
+        settings.temperature = clamp(toNumber(settings.temperature, 0), -1, 1);
+        settings.tint = clamp(toNumber(settings.tint, 0), -1, 1);
+        settings.vignette = clamp(toNumber(settings.vignette, 0), 0, 1);
         delete settings.gpu_status;
         return settings;
     }
@@ -795,6 +886,19 @@
         settings.bloom_hdr_strength = clamp(toNumber(settings.bloom_hdr_strength, 1), 0, 4);
         settings.bloom_emissive_strength = clamp(toNumber(settings.bloom_emissive_strength, 1.35), 0, 6);
         settings.bloom_occlusion = settings.bloom_occlusion !== false;
+        settings.viewport_bloom_enabled = settings.viewport_bloom_enabled !== false;
+        settings.viewport_bloom_fps = clamp(toNumber(settings.viewport_bloom_fps, 0), 0, 144);
+        settings.viewport_bloom_quality = VIEWPORT_BLOOM_PROFILES[settings.viewport_bloom_quality]
+            ? settings.viewport_bloom_quality
+            : 'adaptive';
+        settings.viewport_composer_revision = 2;
+        settings.color_grading_enabled = !!settings.color_grading_enabled;
+        settings.exposure = clamp(toNumber(settings.exposure, 1), 0.1, 4);
+        settings.contrast = clamp(toNumber(settings.contrast, 1), 0, 3);
+        settings.saturation = clamp(toNumber(settings.saturation, 1), 0, 3);
+        settings.temperature = clamp(toNumber(settings.temperature, 0), -1, 1);
+        settings.tint = clamp(toNumber(settings.tint, 0), -1, 1);
+        settings.vignette = clamp(toNumber(settings.vignette, 0), 0, 1);
         settings.zoom = settings.zoom === null || settings.zoom === undefined || settings.zoom === ''
             ? null
             : toNumber(settings.zoom, DEFAULT_ZOOM);
@@ -1684,10 +1788,6 @@
             await waitForFrame();
             window.LightManagerPrepareRender(sourcePreview, { force: true, studio: false });
             sourcePreview.render();
-
-            await waitForFrame();
-            window.LightManagerPrepareRender(sourcePreview, { force: true, studio: false });
-            sourcePreview.render();
         }
     }
 
@@ -1707,45 +1807,58 @@
         return true;
     }
 
-    function applyFinalBloom(canvas, settings, sourceMaskCanvas) {
+    function applyFinalBloom(canvas, settings, sourceMaskCanvas, options = {}) {
         if (!canvas || !settings?.bloom_enabled) return canvas;
 
-        const maxMaskDimension = 4096;
-        const scale = Math.min(
+        const sourceMask = sourceMaskCanvas || canvas;
+        const maxMaskDimension = Math.max(64, Number(options.maxDimension) || 4096);
+        const sourceScale = Math.min(
             1,
             maxMaskDimension / Math.max(canvas.width || 1, canvas.height || 1)
         );
-        const width = Math.max(1, Math.round(canvas.width * scale));
-        const height = Math.max(1, Math.round(canvas.height * scale));
+        const width = Math.max(1, Math.round(Number(options.processingWidth) || canvas.width * sourceScale));
+        const height = Math.max(1, Math.round(Number(options.processingHeight) || canvas.height * sourceScale));
+        const radiusScale = Math.min(width / Math.max(canvas.width || 1, 1), height / Math.max(canvas.height || 1, 1));
         const threshold = clamp(toNumber(settings.bloom_threshold, 0.72), 0, 1);
         const strength = clamp(toNumber(settings.bloom_strength, 0.8), 0, 3);
-        const radius = clamp(toNumber(settings.bloom_radius, 18), 1, 96) * scale;
+        const radius = clamp(toNumber(settings.bloom_radius, 18), 1, 96) * radiusScale;
         const hdrStrength = clamp(toNumber(settings.bloom_hdr_strength, 1), 0, 4);
         const emissiveStrength = clamp(toNumber(settings.bloom_emissive_strength, 1.35), 0, 6);
         const useOcclusion = settings.bloom_occlusion !== false;
+        const includeSceneSignal = options.emissiveOnly !== true;
+        const workspace = options.workspace || null;
+        const getWorkingCanvas = key => {
+            let target = workspace?.[key];
+            if (!target) {
+                target = document.createElement('canvas');
+                if (workspace) workspace[key] = target;
+            }
+            if (target.width !== width) target.width = width;
+            if (target.height !== height) target.height = height;
+            return target;
+        };
 
-        const mask = document.createElement('canvas');
-        mask.width = width;
-        mask.height = height;
+        const mask = getWorkingCanvas('processingMask');
         const maskContext = mask.getContext('2d', { willReadFrequently: true });
-        maskContext.drawImage(sourceMaskCanvas || canvas, 0, 0, width, height);
+        maskContext.clearRect(0, 0, width, height);
+        maskContext.drawImage(sourceMask, 0, 0, width, height);
 
-        const sceneSample = document.createElement('canvas');
-        sceneSample.width = width;
-        sceneSample.height = height;
-        const sceneContext = sceneSample.getContext('2d', { willReadFrequently: true });
-        sceneContext.drawImage(canvas, 0, 0, width, height);
+        let sceneImage = null;
+        if (includeSceneSignal) {
+            const sceneSample = getWorkingCanvas('sceneSample');
+            const sceneContext = sceneSample.getContext('2d', { willReadFrequently: true });
+            sceneContext.clearRect(0, 0, width, height);
+            sceneContext.drawImage(canvas, 0, 0, width, height);
+            sceneImage = sceneContext.getImageData(0, 0, width, height);
+        }
 
-        const blocker = document.createElement('canvas');
-        blocker.width = width;
-        blocker.height = height;
+        const blocker = getWorkingCanvas('blocker');
         const blockerContext = blocker.getContext('2d', { willReadFrequently: true });
 
         const maskImage = maskContext.getImageData(0, 0, width, height);
-        const sceneImage = sceneContext.getImageData(0, 0, width, height);
         const blockerImage = blockerContext.createImageData(width, height);
         const pixels = maskImage.data;
-        const scenePixels = sceneImage.data;
+        const scenePixels = sceneImage?.data || null;
         const blockerPixels = blockerImage.data;
 
         for (let index = 0; index < pixels.length; index += 4) {
@@ -1753,9 +1866,9 @@
             const emissionR = pixels[index] / 255 * emissiveStrength;
             const emissionG = pixels[index + 1] / 255 * emissiveStrength;
             const emissionB = pixels[index + 2] / 255 * emissiveStrength;
-            const sceneR = scenePixels[index] / 255 * hdrStrength;
-            const sceneG = scenePixels[index + 1] / 255 * hdrStrength;
-            const sceneB = scenePixels[index + 2] / 255 * hdrStrength;
+            const sceneR = scenePixels ? scenePixels[index] / 255 * hdrStrength : 0;
+            const sceneG = scenePixels ? scenePixels[index + 1] / 255 * hdrStrength : 0;
+            const sceneB = scenePixels ? scenePixels[index + 2] / 255 * hdrStrength : 0;
 
             const hdrSignal = geometryAlpha > 0.001
                 ? Math.max(sceneR, sceneG, sceneB)
@@ -1787,16 +1900,15 @@
         maskContext.putImageData(maskImage, 0, 0);
         blockerContext.putImageData(blockerImage, 0, 0);
 
-        const bloomLayer = document.createElement('canvas');
-        bloomLayer.width = canvas.width;
-        bloomLayer.height = canvas.height;
+        const bloomLayer = getWorkingCanvas('bloomLayer');
         const bloomContext = bloomLayer.getContext('2d');
+        bloomContext.clearRect(0, 0, width, height);
         bloomContext.globalCompositeOperation = 'lighter';
 
         const drawBloomLayer = (blur, alpha) => {
             bloomContext.globalAlpha = clamp(alpha * strength, 0, 1);
             bloomContext.filter = `blur(${Math.max(0.5, blur)}px)`;
-            bloomContext.drawImage(mask, 0, 0, canvas.width, canvas.height);
+            bloomContext.drawImage(mask, 0, 0, width, height);
         };
 
         drawBloomLayer(radius * 2.4, 0.20);
@@ -1807,7 +1919,7 @@
             bloomContext.globalCompositeOperation = 'destination-out';
             bloomContext.globalAlpha = 1;
             bloomContext.filter = 'none';
-            bloomContext.drawImage(blocker, 0, 0, canvas.width, canvas.height);
+            bloomContext.drawImage(blocker, 0, 0, width, height);
         }
 
         const output = canvas.getContext('2d');
@@ -1815,9 +1927,646 @@
         output.globalCompositeOperation = 'lighter';
         output.globalAlpha = 1;
         output.filter = 'none';
-        output.drawImage(bloomLayer, 0, 0);
+        output.drawImage(bloomLayer, 0, 0, canvas.width, canvas.height);
         output.restore();
         return canvas;
+    }
+
+    function applyFinalColorGrade(canvas, settings) {
+        if (!canvas || !settings?.color_grading_enabled) return canvas;
+        const width = canvas.width || 1;
+        const height = canvas.height || 1;
+        const source = document.createElement('canvas');
+        source.width = width;
+        source.height = height;
+        source.getContext('2d').drawImage(canvas, 0, 0);
+
+        const context = canvas.getContext('2d');
+        context.save();
+        context.clearRect(0, 0, width, height);
+        context.filter = [
+            'brightness(' + clamp(toNumber(settings.exposure, 1), 0.1, 4) + ')',
+            'contrast(' + clamp(toNumber(settings.contrast, 1), 0, 3) + ')',
+            'saturate(' + clamp(toNumber(settings.saturation, 1), 0, 3) + ')'
+        ].join(' ');
+        context.drawImage(source, 0, 0);
+        context.filter = 'none';
+
+        const temperature = clamp(toNumber(settings.temperature, 0), -1, 1);
+        const tint = clamp(toNumber(settings.tint, 0), -1, 1);
+        if (Math.abs(temperature) > 0.001 || Math.abs(tint) > 0.001) {
+            context.globalCompositeOperation = 'soft-light';
+            context.globalAlpha = Math.min(0.42, (Math.abs(temperature) + Math.abs(tint)) * 0.24);
+            const red = clamp(128 + temperature * 127 + tint * 26, 0, 255);
+            const green = clamp(128 - Math.abs(tint) * 92, 0, 255);
+            const blue = clamp(128 - temperature * 127 + tint * 26, 0, 255);
+            context.fillStyle = 'rgb(' + Math.round(red) + ', ' + Math.round(green) + ', ' + Math.round(blue) + ')';
+            context.fillRect(0, 0, width, height);
+        }
+
+        const vignette = clamp(toNumber(settings.vignette, 0), 0, 1);
+        if (vignette > 0.001) {
+            const gradient = context.createRadialGradient(
+                width * 0.5, height * 0.5, Math.min(width, height) * 0.18,
+                width * 0.5, height * 0.5, Math.max(width, height) * 0.72
+            );
+            gradient.addColorStop(0, 'rgba(0, 0, 0, 0)');
+            gradient.addColorStop(0.62, 'rgba(0, 0, 0, 0)');
+            gradient.addColorStop(1, 'rgba(0, 0, 0, ' + (vignette * 0.82) + ')');
+            context.globalCompositeOperation = 'source-over';
+            context.globalAlpha = 1;
+            context.fillStyle = gradient;
+            context.fillRect(0, 0, width, height);
+        }
+        context.restore();
+        return canvas;
+    }
+
+    function configureViewportPostTarget(target, width, height) {
+        if (!target) return;
+        if (target.width !== width || target.height !== height) target.setSize(width, height);
+        target.viewport?.set?.(0, 0, width, height);
+        target.scissor?.set?.(0, 0, width, height);
+        target.scissorTest = false;
+    }
+
+    function createViewportPostTarget(width, height, name, depthBuffer = false) {
+        const target = new THREE.WebGLRenderTarget(width, height, {
+            minFilter: THREE.LinearFilter,
+            magFilter: THREE.LinearFilter,
+            format: THREE.RGBAFormat,
+            type: THREE.UnsignedByteType,
+            depthBuffer,
+            stencilBuffer: false
+        });
+        target.texture.name = name;
+        target.texture.generateMipmaps = false;
+        configureViewportPostTarget(target, width, height);
+        return target;
+    }
+
+    function restoreViewportRendererState(renderer, snapshot) {
+        if (!renderer || !snapshot) return;
+        if (snapshot.target) {
+            if (snapshot.targetViewport && snapshot.target.viewport) snapshot.target.viewport.copy(snapshot.targetViewport);
+            if (snapshot.targetScissor && snapshot.target.scissor) snapshot.target.scissor.copy(snapshot.targetScissor);
+            snapshot.target.scissorTest = snapshot.targetScissorTest;
+            renderer.setRenderTarget?.(snapshot.target);
+        } else {
+            renderer.setRenderTarget?.(null);
+            if (snapshot.viewport) renderer.setViewport?.(snapshot.viewport);
+            if (snapshot.scissor) renderer.setScissor?.(snapshot.scissor);
+            renderer.setScissorTest?.(snapshot.scissorTest);
+        }
+        renderer.autoClear = snapshot.autoClear;
+        renderer.setClearColor?.(snapshot.clearColor, snapshot.clearAlpha);
+        if (renderer.shadowMap && snapshot.shadowAutoUpdate !== undefined) {
+            renderer.shadowMap.autoUpdate = snapshot.shadowAutoUpdate;
+        }
+    }
+
+    function snapshotViewportRendererState(renderer) {
+        const target = renderer.getRenderTarget?.() || null;
+        const clearColor = new THREE.Color();
+        renderer.getClearColor?.(clearColor);
+        return {
+            target,
+            targetViewport: target?.viewport?.clone?.() || null,
+            targetScissor: target?.scissor?.clone?.() || null,
+            targetScissorTest: target?.scissorTest ?? false,
+            viewport: renderer.getViewport?.(new THREE.Vector4()) || null,
+            currentViewport: renderer.getCurrentViewport?.(new THREE.Vector4()) || null,
+            scissor: renderer.getScissor?.(new THREE.Vector4()) || null,
+            scissorTest: renderer.getScissorTest?.() ?? false,
+            autoClear: renderer.autoClear,
+            clearColor,
+            clearAlpha: renderer.getClearAlpha?.() ?? 1,
+            shadowAutoUpdate: renderer.shadowMap?.autoUpdate
+        };
+    }
+
+    function renderViewportBloomMask(preview, state, width, height) {
+        const renderer = preview?.renderer;
+        const scene = window.Canvas?.scene;
+        if (!renderer || !scene || !THREE.WebGLRenderTarget) return false;
+
+        if (!state.maskTarget) {
+            state.maskTarget = createViewportPostTarget(width, height, 'Lightflow_ViewportBloomMask', true);
+        } else {
+            configureViewportPostTarget(state.maskTarget, width, height);
+        }
+
+        const hiddenVisibility = new Map();
+        collectStudioRenderHiddenObjects().forEach(object => {
+            if (!object || hiddenVisibility.has(object)) return;
+            hiddenVisibility.set(object, object.visible);
+            object.visible = false;
+        });
+
+        const materialChanges = [];
+        const replaceMaterial = object => {
+            if (!object?.visible || !(object.isMesh || object.isSprite) || !object.material) return;
+            const original = object.material;
+            const sourceMaterials = Array.isArray(original) ? original : [original];
+            const replacements = sourceMaterials.map(source => {
+                return getBloomMaskMaterial(source, getMaterialEmissiveState(source).active);
+            });
+            materialChanges.push({ object, material: original });
+            object.material = Array.isArray(original) ? replacements : replacements[0];
+        };
+        if (typeof scene.traverseVisible === 'function') scene.traverseVisible(replaceMaterial);
+        else scene.traverse(replaceMaterial);
+
+        const snapshot = snapshotViewportRendererState(renderer);
+        let succeeded = false;
+        try {
+            renderer.autoClear = true;
+            if (renderer.shadowMap) renderer.shadowMap.autoUpdate = false;
+            /*
+             * In Three r129 setViewport() always multiplies by renderer DPR,
+             * even when a render target is active. The target viewport is
+             * already expressed in physical target pixels, so calling it here
+             * produced the exact 1.25x offset seen with Windows scaling at 125%.
+             * setRenderTarget() consumes target.viewport without a second DPR.
+             */
+            configureViewportPostTarget(state.maskTarget, width, height);
+            renderer.setRenderTarget(state.maskTarget);
+            renderer.setClearColor?.(0x000000, 0);
+            renderer.clear?.(true, true, true);
+            renderer.render(scene, preview.camera);
+            if (window.LightflowAtmosphere?.composite) {
+                window.LightflowAtmosphere.composite(preview, { studio: true, bloomMask: true });
+                renderer.setRenderTarget(state.maskTarget);
+            }
+            succeeded = true;
+        } finally {
+            for (let index = materialChanges.length - 1; index >= 0; index--) {
+                materialChanges[index].object.material = materialChanges[index].material;
+            }
+            hiddenVisibility.forEach((visible, object) => { object.visible = visible; });
+            restoreViewportRendererState(renderer, snapshot);
+        }
+        return succeeded;
+    }
+
+    function createViewportComposerResources(state) {
+        if (state.postScene) return;
+        state.postCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+        state.postScene = new THREE.Scene();
+        state.postGeometry = new THREE.PlaneGeometry(2, 2);
+
+        state.downsampleMaterial = new THREE.ShaderMaterial({
+            uniforms: {
+                tInput: { value: null },
+                uTexel: { value: new THREE.Vector2(1, 1) },
+                uOffset: { value: 1 },
+                uThreshold: { value: 0.72 },
+                uEmissiveStrength: { value: 1.35 },
+                uApplyThreshold: { value: true }
+            },
+            vertexShader: `
+                varying vec2 vUv;
+                void main() {
+                    vUv = uv;
+                    gl_Position = vec4(position.xy, 0.0, 1.0);
+                }
+            `,
+            fragmentShader: `
+                precision highp float;
+                uniform sampler2D tInput;
+                uniform vec2 uTexel;
+                uniform float uOffset;
+                uniform float uThreshold;
+                uniform float uEmissiveStrength;
+                uniform bool uApplyThreshold;
+                varying vec2 vUv;
+
+                vec3 bloomSample(vec2 uv) {
+                    vec3 color = texture2D(tInput, uv).rgb;
+                    if (!uApplyThreshold) return color;
+                    color *= uEmissiveStrength;
+                    float signal = max(color.r, max(color.g, color.b));
+                    float contribution = clamp((signal - uThreshold) / max(0.001, 1.0 - uThreshold), 0.0, 1.0);
+                    return color * contribution;
+                }
+
+                void main() {
+                    vec2 d = uTexel * uOffset;
+                    vec3 color = bloomSample(vUv) * 4.0;
+                    color += bloomSample(vUv + vec2( d.x, 0.0)) * 2.0;
+                    color += bloomSample(vUv + vec2(-d.x, 0.0)) * 2.0;
+                    color += bloomSample(vUv + vec2(0.0,  d.y)) * 2.0;
+                    color += bloomSample(vUv + vec2(0.0, -d.y)) * 2.0;
+                    color += bloomSample(vUv + vec2( d.x,  d.y));
+                    color += bloomSample(vUv + vec2(-d.x,  d.y));
+                    color += bloomSample(vUv + vec2( d.x, -d.y));
+                    color += bloomSample(vUv + vec2(-d.x, -d.y));
+                    gl_FragColor = vec4(color * 0.0625, 1.0);
+                }
+            `,
+            depthTest: false,
+            depthWrite: false,
+            transparent: false,
+            blending: THREE.NoBlending
+        });
+        state.downsampleMaterial.name = 'Lightflow_ViewportBloomDownsample';
+
+        state.compositeMaterial = new THREE.ShaderMaterial({
+            uniforms: {
+                tBeauty: { value: null },
+                tMask: { value: null },
+                tBloom0: { value: null },
+                tBloom1: { value: null },
+                tBloom2: { value: null },
+                uUseBeauty: { value: false },
+                uUseBloom: { value: true },
+                uUseColorGrade: { value: false },
+                uThreshold: { value: 0.72 },
+                uBloomStrength: { value: 0.8 },
+                uEmissiveStrength: { value: 1.35 },
+                uExposure: { value: 1 },
+                uContrast: { value: 1 },
+                uSaturation: { value: 1 },
+                uTemperature: { value: 0 },
+                uTint: { value: 0 },
+                uVignette: { value: 0 }
+            },
+            vertexShader: `
+                varying vec2 vUv;
+                void main() {
+                    vUv = uv;
+                    gl_Position = vec4(position.xy, 0.0, 1.0);
+                }
+            `,
+            fragmentShader: `
+                precision highp float;
+                uniform sampler2D tBeauty;
+                uniform sampler2D tMask;
+                uniform sampler2D tBloom0;
+                uniform sampler2D tBloom1;
+                uniform sampler2D tBloom2;
+                uniform bool uUseBeauty;
+                uniform bool uUseBloom;
+                uniform bool uUseColorGrade;
+                uniform float uThreshold;
+                uniform float uBloomStrength;
+                uniform float uEmissiveStrength;
+                uniform float uExposure;
+                uniform float uContrast;
+                uniform float uSaturation;
+                uniform float uTemperature;
+                uniform float uTint;
+                uniform float uVignette;
+                varying vec2 vUv;
+
+                vec3 extractCore(vec3 color) {
+                    color *= uEmissiveStrength;
+                    float signal = max(color.r, max(color.g, color.b));
+                    float contribution = clamp((signal - uThreshold) / max(0.001, 1.0 - uThreshold), 0.0, 1.0);
+                    return color * contribution;
+                }
+
+                vec3 colorGrade(vec3 color) {
+                    color *= uExposure;
+                    color = (color - 0.5) * uContrast + 0.5;
+                    float luminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
+                    color = mix(vec3(luminance), color, uSaturation);
+                    color += vec3(uTemperature * 0.12 + uTint * 0.025, -abs(uTint) * 0.07, -uTemperature * 0.12 + uTint * 0.025);
+                    float edge = smoothstep(0.38, 0.78, length(vUv - 0.5));
+                    color *= 1.0 - edge * uVignette * 0.82;
+                    return max(color, vec3(0.0));
+                }
+
+                void main() {
+                    vec4 beauty = uUseBeauty ? texture2D(tBeauty, vUv) : vec4(0.0);
+                    vec3 bloom = vec3(0.0);
+                    if (uUseBloom) {
+                        bloom += extractCore(texture2D(tMask, vUv).rgb) * 0.10;
+                        bloom += texture2D(tBloom0, vUv).rgb * 0.42;
+                        bloom += texture2D(tBloom1, vUv).rgb * 0.30;
+                        bloom += texture2D(tBloom2, vUv).rgb * 0.18;
+                        bloom *= uBloomStrength;
+                    }
+                    vec3 color = beauty.rgb + bloom;
+                    if (uUseColorGrade) color = colorGrade(color);
+                    gl_FragColor = vec4(color, uUseBeauty ? beauty.a : 1.0);
+                }
+            `,
+            depthTest: false,
+            depthWrite: false,
+            transparent: true,
+            blending: THREE.AdditiveBlending
+        });
+        state.compositeMaterial.name = 'Lightflow_ViewportGPUComposer';
+        state.postQuad = new THREE.Mesh(state.postGeometry, state.downsampleMaterial);
+        state.postQuad.frustumCulled = false;
+        state.postScene.add(state.postQuad);
+    }
+
+    function ensureViewportBeautyTexture(state, renderer, snapshot, width, height) {
+        let needsInitialization = false;
+        if (!state.beautyTarget) {
+            state.beautyTarget = createViewportPostTarget(width, height, 'Lightflow_ViewportBeauty');
+            needsInitialization = true;
+        } else {
+            needsInitialization = state.beautyTarget.width !== width || state.beautyTarget.height !== height;
+            configureViewportPostTarget(state.beautyTarget, width, height);
+        }
+        // Initializing a WebGLRenderTarget gives r129 copyFramebufferToTexture
+        // a real GPU texture without allocating or reading a CPU-side image.
+        if (needsInitialization) {
+            renderer.setRenderTarget(state.beautyTarget);
+            restoreViewportRendererState(renderer, snapshot);
+        }
+        return state.beautyTarget.texture;
+    }
+
+    function renderViewportBloomPyramid(preview, state, maskWidth, maskHeight, viewWidth, viewHeight) {
+        const renderer = preview.renderer;
+        createViewportComposerResources(state);
+        const sizes = [2, 4, 8].map(divisor => ({
+            width: Math.max(2, Math.round(maskWidth / divisor)),
+            height: Math.max(2, Math.round(maskHeight / divisor))
+        }));
+        state.bloomTargets = state.bloomTargets || [];
+        sizes.forEach((size, index) => {
+            if (!state.bloomTargets[index]) {
+                state.bloomTargets[index] = createViewportPostTarget(
+                    size.width,
+                    size.height,
+                    'Lightflow_ViewportBloomMip' + index
+                );
+            } else {
+                configureViewportPostTarget(state.bloomTargets[index], size.width, size.height);
+            }
+        });
+
+        const material = state.downsampleMaterial;
+        const uniforms = material.uniforms;
+        const radiusInMaskPixels = clamp(toNumber(currentSettings.bloom_radius, 18), 1, 96) * maskWidth / Math.max(1, viewWidth);
+        state.postQuad.material = material;
+        renderer.autoClear = true;
+        renderer.setClearColor?.(0x000000, 0);
+
+        let input = state.maskTarget.texture;
+        let inputWidth = maskWidth;
+        let inputHeight = maskHeight;
+        for (let index = 0; index < state.bloomTargets.length; index++) {
+            const target = state.bloomTargets[index];
+            uniforms.tInput.value = input;
+            uniforms.uTexel.value.set(1 / Math.max(1, inputWidth), 1 / Math.max(1, inputHeight));
+            uniforms.uOffset.value = clamp(0.85 + radiusInMaskPixels * (0.055 + index * 0.035), 0.85, 5.5);
+            uniforms.uThreshold.value = clamp(toNumber(currentSettings.bloom_threshold, 0.72), 0, 1);
+            uniforms.uEmissiveStrength.value = clamp(toNumber(currentSettings.bloom_emissive_strength, 1.35), 0, 6);
+            uniforms.uApplyThreshold.value = index === 0;
+            renderer.setRenderTarget(target);
+            renderer.clear?.(true, false, false);
+            renderer.render(state.postScene, state.postCamera);
+            input = target.texture;
+            inputWidth = target.width;
+            inputHeight = target.height;
+        }
+        return state.bloomTargets;
+    }
+
+    function renderViewportGPUComposite(preview, state, snapshot, useBloom, useColorGrade) {
+        const renderer = preview.renderer;
+        createViewportComposerResources(state);
+        const material = state.compositeMaterial;
+        const uniforms = material.uniforms;
+        const fallback = state.maskTarget?.texture || state.beautyTarget?.texture;
+        uniforms.tBeauty.value = state.beautyTarget?.texture || fallback;
+        uniforms.tMask.value = state.maskTarget?.texture || fallback;
+        uniforms.tBloom0.value = state.bloomTargets?.[0]?.texture || fallback;
+        uniforms.tBloom1.value = state.bloomTargets?.[1]?.texture || uniforms.tBloom0.value;
+        uniforms.tBloom2.value = state.bloomTargets?.[2]?.texture || uniforms.tBloom1.value;
+        uniforms.uUseBeauty.value = !!useColorGrade;
+        uniforms.uUseBloom.value = !!useBloom;
+        uniforms.uUseColorGrade.value = !!useColorGrade;
+        uniforms.uThreshold.value = clamp(toNumber(currentSettings.bloom_threshold, 0.72), 0, 1);
+        uniforms.uBloomStrength.value = clamp(toNumber(currentSettings.bloom_strength, 0.8), 0, 3);
+        uniforms.uEmissiveStrength.value = clamp(toNumber(currentSettings.bloom_emissive_strength, 1.35), 0, 6);
+        uniforms.uExposure.value = clamp(toNumber(currentSettings.exposure, 1), 0.1, 4);
+        uniforms.uContrast.value = clamp(toNumber(currentSettings.contrast, 1), 0, 3);
+        uniforms.uSaturation.value = clamp(toNumber(currentSettings.saturation, 1), 0, 3);
+        uniforms.uTemperature.value = clamp(toNumber(currentSettings.temperature, 0), -1, 1);
+        uniforms.uTint.value = clamp(toNumber(currentSettings.tint, 0), -1, 1);
+        uniforms.uVignette.value = clamp(toNumber(currentSettings.vignette, 0), 0, 1);
+
+        state.postQuad.material = material;
+        material.transparent = !useColorGrade;
+        if (useColorGrade) {
+            material.blending = THREE.NoBlending;
+        } else {
+            /*
+             * Add Bloom to RGB without touching the destination alpha. The
+             * Blockbench checkerboard is CSS behind a transparent WebGL
+             * canvas; ordinary AdditiveBlending also adds source alpha and
+             * turns those transparent pixels opaque black.
+             */
+            material.blending = THREE.CustomBlending;
+            material.blendEquation = THREE.AddEquation;
+            material.blendSrc = THREE.OneFactor;
+            material.blendDst = THREE.OneFactor;
+            material.blendEquationAlpha = THREE.AddEquation;
+            material.blendSrcAlpha = THREE.ZeroFactor;
+            material.blendDstAlpha = THREE.OneFactor;
+        }
+        renderer.setRenderTarget?.(null);
+        if (snapshot.viewport) renderer.setViewport?.(snapshot.viewport);
+        if (snapshot.scissor) renderer.setScissor?.(snapshot.scissor);
+        renderer.setScissorTest?.(snapshot.scissorTest);
+        renderer.autoClear = false;
+        renderer.render(state.postScene, state.postCamera);
+    }
+
+    function getViewportComposerState(preview) {
+        if (!preview?.canvas || !preview.renderer) return null;
+        let state = VIEWPORT_COMPOSER_STATE.get(preview);
+        if (state) return state;
+        state = {
+            preview,
+            maskTarget: null,
+            bloomTargets: null,
+            beautyTarget: null,
+            copyPosition: new THREE.Vector2(),
+            postScene: null,
+            postCamera: null,
+            postQuad: null,
+            postGeometry: null,
+            downsampleMaterial: null,
+            compositeMaterial: null,
+            dynamicScale: VIEWPORT_BLOOM_PROFILES.adaptive.scale,
+            composerMs: 0,
+            adaptiveFrames: 0,
+            lastRender: 0,
+            rendering: false,
+            scheduled: false,
+            disposed: false
+        };
+        VIEWPORT_COMPOSER_STATE.set(preview, state);
+        return state;
+    }
+
+    function hideViewportComposerOverlay() {
+        // GPU composition is drawn into the viewport framebuffer, so there is
+        // no persistent DOM overlay to hide or accidentally misalign.
+    }
+
+    function updateAdaptiveViewportBloom(state, elapsed, profile) {
+        if (!profile.adaptive) return;
+        state.composerMs = state.composerMs > 0 ? state.composerMs * 0.88 + elapsed * 0.12 : elapsed;
+        state.adaptiveFrames++;
+        if (state.adaptiveFrames < 24) return;
+        state.adaptiveFrames = 0;
+        const fpsLimit = clamp(toNumber(currentSettings.viewport_bloom_fps, 0), 0, 144);
+        const frameBudget = 1000 / Math.max(30, fpsLimit || 60);
+        if (state.composerMs > frameBudget * 0.46) {
+            state.dynamicScale = Math.max(profile.minScale, state.dynamicScale * 0.88);
+        } else if (state.composerMs < frameBudget * 0.22) {
+            state.dynamicScale = Math.min(profile.maxScale, state.dynamicScale * 1.06);
+        }
+    }
+
+    function renderViewportComposer(preview) {
+        if (!preview?.renderer || !preview.canvas || window.LightManagerStudioRenderSession || preview.sa_studio_render_active) return;
+        if (!isLightflowRenderMode()) return;
+        const useBloom = !!(currentSettings.viewport_bloom_enabled && currentSettings.bloom_enabled);
+        const useColorGrade = !!currentSettings.color_grading_enabled;
+        if (!useBloom && !useColorGrade) return;
+
+        const state = getViewportComposerState(preview);
+        if (!state || state.rendering || state.disposed) return;
+        const now = performance.now();
+        const fpsLimit = clamp(toNumber(currentSettings.viewport_bloom_fps, 0), 0, 144);
+        const interval = fpsLimit > 0 ? 1000 / fpsLimit : 0;
+        if (interval > 0 && now - state.lastRender < interval) return;
+
+        const renderer = preview.renderer;
+        const snapshot = snapshotViewportRendererState(renderer);
+        // The compositor is designed for the visible framebuffer. Nested
+        // Studio/SSR/AO render-target passes must finish before it runs.
+        if (snapshot.target) return;
+        const currentViewport = snapshot.currentViewport;
+        const drawingBuffer = renderer.getDrawingBufferSize?.(new THREE.Vector2()) || null;
+        const viewWidth = Math.max(1, Math.round(currentViewport?.z || drawingBuffer?.x || preview.canvas.width || 1));
+        const viewHeight = Math.max(1, Math.round(currentViewport?.w || drawingBuffer?.y || preview.canvas.height || 1));
+        const profile = getViewportBloomProfile(currentSettings);
+        const requestedScale = profile.adaptive ? state.dynamicScale : profile.scale;
+        const bloomScale = Math.min(requestedScale, profile.maxDimension / Math.max(viewWidth, viewHeight));
+        const maskWidth = Math.max(2, Math.round(viewWidth * bloomScale));
+        const maskHeight = Math.max(2, Math.round(viewHeight * bloomScale));
+        const started = performance.now();
+
+        state.rendering = true;
+        try {
+            if (useColorGrade) {
+                const beauty = ensureViewportBeautyTexture(state, renderer, snapshot, viewWidth, viewHeight);
+                if (!beauty || typeof renderer.copyFramebufferToTexture !== 'function') return;
+                const originX = Math.max(0, Math.round(currentViewport?.x || 0));
+                const originY = Math.max(0, Math.round(currentViewport?.y || 0));
+                renderer.copyFramebufferToTexture(state.copyPosition.set(originX, originY), beauty);
+            }
+            let bloomReady = false;
+            if (useBloom && renderViewportBloomMask(preview, state, maskWidth, maskHeight)) {
+                renderViewportBloomPyramid(preview, state, maskWidth, maskHeight, viewWidth, viewHeight);
+                bloomReady = true;
+            }
+            renderViewportGPUComposite(preview, state, snapshot, bloomReady, useColorGrade);
+            state.lastRender = now;
+        } catch (error) {
+            if (!state.failureReported) {
+                state.failureReported = true;
+                console.warn('[Studio Render] realtime GPU composer failed', error);
+            }
+        } finally {
+            restoreViewportRendererState(renderer, snapshot);
+            state.rendering = false;
+            updateAdaptiveViewportBloom(state, performance.now() - started, profile);
+        }
+    }
+
+    function collectStudioRenderPreviews() {
+        const previews = new Set();
+        if (window.Preview?.selected) previews.add(Preview.selected);
+        if (Array.isArray(window.Preview?.all)) Preview.all.forEach(preview => previews.add(preview));
+        [window.main_preview, window.MediaPreview, window.Screencam?.NoAAPreview].forEach(preview => {
+            if (preview) previews.add(preview);
+        });
+        return previews;
+    }
+
+    function patchViewportComposer(preview) {
+        if (!preview?.renderer || typeof preview.render !== 'function' || VIEWPORT_COMPOSER_STATE.has(preview)) return;
+        const originalRender = preview.render;
+        const patchedRender = function lightflowSceneComposerRender() {
+            const result = originalRender.apply(this, arguments);
+            scheduleViewportComposer(this);
+            return result;
+        };
+        const state = getViewportComposerState(preview);
+        if (!state) return;
+        state.originalRender = originalRender;
+        state.patchedRender = patchedRender;
+        preview.render = patchedRender;
+    }
+
+    function scheduleViewportComposer(preview) {
+        const state = getViewportComposerState(preview);
+        if (!state || state.scheduled) return;
+        state.scheduled = true;
+        const scheduledRevision = sceneComposerRevision;
+        const scheduledProject = window.Project || null;
+        const run = () => {
+            state.scheduled = false;
+            if (state.disposed) return;
+            if (scheduledRevision !== sceneComposerRevision || scheduledProject !== (window.Project || null)) return;
+            const activePreview = getPreview();
+            if (activePreview && preview !== activePreview) return;
+            renderViewportComposer(preview);
+        };
+        // A microtask runs after every synchronous preview wrapper (including
+        // AO and Atmosphere) but before the browser presents the frame. This
+        // avoids both the old AO load-order race and a one-frame Bloom lag.
+        if (typeof queueMicrotask === 'function') {
+            queueMicrotask(run);
+        } else if (typeof Promise !== 'undefined') {
+            Promise.resolve().then(run);
+        } else {
+            setTimeout(run, 0);
+        }
+    }
+
+    function patchAllViewportComposers() {
+        collectStudioRenderPreviews().forEach(patchViewportComposer);
+    }
+
+    function resetSceneComposerLifecycle() {
+        sceneComposerRevision += 1;
+        if (typeof sceneComposerRefreshFrame === 'number' && typeof cancelAnimationFrame === 'function') {
+            cancelAnimationFrame(sceneComposerRefreshFrame);
+        }
+        sceneComposerRefreshFrame = null;
+        VIEWPORT_COMPOSER_STATE.forEach(state => {
+            state.scheduled = false;
+        });
+    }
+
+    function disposeViewportComposers() {
+        VIEWPORT_COMPOSER_STATE.forEach((state, preview) => {
+            if (preview?.render === state.patchedRender) preview.render = state.originalRender;
+            state.disposed = true;
+            state.maskTarget?.dispose?.();
+            state.bloomTargets?.forEach?.(target => target?.dispose?.());
+            state.beautyTarget?.dispose?.();
+            state.downsampleMaterial?.dispose?.();
+            state.compositeMaterial?.dispose?.();
+            state.postGeometry?.dispose?.();
+            state.maskTarget = null;
+            state.bloomTargets = null;
+            state.beautyTarget = null;
+        });
+        VIEWPORT_COMPOSER_STATE.clear();
     }
 
     async function deliverRender(dataUrl, size, settings) {
@@ -1981,6 +2730,7 @@
 
             Blockbench.setStatusBarText(translate('studio_render.status.downsample', 'Compositing final image...'));
             applyFinalBloom(canvas, normalized, bloomMaskCanvas);
+            applyFinalColorGrade(canvas, normalized);
             const dataUrl = canvas.toDataURL('image/png');
             await deliverRender(dataUrl, outputSize, normalized);
         } catch (error) {
@@ -2691,6 +3441,92 @@
                 value: settings.bloom_occlusion,
                 condition: form => !!form.bloom_enabled && !!form.show_advanced
             },
+            viewport_bloom_enabled: {
+                type: 'checkbox',
+                label: 'studio_render.field.viewport_bloom_enabled',
+                value: settings.viewport_bloom_enabled,
+                condition: form => !!form.bloom_enabled
+            },
+            viewport_bloom_fps: {
+                type: 'range',
+                label: 'studio_render.field.viewport_bloom_fps',
+                value: settings.viewport_bloom_fps,
+                min: 0,
+                max: 144,
+                step: 1,
+                condition: form => !!form.bloom_enabled && !!form.viewport_bloom_enabled && !!form.show_advanced
+            },
+            viewport_bloom_quality: {
+                type: 'select',
+                label: 'studio_render.field.viewport_bloom_quality',
+                value: settings.viewport_bloom_quality,
+                options: {
+                    adaptive: 'studio_render.option.viewport_bloom.adaptive',
+                    performance: 'studio_render.option.viewport_bloom.performance',
+                    balanced: 'studio_render.option.viewport_bloom.balanced',
+                    high: 'studio_render.option.viewport_bloom.high'
+                },
+                condition: form => !!form.bloom_enabled && !!form.viewport_bloom_enabled && !!form.show_advanced
+            },
+            color_grading_enabled: {
+                type: 'checkbox',
+                label: 'studio_render.field.color_grading_enabled',
+                value: settings.color_grading_enabled
+            },
+            exposure: {
+                type: 'range',
+                label: 'studio_render.field.exposure',
+                value: settings.exposure,
+                min: 0.1,
+                max: 4,
+                step: 0.05,
+                condition: form => !!form.color_grading_enabled
+            },
+            contrast: {
+                type: 'range',
+                label: 'studio_render.field.contrast',
+                value: settings.contrast,
+                min: 0,
+                max: 3,
+                step: 0.05,
+                condition: form => !!form.color_grading_enabled
+            },
+            saturation: {
+                type: 'range',
+                label: 'studio_render.field.saturation',
+                value: settings.saturation,
+                min: 0,
+                max: 3,
+                step: 0.05,
+                condition: form => !!form.color_grading_enabled
+            },
+            temperature: {
+                type: 'range',
+                label: 'studio_render.field.temperature',
+                value: settings.temperature,
+                min: -1,
+                max: 1,
+                step: 0.02,
+                condition: form => !!form.color_grading_enabled && !!form.show_advanced
+            },
+            tint: {
+                type: 'range',
+                label: 'studio_render.field.tint',
+                value: settings.tint,
+                min: -1,
+                max: 1,
+                step: 0.02,
+                condition: form => !!form.color_grading_enabled && !!form.show_advanced
+            },
+            vignette: {
+                type: 'range',
+                label: 'studio_render.field.vignette',
+                value: settings.vignette,
+                min: 0,
+                max: 1,
+                step: 0.02,
+                condition: form => !!form.color_grading_enabled
+            },
             _export: '_',
             destination: {
                 type: 'select',
@@ -2711,6 +3547,310 @@
         };
     }
 
+    function createSceneComposerForm(settings) {
+        const environment = window.LightflowEnvironment?.settings || {};
+        return {
+            _realtime: '_',
+            viewport_bloom_enabled: {
+                type: 'checkbox',
+                label: 'studio_render.field.viewport_bloom_enabled',
+                value: settings.viewport_bloom_enabled
+            },
+            viewport_bloom_fps: {
+                type: 'range',
+                label: 'studio_render.field.viewport_bloom_fps',
+                value: settings.viewport_bloom_fps,
+                min: 0,
+                max: 144,
+                step: 1,
+                condition: form => !!form.viewport_bloom_enabled
+            },
+            viewport_bloom_quality: {
+                type: 'select',
+                label: 'studio_render.field.viewport_bloom_quality',
+                value: settings.viewport_bloom_quality,
+                options: {
+                    adaptive: 'studio_render.option.viewport_bloom.adaptive',
+                    performance: 'studio_render.option.viewport_bloom.performance',
+                    balanced: 'studio_render.option.viewport_bloom.balanced',
+                    high: 'studio_render.option.viewport_bloom.high'
+                },
+                condition: form => !!form.viewport_bloom_enabled
+            },
+            _bloom: '_',
+            bloom_enabled: {
+                type: 'checkbox',
+                label: 'studio_render.field.bloom_enabled',
+                value: settings.bloom_enabled
+            },
+            bloom_threshold: {
+                type: 'range',
+                label: 'studio_render.field.bloom_threshold',
+                value: settings.bloom_threshold,
+                min: 0,
+                max: 1,
+                step: 0.01,
+                condition: form => !!form.bloom_enabled
+            },
+            bloom_strength: {
+                type: 'range',
+                label: 'studio_render.field.bloom_strength',
+                value: settings.bloom_strength,
+                min: 0,
+                max: 3,
+                step: 0.05,
+                condition: form => !!form.bloom_enabled
+            },
+            bloom_radius: {
+                type: 'range',
+                label: 'studio_render.field.bloom_radius',
+                value: settings.bloom_radius,
+                min: 1,
+                max: 96,
+                step: 1,
+                condition: form => !!form.bloom_enabled
+            },
+            bloom_hdr_strength: {
+                type: 'range',
+                label: 'studio_render.field.bloom_hdr_strength',
+                value: settings.bloom_hdr_strength,
+                min: 0,
+                max: 4,
+                step: 0.05,
+                condition: form => !!form.bloom_enabled
+            },
+            bloom_emissive_strength: {
+                type: 'range',
+                label: 'studio_render.field.bloom_emissive_strength',
+                value: settings.bloom_emissive_strength,
+                min: 0,
+                max: 6,
+                step: 0.05,
+                condition: form => !!form.bloom_enabled
+            },
+            bloom_occlusion: {
+                type: 'checkbox',
+                label: 'studio_render.field.bloom_occlusion',
+                value: settings.bloom_occlusion,
+                condition: form => !!form.bloom_enabled
+            },
+            _grade: '_',
+            color_grading_enabled: {
+                type: 'checkbox',
+                label: 'studio_render.field.color_grading_enabled',
+                value: settings.color_grading_enabled
+            },
+            exposure: {
+                type: 'range',
+                label: 'studio_render.field.exposure',
+                value: settings.exposure,
+                min: 0.1,
+                max: 4,
+                step: 0.05,
+                condition: form => !!form.color_grading_enabled
+            },
+            contrast: {
+                type: 'range',
+                label: 'studio_render.field.contrast',
+                value: settings.contrast,
+                min: 0,
+                max: 3,
+                step: 0.05,
+                condition: form => !!form.color_grading_enabled
+            },
+            saturation: {
+                type: 'range',
+                label: 'studio_render.field.saturation',
+                value: settings.saturation,
+                min: 0,
+                max: 3,
+                step: 0.05,
+                condition: form => !!form.color_grading_enabled
+            },
+            temperature: {
+                type: 'range',
+                label: 'studio_render.field.temperature',
+                value: settings.temperature,
+                min: -1,
+                max: 1,
+                step: 0.02,
+                condition: form => !!form.color_grading_enabled
+            },
+            tint: {
+                type: 'range',
+                label: 'studio_render.field.tint',
+                value: settings.tint,
+                min: -1,
+                max: 1,
+                step: 0.02,
+                condition: form => !!form.color_grading_enabled
+            },
+            vignette: {
+                type: 'range',
+                label: 'studio_render.field.vignette',
+                value: settings.vignette,
+                min: 0,
+                max: 1,
+                step: 0.02,
+                condition: form => !!form.color_grading_enabled
+            },
+            _environment: '_',
+            environment_enabled: {
+                type: 'checkbox',
+                label: 'lightflow_environment.field.enabled',
+                value: environment.enabled !== false,
+                condition: () => !!window.LightflowEnvironment
+            },
+            environment_preset: {
+                type: 'select',
+                label: 'lightflow_environment.field.preset',
+                value: environment.preset || 'vanilla',
+                options: {
+                    vanilla: 'Minecraft Vanilla',
+                    vibrant_visuals: 'Minecraft Vibrant Visuals'
+                },
+                condition: () => !!window.LightflowEnvironment
+            },
+            environment_time: {
+                type: 'range',
+                label: 'lightflow_environment.field.time',
+                value: Number(environment.time) || 6000,
+                min: 0,
+                max: 23999,
+                step: 100,
+                condition: () => !!window.LightflowEnvironment
+            },
+            environment_strength: {
+                type: 'range',
+                label: 'lightflow_environment.field.environment',
+                value: Number(environment.environment_strength) || 0.75,
+                min: 0,
+                max: 4,
+                step: 0.05,
+                condition: () => !!window.LightflowEnvironment
+            }
+        };
+    }
+
+    function refreshSceneComposerPreviews() {
+        const preview = getPreview();
+        if (!preview) return;
+        patchViewportComposer(preview);
+        if (sceneComposerRefreshFrame !== null) return;
+        const revision = sceneComposerRevision;
+        const project = window.Project || null;
+        const render = () => {
+            sceneComposerRefreshFrame = null;
+            if (revision !== sceneComposerRevision || project !== (window.Project || null)) return;
+            const activePreview = getPreview();
+            activePreview?.render?.();
+        };
+        if (typeof requestAnimationFrame === 'function') {
+            sceneComposerRefreshFrame = requestAnimationFrame(render);
+        } else {
+            sceneComposerRefreshFrame = 'microtask';
+            queueMicrotask(render);
+        }
+    }
+
+    function createSceneComposerPanelForm(settings) {
+        return {
+            viewport_bloom_enabled: {
+                type: 'checkbox', label: 'studio_render.field.viewport_bloom_enabled', value: settings.viewport_bloom_enabled
+            },
+            viewport_bloom_quality: {
+                type: 'select', label: 'studio_render.field.viewport_bloom_quality', value: settings.viewport_bloom_quality,
+                options: {
+                    adaptive: 'studio_render.option.viewport_bloom.adaptive',
+                    performance: 'studio_render.option.viewport_bloom.performance',
+                    balanced: 'studio_render.option.viewport_bloom.balanced',
+                    high: 'studio_render.option.viewport_bloom.high'
+                },
+                condition: form => !!form.viewport_bloom_enabled
+            },
+            viewport_bloom_fps: {
+                type: 'range', label: 'studio_render.field.viewport_bloom_fps', value: settings.viewport_bloom_fps,
+                min: 0, max: 144, step: 1, condition: form => !!form.viewport_bloom_enabled
+            },
+            bloom_enabled: {
+                type: 'checkbox', label: 'studio_render.field.bloom_enabled', value: settings.bloom_enabled
+            },
+            bloom_strength: {
+                type: 'range', label: 'studio_render.field.bloom_strength', value: settings.bloom_strength,
+                min: 0, max: 3, step: 0.05, condition: form => !!form.bloom_enabled
+            },
+            composer_advanced: {
+                type: 'buttons', buttons: ['studio_render.action.open_advanced'],
+                click() { openSceneComposerDialog(); }
+            }
+        };
+    }
+
+    function syncSceneComposerPanel() {
+        if (!sceneComposerPanel?.form || syncingSceneComposerPanel) return;
+        syncingSceneComposerPanel = true;
+        sceneComposerPanel.form.form_config = createSceneComposerPanelForm(currentSettings);
+        sceneComposerPanel.form.buildForm();
+        syncingSceneComposerPanel = false;
+    }
+
+    function applySceneComposerForm(form, persist) {
+        const next = Object.assign({}, currentSettings, form || {});
+        delete next.environment_enabled;
+        delete next.environment_preset;
+        delete next.environment_time;
+        delete next.environment_strength;
+        currentSettings = normalizeForm(next);
+        if (persist) saveSettings(currentSettings);
+
+        if (window.LightflowEnvironment && form) {
+            const environmentSettings = {};
+            if (Object.prototype.hasOwnProperty.call(form, 'environment_enabled')) environmentSettings.enabled = form.environment_enabled;
+            if (Object.prototype.hasOwnProperty.call(form, 'environment_preset')) environmentSettings.preset = form.environment_preset;
+            if (Object.prototype.hasOwnProperty.call(form, 'environment_time')) environmentSettings.time = form.environment_time;
+            if (Object.prototype.hasOwnProperty.call(form, 'environment_strength')) environmentSettings.environment_strength = form.environment_strength;
+            if (Object.keys(environmentSettings).length) {
+                window.LightflowEnvironment.setSettings(environmentSettings, {
+                    cause: 'scene_composer',
+                    render: false,
+                    forceShadow: false
+                });
+            }
+        }
+
+        refreshSceneComposerPreviews();
+    }
+
+    function openSceneComposerDialog() {
+        currentSettings = loadSettings();
+        const initialEnvironment = window.LightflowEnvironment?.settings || null;
+        activeComposerDialog = new Dialog('lightflow_scene_composer_dialog', {
+            title: 'studio_render.action.scene_composer',
+            width: 680,
+            form: createSceneComposerForm(currentSettings),
+            onFormChange(form) {
+                applySceneComposerForm(form, false);
+            },
+            onConfirm(form) {
+                applySceneComposerForm(form, true);
+                activeComposerDialog = null;
+            },
+            onCancel() {
+                currentSettings = loadSettings();
+                if (initialEnvironment && window.LightflowEnvironment) {
+                    window.LightflowEnvironment.setSettings(initialEnvironment, {
+                        cause: 'scene_composer_cancel',
+                        render: false,
+                        forceShadow: true
+                    });
+                }
+                refreshSceneComposerPreviews();
+                activeComposerDialog = null;
+            }
+        });
+        activeComposerDialog.show();
+    }
+
     function openStudioRenderDialog() {
         currentSettings = loadSettings();
         activeDialog = new Dialog({
@@ -2726,6 +3866,7 @@
                 }
                 currentSettings = next;
                 StudioRenderFrame.updateNode();
+                refreshSceneComposerPreviews();
             },
             onConfirm(form) {
                 const settings = normalizeForm(form);
@@ -2737,6 +3878,7 @@
             onCancel() {
                 currentSettings = loadSettings();
                 StudioRenderFrame.updateNode();
+                refreshSceneComposerPreviews();
                 activeDialog = null;
             }
         });
@@ -2744,6 +3886,9 @@
     }
 
     function addStyles() {
+        const palette = Array.isArray(globalThis.markerColors) ? globalThis.markerColors : [];
+        const previewColor = palette[0]?.pastel || '#A2EBFF';
+        const bloomColor = palette[8]?.pastel || '#FFA5D5';
         stylesheet = Blockbench.addCSS(`
             #studio_render_frame {
                 position: absolute;
@@ -2967,6 +4112,39 @@
                 background: rgba(72, 210, 125, 0.12);
                 box-shadow: inset 0 0 0 1px rgba(72, 210, 125, 0.24);
             }
+            #panel_lightflow_scene_composer_panel {
+                overflow-y: auto !important;
+                overflow-x: hidden;
+                background: var(--color-ui);
+            }
+            #panel_lightflow_scene_composer_panel .dialog_bar {
+                min-height: 27px;
+                margin: 0;
+                padding-top: 1px;
+                padding-bottom: 1px;
+                box-sizing: border-box;
+            }
+            #panel_lightflow_scene_composer_panel .form_bar_viewport_bloom_enabled,
+            #panel_lightflow_scene_composer_panel .form_bar_bloom_enabled {
+                border-left: 3px solid ${previewColor};
+                padding-left: 7px;
+            }
+            #panel_lightflow_scene_composer_panel .form_bar_bloom_enabled {
+                border-left-color: ${bloomColor};
+            }
+            #panel_lightflow_scene_composer_panel .form_bar_viewport_bloom_fps input[type="range"] {
+                --color-thumb: ${previewColor};
+            }
+            #panel_lightflow_scene_composer_panel .form_bar_bloom_strength input[type="range"] {
+                --color-thumb: ${bloomColor};
+            }
+            #panel_lightflow_scene_composer_panel::-webkit-scrollbar {
+                width: 6px;
+            }
+            #panel_lightflow_scene_composer_panel::-webkit-scrollbar-thumb {
+                background: var(--color-button);
+                border-radius: 3px;
+            }
         `);
     }
 
@@ -2976,10 +4154,22 @@
             activeDialog.hide();
             activeDialog = null;
         }
+        if (activeComposerDialog) {
+            activeComposerDialog.hide();
+            activeComposerDialog = null;
+        }
         if (exportAction) exportAction.delete();
         if (quickRenderAction) quickRenderAction.delete();
         if (frameAction) frameAction.delete();
         if (resetFrameAction) resetFrameAction.delete();
+        if (sceneComposerAction) sceneComposerAction.delete();
+        if (sceneComposerPanel) sceneComposerPanel.delete();
+        if (sceneComposerProjectListener) sceneComposerProjectListener.delete?.();
+        if (sceneComposerModeListener) sceneComposerModeListener.delete?.();
+        if (sceneComposerCloseListener) sceneComposerCloseListener.delete?.();
+        if (sceneComposerLifecycleHydrator) sceneComposerLifecycleHydrator.delete?.();
+        resetSceneComposerLifecycle();
+        disposeViewportComposers();
         if (stylesheet && typeof stylesheet.delete === 'function') stylesheet.delete();
         BLOOM_MASK_STATE.resources.forEach(resource => resource?.dispose?.());
         BLOOM_MASK_STATE.resources.clear();
@@ -2994,7 +4184,7 @@
         author: 'MidFord327',
         description: 'Export polished Blockbench studio renders with tiled supersampling, 4K/8K-safe output, transparency, GPU guidance, and an adjustable frame. Complements Light Manager and Shader Architect in the Lightflow suite.',
         tags: ['Lightflow', 'Rendering', 'Export', 'Screenshots', 'Studio', 'Presentation'],
-        version: '1.4.2',
+        version: '1.7.0',
         min_version: '4.9.0',
         variant: 'both',
         onload() {
@@ -3045,17 +4235,97 @@
                 }
             });
 
+            sceneComposerAction = new Action('lightflow_scene_composer', {
+                name: 'studio_render.action.scene_composer',
+                description: 'studio_render.action.scene_composer.desc',
+                icon: 'auto_fix_high',
+                category: 'view',
+                condition: () => !!getPreview(),
+                click: openSceneComposerDialog
+            });
+
+            sceneComposerPanel = new Panel('lightflow_scene_composer_panel', {
+                name: 'studio_render.panel.composer',
+                icon: 'auto_fix_high',
+                growable: true,
+                resizable: true,
+                expand_button: true,
+                condition: { modes: ['render'], project: true },
+                default_position: {
+                    slot: 'right_bar',
+                    float_position: [0, 0],
+                    float_size: [314, 200],
+                    height: 200,
+                    folded: false,
+                    attached_to: window.Panels?.lightflow_environment_panel ? 'lightflow_environment_panel' : 'outliner',
+                    attached_index: 2,
+                    sidebar_index: 2
+                },
+                mode_positions: {
+                    render: {
+                        slot: 'right_bar',
+                        height: 200,
+                        folded: false,
+                        attached_to: window.Panels?.lightflow_environment_panel ? 'lightflow_environment_panel' : 'outliner',
+                        attached_index: 2,
+                        sidebar_index: 2
+                    }
+                },
+                insert_after: window.Panels?.lightflow_environment_panel ? 'lightflow_environment_panel' : 'outliner',
+                form: createSceneComposerPanelForm(currentSettings)
+            });
+
+            sceneComposerPanel.form.on('change', ({ result }) => {
+                if (syncingSceneComposerPanel) return;
+                applySceneComposerForm(result, true);
+            });
+
             MenuBar.addAction(exportAction, 'file.export');
             MenuBar.addAction(quickRenderAction, 'file.export');
             MenuBar.addAction(exportAction, 'view');
             MenuBar.addAction(quickRenderAction, 'view');
             MenuBar.addAction(frameAction, 'view');
             MenuBar.addAction(resetFrameAction, 'view');
+            MenuBar.addAction(sceneComposerAction, 'view');
+
+            patchAllViewportComposers();
+            sceneComposerLifecycleHydrator = window.LightflowLifecycle?.registerHydrator?.(
+                'studio_render',
+                ({ project, deferred }) => {
+                    resetSceneComposerLifecycle();
+                    if (deferred || !project) return;
+                    currentSettings = loadSettings();
+                    syncSceneComposerPanel();
+                    refreshSceneComposerPreviews();
+                }
+            );
+            if (!sceneComposerLifecycleHydrator) {
+                sceneComposerProjectListener = Blockbench.on('select_project', () => {
+                    resetSceneComposerLifecycle();
+                    currentSettings = loadSettings();
+                    syncSceneComposerPanel();
+                    refreshSceneComposerPreviews();
+                });
+                sceneComposerCloseListener = Blockbench.on('close_project', resetSceneComposerLifecycle);
+            }
+            sceneComposerModeListener = Blockbench.on('select_mode', () => {
+                refreshSceneComposerPreviews();
+            });
 
             window.StudioRender = {
                 open: openStudioRenderDialog,
                 render: renderWithSettings,
                 quickRender: quickStudioRender,
+                openComposer: openSceneComposerDialog,
+                refreshComposer: refreshSceneComposerPreviews,
+                get settings() { return Object.assign({}, currentSettings); },
+                setComposerSettings(next) {
+                    currentSettings = normalizeForm(Object.assign({}, currentSettings, next || {}));
+                    saveSettings(currentSettings);
+                    syncSceneComposerPanel();
+                    refreshSceneComposerPreviews();
+                    return Object.assign({}, currentSettings);
+                },
                 showFrame: () => StudioRenderFrame.show(getPreview(), currentSettings),
                 hideFrame: () => StudioRenderFrame.remove(true),
                 resetFrame: () => StudioRenderFrame.reset(getPreview(), currentSettings)

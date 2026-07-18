@@ -6,6 +6,88 @@ Lightflow uses a suite release version for public downloads. Individual plugins 
 
 ## [Unreleased]
 
+### RC 6 startup, project hydration, and interaction latency
+
+- **Light Manager 1.7.0:** registers the plugin and its custom `light` outliner type synchronously. Material-icon generation now runs later during idle time and can no longer delay `.bbmodel` parsing.
+- Added a shared, generation-guarded Lightflow project lifecycle. If the suite becomes available after a scene is already open, it reads the current project model and restores saved lights, Volume Domains, Environment settings, material assignments, face assignments, and material instances without requiring the project to be closed and reopened.
+- Project close and tab switching now cancel stale queued scene, light-uniform, Environment, Atmosphere, and Scene Composer work. A full light-registry pass also removes lights belonging to the previous project, including when the next project contains no lights.
+- Light edits now update only the affected light. Type, color, intensity, range, shadow bias, animation, and viewport-drag paths no longer rescan every Lightflow light, every preview, and every scene mesh on each input step.
+- Viewport shadow maps now use explicit invalidation. Ordinary Cube and Group transforms update the shadow image without rewalking all caster/receiver meshes, and finishing an edit performs a lightweight light cleanup instead of a full scene traversal.
+- **Lightflow Environment 1.3.0:** keeps the directional-light topology stable while Environment or Sun is toggled, updates shadow projection and targets only when their signature changes, and limits animated sun-shadow refreshes while keeping sky and light uniforms fluid.
+- **Shader Architect 2.9.0:** isolates queued material and uniform work by project revision and hydrates saved root, element, and face material state when loaded late.
+- **Lightflow Atmosphere 1.2.0:** restores late-loaded Volume Domains and prevents a queued volume render from crossing a project transition.
+- **Studio Render 1.7.0:** coalesces Scene Composer refreshes, composites only the active viewport, discards stale work after close/switch, and removes the redundant second preview/shadow recovery render after Studio Render.
+- Added regression coverage for synchronous registration, late hydration, project isolation, partial light updates, manual shadow invalidation, stable Environment topology, and active-preview-only Scene Composer refreshes.
+
+### RC 5 interactive performance and transparency
+
+- **Studio Render 1.6.1:** preserves the destination alpha during additive viewport Bloom, so Blockbench's transparent checkerboard remains visible instead of becoming an opaque black background.
+- **Shader Architect 2.8.0:** removes the full light/shadow preparation accidentally triggered by uniform-only updates and no longer treats ordinary Cube transforms as lighting changes.
+- Geometry, face, and UV events now rebuild only the affected render element; light arrays, vectors, shadow-index maps, and active-preview rendering are reused or coalesced instead of recreated for every slider step.
+- **Light Manager 1.6.5:** light transforms explicitly skip scene shadow-mesh traversal and reuse update scratch objects rather than allocating world-space vectors for every light and frame.
+- **Lightflow Atmosphere 1.1.0:** separates depth and volume signatures. Light/color/intensity changes reuse the unchanged scene depth and rerun only the volumetric lighting pass; optical volume edits also retain depth, while actual geometry transforms invalidate it without rebuilding the scene partition.
+- Atmosphere selection updates no longer invalidate volumetric rendering, preview requests are frame-coalesced, and light-element lookup no longer performs a repeated linear search inside the raymarch setup.
+- **Lightflow Environment 1.2.0:** coalesces environment uniform updates and renders only the active preview, avoiding a second full render of every Blockbench preview during time animation and live panel edits.
+- These changes target high-refresh interactive editing, but the achieved frame rate still depends on GPU, viewport size, shadow resolution, volume quality, scene complexity, and Blockbench itself.
+
+### RC 4 native GPU viewport composition
+
+- **Studio Render 1.6.0:** replaced the realtime CPU readback/Canvas2D overlay with a GPU-resident emissive mask, three-level downsample Bloom pyramid, and direct framebuffer composition.
+- Fixed the 1.25× Bloom scale/offset on Windows display scaling by never passing physical render-target dimensions through Three r129's DPR-multiplying `setViewport()` path.
+- Added Adaptive quality, automatic internal-resolution hysteresis, synchronized uncapped viewport updates, and optional FPS caps from 1–144.
+- Moved Scene Composer scheduling to a coalesced microtask after AO/Atmosphere wrappers but before browser presentation, removing the extra frame of latency.
+- **Lightflow Atmosphere 1.0.1:** preserves target-local viewport/scissor state when Atmosphere is composed into Bloom or other offscreen targets.
+- **Light Manager 1.6.4:** Volume Domain selection proxies are explicitly excluded from shadow casting and receiving.
+- Volume Domain proxy meshes now carry their own no-shadow marker and continuously enforce `castShadow = false`, preventing the invisible editing cube from occluding its contents or projecting a solid box shadow.
+
+### RC 3 viewport and environment workflow
+
+- **Studio Render 1.5.1:** moved Scene Composer into a resizable panel attached inside **Lightflow Render** instead of occupying a generic Blockbench sidebar slot.
+- Replaced the realtime full-resolution visible-canvas Bloom capture with a reduced offscreen WebGL mask, reusable processing canvases, DPI-aware quality profiles, and a 30 FPS safety cap.
+- Realtime Bloom now preserves the Shader Architect AO-composited base frame, excludes Blockbench helpers/gizmos from its mask, and only runs in Lightflow Render mode.
+- **Lightflow Environment 1.1.0:** replaced the toolbar-only panel with an attached, resizable Lightflow Render panel and a complete advanced composer.
+- Added custom day, sunrise, night, lower-sky, sun, moon, and cloud colors plus gradient, stars, cloud appearance, motion, and contrast controls.
+- Added generated Vanilla-style cloud textures and project-texture selection for clouds, sun, and moon without bundling game assets.
+- Stopped the animated day cycle from disposing and recreating the directional shadow map on every update.
+
+### RC 2 shader hotfixes
+
+- **Lightflow Environment 1.0.1:** fixed sky vertex/fragment assembly so array lines are joined with real newline characters instead of emitting literal `\\n` tokens into GLSL.
+- **Shader Architect 2.7.1:** added punctual-light compatibility overloads locally to custom shaders that include `<lights_pars_begin>` without Three's `<bsdfs>` chunk.
+- Added the missing custom shadow-index uniforms to Pixelated Lightflow.
+- Suspended SSR capture samplers while their render target is bound, preventing framebuffer/texture feedback loops.
+- **Light Manager 1.6.3:** removed global mutation of `THREE.ShaderChunk.common`; stock Lambert/Phong shaders now retain Three r129's single native punctual helper.
+
+### Lightflow Environment 1.0.0
+
+- Added a separately loadable procedural environment module with Minecraft time (`0`–`23999`), controllable day length, realtime playback, sun azimuth, moon phases, stars, and block-shaped clouds.
+- Added independent **Vanilla** and **Vibrant Visuals** presets for sky gradients, sunset/night transitions, celestial bodies, cloud response, and ambient palettes.
+- Added directional sun and moon lighting with artist-controlled shadow area, near/far range, resolution, bias, normal bias, and pixelated-shadow settings.
+- Exposed a stable environment API and project-persisted lighting state for Shader Architect, Studio Render, and future Lightflow modules.
+
+### Shader Architect 2.7.0
+
+- Added environment ambient uniforms so sky, horizon, and ground light can tint compatible Lightflow materials in realtime.
+- Extended depth-aware SSR with a world-space procedural environment fallback—including sky gradient, sun/moon, and clouds—when a reflection ray misses visible screen geometry.
+- Added **Vibrant Visuals PBR**, a complete PBR starting preset with environment response, SSR, and pixel-shadow defaults.
+- Added a switchable pixelated-shadow path with adjustable quantization steps and pixel scale to Pixelated Lightflow and Vibrant Visuals PBR.
+- Added the Environment sun/moon as a synthetic Lightflow light source, including dynamic direction, color, strength, and shadow settings.
+
+### Studio Render 1.5.0
+
+- Added **Scene Composer** with realtime viewport Bloom, Bloom preview FPS, exposure, contrast, saturation, temperature, tint, vignette, and integrated environment controls.
+- Reused the final renderer's emissive/atmosphere Bloom masks, geometry occlusion, threshold, multiscale blur, radius, and strength in the realtime viewport preview.
+- Added one shared color-grade implementation for realtime preview and final tiled output.
+- Added a persistent Scene Composer panel plus quick viewport-Bloom and strength controls.
+
+### Light Manager 1.6.2
+
+- Fixed the Three.js r129 compatibility path so Light Manager no longer injects a second `punctualLightIntensityToIrradianceFactor` body when Blockbench already provides it.
+
+### Release-candidate validation
+
+- Extended syntax/version coverage to all five modules and added regression guards for Scene Composer parity, environment integration, Vibrant Visuals PBR, SSR environment fallback, and pixelated shadows.
+
 ### Shader Architect 2.6.0
 
 - Added lossless Cube material-slot collapsing: six equivalent face slots now render as one material batch while genuinely different textures, render modes, transparency states, and face overrides remain independent.

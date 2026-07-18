@@ -11,6 +11,7 @@ const pluginFiles = [
     'light_manager.js',
     'shader_architect.js',
     'lightflow_atmosphere.js',
+    'lightflow_environment.js',
     'studio_render.js'
 ];
 
@@ -24,16 +25,108 @@ test('all independently loadable plugins parse as JavaScript', () => {
 
 test('release candidate versions stay synchronized with the README', () => {
     const expected = {
-        'light_manager.js': '1.6.1',
-        'shader_architect.js': '2.6.0',
-        'lightflow_atmosphere.js': '1.0.0',
-        'studio_render.js': '1.4.2'
+        'light_manager.js': '1.7.0',
+        'shader_architect.js': '2.9.0',
+        'lightflow_atmosphere.js': '1.2.0',
+        'lightflow_environment.js': '1.3.0',
+        'studio_render.js': '1.7.0'
     };
     const readme = read('README.md');
     Object.entries(expected).forEach(([file, version]) => {
         assert.match(read(file), new RegExp(`version:\\s*['\"]${version.replaceAll('.', '\\.')}['\"]|PLUGIN_VERSION\\s*=\\s*['\"]${version.replaceAll('.', '\\.')}['\"]`));
         assert.ok(readme.includes(`\`${version}\``), `${version} is missing from README.md`);
     });
+});
+
+test('Light Manager registers custom project types before cosmetic icon work', () => {
+    const source = read('light_manager.js');
+    const synchronousRegistration = source.lastIndexOf('initialize_light_plugin();');
+    const deferredIcons = source.lastIndexOf('load_textures().catch');
+    assert.ok(synchronousRegistration >= 0, 'Light Manager registration call is missing');
+    assert.ok(deferredIcons > synchronousRegistration, 'icon generation must run after plugin registration');
+    assert.match(source, /requestIdleCallback\(callback, \{ timeout: 1800 \}\)/);
+    assert.match(source, /await Promise\.all\(specs\.map/);
+    assert.doesNotMatch(source, /load_textures\(\)[\s\S]{0,240}\.then\(\(\) => \{\s*initialize_light_plugin\(\)/);
+    ['shader_architect.js', 'lightflow_environment.js', 'lightflow_atmosphere.js'].forEach(file => {
+        assert.doesNotMatch(read(file), /waitFor(?:Plugin)?LightManager/);
+    });
+});
+
+test('late plugin startup rehydrates every persisted Lightflow project feature', () => {
+    const lights = read('light_manager.js');
+    const environment = read('lightflow_environment.js');
+    const atmosphere = read('lightflow_atmosphere.js');
+    const shaders = read('shader_architect.js');
+
+    assert.match(lights, /function createLightflowLifecycleRuntime\(\)/);
+    assert.match(lights, /Blockbench\.on\('load_project',[\s\S]{0,260}event\?\.model[\s\S]{0,160}deferHydration: true/);
+    assert.match(lights, /Codecs\?\.project\?\.on\?\.\('parsed'/);
+    assert.match(lights, /Blockbench\.read\(\[path\], \{ errorbox: false \}/);
+    const closeLifecycleStart = lights.indexOf("Blockbench.on('close_project'");
+    const closeLifecycleEnd = lights.indexOf('const parsedListener', closeLifecycleStart);
+    const closeLifecycle = lights.slice(closeLifecycleStart, closeLifecycleEnd);
+    assert.match(closeLifecycle, /deferHydration: true/);
+    assert.match(closeLifecycle, /close_project_ready/);
+    assert.match(lights, /attachOwner\(\)[\s\S]{0,180}releaseOwner\(\)/);
+    assert.match(lights, /restoreCustomElements\(model, 'light', LightElement\)/);
+    assert.match(atmosphere, /restoreCustomElements\(model, 'lightflow_volume', VolumeElement\)/);
+    assert.match(environment, /typeof model\?\.\[PROJECT_PROPERTY\] === 'string'/);
+    assert.match(shaders, /model\?\.\[PROJECT_MATERIAL_INSTANCES_PROP\]/);
+    assert.match(shaders, /const rawByUuid = new Map/);
+    assert.match(shaders, /FACE_MATERIAL_INSTANCES_PROP/);
+});
+
+test('project generations reject stale Lightflow render and material work', () => {
+    const environment = read('lightflow_environment.js');
+    const atmosphere = read('lightflow_atmosphere.js');
+    const shaders = read('shader_architect.js');
+    const studio = read('studio_render.js');
+
+    assert.match(environment, /revision !== environmentRevision[\s\S]{0,120}project !== environmentProject/);
+    assert.match(atmosphere, /revision !== atmosphereRevision[\s\S]{0,120}project !== atmosphereProject/);
+    assert.match(shaders, /scheduledRevision !== this\.projectRevision[\s\S]{0,180}scheduledProject !== this\.activeProject/);
+    assert.match(shaders, /beginProjectLifecycle\(project\)[\s\S]{0,260}cancelPendingSceneUpdate\(\)/);
+    assert.match(studio, /scheduledRevision !== sceneComposerRevision \|\| scheduledProject !== \(window\.Project \|\| null\)/);
+    assert.match(studio, /resetSceneComposerLifecycle\(\)/);
+});
+
+test('light and shadow hot paths stay partial and change-driven', () => {
+    const lights = read('light_manager.js');
+    const environment = read('lightflow_environment.js');
+
+    assert.match(lights, /renderer\.shadowMap\.autoUpdate = false/);
+    assert.match(lights, /renderer\.shadowMap\.autoUpdate = true/);
+    assert.match(lights, /const targetLights = updateOptions\.elements/);
+    assert.match(lights, /elements: \[light\],[\s\S]{0,80}cleanup: false/);
+    assert.match(lights, /if \(light\?\.userData\?\.lightflowEnvironmentVirtual\) continue/);
+    assert.match(lights, /Blockbench\.on\('finish_edit',[\s\S]{0,600}scene: false/);
+    assert.match(lights, /element_aspects: \{ transform: true \}/);
+    assert.doesNotMatch(lights, /element_aspects: \{ transform: true, geometry: true \}/);
+
+    assert.match(environment, /const configSignature =/);
+    assert.match(environment, /shadow\.map\?\.setSize/);
+    assert.match(environment, /directionAngle >= THREE\.MathUtils\.degToRad\(0\.35\)/);
+    assert.match(environment, /now - lastSunShadowRefresh >= 100/);
+    assert.match(environment, /sunLight\.visible = true/);
+    assert.match(environment, /sunLight\.intensity = activeSun \? state\.sunIntensity : 0/);
+    assert.match(environment, /if \(shadowChanged && typeof window\.LightManagerPrepareRender/);
+});
+
+test('Scene Composer refreshes only the active preview and coalesces UI changes', () => {
+    const source = read('studio_render.js');
+    const scheduleStart = source.indexOf('function scheduleViewportComposer');
+    const scheduleEnd = source.indexOf('function patchAllViewportComposers', scheduleStart);
+    const refreshStart = source.indexOf('function refreshSceneComposerPreviews');
+    const refreshEnd = source.indexOf('function createSceneComposerPanelForm', refreshStart);
+    const schedule = source.slice(scheduleStart, scheduleEnd);
+    const refresh = source.slice(refreshStart, refreshEnd);
+
+    assert.match(schedule, /const activePreview = getPreview\(\)/);
+    assert.match(schedule, /if \(activePreview && preview !== activePreview\) return/);
+    assert.match(refresh, /if \(sceneComposerRefreshFrame !== null\) return/);
+    assert.match(refresh, /const activePreview = getPreview\(\)/);
+    assert.match(refresh, /activePreview\?\.render\?\.\(\)/);
+    assert.doesNotMatch(refresh, /collectStudioRenderPreviews/);
 });
 
 test('Shader Architect covers Cube, Mesh, and TextureMesh lifecycle paths', () => {
@@ -112,6 +205,153 @@ test('Bloom uses transparent depth-only texels to occlude hidden emitters withou
     assert.doesNotMatch(source, /if \(energy <= 0\.0005\) discard;/);
 });
 
+test('Scene Composer keeps realtime Bloom GPU-resident, DPI-safe, and AO-order-safe', () => {
+    const source = read('studio_render.js');
+    assert.match(source, /function renderViewportComposer\(preview\)/);
+    assert.match(source, /function scheduleViewportComposer\(preview\)/);
+    assert.match(source, /const result = originalRender\.apply\(this, arguments\);\s*scheduleViewportComposer\(this\);/);
+    assert.match(source, /renderViewportBloomMask\(preview, state, maskWidth, maskHeight\)/);
+    assert.match(source, /renderViewportBloomPyramid\(preview, state, maskWidth, maskHeight, viewWidth, viewHeight\)/);
+    assert.match(source, /renderViewportGPUComposite\(preview, state, snapshot, bloomReady, useColorGrade\)/);
+    assert.match(source, /renderer\.copyFramebufferToTexture\(state\.copyPosition\.set\(originX, originY\), beauty\)/);
+    assert.match(source, /renderer\.getCurrentViewport\?\.\(new THREE\.Vector4\(\)\)/);
+    assert.match(source, /state\.bloomTargets\[index\] = createViewportPostTarget/);
+    assert.match(source, /Lightflow_ViewportBloomDownsample/);
+    assert.match(source, /Lightflow_ViewportGPUComposer/);
+    assert.match(source, /queueMicrotask\(run\)/);
+    assert.match(source, /viewport_bloom_fps: 0/);
+    assert.match(source, /max: 144/);
+    assert.match(source, /adaptive: \{ scale:/);
+    assert.match(source, /new Panel\('lightflow_scene_composer_panel'/);
+    assert.doesNotMatch(source, /id: 'lightflow_scene_composer_toolbar'/);
+    assert.match(source, /viewport_bloom_fps/);
+    assert.match(source, /new THREE\.WebGLRenderTarget\(width, height/);
+    assert.doesNotMatch(source, /renderer\.readRenderTargetPixels\(state\.maskTarget/);
+    assert.doesNotMatch(source, /lightflow_scene_composer_overlay/);
+    assert.doesNotMatch(source, /state\.maskPixels/);
+    assert.match(source, /collectStudioRenderHiddenObjects\(\)\.forEach/);
+    assert.match(source, /if \(!isLightflowRenderMode\(\)\)/);
+    assert.match(source, /condition: \{ modes: \['render'\], project: true \}/);
+    assert.match(source, /attached_to: window\.Panels\?\.lightflow_environment_panel \? 'lightflow_environment_panel' : 'outliner'/);
+    assert.match(source, /applyFinalBloom\(canvas, normalized, bloomMaskCanvas\)/);
+    assert.match(source, /applyFinalColorGrade\(canvas, normalized\)/);
+    const maskSection = source.slice(
+        source.indexOf('function renderViewportBloomMask'),
+        source.indexOf('function createViewportComposerResources')
+    );
+    assert.match(maskSection, /configureViewportPostTarget\(state\.maskTarget, width, height\);\s*renderer\.setRenderTarget\(state\.maskTarget\)/);
+    assert.doesNotMatch(maskSection, /renderer\.setViewport/);
+    assert.match(source, /material\.blending = THREE\.CustomBlending/);
+    assert.match(source, /material\.blendSrcAlpha = THREE\.ZeroFactor/);
+    assert.match(source, /material\.blendDstAlpha = THREE\.OneFactor/);
+});
+
+test('interactive transforms avoid global lighting and material rebuild work', () => {
+    const source = read('shader_architect.js');
+    assert.doesNotMatch(source, /Blockbench\.on\('update_transform',[\s\S]{0,160}requestLightUniformUpdate/);
+    assert.match(source, /const changedElement = event\?\.element \|\| event\?\.object \|\| event\?\.cube/);
+    assert.match(source, /\{ partial: true, cubes: changedElements \}/);
+    assert.match(source, /getLightUniformScratch\(MAX_LIGHTS\)/);
+    assert.match(source, /'uLightShadowIndex', 'uSAEnvironmentEnabled'/);
+    const lightUpdateStart = source.indexOf('updateLightUniforms(cause =');
+    const lightUpdateEnd = source.indexOf('\n        }\n    };', lightUpdateStart);
+    const lightUpdate = source.slice(lightUpdateStart, lightUpdateEnd);
+    assert.doesNotMatch(lightUpdate, /window\.LightManagerPrepareRender\s*\(/);
+    assert.match(source, /const preview =[\s\S]{0,180}Preview\.selected/);
+    const previewRequestStart = source.indexOf('requestPreviewRender(options = {})');
+    const previewRequestEnd = source.indexOf('cancelPendingPreviewRender()', previewRequestStart);
+    assert.doesNotMatch(
+        source.slice(previewRequestStart, previewRequestEnd),
+        /Preview\.all\.forEach\(preview => \{[\s\S]{0,100}preview\.render/
+    );
+});
+
+test('light updates and environment animation are coalesced without redundant scene work', () => {
+    const lights = read('light_manager.js');
+    const environment = read('lightflow_environment.js');
+    assert.match(lights, /activeUuids: new Set\(\)/);
+    assert.match(lights, /worldPosition: new THREE\.Vector3\(\)/);
+    assert.match(lights, /elements: \[light\],[\s\S]{0,80}cleanup: false/);
+    assert.match(lights, /sceneTopologyChanged/);
+    assert.match(environment, /requestLightUniformUpdate\('environment_update', \{ render: false \}\)/);
+    assert.match(environment, /if \(previewRenderFrame !== null\) return/);
+    assert.match(environment, /const preview = window\.Preview\?\.selected \|\| window\.main_preview/);
+    assert.match(environment, /updateScene\(\{ forceShadow: false, animation: true \}\)/);
+});
+
+test('Minecraft environment drives sky, time, ambient response, sun shadows, and project persistence', () => {
+    const source = read('lightflow_environment.js');
+    assert.match(source, /preset: 'vanilla'/);
+    assert.match(source, /vibrant_visuals:/);
+    assert.match(source, /function getLightingState\(\)/);
+    assert.match(source, /new THREE\.DirectionalLight/);
+    assert.match(source, /const cameraValues = \{\s*left: -area, right: area, top: area, bottom: -area/);
+    assert.match(source, /pixelated_shadows/);
+    assert.match(source, /lightflow_environment_settings/);
+    assert.match(source, /getVirtualLight/);
+    assert.match(source, /palette_mode: 'preset'/);
+    assert.match(source, /cloud_mode: 'vanilla'/);
+    assert.match(source, /sun_texture_uuid/);
+    assert.match(source, /moon_texture_uuid/);
+    assert.match(source, /cloud_texture_uuid/);
+    assert.match(source, /Generated Vanilla-style Texture/);
+    assert.match(source, /condition: \{ modes: \['render'\], project: true \}/);
+    assert.match(source, /attached_to: 'outliner'/);
+    assert.match(source, /updateScene\(\{ forceShadow: false, animation: true \}\);\s*dispatchChanged\('animation'\)/);
+    assert.equal((source.match(/\.join\('\\n'\)/g) || []).length, 2);
+    assert.doesNotMatch(source, /\.join\('\\\\n'\)/);
+});
+
+test('environment sky shaders assemble with real line breaks', () => {
+    const source = read('lightflow_environment.js');
+    const start = source.indexOf('const SKY_VERTEX =');
+    const end = source.indexOf('function createSky()', start);
+    assert.ok(start >= 0 && end > start);
+
+    const buildShaders = new Function(`${source.slice(start, end)}\nreturn { SKY_VERTEX, SKY_FRAGMENT };`);
+    const { SKY_VERTEX, SKY_FRAGMENT } = buildShaders();
+    [SKY_VERTEX, SKY_FRAGMENT].forEach(shader => {
+        assert.match(shader, /\nvoid main\(\)/);
+        assert.doesNotMatch(shader, /\\\\n/);
+    });
+    assert.match(SKY_FRAGMENT, /uniform sampler2D uSunTexture;/);
+    assert.match(SKY_FRAGMENT, /uniform sampler2D uMoonTexture;/);
+    assert.match(SKY_FRAGMENT, /uniform sampler2D uCloudTexture;/);
+    assert.match(SKY_FRAGMENT, /uniform int uCloudMode;/);
+});
+
+test('Vibrant Visuals PBR uses native MER semantics, environment lighting, SSR fallback, and switchable pixel shadows', () => {
+    const source = read('shader_architect.js');
+    assert.match(source, /id: 'vibrant_visuals_pbr'/);
+    assert.match(source, /uUseBlockbenchMERMap/);
+    assert.match(source, /uSAEnvironmentAmbient/);
+    assert.match(source, /"uSAEnvironmentEnabled": \{ type: "int", value: 0, expose: false \}/);
+    assert.match(source, /saSSRSampleEnvironment/);
+    assert.match(source, /uLFPixelatedShadowsEnabled/);
+    assert.match(source, /uniform bool uLFPixelatedShadowsEnabled/);
+    assert.match(source, /\/\* Lightflow lights \*\//);
+    assert.match(source, /uniform int uLightCastShadow\[16\];/);
+    assert.match(source, /uniform int uLightShadowIndex\[16\];/);
+});
+
+test('Three r129 punctual-light compatibility stays local to custom shaders', () => {
+    const lights = read('light_manager.js');
+    const shaders = read('shader_architect.js');
+    assert.doesNotMatch(lights, /ShaderChunk\.common\s*\+=/);
+    assert.doesNotMatch(lights, /float punctualLightIntensityToIrradianceFactor/);
+    assert.match(shaders, /const LIGHTFLOW_PUNCTUAL_LIGHT_COMPAT/);
+    assert.ok((shaders.match(/\$\{LIGHTFLOW_PUNCTUAL_LIGHT_COMPAT\}/g) || []).length >= 5);
+});
+
+test('SSR capture never samples the render target currently being written', () => {
+    const source = read('shader_architect.js');
+    const suspend = source.indexOf('material.uniforms.uSA_SSRScene.value = fallbackTexture');
+    const bind = source.indexOf('renderer.setRenderTarget(state.captureTarget)', suspend);
+    assert.ok(suspend >= 0 && bind > suspend);
+    assert.match(source, /material\.uniforms\.uSA_SSRDepth\.value = fallbackTexture/);
+    assert.match(source, /material\.uniforms\.uSA_SSRHasDepth\.value = 0/);
+});
+
 test('supporting modules include Mesh and TextureMesh render elements', () => {
     const atmosphere = read('lightflow_atmosphere.js');
     const studio = read('studio_render.js');
@@ -121,7 +361,7 @@ test('supporting modules include Mesh and TextureMesh render elements', () => {
     assert.match(lights, /TextureMesh\.selected/);
 });
 
-test('Atmosphere 1.0 keeps volume targets DPI-safe and shadowed God Rays transparent', () => {
+test('Atmosphere 1.2 keeps volume targets DPI-safe and shadowed God Rays transparent', () => {
     const source = read('lightflow_atmosphere.js');
     assert.match(source, /function configureRenderTarget\(target, width, height\)/);
     assert.match(source, /configureRenderTarget\(state\.volumeTarget, volumeWidth, volumeHeight\)/);
@@ -132,9 +372,16 @@ test('Atmosphere 1.0 keeps volume targets DPI-safe and shadowed God Rays transpa
     assert.match(source, /if \(!lightShaft\) extinctionColor \+= sigmaS \+ sigmaA/);
     assert.match(source, /accumulated \+= transmittance \* scatteringSource \* stepLength/);
     assert.match(source, /const legacyGodRays =/);
+    assert.match(source, /previousTargetViewport = previousTarget\?\.viewport\?\.clone/);
+    assert.match(source, /if \(previousTarget\) \{[\s\S]{0,500}renderer\.setRenderTarget\?\.\(previousTarget\);[\s\S]{0,120}\} else \{/);
+    assert.match(source, /proxy\.userData\.lightflowNoShadow = true/);
+    assert.match(source, /proxy\.castShadow = false/);
+    const lightManager = read('light_manager.js');
+    assert.match(lightManager, /const suppressElementShadows = element\.type === 'lightflow_volume'/);
+    assert.match(lightManager, /suppressElementShadows \|\| object\.userData\?\.lightflowNoShadow/);
 });
 
-test('Atmosphere 1.0 skips redundant realtime volume work', () => {
+test('Atmosphere 1.2 skips redundant realtime volume work', () => {
     const source = read('lightflow_atmosphere.js');
     assert.match(source, /frustum\.intersectsSphere/);
     assert.match(source, /computeFrameSignature\(state, preview, volumes, studio\)/);
@@ -144,6 +391,13 @@ test('Atmosphere 1.0 skips redundant realtime volume work', () => {
     assert.match(source, /useDepthOnlyCubeMaterials\(\)/);
     assert.match(source, /findFreshSharedDepthSources/);
     assert.match(source, /performance\(\) \{/);
+    assert.match(source, /computeDepthSignature\(state, preview, studio\)/);
+    assert.match(source, /state\.lastDepthSignature === depthSignature/);
+    assert.match(source, /sharedDepth \|\| cachedDepth \|\| this\.captureDepth/);
+    assert.match(source, /invalidateDepthCache\(\)/);
+    assert.match(source, /invalidateVolumeCache\(\)/);
+    assert.match(source, /const selectionListener = Blockbench\.on\('update_selection', \(\) => syncAtmospherePanel\(\)\)/);
+    assert.match(source, /lightElementByUuid: new Map\(\)/);
 });
 
 test('renderer documentation does not misrepresent WebGL as hardware RTX', () => {
