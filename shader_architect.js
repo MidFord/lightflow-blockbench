@@ -546,8 +546,8 @@
     // =========================================================================
     Language.addTranslations('en', {
         'panel.global_renderer_properties': 'WORLD',
-        'panel.material_instance_manager': 'OVERRIDES',
-        'panel.material_properties': 'MATERIAL',
+        'panel.material_instance_manager': 'INSTANCES',
+        'panel.material_properties': 'OVERRIDES',
 
         'shader_architect.material_panel.no_selected': 'Select a single cube or multiple cubes to edit their material instance properties.',
         'shader_architect.material_panel.no_instance': 'Create a material instance to override the global material on this cube.',
@@ -556,6 +556,9 @@
         'shader_architect.material_panel.properties': 'Material Instance Properties',
 
         'shader_architect.material_panel.title': 'Material Instance',
+        'shader_architect.material_panel.instances_title': 'INSTANCES',
+        'shader_architect.material_panel.overrides_title': 'OVERRIDES',
+        'shader_architect.material_panel.scope': 'Override Scope',
         'shader_architect.material_panel.global_material': 'Global Material',
         'shader_architect.material_panel.element_material': 'Element Material',
         'shader_architect.material_panel.mixed_instances': '(Mixed Instances)',
@@ -630,6 +633,8 @@
         "shader_architect.world.brightness": "Brightness",
         "shader_architect.world.brightness.desc": "Global Blockbench viewport brightness.",
         "shader_architect.world.shading": "Shading",
+        "shader_architect.world.ao": "Ambient Occlusion",
+        "shader_architect.world.ao_settings": "Ambient Occlusion Settings",
         "shader_architect.world.grids": "Grid",
         "shader_architect.world.ground": "Ground",
         "shader_architect.material.new_material": "New Material",
@@ -923,7 +928,7 @@
         "shader_architect.uniform.uSSSAmbient": "SSS Ambient",
         "shader_architect.uniform.uSSSAmbient.desc": "Soft ambient energy returned by the scattering medium",
         "shader_architect.uniform.uSSSShadowMix": "SSS Shadows",
-        "shader_architect.uniform.uSSSShadowMix.desc": "How strongly cast shadows block subsurface light",
+        "shader_architect.uniform.uSSSShadowMix.desc": "Additional subsurface attenuation inside cast-shadow penumbras (never bypasses full occlusion)",
         "shader_architect.uniform.uSSSUseNativePBR": "Native PBR SSS",
         "shader_architect.uniform.uSSSUseNativePBR.desc": "Read Blockbench material-config SSS and MER Subsurface alpha automatically",
         "shader_architect.uniform.uUseSSSMaskMap": "MER SSS Mask",
@@ -1024,20 +1029,16 @@
         "shader_architect.uniform.uSSRRenderScale.desc": "Internal capture resolution scale for screen-space reflections",
         "shader_architect.uniform.uSSRFrameInterval": "SSR Refresh",
         "shader_architect.uniform.uSSRFrameInterval.desc": "How often reflections refresh while previewing",
-        "shader_architect.uniform.shadowPixelResolution": "Pixel Size",
-        "shader_architect.uniform.shadowPixelResolution.desc": "Size of the pixelated shadow grid",
-        "shader_architect.uniform.shadowThreshold": "Cutoff",
-        "shader_architect.uniform.shadowThreshold.desc": "Shadow threshold for the pixelated shadow mask",
-        "shader_architect.uniform.PIXELATED_SHADOWS": "Pixelated Shadows",
-        "shader_architect.uniform.PIXELATED_SHADOWS.desc": "Switch the Vibrant Visuals-style stepped shadow response without changing material",
-        "shader_architect.uniform.uPixelatedShadows": "Pixelated Shadows",
-        "shader_architect.uniform.uPixelatedShadows.desc": "Quantize PBR shadow visibility into stable screen-space pixel cells",
-        "shader_architect.uniform.uPixelShadowSteps": "Shadow Tone Steps",
-        "shader_architect.uniform.uPixelShadowScale": "Shadow Pixel Size",
-        "shader_architect.uniform.shadowFilterScale": "Filter Scale",
-        "shader_architect.uniform.shadowFilterScale.desc": "Multiplies the light shadow softness used by pixelated shadows",
-        "shader_architect.uniform.shadowFeather": "Feather",
-        "shader_architect.uniform.shadowFeather.desc": "Softens the pixelated shadow threshold instead of making it fully binary",
+        "shader_architect.uniform.uLFPixelatedShadowsEnabled": "Pixel Shadows",
+        "shader_architect.uniform.uLFPixelatedShadowsEnabled.desc": "Enables pixel-aligned shadow sampling on model faces",
+        "shader_architect.uniform.uLFPixelatedShadowResolution": "Shadow Scale",
+        "shader_architect.uniform.uLFPixelatedShadowResolution.desc": "Controls the pixel grid density used to sample shadows",
+        "shader_architect.uniform.uLFPixelatedShadowLevels": "Shadow Steps",
+        "shader_architect.uniform.uLFPixelatedShadowLevels.desc": "Quantizes shadow intensity into a fixed number of levels; zero keeps smooth intensity",
+        "shader_architect.uniform.uLFPixelatedShadowGlobalResolution": "Global Grid",
+        "shader_architect.uniform.uLFPixelatedShadowGlobalResolution.desc": "Uses the physical face size instead of the UV region to calculate shadow pixels",
+        "shader_architect.uniform.uLFPixelatedShadowStrength": "Pixel Strength",
+        "shader_architect.uniform.uLFPixelatedShadowStrength.desc": "Controls how strongly pixelated shadows replace the original shadow result",
         "shader_architect.uniform.AUTO_TILE": "Auto Tile",
         "shader_architect.uniform.AUTO_TILE.desc": "Scale texture tiling from face size",
         "shader_architect.uniform.TILING": "Tiling",
@@ -1072,14 +1073,17 @@
 
     Language.addTranslations('es', {
         'panel.global_renderer_properties': 'MUNDO',
-        'panel.material_instance_manager': 'OVERRIDES',
-        'panel.material_properties': 'MATERIAL',
+        'panel.material_instance_manager': 'INSTANCIAS',
+        'panel.material_properties': 'REEMPLAZOS',
         'shader_architect.material_panel.no_selected': 'Selecciona uno o varios cubos para editar sus instancias de material.',
         'shader_architect.material_panel.no_instance': 'Crea una instancia de material para sobrescribir el material global en este cubo.',
         'shader_architect.material_panel.no_face_instance': 'Asigna una instancia de material a esta cara para sobrescribir el material del elemento.',
         'shader_architect.material_panel.multiple_instances': 'Hay varias instancias de material seleccionadas. Todos los cubos seleccionados deben compartir la misma instancia.',
         'shader_architect.material_panel.properties': 'Propiedades de instancia de material',
         'shader_architect.material_panel.title': 'Instancia de material',
+        'shader_architect.material_panel.instances_title': 'INSTANCIAS',
+        'shader_architect.material_panel.overrides_title': 'REEMPLAZOS',
+        'shader_architect.material_panel.scope': 'Alcance del reemplazo',
         'shader_architect.material_panel.global_material': 'Material global',
         'shader_architect.material_panel.element_material': 'Material del elemento',
         'shader_architect.material_panel.mixed_instances': '(Instancias diferentes)',
@@ -1154,6 +1158,8 @@
         "shader_architect.world.brightness": "Brillo",
         "shader_architect.world.brightness.desc": "Brillo global del viewport de Blockbench.",
         "shader_architect.world.shading": "Sombreado",
+        "shader_architect.world.ao": "Oclusión ambiental",
+        "shader_architect.world.ao_settings": "Ajustes de oclusión ambiental",
         "shader_architect.world.grids": "Grid",
         "shader_architect.world.ground": "Suelo",
         "shader_architect.material.new_material": "Material nuevo",
@@ -1297,7 +1303,7 @@
         "shader_architect.uniform.uSSSAmbient": "Ambiente SSS",
         "shader_architect.uniform.uSSSAmbient.desc": "Energia ambiente suave devuelta por el medio",
         "shader_architect.uniform.uSSSShadowMix": "Sombras SSS",
-        "shader_architect.uniform.uSSSShadowMix.desc": "Cuanto bloquean las sombras proyectadas la luz subsuperficial",
+        "shader_architect.uniform.uSSSShadowMix.desc": "Atenuacion subsuperficial adicional en la penumbra (nunca atraviesa una oclusion total)",
         "shader_architect.uniform.uSSSUseNativePBR": "SSS PBR Nativo",
         "shader_architect.uniform.uSSSUseNativePBR.desc": "Lee automaticamente el SSS del material y el alfa MER Subsurface de Blockbench",
         "shader_architect.uniform.uUseSSSMaskMap": "Mascara MER SSS",
@@ -1552,14 +1558,16 @@
         "shader_architect.uniform.AUTO_TILE.desc": "Ajusta repeticion por tamano de cara",
         "shader_architect.uniform.TILING": "Tile",
         "shader_architect.uniform.TILING.desc": "Repeticion manual de textura",
-        "shader_architect.uniform.shadowPixelResolution": "Pixel",
-        "shader_architect.uniform.shadowPixelResolution.desc": "Tamano del pixel de sombra",
-        "shader_architect.uniform.shadowThreshold": "Corte",
-        "shader_architect.uniform.shadowThreshold.desc": "Umbral de sombra pixelada",
-        "shader_architect.uniform.shadowFilterScale": "Escala de filtro",
-        "shader_architect.uniform.shadowFilterScale.desc": "Multiplica la suavidad de sombra de la luz usada por sombras pixeladas",
-        "shader_architect.uniform.shadowFeather": "Pluma",
-        "shader_architect.uniform.shadowFeather.desc": "Suaviza el umbral de sombra pixelada en vez de hacerlo completamente binario",
+        "shader_architect.uniform.uLFPixelatedShadowsEnabled": "Sombras píxel",
+        "shader_architect.uniform.uLFPixelatedShadowsEnabled.desc": "Activa el muestreo de sombras alineado con los píxeles de las caras",
+        "shader_architect.uniform.uLFPixelatedShadowResolution": "Escala sombra",
+        "shader_architect.uniform.uLFPixelatedShadowResolution.desc": "Controla la densidad de la cuadrícula de píxeles utilizada para muestrear las sombras",
+        "shader_architect.uniform.uLFPixelatedShadowLevels": "Niveles sombra",
+        "shader_architect.uniform.uLFPixelatedShadowLevels.desc": "Reduce la intensidad de la sombra a una cantidad fija de niveles; cero conserva una intensidad continua",
+        "shader_architect.uniform.uLFPixelatedShadowGlobalResolution": "Cuadrícula global",
+        "shader_architect.uniform.uLFPixelatedShadowGlobalResolution.desc": "Usa el tamaño físico de la cara en vez de la región UV para calcular los píxeles de sombra",
+        "shader_architect.uniform.uLFPixelatedShadowStrength": "Fuerza píxel",
+        "shader_architect.uniform.uLFPixelatedShadowStrength.desc": "Controla cuánto reemplazan las sombras pixeladas al resultado de sombra original",
         "shader_architect.uniform.uShadowStrength": "Sombra",
         "shader_architect.uniform.uShadowStrength.desc": "Intensidad de las sombras proyectadas",
         "shader_architect.uniform.uShadowFloor": "Min Sombra",
@@ -1970,7 +1978,7 @@ vec3 saApplyBlockbenchRenderModeEmission(vec3 litColor, vec3 baseColor, float al
         if (/^(BEVEL_|EDGE_FALLBACK_LIGHT_DIRECTION)/.test(name)) return 'bevel';
         if (/^OUTLINE_/.test(name)) return 'outline';
         if (/^PROMO_RIM_/.test(name)) return 'rim';
-        if (name === 'SHADOWS' || /^(uShadow|shadowPixelResolution|shadowThreshold)/.test(name)) return 'shadows';
+        if (name === 'SHADOWS' || /^(uShadow|uLFPixelatedShadow)/.test(name)) return 'shadows';
         if (/^uAO/.test(name)) return 'ao';
         if (name === 'map' || name === 'AUTO_TILE' || name === 'TILING' || /Map|TEXTURE_SIZE/.test(name)) {
             return 'texture';
@@ -2383,6 +2391,841 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
     return sourceColor;
 }
 `;
+
+    const LIGHTFLOW_TEXTURE_TILING = /* glsl */`
+#ifndef LIGHTFLOW_TEXTURE_TILING_MODULE
+#define LIGHTFLOW_TEXTURE_TILING_MODULE
+
+uniform bool AUTO_TILE;
+uniform vec2 TILING;
+uniform vec2 TEXTURE_SIZE;
+
+vec2 lfResolveTextureTiling(vec2 faceSize) {
+    if (AUTO_TILE) {
+        return abs(faceSize) /
+            max(abs(TEXTURE_SIZE), vec2(1.0));
+    }
+
+    return TILING;
+}
+
+#endif
+`;
+
+    const LIGHTFLOW_PIXELATED_SHADOWS_VERTEX = /* glsl */`
+#ifndef LIGHTFLOW_PIXELATED_SHADOWS_VERTEX_MODULE
+#define LIGHTFLOW_PIXELATED_SHADOWS_VERTEX_MODULE
+
+#include <shadowmap_pars_vertex>
+
+uniform float uLFPixelatedShadowResolution;
+uniform bool uLFPixelatedShadowGlobalResolution;
+
+varying vec2 lfVPixelatedShadowFaceUv;
+varying vec2 lfVPixelatedShadowGrid;
+varying float lfVPixelatedShadowInfluence;
+
+vec3 lfSafeShadowNormal(vec3 normalValue) {
+    float lengthSquared = dot(normalValue, normalValue);
+
+    if (lengthSquared <= 1e-12) {
+        return vec3(0.0, 1.0, 0.0);
+    }
+
+    return normalValue * inversesqrt(lengthSquared);
+}
+
+/*
+    worldPosition:
+        Posición mundial final del vértice.
+
+    worldNormal:
+        Normal física mundial. No debe ser la normal estilizada,
+        ya que shadowNormalBias debe seguir la geometría real.
+
+    normalizedFaceUv:
+        UV local de la cara, normalmente entre 0 y 1.
+
+    faceSize:
+        Tamaño global de la cara en píxeles o unidades voxel.
+
+    uvSize:
+        Tamaño normalizado de la región UV.
+
+    affectedByShadow:
+        Influencia por cara, entre 0 y 1.
+*/
+void lfPixelatedShadowVertexSetup(
+    const in vec4 worldPosition,
+    const in vec3 worldNormal,
+    const in vec2 normalizedFaceUv,
+    const in vec2 faceSize,
+    const in vec2 uvSize,
+    const in float affectedByShadow
+) {
+    lfVPixelatedShadowFaceUv = normalizedFaceUv;
+
+    vec2 baseGrid = uLFPixelatedShadowGlobalResolution
+        ? faceSize
+        : uvSize * faceSize;
+
+    lfVPixelatedShadowGrid = max(
+        baseGrid * max(uLFPixelatedShadowResolution, 0.0),
+        vec2(1.0)
+    );
+
+    lfVPixelatedShadowInfluence =
+        clamp(affectedByShadow, 0.0, 1.0);
+
+#ifdef USE_SHADOWMAP
+
+    vec3 shadowWorldNormal =
+        lfSafeShadowNormal(worldNormal);
+
+    vec4 shadowWorldPosition;
+
+#if NUM_DIR_LIGHT_SHADOWS > 0
+
+    #pragma unroll_loop_start
+    for ( int i = 0; i < NUM_DIR_LIGHT_SHADOWS; i ++ ) {
+        shadowWorldPosition =
+            worldPosition +
+            vec4(
+                shadowWorldNormal *
+                directionalLightShadows[i].shadowNormalBias,
+                0.0
+            );
+
+        vDirectionalShadowCoord[i] =
+            directionalShadowMatrix[i] *
+            shadowWorldPosition;
+    }
+    #pragma unroll_loop_end
+
+#endif
+
+#if NUM_SPOT_LIGHT_SHADOWS > 0
+
+    #pragma unroll_loop_start
+    for ( int i = 0; i < NUM_SPOT_LIGHT_SHADOWS; i ++ ) {
+        shadowWorldPosition =
+            worldPosition +
+            vec4(
+                shadowWorldNormal *
+                spotLightShadows[i].shadowNormalBias,
+                0.0
+            );
+
+        vSpotShadowCoord[i] =
+            spotShadowMatrix[i] *
+            shadowWorldPosition;
+    }
+    #pragma unroll_loop_end
+
+#endif
+
+#if NUM_POINT_LIGHT_SHADOWS > 0
+
+    #pragma unroll_loop_start
+    for ( int i = 0; i < NUM_POINT_LIGHT_SHADOWS; i ++ ) {
+        shadowWorldPosition =
+            worldPosition +
+            vec4(
+                shadowWorldNormal *
+                pointLightShadows[i].shadowNormalBias,
+                0.0
+            );
+
+        vPointShadowCoord[i] =
+            pointShadowMatrix[i] *
+            shadowWorldPosition;
+    }
+    #pragma unroll_loop_end
+
+#endif
+
+#endif
+}
+
+#endif
+`;
+
+    const LIGHTFLOW_PIXELATED_SHADOWS_FRAGMENT = /* glsl */`
+#ifndef LIGHTFLOW_PIXELATED_SHADOWS_FRAGMENT_MODULE
+#define LIGHTFLOW_PIXELATED_SHADOWS_FRAGMENT_MODULE
+
+#include <shadowmap_pars_fragment>
+
+uniform bool uLFPixelatedShadowsEnabled;
+uniform float uLFPixelatedShadowResolution;
+uniform float uLFPixelatedShadowLevels;
+uniform float uLFPixelatedShadowStrength;
+uniform bool uLFPixelatedShadowGlobalResolution;
+
+varying vec2 lfVPixelatedShadowFaceUv;
+varying vec2 lfVPixelatedShadowGrid;
+varying float lfVPixelatedShadowInfluence;
+
+#define LFPS_DETERMINANT_EPSILON 1e-12
+#define LFPS_QUALITY_EPSILON 1e-5
+#define LFPS_PROJECTIVE_W_EPSILON 1e-7
+
+#define LFPS_PROJECTED_COORD_MARGIN 0.05
+#define LFPS_PROJECTED_MAX_XY_JUMP 0.25
+#define LFPS_PROJECTED_MAX_Z_JUMP 0.25
+
+#define LFPS_POINT_MIN_LENGTH 1e-6
+#define LFPS_POINT_MAX_ABSOLUTE_JUMP 0.75
+#define LFPS_POINT_MAX_RELATIVE_JUMP 0.35
+
+vec2 lfpsGetPixelCenterUv(
+    vec2 localUv,
+    vec2 requestedGrid
+) {
+    vec2 grid = max(
+        floor(requestedGrid + vec2(0.5)),
+        vec2(1.0)
+    );
+
+    vec2 cell = floor(localUv * grid);
+
+    cell = clamp(
+        cell,
+        vec2(0.0),
+        grid - vec2(1.0)
+    );
+
+    return (cell + vec2(0.5)) / grid;
+}
+
+void lfpsGetUvBasis(
+    vec2 currentUv,
+    out vec2 dUvDx,
+    out vec2 dUvDy,
+    out float inverseDeterminant,
+    out bool valid
+) {
+    dUvDx = dFdx(currentUv);
+    dUvDy = dFdy(currentUv);
+
+    float determinant =
+        dUvDx.x * dUvDy.y -
+        dUvDx.y * dUvDy.x;
+
+    float uvArea =
+        length(dUvDx) *
+        length(dUvDy);
+
+    float absoluteDeterminant =
+        abs(determinant);
+
+    float quality =
+        absoluteDeterminant /
+        max(uvArea, LFPS_DETERMINANT_EPSILON);
+
+    inverseDeterminant = 0.0;
+    valid = false;
+
+    if (
+        absoluteDeterminant > LFPS_DETERMINANT_EPSILON &&
+        quality > LFPS_QUALITY_EPSILON
+    ) {
+        inverseDeterminant = 1.0 / determinant;
+        valid = true;
+    }
+}
+
+vec4 lfpsGetRawShadowCoordAtDelta(
+    vec4 currentShadowCoord,
+    vec2 deltaUv,
+    vec2 dUvDx,
+    vec2 dUvDy,
+    float inverseDeterminant,
+    bool basisIsValid
+) {
+    /*
+        Estas derivadas deben evaluarse antes de cualquier discard
+        y fuera de ramas divergentes dependientes del fragmento.
+    */
+    vec4 dCoordDx = dFdx(currentShadowCoord);
+    vec4 dCoordDy = dFdy(currentShadowCoord);
+
+    if (!basisIsValid) {
+        return currentShadowCoord;
+    }
+
+    vec4 dCoordDu =
+        (
+            dCoordDx * dUvDy.y -
+            dCoordDy * dUvDx.y
+        ) * inverseDeterminant;
+
+    vec4 dCoordDv =
+        (
+            dCoordDy * dUvDx.x -
+            dCoordDx * dUvDy.x
+        ) * inverseDeterminant;
+
+    return currentShadowCoord +
+        dCoordDu * deltaUv.x +
+        dCoordDv * deltaUv.y;
+}
+
+vec4 lfpsGetProjectedShadowCoord(
+    vec4 currentShadowCoord,
+    vec2 deltaUv,
+    vec2 dUvDx,
+    vec2 dUvDy,
+    float inverseDeterminant,
+    bool basisIsValid
+) {
+    vec4 candidate = lfpsGetRawShadowCoordAtDelta(
+        currentShadowCoord,
+        deltaUv,
+        dUvDx,
+        dUvDy,
+        inverseDeterminant,
+        basisIsValid
+    );
+
+    if (
+        !basisIsValid ||
+        currentShadowCoord.w <= LFPS_PROJECTIVE_W_EPSILON ||
+        candidate.w <= LFPS_PROJECTIVE_W_EPSILON
+    ) {
+        return currentShadowCoord;
+    }
+
+    vec3 currentProjected =
+        currentShadowCoord.xyz /
+        currentShadowCoord.w;
+
+    vec3 candidateProjected =
+        candidate.xyz /
+        candidate.w;
+
+    bool candidateInsideBounds =
+        candidateProjected.x >
+            -LFPS_PROJECTED_COORD_MARGIN &&
+        candidateProjected.x <
+            1.0 + LFPS_PROJECTED_COORD_MARGIN &&
+
+        candidateProjected.y >
+            -LFPS_PROJECTED_COORD_MARGIN &&
+        candidateProjected.y <
+            1.0 + LFPS_PROJECTED_COORD_MARGIN &&
+
+        candidateProjected.z >
+            -LFPS_PROJECTED_COORD_MARGIN &&
+        candidateProjected.z <
+            1.0 + LFPS_PROJECTED_COORD_MARGIN;
+
+    bool candidateIsClose =
+        distance(
+            candidateProjected.xy,
+            currentProjected.xy
+        ) < LFPS_PROJECTED_MAX_XY_JUMP &&
+
+        abs(
+            candidateProjected.z -
+            currentProjected.z
+        ) < LFPS_PROJECTED_MAX_Z_JUMP;
+
+    if (
+        candidateInsideBounds &&
+        candidateIsClose
+    ) {
+        return candidate;
+    }
+
+    return currentShadowCoord;
+}
+
+vec4 lfpsGetPointShadowCoord(
+    vec4 currentShadowCoord,
+    vec2 deltaUv,
+    vec2 dUvDx,
+    vec2 dUvDy,
+    float inverseDeterminant,
+    bool basisIsValid
+) {
+    vec4 candidate = lfpsGetRawShadowCoordAtDelta(
+        currentShadowCoord,
+        deltaUv,
+        dUvDx,
+        dUvDy,
+        inverseDeterminant,
+        basisIsValid
+    );
+
+    if (!basisIsValid) {
+        return currentShadowCoord;
+    }
+
+    float currentLength =
+        length(currentShadowCoord.xyz);
+
+    float candidateLength =
+        length(candidate.xyz);
+
+    float allowedJump = max(
+        LFPS_POINT_MAX_ABSOLUTE_JUMP,
+        currentLength *
+            LFPS_POINT_MAX_RELATIVE_JUMP
+    );
+
+    bool candidateIsReasonable =
+        candidateLength > LFPS_POINT_MIN_LENGTH &&
+        abs(
+            candidateLength -
+            currentLength
+        ) < allowedJump;
+
+    if (candidateIsReasonable) {
+        return candidate;
+    }
+
+    return currentShadowCoord;
+}
+
+/*
+    Devuelve:
+
+    x = producto de sombras direccionales
+    y = producto de sombras spot
+    z = producto de sombras puntuales
+*/
+vec3 lfpsGetRawShadowByType() {
+    vec3 shadowByType = vec3(1.0);
+
+#ifdef USE_SHADOWMAP
+
+    /*
+        Ambos son uniforms, por lo que esta rama es uniforme durante
+        todo el draw call y puede evitar el trabajo costoso cuando
+        el efecto está desactivado.
+    */
+    if (
+        !uLFPixelatedShadowsEnabled ||
+        uLFPixelatedShadowResolution <= 0.0 ||
+        uLFPixelatedShadowStrength <= 0.0
+    ) {
+        return shadowByType;
+    }
+
+    vec2 currentUv =
+        lfVPixelatedShadowFaceUv;
+
+    vec2 targetUv = lfpsGetPixelCenterUv(
+        currentUv,
+        lfVPixelatedShadowGrid
+    );
+
+    vec2 deltaUv =
+        targetUv - currentUv;
+
+    vec2 dUvDx;
+    vec2 dUvDy;
+    float inverseDeterminant;
+    bool basisIsValid;
+
+    lfpsGetUvBasis(
+        currentUv,
+        dUvDx,
+        dUvDy,
+        inverseDeterminant,
+        basisIsValid
+    );
+
+    vec4 shadowCoord;
+
+#if NUM_DIR_LIGHT_SHADOWS > 0
+
+    DirectionalLightShadow directionalShadow;
+
+    #pragma unroll_loop_start
+    for ( int i = 0; i < NUM_DIR_LIGHT_SHADOWS; i ++ ) {
+        directionalShadow =
+            directionalLightShadows[i];
+
+        shadowCoord = lfpsGetProjectedShadowCoord(
+            vDirectionalShadowCoord[i],
+            deltaUv,
+            dUvDx,
+            dUvDy,
+            inverseDeterminant,
+            basisIsValid
+        );
+
+        shadowByType.x *= getShadow(
+            directionalShadowMap[i],
+            directionalShadow.shadowMapSize,
+            directionalShadow.shadowBias,
+            directionalShadow.shadowRadius,
+            shadowCoord
+        );
+    }
+    #pragma unroll_loop_end
+
+#endif
+
+#if NUM_SPOT_LIGHT_SHADOWS > 0
+
+    SpotLightShadow spotShadow;
+
+    #pragma unroll_loop_start
+    for ( int i = 0; i < NUM_SPOT_LIGHT_SHADOWS; i ++ ) {
+        spotShadow =
+            spotLightShadows[i];
+
+        shadowCoord = lfpsGetProjectedShadowCoord(
+            vSpotShadowCoord[i],
+            deltaUv,
+            dUvDx,
+            dUvDy,
+            inverseDeterminant,
+            basisIsValid
+        );
+
+        shadowByType.y *= getShadow(
+            spotShadowMap[i],
+            spotShadow.shadowMapSize,
+            spotShadow.shadowBias,
+            spotShadow.shadowRadius,
+            shadowCoord
+        );
+    }
+    #pragma unroll_loop_end
+
+#endif
+
+#if NUM_POINT_LIGHT_SHADOWS > 0
+
+    PointLightShadow pointShadow;
+
+    #pragma unroll_loop_start
+    for ( int i = 0; i < NUM_POINT_LIGHT_SHADOWS; i ++ ) {
+        pointShadow =
+            pointLightShadows[i];
+
+        shadowCoord = lfpsGetPointShadowCoord(
+            vPointShadowCoord[i],
+            deltaUv,
+            dUvDx,
+            dUvDy,
+            inverseDeterminant,
+            basisIsValid
+        );
+
+        shadowByType.z *= getPointShadow(
+            pointShadowMap[i],
+            pointShadow.shadowMapSize,
+            pointShadow.shadowBias,
+            pointShadow.shadowRadius,
+            shadowCoord,
+            pointShadow.shadowCameraNear,
+            pointShadow.shadowCameraFar
+        );
+    }
+    #pragma unroll_loop_end
+
+#endif
+
+#endif
+
+    return clamp(
+        shadowByType,
+        vec3(0.0),
+        vec3(1.0)
+    );
+}
+
+float lfpsQuantizeShadow(float shadow) {
+    shadow = clamp(shadow, 0.0, 1.0);
+
+    if (uLFPixelatedShadowLevels <= 0.0) {
+        return shadow;
+    }
+
+    float resolutionLimit = max(
+        floor(
+            max(
+                uLFPixelatedShadowResolution,
+                1.0
+            ) + 0.5
+        ),
+        1.0
+    );
+
+    float levelCount = clamp(
+        floor(
+            uLFPixelatedShadowLevels +
+            0.5
+        ),
+        1.0,
+        resolutionLimit
+    );
+
+    return clamp(
+        floor(
+            shadow * levelCount +
+            0.5
+        ) / levelCount,
+        0.0,
+        1.0
+    );
+}
+
+float lfpsFinalizeShadow(float rawShadow) {
+    float influence = clamp(
+        lfVPixelatedShadowInfluence *
+        uLFPixelatedShadowStrength,
+        0.0,
+        1.0
+    );
+
+    float shadow = mix(
+        1.0,
+        clamp(rawShadow, 0.0, 1.0),
+        influence
+    );
+
+    return lfpsQuantizeShadow(shadow);
+}
+
+/*
+    API simple.
+
+    Multiplica todas las sombras de todas las clases.
+    Ideal cuando existe una única luz principal con sombras.
+*/
+float lfGetPixelatedCombinedShadow() {
+    vec3 rawShadow =
+        lfpsGetRawShadowByType();
+
+    return lfpsFinalizeShadow(
+        rawShadow.x *
+        rawShadow.y *
+        rawShadow.z
+    );
+}
+
+/*
+    API recomendada para Lightflow.
+
+    x = directional
+    y = spot
+    z = point
+*/
+vec3 lfGetPixelatedShadowByType() {
+    vec3 rawShadow =
+        lfpsGetRawShadowByType();
+
+    return vec3(
+        lfpsFinalizeShadow(rawShadow.x),
+        lfpsFinalizeShadow(rawShadow.y),
+        lfpsFinalizeShadow(rawShadow.z)
+    );
+}
+
+vec3 lfApplyPixelatedCombinedShadow(
+    vec3 directLight
+) {
+    return directLight *
+        lfGetPixelatedCombinedShadow();
+}
+
+#endif
+`;
+
+    const LIGHTFLOW_SHADOW_SELECTOR_FRAGMENT = /* glsl */`
+#ifndef LIGHTFLOW_SHADOW_SELECTOR_FRAGMENT_MODULE
+#define LIGHTFLOW_SHADOW_SELECTOR_FRAGMENT_MODULE
+
+uniform int uLightCastShadow[16];
+uniform int uLightShadowIndex[16];
+uniform float uShadowStrength;
+uniform float uShadowFloor;
+
+#define LF_SHADOW_LIGHT_POINT 0
+#define LF_SHADOW_LIGHT_DIRECTIONAL 1
+#define LF_SHADOW_LIGHT_SPOT 2
+
+float lfGetRegularDirectionalShadowByIndex(
+    int shadowIndex
+) {
+    float result = 1.0;
+
+#ifdef USE_SHADOWMAP
+#if NUM_DIR_LIGHT_SHADOWS > 0
+
+    DirectionalLightShadow directionalShadow;
+
+    #pragma unroll_loop_start
+    for ( int i = 0; i < NUM_DIR_LIGHT_SHADOWS; i ++ ) {
+        directionalShadow = directionalLightShadows[i];
+
+        if (UNROLLED_LOOP_INDEX == shadowIndex) {
+            result = getShadow(
+                directionalShadowMap[i],
+                directionalShadow.shadowMapSize,
+                directionalShadow.shadowBias,
+                directionalShadow.shadowRadius,
+                vDirectionalShadowCoord[i]
+            );
+        }
+    }
+    #pragma unroll_loop_end
+
+#endif
+#endif
+
+    return result;
+}
+
+float lfGetRegularSpotShadowByIndex(
+    int shadowIndex
+) {
+    float result = 1.0;
+
+#ifdef USE_SHADOWMAP
+#if NUM_SPOT_LIGHT_SHADOWS > 0
+
+    SpotLightShadow spotShadow;
+
+    #pragma unroll_loop_start
+    for ( int i = 0; i < NUM_SPOT_LIGHT_SHADOWS; i ++ ) {
+        spotShadow = spotLightShadows[i];
+
+        if (UNROLLED_LOOP_INDEX == shadowIndex) {
+            result = getShadow(
+                spotShadowMap[i],
+                spotShadow.shadowMapSize,
+                spotShadow.shadowBias,
+                spotShadow.shadowRadius,
+                vSpotShadowCoord[i]
+            );
+        }
+    }
+    #pragma unroll_loop_end
+
+#endif
+#endif
+
+    return result;
+}
+
+float lfGetRegularPointShadowByIndex(
+    int shadowIndex
+) {
+    float result = 1.0;
+
+#ifdef USE_SHADOWMAP
+#if NUM_POINT_LIGHT_SHADOWS > 0
+
+    PointLightShadow pointShadow;
+
+    #pragma unroll_loop_start
+    for ( int i = 0; i < NUM_POINT_LIGHT_SHADOWS; i ++ ) {
+        pointShadow = pointLightShadows[i];
+
+        if (UNROLLED_LOOP_INDEX == shadowIndex) {
+            result = getPointShadow(
+                pointShadowMap[i],
+                pointShadow.shadowMapSize,
+                pointShadow.shadowBias,
+                pointShadow.shadowRadius,
+                vPointShadowCoord[i],
+                pointShadow.shadowCameraNear,
+                pointShadow.shadowCameraFar
+            );
+        }
+    }
+    #pragma unroll_loop_end
+
+#endif
+#endif
+
+    return result;
+}
+
+float lfGetRegularShadowForLight(
+    int lightType,
+    int shadowIndex
+) {
+    if (lightType == LF_SHADOW_LIGHT_DIRECTIONAL) {
+        return lfGetRegularDirectionalShadowByIndex(shadowIndex);
+    }
+
+    if (lightType == LF_SHADOW_LIGHT_SPOT) {
+        return lfGetRegularSpotShadowByIndex(shadowIndex);
+    }
+
+    return lfGetRegularPointShadowByIndex(shadowIndex);
+}
+
+float lfGetPixelatedShadowForLightType(
+    vec3 pixelatedShadowByType,
+    int lightType
+) {
+    if (lightType == LF_SHADOW_LIGHT_DIRECTIONAL) {
+        return pixelatedShadowByType.x;
+    }
+
+    if (lightType == LF_SHADOW_LIGHT_SPOT) {
+        return pixelatedShadowByType.y;
+    }
+
+    return pixelatedShadowByType.z;
+}
+
+float lfApplySharedShadowControls(float shadow) {
+    shadow = clamp(shadow, 0.0, 1.0);
+    shadow = max(
+        shadow,
+        clamp(uShadowFloor, 0.0, 1.0)
+    );
+
+    return mix(
+        1.0,
+        shadow,
+        clamp(uShadowStrength, 0.0, 1.0)
+    );
+}
+
+float lfGetLightShadow(
+    int lightIndex,
+    int lightType,
+    vec3 pixelatedShadowByType
+) {
+    if (
+        !receiveShadow ||
+        uLightCastShadow[lightIndex] == 0
+    ) {
+        return 1.0;
+    }
+
+    int shadowIndex = uLightShadowIndex[lightIndex];
+    if (shadowIndex < 0) {
+        return 1.0;
+    }
+
+    float shadow = uLFPixelatedShadowsEnabled
+        ? lfGetPixelatedShadowForLightType(
+            pixelatedShadowByType,
+            lightType
+        )
+        : lfGetRegularShadowForLight(
+            lightType,
+            shadowIndex
+        );
+
+    return lfApplySharedShadowControls(shadow);
+}
+
+#endif
+`;
+
     const pluginStyle = /*css*/`
     /* Dialog Layout Restructuring for fixed window with internal scrollbars */
     #sa_material_studio_dialog {
@@ -3096,6 +3939,10 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
                     this.uniforms.map.repeat = false;
                 }
             }
+
+            if (this.uniforms.AUTO_TILE) {
+                this.uniforms.map.repeat = true;
+            }
         }
 
         // Serializer for the JSON format
@@ -3295,7 +4142,7 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
                 if (key === 'value' || key === 'hexValue' || key === 'repeat') continue;
                 targetDef[key] = this.cloneUniformValue(baseDef[key]);
             }
-            if (baseDef.repeat !== undefined && targetDef.repeat === undefined) {
+            if (baseDef.repeat !== undefined) {
                 targetDef.repeat = baseDef.repeat;
             }
             return targetDef;
@@ -4455,6 +5302,11 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
                     );
                 }
             }
+
+            if (uniforms.AUTO_TILE && uniforms.map) {
+                uniforms.map.repeat = true;
+            }
+
             return uniforms;
         },
 
@@ -4673,16 +5525,18 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
                 name: tl('shader_architect.preset.classic'),
                 icon: 'grid_view',
                 isCustom: false,
-                vertex: `
-                    //Classic
-                    attribute float highlight;
+                 vertex: `
+                     //Classic
+                     attribute float highlight;
+                    attribute vec2 globalFaceSize;
 
-                    uniform bool SHADE;
-                    uniform int LIGHTSIDE;
+                     uniform bool SHADE;
+                     uniform int LIGHTSIDE;
 
-                    varying vec2 vUv;
-                    varying float light;
-                    varying float lift;
+                     varying vec2 vUv;
+                    varying vec2 vFaceSize;
+                     varying float light;
+                     varying float lift;
 
                     void main() {
                         if (SHADE) {
@@ -4701,24 +5555,30 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
                             light = 1.0;
                         }
 
-                        lift = (highlight == 2.0) ? 0.22 : (highlight == 1.0) ? 0.1 : 0.0;
-                        vUv = uv;
+                         lift = (highlight == 2.0) ? 0.22 : (highlight == 1.0) ? 0.1 : 0.0;
+                         vUv = uv;
+                        vFaceSize = globalFaceSize;
 
-                        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-                    }
-                `,
-                fragment: `
-                    uniform sampler2D map;
-                    uniform bool EMISSIVE;
-                    uniform vec3 LIGHTCOLOR;
+                         gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                     }
+                 `,
+                 fragment: `
+                    ${LIGHTFLOW_TEXTURE_TILING}
 
-                    varying vec2 vUv;
-                    varying float light;
-                    varying float lift;
+                     uniform sampler2D map;
+                     uniform bool EMISSIVE;
+                     uniform vec3 LIGHTCOLOR;
 
-                    void main() {
-                        vec4 color = texture2D(map, vUv);
-                        if(color.a < 0.01) discard;
+                     varying vec2 vUv;
+                    varying vec2 vFaceSize;
+                     varying float light;
+                     varying float lift;
+
+                     void main() {
+                        vec2 materialUv =
+                            vUv * lfResolveTextureTiling(vFaceSize);
+                        vec4 color = texture2D(map, materialUv);
+                         if(color.a < 0.01) discard;
 
                         if (!EMISSIVE) {
                             gl_FragColor = vec4(lift + color.rgb * light, color.a);
@@ -4732,14 +5592,119 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
                             gl_FragColor.rg *= vec2(0.6, 0.7);
                         }
                     }
-                `,
-                uniforms: {
+                 `,
+                 uniforms: {
+                    "map": { type: "sampler2D", value: null, repeat: true, expose: true },
                     "LIGHTCOLOR": { type: "vec3", value: new THREE.Vector3(1, 1, 1), hexValue: "#ffffff", expose: true, is_color: true },
-                    "SHADE": { type: "bool", value: true, expose: true },
-                    "LIGHTSIDE": { type: "int", value: 0, expose: true, min: 0, max: 5, step: 1, allow_higher: false, allow_lower: false },
-                    "EMISSIVE": { type: "bool", value: false, expose: true }
-                }
-            });
+                     "SHADE": { type: "bool", value: true, expose: true },
+                     "LIGHTSIDE": { type: "int", value: 0, expose: true, min: 0, max: 5, step: 1, allow_higher: false, allow_lower: false },
+                    "EMISSIVE": { type: "bool", value: false, expose: true },
+                    "AUTO_TILE": { type: "bool", value: false, expose: true },
+                    "TILING": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true, min: 0.1, max: 10.0, step: 0.1 },
+                    "TEXTURE_SIZE": { type: "vec2", value: new THREE.Vector2(16, 16), expose: false }
+                 }
+             });
+
+            const createLightflowPixelatedShadowUniforms = (options = {}) => {
+                const config = {
+                    enabled: options.enabled ?? false,
+                    resolution: options.resolution ?? 1.0,
+                    levels: options.levels ?? 0,
+                    globalResolution: options.globalResolution ?? false,
+                    strength: options.strength ?? 1.0
+                };
+
+                return {
+                    /*
+                        Master toggle.
+
+                        Mantiene el shader compilado y permite activar o
+                        desactivar el efecto sin reconstruir el material.
+                    */
+                    "uLFPixelatedShadowsEnabled": {
+                        type: "bool",
+                        value: config.enabled,
+                        expose: true,
+                        advanced: false
+                    },
+
+                    /*
+                        Multiplicador de resolución de la cuadrícula.
+
+                        1.0 = un píxel de sombra por píxel lógico.
+                        < 1.0 = bloques de sombra más grandes.
+                        > 1.0 = sombras pixeladas más detalladas.
+                    */
+                    "uLFPixelatedShadowResolution": {
+                        type: "float",
+                        value: config.resolution,
+                        expose: true,
+                        advanced: false,
+                        min: 0.125,
+                        max: 8.0,
+                        step: 0.125,
+                        allow_higher: true,
+                        allow_lower: false
+                    },
+
+                    /*
+                        Cantidad de escalones de intensidad.
+
+                        0 = intensidad continua.
+                        1 = transición binaria aproximada.
+                        2–8 = varios niveles de sombra.
+                    */
+                    "uLFPixelatedShadowLevels": {
+                        type: "float",
+                        value: config.levels,
+                        expose: true,
+                        advanced: false,
+                        min: 0,
+                        max: 8,
+                        step: 1,
+                        allow_higher: true,
+                        allow_lower: false
+                    },
+
+                    /*
+                        Define cómo se calcula la cuadrícula:
+
+                        false:
+                            uvSize * faceSize
+
+                        true:
+                            globalFaceSize
+
+                        El modo global evita que la densidad cambie debido
+                        al tamaño de la región UV dentro de la textura.
+                    */
+                    "uLFPixelatedShadowGlobalResolution": {
+                        type: "bool",
+                        value: config.globalResolution,
+                        expose: true,
+                        advanced: true
+                    },
+
+                    /*
+                        Mezcla entre sombra normal y sombra pixelada.
+
+                        0.0 = sin influencia.
+                        1.0 = efecto completo.
+                    */
+                    "uLFPixelatedShadowStrength": {
+                        type: "float",
+                        value: config.strength,
+                        expose: true,
+                        advanced: false,
+                        min: 0.0,
+                        max: 1.0,
+                        step: 0.05,
+                        allow_higher: false,
+                        allow_lower: false
+                    }
+                };
+            };
+
 
             // =========================================================================
             // PBR METALLIC/ROUGHNESS SHADER - corrected v2 for Shader Architect / Blockbench
@@ -4750,11 +5715,16 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
                 name: tl('shader_architect.preset.pbr_metallic_roughness'),
                 icon: 'hexagon',
                 isCustom: false,
-                vertex: `#include <common>
-#include <shadowmap_pars_vertex>
+                 vertex: `#include <common>
+
+${LIGHTFLOW_PIXELATED_SHADOWS_VERTEX}
+${LIGHTFLOW_TEXTURE_TILING}
 
 attribute float highlight;
+attribute float affected_by_shadow;
 attribute vec2 normalizedFaceUv;
+attribute vec2 globalFaceSize;
+attribute vec2 uvSize;
 
 uniform bool SHADE;
 uniform int LIGHTSIDE;
@@ -4762,7 +5732,7 @@ uniform mat3 uWorldNormalMatrix;
 uniform float uStylizedNormalInfluence;
 
 varying vec2 vUv;
-varying vec2 v_uvSize;
+varying vec2 vFaceSize;
 varying float lift;
 varying vec3 vWorldPos;
 varying vec3 vWorldNormal;
@@ -4806,12 +5776,6 @@ vec3 applyLightSide(vec3 n) {
 void main() {
     vec4 worldPosition = modelMatrix * vec4(position, 1.0);
 
-    /*
-        Three.js r129 requires this exact variable for #include <shadowmap_vertex>.
-        Keep it even though custom lighting uses uWorldNormalMatrix.
-    */
-    vec3 transformedNormal = normalize(normalMatrix * normal);
-
     vWorldPos = worldPosition.xyz;
 
     vec3 physicalNormal = safeNormalizeVertex(uWorldNormalMatrix * normal, vec3(0.0, 1.0, 0.0));
@@ -4828,7 +5792,7 @@ void main() {
     }
 
     vUv = uv;
-    v_uvSize = normalizedFaceUv;
+    vFaceSize = globalFaceSize;
     vViewDir = safeNormalizeVertex(cameraPosition - vWorldPos, vec3(0.0, 0.0, 1.0));
     vec4 saSSRViewPosition4 = modelViewMatrix * vec4(position, 1.0);
     vSA_SSRViewPosition = saSSRViewPosition4.xyz;
@@ -4839,15 +5803,26 @@ void main() {
            highlight == 1.0 ? 0.10 :
            0.0;
 
-    gl_Position = vSA_SSRClipPosition;
+    lfPixelatedShadowVertexSetup(
+        worldPosition,
+        physicalNormal,
+        normalizedFaceUv,
+        globalFaceSize,
+        uvSize * abs(
+            lfResolveTextureTiling(globalFaceSize)
+        ),
+        affected_by_shadow
+    );
 
-    #include <shadowmap_vertex>
+    gl_Position = vSA_SSRClipPosition;
 }`,
                 fragment: `#include <common>
 #include <packing>
 ${LIGHTFLOW_PUNCTUAL_LIGHT_COMPAT}
 #include <lights_pars_begin>
-#include <shadowmap_pars_fragment>
+${LIGHTFLOW_PIXELATED_SHADOWS_FRAGMENT}
+${LIGHTFLOW_SHADOW_SELECTOR_FRAGMENT}
+${LIGHTFLOW_TEXTURE_TILING}
 ${SCREEN_SPACE_REFLECTIONS_PARS_FRAGMENT}
 
 uniform sampler2D map;
@@ -4954,9 +5929,6 @@ uniform int uLightType[16];
 uniform vec3 uLightColor[16];
 uniform int max_light_number;
 
-uniform int uLightCastShadow[16];
-uniform int uLightShadowIndex[16];
-
 uniform float uAmbient;
 uniform vec3 uAmbientColor;
 uniform int uSAEnvironmentEnabled;
@@ -4974,14 +5946,8 @@ uniform float uAOPower;
 uniform float uAOMin;
 uniform float uAODirectInfluence;
 
-uniform float uShadowStrength;
-uniform float uShadowFloor;
-uniform bool uPixelatedShadows;
-uniform float uPixelShadowSteps;
-uniform float uPixelShadowScale;
-
 varying vec2 vUv;
-varying vec2 v_uvSize;
+varying vec2 vFaceSize;
 varying float lift;
 varying vec3 vWorldPos;
 varying vec3 vWorldNormal;
@@ -5158,131 +6124,6 @@ vec3 getLightRadiance(int lightIndex, float attenuation) {
 }
 
 // -------------------------------------------------------------------------
-// Shadow functions: intentionally kept compatible with shaded_lightflow.
-// -------------------------------------------------------------------------
-float getDirectionalShadowByIndex(int shadowIndex) {
-    float result = 1.0;
-
-    #ifdef USE_SHADOWMAP
-
-    #if NUM_DIR_LIGHT_SHADOWS > 0
-
-        DirectionalLightShadow directionalLight;
-
-        #pragma unroll_loop_start
-        for ( int i = 0; i < NUM_DIR_LIGHT_SHADOWS; i ++ ) {
-            directionalLight = directionalLightShadows[ i ];
-
-            if (UNROLLED_LOOP_INDEX == shadowIndex) {
-                result = receiveShadow ? getShadow(
-                    directionalShadowMap[ i ],
-                    directionalLight.shadowMapSize,
-                    directionalLight.shadowBias,
-                    directionalLight.shadowRadius,
-                    vDirectionalShadowCoord[ i ]
-                ) : 1.0;
-            }
-        }
-        #pragma unroll_loop_end
-
-    #endif
-
-    #endif
-
-    return result;
-}
-
-float getSpotShadowByIndex(int shadowIndex) {
-    float result = 1.0;
-
-    #ifdef USE_SHADOWMAP
-
-    #if NUM_SPOT_LIGHT_SHADOWS > 0
-
-        SpotLightShadow spotLight;
-
-        #pragma unroll_loop_start
-        for ( int i = 0; i < NUM_SPOT_LIGHT_SHADOWS; i ++ ) {
-            spotLight = spotLightShadows[ i ];
-
-            if (UNROLLED_LOOP_INDEX == shadowIndex) {
-                result = receiveShadow ? getShadow(
-                    spotShadowMap[ i ],
-                    spotLight.shadowMapSize,
-                    spotLight.shadowBias,
-                    spotLight.shadowRadius,
-                    vSpotShadowCoord[ i ]
-                ) : 1.0;
-            }
-        }
-        #pragma unroll_loop_end
-
-    #endif
-
-    #endif
-
-    return result;
-}
-
-float getPointShadowByIndex(int shadowIndex) {
-    float result = 1.0;
-
-    #ifdef USE_SHADOWMAP
-
-    #if NUM_POINT_LIGHT_SHADOWS > 0
-
-        PointLightShadow pointLight;
-
-        #pragma unroll_loop_start
-        for ( int i = 0; i < NUM_POINT_LIGHT_SHADOWS; i ++ ) {
-            pointLight = pointLightShadows[ i ];
-
-            if (UNROLLED_LOOP_INDEX == shadowIndex) {
-                result = receiveShadow ? getPointShadow(
-                    pointShadowMap[ i ],
-                    pointLight.shadowMapSize,
-                    pointLight.shadowBias,
-                    pointLight.shadowRadius,
-                    vPointShadowCoord[ i ],
-                    pointLight.shadowCameraNear,
-                    pointLight.shadowCameraFar
-                ) : 1.0;
-            }
-        }
-        #pragma unroll_loop_end
-
-    #endif
-
-    #endif
-
-    return result;
-}
-
-float getCustomLightShadow(int lightIndex) {
-    if (uLightCastShadow[lightIndex] == 0) return 1.0;
-
-    int shadowIndex = uLightShadowIndex[lightIndex];
-    if (shadowIndex < 0) return 1.0;
-
-    int type = uLightType[lightIndex];
-
-    float shadow = 1.0;
-
-    if (type == SA_LIGHT_DIRECTIONAL) {
-        shadow = getDirectionalShadowByIndex(shadowIndex);
-    } else if (type == SA_LIGHT_SPOT) {
-        shadow = getSpotShadowByIndex(shadowIndex);
-    } else {
-        shadow = getPointShadowByIndex(shadowIndex);
-    }
-
-    shadow = clamp(shadow, 0.0, 1.0);
-    shadow = max(shadow, clamp(uShadowFloor, 0.0, 1.0));
-
-    return mix(1.0, shadow, clamp(uShadowStrength, 0.0, 1.0));
-}
-
-// -------------------------------------------------------------------------
 // Ambient occlusion: same stylized face-cavity idea as shaded_lightflow.
 // -------------------------------------------------------------------------
 float computeFaceCavityAO(vec2 faceUv) {
@@ -5348,11 +6189,16 @@ vec3 evaluateIridescence(float NdotV, float thickness) {
     return wave;
 }
 
-void buildSurfaceTangentFrame(vec3 normal, out vec3 tangent, out vec3 bitangent) {
+void buildSurfaceTangentFrame(
+    vec3 normal,
+    vec2 materialUv,
+    out vec3 tangent,
+    out vec3 bitangent
+) {
     vec3 positionDx = dFdx(vWorldPos);
     vec3 positionDy = dFdy(vWorldPos);
-    vec2 uvDx = dFdx(vUv);
-    vec2 uvDy = dFdy(vUv);
+    vec2 uvDx = dFdx(materialUv);
+    vec2 uvDy = dFdy(materialUv);
     float determinant = uvDx.x * uvDy.y - uvDx.y * uvDy.x;
 
     vec3 fallbackTangent = safeNormalize(
@@ -5374,15 +6220,23 @@ void buildSurfaceTangentFrame(vec3 normal, out vec3 tangent, out vec3 bitangent)
     }
 }
 
-vec3 applyCheapNormalMap(vec3 normal) {
+vec3 applyCheapNormalMap(vec3 normal, vec2 materialUv) {
     if (!uUseNormalMap) return normal;
 
-    vec3 nTex = texture2D(uNormalMap, vUv * uNormalMapScale).xyz * 2.0 - 1.0;
+    vec3 nTex = texture2D(
+        uNormalMap,
+        materialUv * uNormalMapScale
+    ).xyz * 2.0 - 1.0;
     nTex.y *= uNormalYSign;
 
     vec3 tangent;
     vec3 bitangent;
-    buildSurfaceTangentFrame(normal, tangent, bitangent);
+    buildSurfaceTangentFrame(
+        normal,
+        materialUv,
+        tangent,
+        bitangent
+    );
     float normalStrength = clamp(uNormalScale, 0.0, 2.0);
     vec3 tangentNormal = safeNormalize(
         vec3(nTex.xy * normalStrength, max(nTex.z, 0.001)),
@@ -5396,10 +6250,13 @@ vec3 applyCheapNormalMap(vec3 normal) {
     return bumped;
 }
 
-vec3 applyHeightMap(vec3 normal) {
+vec3 applyHeightMap(vec3 normal, vec2 materialUv) {
     if (!uUseHeightMap) return normal;
 
-    float height = texture2D(uHeightMap, vUv * uHeightMapScale).r;
+    float height = texture2D(
+        uHeightMap,
+        materialUv * uHeightMapScale
+    ).r;
     float heightDx = dFdx(height);
     float heightDy = dFdy(height);
 
@@ -5416,8 +6273,18 @@ vec3 applyHeightMap(vec3 normal) {
     );
 }
 
-void buildAnisotropyFrame(vec3 normal, out vec3 tangent, out vec3 bitangent) {
-    buildSurfaceTangentFrame(normal, tangent, bitangent);
+void buildAnisotropyFrame(
+    vec3 normal,
+    vec2 materialUv,
+    out vec3 tangent,
+    out vec3 bitangent
+) {
+    buildSurfaceTangentFrame(
+        normal,
+        materialUv,
+        tangent,
+        bitangent
+    );
 
     vec2 direction = uAnisotropyDirection;
     float directionLength = length(direction);
@@ -5432,8 +6299,13 @@ void buildAnisotropyFrame(vec3 normal, out vec3 tangent, out vec3 bitangent) {
 }
 
 void main() {
-    vec4 texel = texture2D(map, vUv);
+    vec2 materialUv =
+        vUv * lfResolveTextureTiling(vFaceSize);
+    vec4 texel = texture2D(map, materialUv);
     texel.a *= clamp(uBaseAlpha, 0.0, 1.0);
+
+    vec3 pixelatedShadowByType =
+        lfGetPixelatedShadowByType();
 
     if (texel.a < 0.01) discard;
 
@@ -5457,11 +6329,17 @@ void main() {
     vec3 emissive = uEmissiveColor * max(uEmissiveStrength, 0.0);
 
     if (uUseBaseColorMap) {
-        baseColor *= texture2D(uBaseColorMap, vUv * uBaseColorMapScale).rgb;
+        baseColor *= texture2D(
+            uBaseColorMap,
+            materialUv * uBaseColorMapScale
+        ).rgb;
     }
 
     if (uUseMetallicRoughnessMap) {
-        vec4 mr = texture2D(uMetallicRoughnessMap, vUv * uMetallicRoughnessMapScale);
+        vec4 mr = texture2D(
+            uMetallicRoughnessMap,
+            materialUv * uMetallicRoughnessMapScale
+        );
         metallic *= mr.r;
         roughness *= uUseBlockbenchMERMap ? mr.b : mr.g;
         if (uUseBlockbenchMERMap) {
@@ -5474,11 +6352,17 @@ void main() {
     }
 
     if (uUseAOMap) {
-        aoMapValue *= texture2D(uAOMap, vUv * uAOMapScale).r;
+        aoMapValue *= texture2D(
+            uAOMap,
+            materialUv * uAOMapScale
+        ).r;
     }
 
     if (uUseEmissiveMap) {
-        emissive += texture2D(uEmissiveMap, vUv * uEmissiveMapScale).rgb * max(uEmissiveStrength, 0.0);
+        emissive += texture2D(
+            uEmissiveMap,
+            materialUv * uEmissiveMapScale
+        ).rgb * max(uEmissiveStrength, 0.0);
     }
 
     metallic = clamp(metallic, 0.0, 1.0);
@@ -5515,8 +6399,8 @@ void main() {
     );
 
     vec3 N = safeNormalize(vWorldNormal, vec3(0.0, 1.0, 0.0));
-    N = applyCheapNormalMap(N);
-    N = applyHeightMap(N);
+    N = applyCheapNormalMap(N, materialUv);
+    N = applyHeightMap(N, materialUv);
 
     vec3 V = safeNormalize(vViewDir, vec3(0.0, 0.0, 1.0));
     float NdotV = max(dot(N, V), 0.001);
@@ -5544,7 +6428,12 @@ void main() {
     vec3 anisotropyTangent = vec3(1.0, 0.0, 0.0);
     vec3 anisotropyBitangent = vec3(0.0, 0.0, 1.0);
     if (uAnisotropyEnabled && anisotropyAmount > 0.0001) {
-        buildAnisotropyFrame(N, anisotropyTangent, anisotropyBitangent);
+        buildAnisotropyFrame(
+            N,
+            materialUv,
+            anisotropyTangent,
+            anisotropyBitangent
+        );
     }
 
     for (int i = 0; i < 16; i++) {
@@ -5552,15 +6441,12 @@ void main() {
 
         vec3 L = getLightDirection(i, vWorldPos);
         float attenuation = getLightAttenuation(i, vWorldPos, L);
-        float shadow = getCustomLightShadow(i);
-        if (uPixelatedShadows) {
-            float levels = max(2.0, uPixelShadowSteps);
-            vec2 pixelCell = floor(gl_FragCoord.xy / max(uPixelShadowScale, 1.0));
-            float dither = fract(dot(pixelCell, vec2(0.75487766, 0.56984029))) - 0.5;
-            shadow = floor(clamp(shadow + dither / levels, 0.0, 1.0) * levels + 0.5) / levels;
-        }
-        vec3 incidentRadiance = getLightRadiance(i, attenuation);
-        vec3 radiance = incidentRadiance * shadow;
+        float shadow = lfGetLightShadow(
+            i,
+            uLightType[i],
+            pixelatedShadowByType
+        );
+        vec3 radiance = getLightRadiance(i, attenuation) * shadow;
 
         float NdotLRaw = dot(N, L);
         float NdotL = max(NdotLRaw, 0.0);
@@ -5627,29 +6513,34 @@ void main() {
             scatterProfile += backScatter * (0.35 + 0.65 * viewScatter) * throughProfile;
             scatterProfile = min(scatterProfile, 2.0);
 
-            // SSS can pass through the casting surface, but artists can restore full
-            // shadowing with SSS Shadow Mix when a denser material is required.
-            float sssShadow = mix(1.0, shadow, clamp(uSSSShadowMix, 0.0, 1.0));
-            directSubsurface += incidentRadiance
+            // SSS may cross the receiving surface, but it must not bypass another
+            // object's cast shadow. The control only deepens partial penumbras.
+            float sssPenumbra = mix(
+                1.0,
+                shadow,
+                clamp(uSSSShadowMix, 0.0, 1.0)
+            );
+            directSubsurface += radiance
                 * baseColor
                 * max(uSSSColor, vec3(0.0))
                 * scatterProfile
-                * sssShadow
+                * sssPenumbra
                 * sssWeight;
         }
 
         if (uTransmissionEnabled && transmission > 0.0001) {
             float transmissionBacklight = max(-NdotLRaw, 0.0);
-            float transmissionShadow = mix(1.0, shadow, uThinWalled ? 0.15 : 0.45);
-            directTransmission += incidentRadiance
+            // Thin surfaces transmit light through themselves, not through unrelated
+            // occluders between the light and this fragment.
+            directTransmission += radiance
                 * baseColor
-                * transmissionBacklight
-                * transmissionShadow;
+                * transmissionBacklight;
         }
     }
 
-    // Contact AO is applied once as the depth-aware Lightflow SSAO pass.
-    float ambientOcclusion = 1.0;
+    // Material/baked AO belongs in the BRDF. Contact AO is still applied once by
+    // the separate depth-aware Lightflow pass.
+    float ambientOcclusion = aoMapValue;
     float directAO = mix(1.0, ambientOcclusion, clamp(uAODirectInfluence, 0.0, 1.0));
     float specAO = mix(1.0, ambientOcclusion, clamp(uAODirectInfluence * 0.35, 0.0, 1.0));
 
@@ -5664,12 +6555,32 @@ void main() {
     vec3 ambientSpecular = ambientLight * F_ambient * max(uEnvSpecularStrength, 0.0) * (0.25 + 0.75 * (1.0 - roughness));
     ambientSpecular *= mix(vec3(1.0), baseColor, metallic) * ambientOcclusion;
 
+    vec3 specularLighting = ambientSpecular;
+    specularLighting += directSpecular * specAO;
+    specularLighting += directClearcoat * specAO;
+
+    // Iridescence is a thin-film tint of reflected light, not an emissive glow.
+    // Keeping it on the already lit specular carrier makes direct iridescence obey
+    // cast shadows while preserving legitimate environment reflections.
+    if (uIridescenceEnabled && iridescence > 0.0001) {
+        vec3 iridescenceTint = clamp(
+            evaluateIridescence(NdotV, iridescenceThickness) * 2.0,
+            vec3(0.0),
+            vec3(2.0)
+        );
+        float iridescenceWeight = iridescence * (
+            0.35 + 0.65 * (1.0 - roughness)
+        );
+        specularLighting *= mix(
+            vec3(1.0),
+            iridescenceTint,
+            clamp(iridescenceWeight, 0.0, 1.0)
+        );
+    }
+
     vec3 color = vec3(0.0);
     color += ambientDiffuse;
-    color += ambientSpecular;
     color += directDiffuse * directAO;
-    color += directSpecular * specAO;
-    color += directClearcoat * specAO;
     color += directSheen * directAO;
 
     float sssDiffusion = 1.0 - exp(-sssRadius * max(sssThickness, 0.05));
@@ -5678,17 +6589,20 @@ void main() {
         * max(uSSSColor, vec3(0.0))
         * max(uSSSAmbient, 0.0)
         * sssWeight
-        * (0.2 + 0.8 * sssDiffusion);
+        * (0.2 + 0.8 * sssDiffusion)
+        * ambientOcclusion;
     color += (directSubsurface + ambientSubsurface) * mix(1.0, directAO, 0.35);
 
     float transmissionFactor = transmission * (1.0 - metallic);
-    vec3 transmitted = (ambientLight * baseColor + directTransmission) * transmissionAbsorption;
-    color = mix(color, transmitted + directSpecular * specAO, transmissionFactor);
+    vec3 transmitted = (
+        ambientLight * baseColor * ambientOcclusion +
+        directTransmission
+    ) * transmissionAbsorption;
+    color = mix(color, transmitted, transmissionFactor);
 
-    if (uIridescenceEnabled && iridescence > 0.0001) {
-        vec3 irid = evaluateIridescence(NdotV, iridescenceThickness);
-        color += irid * iridescence * (0.08 + 0.35 * (1.0 - roughness));
-    }
+    // Surface reflection stays above the transmissive body layer. This also keeps
+    // the iridescence tint attached to real reflected light at every transmission.
+    color += specularLighting;
 
     color += emissive;
 
@@ -5717,6 +6631,8 @@ void main() {
     );
 }`,
                 uniforms: Object.assign({
+                    "map": { type: "sampler2D", value: null, repeat: true, expose: true },
+
                     // Base PBR Properties
                     "uBaseColor": { type: "vec3", value: new THREE.Vector3(1, 1, 1), hexValue: "#ffffff", expose: true, is_color: true },
                     "uBaseAlpha": { type: "float", value: 1.0, expose: false },
@@ -5851,16 +6767,17 @@ void main() {
                     // Shadows
                     "uShadowStrength": { type: "float", value: 1.0, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
                     "uShadowFloor": { type: "float", value: 0.0, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: false, allow_lower: false },
-                    "uPixelatedShadows": { type: "bool", value: false, expose: true },
-                    "uPixelShadowSteps": { type: "float", value: 4.0, expose: true, min: 2.0, max: 16.0, step: 1.0, allow_higher: false, allow_lower: false },
-                    "uPixelShadowScale": { type: "float", value: 2.0, expose: true, min: 1.0, max: 16.0, step: 1.0, allow_higher: false, allow_lower: false },
 
                     // Blockbench-style controls
                     "SHADE": { type: "bool", value: true, expose: true },
                     "LIGHTSIDE": { type: "int", value: 0, expose: true, min: 0, max: 5, step: 1, allow_higher: false, allow_lower: false },
                     "LIGHTCOLOR": { type: "vec3", value: new THREE.Vector3(1, 1, 1), hexValue: "#ffffff", expose: true, is_color: true },
+                    "AUTO_TILE": { type: "bool", value: false, expose: true },
+                    "TILING": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true, min: 0.1, max: 10.0, step: 0.1 },
                     "TEXTURE_SIZE": { type: "vec2", value: new THREE.Vector2(16, 16), expose: false }
-                }, createScreenSpaceReflectionUniforms({
+                }, createLightflowPixelatedShadowUniforms({
+                    enabled: false
+                }), createScreenSpaceReflectionUniforms({
                     intensity: 0.82,
                     roughness: 0.16,
                     quality: 0.72,
@@ -5890,9 +6807,8 @@ void main() {
             setVibrantDefault('uSSRRoughness', 0.22);
             setVibrantDefault('uSSRQuality', 0.72);
             setVibrantDefault('uSSRRenderScale', 0.85);
-            setVibrantDefault('uPixelatedShadows', true);
-            setVibrantDefault('uPixelShadowSteps', 4.0);
-            setVibrantDefault('uPixelShadowScale', 2.0);
+            setVibrantDefault('uLFPixelatedShadowsEnabled', true);
+            setVibrantDefault('uLFPixelatedShadowLevels', 4.0);
 
             const vibrant_visuals_pbr = new FancyShaderMaterial({
                 id: 'vibrant_visuals_pbr',
@@ -5926,14 +6842,25 @@ void main() {
                 if (typeof options === 'boolean') {
                     return {
                         shadows: options,
-                        screenSpaceReflections: false
+                        screenSpaceReflections: false,
+                        pixelatedShadows: null
                     };
                 }
 
                 const config = options || {};
+                const pixelatedShadows = config.pixelatedShadows === true
+                    ? {}
+                    : (
+                        config.pixelatedShadows &&
+                        typeof config.pixelatedShadows === 'object'
+                            ? config.pixelatedShadows
+                            : null
+                    );
+
                 return {
                     shadows: !!(config.shadows || config.withShadowBinding),
-                    screenSpaceReflections: config.screenSpaceReflections === true || config.ssr === true
+                    screenSpaceReflections: config.screenSpaceReflections === true || config.ssr === true,
+                    pixelatedShadows
                 };
             };
 
@@ -6263,6 +7190,15 @@ void main() {
                         allow_higher: false,
                         allow_lower: false
                     };
+
+                    if (config.pixelatedShadows) {
+                        Object.assign(
+                            uniforms,
+                            createLightflowPixelatedShadowUniforms(
+                                config.pixelatedShadows
+                            )
+                        );
+                    }
                 }
 
                 if (config.screenSpaceReflections) {
@@ -6277,7 +7213,13 @@ void main() {
                 name: tl('shader_architect.preset.lightflow'),
                 icon: 'wb_sunny',
                 isCustom: false,
-                vertex: `attribute float highlight;
+                vertex: `#include <common>
+
+${LIGHTFLOW_PIXELATED_SHADOWS_VERTEX}
+${LIGHTFLOW_TEXTURE_TILING}
+
+attribute float highlight;
+attribute float affected_by_shadow;
 uniform bool SHADE;
 uniform int LIGHTSIDE;
 uniform mat3 uWorldNormalMatrix;
@@ -6351,14 +7293,31 @@ void main() {
            highlight == 1.0 ? 0.10 :
            0.0;
 
+    lfPixelatedShadowVertexSetup(
+        worldPosition,
+        physicalNormal,
+        normalizedFaceUv,
+        globalFaceSize,
+        uvSize * abs(
+            lfResolveTextureTiling(globalFaceSize)
+        ),
+        affected_by_shadow
+    );
+
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 }`,
-                fragment: `uniform sampler2D map;
+                fragment: `#include <common>
+#include <packing>
+${LIGHTFLOW_PUNCTUAL_LIGHT_COMPAT}
+#include <lights_pars_begin>
+${LIGHTFLOW_PIXELATED_SHADOWS_FRAGMENT}
+${LIGHTFLOW_SHADOW_SELECTOR_FRAGMENT}
+${LIGHTFLOW_TEXTURE_TILING}
+
+uniform sampler2D map;
 uniform vec3 LIGHTCOLOR;
 uniform bool EMISSIVE;
-uniform vec2 TILING;
-uniform bool AUTO_TILE;
-uniform vec2 TEXTURE_SIZE;
+uniform bool SHADOWS;
 
 uniform vec3 uLightPos[16];
 uniform vec3 uLightDir[16];
@@ -6610,12 +7569,13 @@ vec3 applyToneMapping(vec3 color) {
 }
 
 void main() {
-    vec2 tiling_value = TILING;
-    if (AUTO_TILE) {
-        tiling_value = v_faceSize / TEXTURE_SIZE;
-    }
+    vec2 tiling_value =
+        lfResolveTextureTiling(v_faceSize);
     vec4 texel = texture2D(map, vUv * tiling_value);
     texel = saApplyNativePBRBaseColor(texel);
+
+    vec3 pixelatedShadowByType =
+        lfGetPixelatedShadowByType();
 
     if (texel.a < 0.01) discard;
 
@@ -6632,7 +7592,19 @@ void main() {
         if (i >= max_light_number) break;
         if (uLightIntensity[i] <= 0.0) continue;
 
-        directLight += computeLightContribution(i, normal, vWorldPos);
+        vec3 lightContribution =
+            computeLightContribution(i, normal, vWorldPos);
+        float shadow = 1.0;
+
+        if (SHADOWS) {
+            shadow = lfGetLightShadow(
+                i,
+                uLightType[i],
+                pixelatedShadowByType
+            );
+        }
+
+        directLight += lightContribution * shadow;
     }
 
     float ambientOcclusion = 1.0;
@@ -6689,7 +7661,13 @@ void main() {
 
     gl_FragColor = vec4(finalColor, EMISSIVE ? 1.0 : texel.a);
 }`,
-                uniforms: createLightflowUniforms()
+                uniforms: createLightflowUniforms({
+                    shadows: true,
+                    pixelatedShadows: {
+                        enabled: false
+                    }
+                }),
+                enableShadows: true
             });
 
             let shaded_lightflow = new FancyShaderMaterial({
@@ -6698,9 +7676,12 @@ void main() {
                 icon: 'flare',
                 isCustom: false,
                 vertex: `#include <common>
-#include <shadowmap_pars_vertex>
+
+${LIGHTFLOW_PIXELATED_SHADOWS_VERTEX}
+${LIGHTFLOW_TEXTURE_TILING}
 
 attribute float highlight;
+attribute float affected_by_shadow;
 
 uniform bool SHADE;
 uniform int LIGHTSIDE;
@@ -6754,13 +7735,6 @@ vec3 applyLightSide(vec3 n) {
 void main() {
     vec4 worldPosition = modelMatrix * vec4(position, 1.0);
 
-    /*
-        IMPORTANTE:
-        Three.js r129 requires this exact variable for #include <shadowmap_vertex>.
-        Keep it even though custom lighting uses uWorldNormalMatrix.
-    */
-    vec3 transformedNormal = normalize(normalMatrix * normal);
-
     vWorldPos = worldPosition.xyz;
 
     vec3 physicalNormal = normalize(uWorldNormalMatrix * normal);
@@ -6789,24 +7763,32 @@ void main() {
            highlight == 1.0 ? 0.10 :
            0.0;
 
-    gl_Position = vSA_SSRClipPosition;
+    lfPixelatedShadowVertexSetup(
+        worldPosition,
+        physicalNormal,
+        normalizedFaceUv,
+        globalFaceSize,
+        uvSize * abs(
+            lfResolveTextureTiling(globalFaceSize)
+        ),
+        affected_by_shadow
+    );
 
-    #include <shadowmap_vertex>
+    gl_Position = vSA_SSRClipPosition;
 }`,
                 fragment: `#include <common>
 #include <packing>
 ${LIGHTFLOW_PUNCTUAL_LIGHT_COMPAT}
 #include <lights_pars_begin>
-#include <shadowmap_pars_fragment>
+${LIGHTFLOW_PIXELATED_SHADOWS_FRAGMENT}
+${LIGHTFLOW_SHADOW_SELECTOR_FRAGMENT}
+${LIGHTFLOW_TEXTURE_TILING}
 ${SCREEN_SPACE_REFLECTIONS_PARS_FRAGMENT}
 
 uniform sampler2D map;
 uniform vec3 LIGHTCOLOR;
 uniform bool EMISSIVE;
 uniform bool SHADOWS;
-uniform vec2 TILING;
-uniform bool AUTO_TILE;
-uniform vec2 TEXTURE_SIZE;
 
 uniform vec3 uLightPos[16];
 uniform vec3 uLightDir[16];
@@ -6817,9 +7799,6 @@ uniform float uLightPenumbra[16];
 uniform int uLightType[16];
 uniform vec3 uLightColor[16];
 uniform int max_light_number;
-
-uniform int uLightCastShadow[16];
-uniform int uLightShadowIndex[16];
 
 uniform float uAmbient;
 uniform vec3 uAmbientColor;
@@ -6846,9 +7825,6 @@ uniform float uAOFaceNormalWeight;
 uniform bool uClampLighting;
 
 ${NATIVE_PBR_FRAGMENT}
-
-uniform float uShadowStrength;
-uniform float uShadowFloor;
 
 varying vec2 vUv;
 varying float lift;
@@ -7164,12 +8140,13 @@ vec3 applyToneMapping(vec3 color) {
 }
 
 void main() {
-    vec2 tiling_value = TILING;
-    if (AUTO_TILE) {
-        tiling_value = v_faceSize / TEXTURE_SIZE;
-    }
+    vec2 tiling_value =
+        lfResolveTextureTiling(v_faceSize);
     vec4 texel = texture2D(map, vUv * tiling_value);
     texel = saApplyNativePBRBaseColor(texel);
+
+    vec3 pixelatedShadowByType =
+        lfGetPixelatedShadowByType();
 
     if (texel.a < 0.01) discard;
 
@@ -7195,9 +8172,11 @@ void main() {
         float shadow = 1.0;
 
         if (SHADOWS) {
-            if (uLightCastShadow[i] != 0) {
-                shadow = getCustomLightShadow(i);
-            }
+            shadow = lfGetLightShadow(
+                i,
+                uLightType[i],
+                pixelatedShadowByType
+            );
         }
 
         directLight += lightContribution * shadow;
@@ -7269,6 +8248,9 @@ void main() {
 }`,
                 uniforms: createLightflowUniforms({
                     shadows: true,
+                    pixelatedShadows: {
+                        enabled: false
+                    },
                     screenSpaceReflections: true
                 }),
                 supportsScreenSpaceReflections: true,
@@ -7282,9 +8264,12 @@ void main() {
                 isCustom: false,
 
                 vertex: `#include <common>
-#include <shadowmap_pars_vertex>
+
+${LIGHTFLOW_PIXELATED_SHADOWS_VERTEX}
+${LIGHTFLOW_TEXTURE_TILING}
 
 attribute float highlight;
+attribute float affected_by_shadow;
 attribute vec2 normalizedFaceUv;
 attribute vec2 faceSize;
 attribute vec2 globalFaceSize;
@@ -7298,8 +8283,6 @@ uniform float uStylizedNormalInfluence;
 varying vec2 vUv;
 varying vec2 vNormalizedFaceUv;
 varying vec2 vfaceSize;
-varying vec2 vGlobalFaceSize;
-varying vec2 vuvSize;
 
 varying float lift;
 varying vec3 vWorldPos;
@@ -7334,12 +8317,6 @@ vec3 applyLightSide(vec3 n) {
 void main() {
     vec4 worldPosition = modelMatrix * vec4(position, 1.0);
 
-    /*
-        Requerido por shadowmap_vertex de Three.js.
-        No sustituir por vWorldNormal: Three necesita esta variable exacta.
-    */
-    vec3 transformedNormal = normalize(normalMatrix * normal);
-
     vWorldPos = worldPosition.xyz;
 
     vec3 physicalNormal = normalize(uWorldNormalMatrix * normal);
@@ -7357,31 +8334,38 @@ void main() {
 
     vUv = uv;
     vNormalizedFaceUv = normalizedFaceUv;
-    vfaceSize = faceSize;
-    vGlobalFaceSize = globalFaceSize;
-    vuvSize = uvSize;
+    vfaceSize = globalFaceSize;
 
     lift = highlight == 2.0 ? 0.22 :
            highlight == 1.0 ? 0.10 :
            0.0;
 
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    lfPixelatedShadowVertexSetup(
+        worldPosition,
+        physicalNormal,
+        normalizedFaceUv,
+        globalFaceSize,
+        uvSize * abs(
+            lfResolveTextureTiling(globalFaceSize)
+        ),
+        affected_by_shadow
+    );
 
-    #include <shadowmap_vertex>
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 }`,
 
                 fragment: `#include <common>
 #include <packing>
 ${LIGHTFLOW_PUNCTUAL_LIGHT_COMPAT}
 #include <lights_pars_begin>
-#include <shadowmap_pars_fragment>
+${LIGHTFLOW_PIXELATED_SHADOWS_FRAGMENT}
+${LIGHTFLOW_SHADOW_SELECTOR_FRAGMENT}
+${LIGHTFLOW_TEXTURE_TILING}
 
 uniform sampler2D map;
 uniform vec3 LIGHTCOLOR;
 uniform bool EMISSIVE;
-uniform vec2 TILING;
-uniform bool AUTO_TILE;
-uniform vec2 TEXTURE_SIZE;
+uniform bool SHADOWS;
 
 /* Lightflow lights */
 uniform vec3 uLightPos[16];
@@ -7393,9 +8377,6 @@ uniform float uLightPenumbra[16];
 uniform int uLightType[16];
 uniform vec3 uLightColor[16];
 uniform int max_light_number;
-
-uniform int uLightCastShadow[16];
-uniform int uLightShadowIndex[16];
 
 /* Ambient */
 uniform float uAmbient;
@@ -7423,26 +8404,9 @@ uniform float uAOEdgeSharpness;
 uniform float uAOCornerWeight;
 uniform float uAOFaceNormalWeight;
 
-/*
-    Lightflow shadow controls are applied after the pixelated threshold.
-*/
-uniform float uShadowStrength;
-uniform float uShadowFloor;
-
-/*
-    Legacy pixelated-shadow controls.
-*/
-uniform float shadowPixelResolution;
-uniform float shadowThreshold;
-uniform bool PIXELATED_SHADOWS;
-uniform float shadowFilterScale;
-uniform float shadowFeather;
-
 varying vec2 vUv;
 varying vec2 vNormalizedFaceUv;
 varying vec2 vfaceSize;
-varying vec2 vGlobalFaceSize;
-varying vec2 vuvSize;
 
 varying float lift;
 varying vec3 vWorldPos;
@@ -7459,9 +8423,6 @@ varying vec3 vWorldNormal;
 #define TM_HABLE 4
 #define TM_FILMIC 5
 #define TM_LINEAR 6
-
-#define SHADOW_DET_EPS 1e-12
-#define SHADOW_QUALITY_EPS 1e-5
 
 vec3 safeNormalize(vec3 v, vec3 fallback) {
     float lenSq = dot(v, v);
@@ -7580,490 +8541,6 @@ vec3 computeLightContribution(
         diffuse *
         intensity *
         attenuation;
-}
-
-/* ------------------------------------------------------------
-   PIXELATED LEGACY SHADOWS
-   Keep this path independent from uLightShadowIndex to preserve
-   the legacy pixelated behavior.
------------------------------------------------------------- */
-
-vec2 getPixelCenterUV(vec2 localUV, vec2 gridSize) {
-    vec2 grid = max(floor(gridSize + 0.5), vec2(1.0));
-
-    vec2 safeUV = clamp(
-        localUV,
-        vec2(0.001),
-        vec2(0.999)
-    );
-
-    return (floor(safeUV * grid) + 0.5) / grid;
-}
-
-vec4 getRawShadowCoordAtUV(
-    vec4 currentShadowCoord,
-    vec2 targetUV,
-    vec2 currentUV,
-    out bool valid
-) {
-    valid = false;
-
-    vec2 deltaUV = targetUV - currentUV;
-
-    vec2 dUV_dx = dFdx(currentUV);
-    vec2 dUV_dy = dFdy(currentUV);
-
-    vec4 dCoord_dx = dFdx(currentShadowCoord);
-    vec4 dCoord_dy = dFdy(currentShadowCoord);
-
-    float det =
-        dUV_dx.x * dUV_dy.y -
-        dUV_dx.y * dUV_dy.x;
-
-    float uvArea =
-        length(dUV_dx) *
-        length(dUV_dy);
-
-    float quality = abs(det) / max(
-        uvArea,
-        SHADOW_DET_EPS
-    );
-
-    if (
-        abs(det) > SHADOW_DET_EPS &&
-        quality > SHADOW_QUALITY_EPS
-    ) {
-        float invDet = 1.0 / det;
-
-        vec4 dCoord_du =
-            (dCoord_dx * dUV_dy.y -
-            dCoord_dy * dUV_dx.y) *
-            invDet;
-
-        vec4 dCoord_dv =
-            (dCoord_dy * dUV_dx.x -
-            dCoord_dx * dUV_dy.x) *
-            invDet;
-
-        valid = true;
-
-        return currentShadowCoord +
-            dCoord_du * deltaUV.x +
-            dCoord_dv * deltaUV.y;
-    }
-
-    return currentShadowCoord;
-}
-
-vec4 snapShadowCoordToTexel(
-    vec4 shadowCoord,
-    vec2 shadowMapSize
-) {
-    if (abs(shadowCoord.w) < 1e-6) {
-        return shadowCoord;
-    }
-
-    vec2 safeShadowMapSize = max(
-        shadowMapSize,
-        vec2(1.0)
-    );
-
-    vec3 projected = shadowCoord.xyz / shadowCoord.w;
-
-    projected.xy = (
-        floor(projected.xy * safeShadowMapSize) + 0.5
-    ) / safeShadowMapSize;
-
-    shadowCoord.xy = projected.xy * shadowCoord.w;
-
-    return shadowCoord;
-}
-
-vec4 getProjectedShadowCoordAtUV(
-    vec4 currentShadowCoord,
-    vec2 targetUV,
-    vec2 currentUV,
-    vec2 shadowMapSize
-) {
-    bool valid;
-
-    vec4 candidate = getRawShadowCoordAtUV(
-        currentShadowCoord,
-        targetUV,
-        currentUV,
-        valid
-    );
-
-    if (valid && candidate.w > 0.0) {
-        vec3 projCandidate = candidate.xyz / candidate.w;
-
-        if (
-            projCandidate.x >= 0.0 &&
-            projCandidate.x <= 1.0 &&
-            projCandidate.y >= 0.0 &&
-            projCandidate.y <= 1.0
-        ) {
-            return snapShadowCoordToTexel(
-                candidate,
-                shadowMapSize
-            );
-        }
-    }
-
-    return snapShadowCoordToTexel(
-        currentShadowCoord,
-        shadowMapSize
-    );
-}
-
-vec4 getPointShadowCoordAtUV(
-    vec4 currentShadowCoord,
-    vec2 targetUV,
-    vec2 currentUV,
-    vec2 shadowMapSize
-) {
-    bool valid;
-
-    vec4 candidate = getRawShadowCoordAtUV(
-        currentShadowCoord,
-        targetUV,
-        currentUV,
-        valid
-    );
-
-    if (valid) {
-        float currentLen = length(currentShadowCoord.xyz);
-        float candidateLen = length(candidate.xyz);
-
-        if (
-            candidateLen > 0.1 &&
-            abs(candidateLen - currentLen) < 1.0
-        ) {
-            return candidate;
-        }
-    }
-
-    return currentShadowCoord;
-}
-
-float pixelShadowMask(float visibility) {
-    if (!PIXELATED_SHADOWS) return visibility;
-    float threshold = clamp(shadowThreshold, 0.0, 1.0);
-    float feather = clamp(shadowFeather, 0.0, 0.49);
-
-    if (feather <= 0.0001) {
-        return step(threshold, visibility);
-    }
-
-    return smoothstep(
-        max(0.0, threshold - feather),
-        min(1.0, threshold + feather),
-        visibility
-    );
-}
-
-float getPixelatedShadowAtUV(
-    vec2 targetUV,
-    vec2 currentUV
-) {
-    float shadow = 1.0;
-
-    #ifdef USE_SHADOWMAP
-
-    vec4 shadowCoord;
-
-    #if NUM_DIR_LIGHT_SHADOWS > 0
-        DirectionalLightShadow directionalLight;
-
-        #pragma unroll_loop_start
-        for (int i = 0; i < NUM_DIR_LIGHT_SHADOWS; i++) {
-            directionalLight = directionalLightShadows[i];
-
-            vec2 safeShadowMapSize = max(
-                directionalLight.shadowMapSize,
-                vec2(1.0)
-            );
-
-            shadowCoord = getProjectedShadowCoordAtUV(
-                vDirectionalShadowCoord[i],
-                targetUV,
-                currentUV,
-                safeShadowMapSize
-            );
-
-            if (receiveShadow) {
-                float rawShadow = getShadow(
-                    directionalShadowMap[i],
-                    safeShadowMapSize,
-                    directionalLight.shadowBias,
-                    max(0.0, directionalLight.shadowRadius * shadowFilterScale),
-                    shadowCoord
-                );
-
-                shadow *= pixelShadowMask(rawShadow);
-            }
-        }
-        #pragma unroll_loop_end
-    #endif
-
-    #if NUM_SPOT_LIGHT_SHADOWS > 0
-        SpotLightShadow spotLight;
-
-        #pragma unroll_loop_start
-        for (int i = 0; i < NUM_SPOT_LIGHT_SHADOWS; i++) {
-            spotLight = spotLightShadows[i];
-
-            vec2 safeShadowMapSize = max(
-                spotLight.shadowMapSize,
-                vec2(1.0)
-            );
-
-            shadowCoord = getProjectedShadowCoordAtUV(
-                vSpotShadowCoord[i],
-                targetUV,
-                currentUV,
-                safeShadowMapSize
-            );
-
-            if (receiveShadow) {
-                float rawShadow = getShadow(
-                    spotShadowMap[i],
-                    safeShadowMapSize,
-                    spotLight.shadowBias,
-                    max(0.0, spotLight.shadowRadius * shadowFilterScale),
-                    shadowCoord
-                );
-
-                shadow *= pixelShadowMask(rawShadow);
-            }
-        }
-        #pragma unroll_loop_end
-    #endif
-
-    #if NUM_POINT_LIGHT_SHADOWS > 0
-        PointLightShadow pointLight;
-
-        #pragma unroll_loop_start
-        for (int i = 0; i < NUM_POINT_LIGHT_SHADOWS; i++) {
-            pointLight = pointLightShadows[i];
-
-            vec2 safeShadowMapSize = max(
-                pointLight.shadowMapSize,
-                vec2(1.0)
-            );
-
-            shadowCoord = getPointShadowCoordAtUV(
-                vPointShadowCoord[i],
-                targetUV,
-                currentUV,
-                safeShadowMapSize
-            );
-
-            if (receiveShadow) {
-                float rawShadow = getPointShadow(
-                    pointShadowMap[i],
-                    safeShadowMapSize,
-                    pointLight.shadowBias,
-                    max(0.0, pointLight.shadowRadius * shadowFilterScale),
-                    shadowCoord,
-                    pointLight.shadowCameraNear,
-                    pointLight.shadowCameraFar
-                );
-
-                shadow *= pixelShadowMask(rawShadow);
-            }
-        }
-        #pragma unroll_loop_end
-    #endif
-
-    #endif
-
-    return shadow;
-}
-
-float getPixelatedDirectionalShadowByIndex(
-    int shadowIndex,
-    vec2 targetUV,
-    vec2 currentUV
-) {
-    float result = 1.0;
-
-    #ifdef USE_SHADOWMAP
-    #if NUM_DIR_LIGHT_SHADOWS > 0
-        DirectionalLightShadow directionalLight;
-
-        #pragma unroll_loop_start
-        for (int i = 0; i < NUM_DIR_LIGHT_SHADOWS; i++) {
-            directionalLight = directionalLightShadows[i];
-
-            if (UNROLLED_LOOP_INDEX == shadowIndex) {
-                vec2 safeShadowMapSize = max(
-                    directionalLight.shadowMapSize,
-                    vec2(1.0)
-                );
-
-                vec4 shadowCoord = getProjectedShadowCoordAtUV(
-                    vDirectionalShadowCoord[i],
-                    targetUV,
-                    currentUV,
-                    safeShadowMapSize
-                );
-
-                result = receiveShadow ? pixelShadowMask(getShadow(
-                    directionalShadowMap[i],
-                    safeShadowMapSize,
-                    directionalLight.shadowBias,
-                    max(0.0, directionalLight.shadowRadius * shadowFilterScale),
-                    shadowCoord
-                )) : 1.0;
-            }
-        }
-        #pragma unroll_loop_end
-    #endif
-    #endif
-
-    return result;
-}
-
-float getPixelatedSpotShadowByIndex(
-    int shadowIndex,
-    vec2 targetUV,
-    vec2 currentUV
-) {
-    float result = 1.0;
-
-    #ifdef USE_SHADOWMAP
-    #if NUM_SPOT_LIGHT_SHADOWS > 0
-        SpotLightShadow spotLight;
-
-        #pragma unroll_loop_start
-        for (int i = 0; i < NUM_SPOT_LIGHT_SHADOWS; i++) {
-            spotLight = spotLightShadows[i];
-
-            if (UNROLLED_LOOP_INDEX == shadowIndex) {
-                vec2 safeShadowMapSize = max(
-                    spotLight.shadowMapSize,
-                    vec2(1.0)
-                );
-
-                vec4 shadowCoord = getProjectedShadowCoordAtUV(
-                    vSpotShadowCoord[i],
-                    targetUV,
-                    currentUV,
-                    safeShadowMapSize
-                );
-
-                result = receiveShadow ? pixelShadowMask(getShadow(
-                    spotShadowMap[i],
-                    safeShadowMapSize,
-                    spotLight.shadowBias,
-                    max(0.0, spotLight.shadowRadius * shadowFilterScale),
-                    shadowCoord
-                )) : 1.0;
-            }
-        }
-        #pragma unroll_loop_end
-    #endif
-    #endif
-
-    return result;
-}
-
-float getPixelatedPointShadowByIndex(
-    int shadowIndex,
-    vec2 targetUV,
-    vec2 currentUV
-) {
-    float result = 1.0;
-
-    #ifdef USE_SHADOWMAP
-    #if NUM_POINT_LIGHT_SHADOWS > 0
-        PointLightShadow pointLight;
-
-        #pragma unroll_loop_start
-        for (int i = 0; i < NUM_POINT_LIGHT_SHADOWS; i++) {
-            pointLight = pointLightShadows[i];
-
-            if (UNROLLED_LOOP_INDEX == shadowIndex) {
-                vec2 safeShadowMapSize = max(
-                    pointLight.shadowMapSize,
-                    vec2(1.0)
-                );
-
-                vec4 shadowCoord = getPointShadowCoordAtUV(
-                    vPointShadowCoord[i],
-                    targetUV,
-                    currentUV,
-                    safeShadowMapSize
-                );
-
-                result = receiveShadow ? pixelShadowMask(getPointShadow(
-                    pointShadowMap[i],
-                    safeShadowMapSize,
-                    pointLight.shadowBias,
-                    max(0.0, pointLight.shadowRadius * shadowFilterScale),
-                    shadowCoord,
-                    pointLight.shadowCameraNear,
-                    pointLight.shadowCameraFar
-                )) : 1.0;
-            }
-        }
-        #pragma unroll_loop_end
-    #endif
-    #endif
-
-    return result;
-}
-
-float getPixelatedLightShadow(
-    int lightIndex,
-    vec2 targetUV,
-    vec2 currentUV
-) {
-    if (uLightCastShadow[lightIndex] == 0) {
-        return 1.0;
-    }
-
-    if (!PIXELATED_SHADOWS) {
-        targetUV = currentUV;
-    }
-
-    int shadowIndex = uLightShadowIndex[lightIndex];
-    if (shadowIndex < 0) {
-        return 1.0;
-    }
-
-    int type = uLightType[lightIndex];
-    float shadow = 1.0;
-
-    if (type == SA_LIGHT_DIRECTIONAL) {
-        shadow = getPixelatedDirectionalShadowByIndex(
-            shadowIndex,
-            targetUV,
-            currentUV
-        );
-    } else if (type == SA_LIGHT_SPOT) {
-        shadow = getPixelatedSpotShadowByIndex(
-            shadowIndex,
-            targetUV,
-            currentUV
-        );
-    } else {
-        shadow = getPixelatedPointShadowByIndex(
-            shadowIndex,
-            targetUV,
-            currentUV
-        );
-    }
-
-    shadow = clamp(shadow, 0.0, 1.0);
-    shadow = max(shadow, clamp(uShadowFloor, 0.0, 1.0));
-
-    return mix(
-        1.0,
-        shadow,
-        clamp(uShadowStrength, 0.0, 1.0)
-    );
 }
 
 /* ------------------------------------------------------------
@@ -8241,23 +8718,22 @@ vec3 applyToneMapping(vec3 color) {
 }
 
 void main() {
-    vec2 tiling_value = TILING;
-    if (AUTO_TILE) {
-        tiling_value = vfaceSize / TEXTURE_SIZE;
-    }
-    vec4 texel = texture2D(map, vUv * tiling_value);
+    vec2 tiling_value =
+        lfResolveTextureTiling(vfaceSize);
+
+    vec2 tiledUv = vUv * tiling_value;
+    vec4 texel = texture2D(map, tiledUv);
     texel = saApplyNativePBRBaseColor(texel);
 
     /*
-        Preserve the legacy visual flow:
-        face UV -> pixel center -> extrapolated shadow-map snap.
+        The module uses derivatives to reconstruct the pixel-aligned shadow
+        coordinates, so this must run before any fragment can be discarded.
     */
-    vec2 shadowCurrentUV = vNormalizedFaceUv;
+    vec3 pixelatedShadowByType = lfGetPixelatedShadowByType();
 
-    vec2 shadowTargetUV = getPixelCenterUV(
-        shadowCurrentUV,
-        vfaceSize * shadowPixelResolution
-    );
+    if (texel.a < 0.01) {
+        discard;
+    }
 
     /*
         Lightflow evaluates lighting in linear color space.
@@ -8273,7 +8749,7 @@ void main() {
     );
     normal = saApplyNativePBRNormal(
         normal,
-        vUv * tiling_value,
+        tiledUv,
         vWorldPos
     );
 
@@ -8293,20 +8769,23 @@ void main() {
             normal,
             vWorldPos
         );
-        float shadow = getPixelatedLightShadow(
-            i,
-            shadowTargetUV,
-            shadowCurrentUV
-        );
+        float shadow = 1.0;
+
+        if (SHADOWS) {
+            shadow = lfGetLightShadow(
+                i,
+                uLightType[i],
+                pixelatedShadowByType
+            );
+        }
 
         directLight += lightContribution * shadow;
     }
 
-    if (texel.a < 0.01) {
-        discard;
-    }
-
-    float ambientOcclusion = 1.0;
+    float ambientOcclusion = computeVoxelAO(
+        vNormalizedFaceUv,
+        normal
+    );
 
     vec3 ambientLight =
         max(uAmbientColor, vec3(0.0)) *
@@ -8343,9 +8822,9 @@ void main() {
         }
     }
 
-    float nativeMetallic = saGetNativePBRMetallic(vUv * tiling_value);
-    float nativeRoughness = saGetNativePBRRoughness(vUv * tiling_value);
-    vec3 nativeEmissive = saGetNativePBREmissive(vUv * tiling_value, texel.rgb);
+    float nativeMetallic = saGetNativePBRMetallic(tiledUv);
+    float nativeRoughness = saGetNativePBRRoughness(tiledUv);
+    vec3 nativeEmissive = saGetNativePBREmissive(tiledUv, texel.rgb);
 
     vec3 finalColor = texel.rgb * lighting;
     finalColor +=
@@ -8384,58 +8863,16 @@ void main() {
     gl_FragColor = vec4(finalColor, EMISSIVE ? 1.0 : texel.a);
 }`,
 
-                uniforms: {
-                    ...createLightflowUniforms({
-                        shadows: true
-                    }),
-
-                    "shadowPixelResolution": {
-                        type: "float",
-                        value: 1.0,
-                        expose: true,
-                        min: 1.0,
-                        max: 16.0,
-                        step: 0.05,
-                        allow_higher: true,
-                        allow_lower: false
-                    },
-
-                    "PIXELATED_SHADOWS": {
-                        type: "bool",
-                        value: true,
-                        expose: true,
-                        advanced: false
-                    },
-
-                    "shadowThreshold": {
-                        type: "float",
-                        value: 0.55,
-                        expose: true,
-                        min: 0.0,
-                        max: 1.0,
-                        step: 0.05,
-                        allow_higher: false,
-                        allow_lower: false
-                    },
-
-                    "shadowFilterScale": {
-                        type: "float",
-                        value: 1.0,
-                        expose: true,
-                        min: 0.0,
-                        max: 3.0,
-                        step: 0.05
-                    },
-
-                    "shadowFeather": {
-                        type: "float",
-                        value: 0.10,
-                        expose: true,
-                        min: 0.0,
-                        max: 0.49,
-                        step: 0.01
+                uniforms: createLightflowUniforms({
+                    shadows: true,
+                    pixelatedShadows: {
+                        enabled: false,
+                        resolution: 1.0,
+                        levels: 0,
+                        globalResolution: false,
+                        strength: 1.0
                     }
-                },
+                }),
 
                 enableShadows: true
             });
@@ -8454,6 +8891,7 @@ void main() {
 attribute float highlight;
 attribute vec2 normalizedFaceUv;
 attribute vec2 faceSize;
+attribute vec2 globalFaceSize;
 attribute vec2 uvSize;
 
 uniform bool SHADE;
@@ -8463,6 +8901,7 @@ uniform mat3 uWorldNormalMatrix;
 varying vec2 vPromoMapUv;
 varying vec2 vPromoElementUv;
 varying vec2 vPromoElementSize;
+varying vec2 vPromoGlobalFaceSize;
 varying vec2 vPromoElementUvSize;
 
 varying vec3 vPromoWorldPosition;
@@ -8534,6 +8973,7 @@ void main() {
     vPromoMapUv = uv;
     vPromoElementUv = normalizedFaceUv;
     vPromoElementSize = faceSize;
+    vPromoGlobalFaceSize = globalFaceSize;
     vPromoElementUvSize = uvSize;
 
     if (SHADE) {
@@ -8569,12 +9009,12 @@ void main() {
 }`,
 
                 fragment: `#include <common>
+${LIGHTFLOW_TEXTURE_TILING}
 
 uniform sampler2D map;
 
 uniform bool EMISSIVE;
 uniform vec3 LIGHTCOLOR;
-uniform vec2 TEXTURE_SIZE;
 
 uniform vec3 uLightPos[16];
 uniform vec3 uLightDir[16];
@@ -8660,6 +9100,7 @@ ${NATIVE_PBR_FRAGMENT}
 varying vec2 vPromoMapUv;
 varying vec2 vPromoElementUv;
 varying vec2 vPromoElementSize;
+varying vec2 vPromoGlobalFaceSize;
 varying vec2 vPromoElementUvSize;
 
 varying vec3 vPromoWorldPosition;
@@ -8667,6 +9108,11 @@ varying vec3 vPromoWorldNormal;
 
 varying float vPromoClassicLight;
 varying float vPromoHighlightLift;
+
+vec2 promoGetMapUv() {
+    return vPromoMapUv *
+        lfResolveTextureTiling(vPromoGlobalFaceSize);
+}
 
 #define SA_PROMO_POINT_LIGHT 0
 #define SA_PROMO_DIRECTIONAL_LIGHT 1
@@ -8743,8 +9189,9 @@ mat2 promoGetElementToMapJacobian() {
     vec2 localDx = dFdx(vPromoElementUv);
     vec2 localDy = dFdy(vPromoElementUv);
 
-    vec2 mapDx = dFdx(vPromoMapUv);
-    vec2 mapDy = dFdy(vPromoMapUv);
+    vec2 mapUv = promoGetMapUv();
+    vec2 mapDx = dFdx(mapUv);
+    vec2 mapDy = dFdy(mapUv);
 
     float determinant =
         localDx.x * localDy.y -
@@ -9142,17 +9589,8 @@ float promoSampleNeighborAlpha(
     }
 
     vec2 mapSample =
-        vPromoMapUv +
+        promoGetMapUv() +
         mapOffset;
-
-    if (
-        mapSample.x < 0.0 ||
-        mapSample.y < 0.0 ||
-        mapSample.x > 1.0 ||
-        mapSample.y > 1.0
-    ) {
-        return 0.0;
-    }
 
     return texture2D(map, mapSample).a;
 }
@@ -9864,9 +10302,10 @@ void main() {
         faceTangentV
     );
 
+    vec2 materialUv = promoGetMapUv();
     vec4 sampledColor = texture2D(
         map,
-        vPromoMapUv
+        materialUv
     );
     sampledColor = saApplyNativePBRBaseColor(sampledColor);
 
@@ -10441,6 +10880,12 @@ void main() {
             for (const key in minecraft_promotional_bevel.uniforms) {
                 lumaForgeUniforms[key] = cloneUniformDefinition(minecraft_promotional_bevel.uniforms[key]);
             }
+            Object.assign(
+                lumaForgeUniforms,
+                createLightflowPixelatedShadowUniforms({
+                    enabled: false
+                })
+            );
             addScreenSpaceReflectionUniforms(lumaForgeUniforms, lightflowScreenSpaceReflectionDefaults);
             // Cinematic Craft opens with a trailer-oriented grade while remaining fully editable.
             Object.entries(MATERIAL_OVERRIDE_PRESETS.trailer_hero.values).forEach(([key, value]) => {
@@ -10459,6 +10904,39 @@ void main() {
             );
 
             const lumaForgeVertex = minecraft_promotional_bevel.vertex
+                .replace(
+                    `#include <common>
+#include <shadowmap_pars_vertex>
+`,
+                    `#include <common>
+${LIGHTFLOW_PIXELATED_SHADOWS_VERTEX}
+${LIGHTFLOW_TEXTURE_TILING}
+`
+                )
+                .replace(
+                    `attribute float highlight;
+attribute vec2 normalizedFaceUv;`,
+                    `attribute float highlight;
+attribute float affected_by_shadow;
+attribute vec2 normalizedFaceUv;`
+                )
+                .replace(
+                    `    vPromoElementUvSize = uvSize;
+`,
+                    `    vPromoElementUvSize = uvSize;
+
+    lfPixelatedShadowVertexSetup(
+        worldPosition,
+        vPromoWorldNormal,
+        normalizedFaceUv,
+        globalFaceSize,
+        uvSize * abs(
+            lfResolveTextureTiling(globalFaceSize)
+        ),
+        affected_by_shadow
+    );
+`
+                )
                 .replace(
                     `varying float vPromoClassicLight;
 varying float vPromoHighlightLift;
@@ -10489,18 +10967,26 @@ varying vec4 vSA_SSRClipPosition;
 
     gl_Position = vSA_SSRClipPosition;
 `
+                )
+                .replace(
+                    `    #include <shadowmap_vertex>
+`,
+                    ``
                 );
 
             const lumaForgeFragment = minecraft_promotional_bevel.fragment
                 .replace(
                     `#include <common>
+${LIGHTFLOW_TEXTURE_TILING}
 
 uniform sampler2D map;`,
                     `#include <common>
 #include <packing>
 ${LIGHTFLOW_PUNCTUAL_LIGHT_COMPAT}
 #include <lights_pars_begin>
-#include <shadowmap_pars_fragment>
+${LIGHTFLOW_PIXELATED_SHADOWS_FRAGMENT}
+${LIGHTFLOW_SHADOW_SELECTOR_FRAGMENT}
+${LIGHTFLOW_TEXTURE_TILING}
 ${SCREEN_SPACE_REFLECTIONS_PARS_FRAGMENT}
 
 uniform sampler2D map;`
@@ -10509,9 +10995,6 @@ uniform sampler2D map;`
                     `uniform int max_light_number;
 `,
                     `uniform int max_light_number;
-
-uniform int uLightCastShadow[16];
-uniform int uLightShadowIndex[16];
 
 uniform float uAmbient;
 uniform vec3 uAmbientColor;
@@ -10535,9 +11018,6 @@ uniform float uAOFaceNormalWeight;
 
 uniform bool uClampLighting;
 uniform bool SHADOWS;
-
-uniform float uShadowStrength;
-uniform float uShadowFloor;
 `
                 )
                 .replace(
@@ -10572,9 +11052,13 @@ ${lumaForgeLightflowHelpers}`
         faceTangentV
     );
 
+    vec2 materialUv = promoGetMapUv();
+    vec3 pixelatedShadowByType =
+        lfGetPixelatedShadowByType();
+
     vec4 sampledColor = texture2D(
         map,
-        vPromoMapUv
+        materialUv
     );
     sampledColor = saApplyNativePBRBaseColor(sampledColor);
 
@@ -10618,7 +11102,7 @@ ${lumaForgeLightflowHelpers}`
         );
         normal = saApplyNativePBRNormal(
             normal,
-            vPromoMapUv,
+            materialUv,
             vPromoWorldPosition
         );
 
@@ -10634,8 +11118,12 @@ ${lumaForgeLightflowHelpers}`
                 vPromoWorldPosition
             );
             float shadow = 1.0;
-            if (SHADOWS && uLightCastShadow[i] != 0) {
-                shadow = getCustomLightShadow(i);
+            if (SHADOWS) {
+                shadow = lfGetLightShadow(
+                    i,
+                    uLightType[i],
+                    pixelatedShadowByType
+                );
             }
 
             directLight += lightContribution * shadow;
@@ -10666,9 +11154,9 @@ ${lumaForgeLightflowHelpers}`
             }
         }
 
-        float nativeMetallic = saGetNativePBRMetallic(vPromoMapUv);
-        float nativeRoughness = saGetNativePBRRoughness(vPromoMapUv);
-        vec3 nativeEmissive = saGetNativePBREmissive(vPromoMapUv, texel.rgb);
+        float nativeMetallic = saGetNativePBRMetallic(materialUv);
+        float nativeRoughness = saGetNativePBRRoughness(materialUv);
+        vec3 nativeEmissive = saGetNativePBREmissive(materialUv, texel.rgb);
 
         finalColor = texel.rgb * lighting;
         finalColor +=
@@ -11566,7 +12054,7 @@ ${lumaForgeLightflowHelpers}`
                     void main(){ vec4 color=texture2D(tScene,vUv); float d=texture2D(tDepth,vUv).x; float sceneD=texture2D(tSceneDepth,vUv).x; if(!solid(d)||!solid(sceneD)){gl_FragColor=color;return;} vec3 c=pos(vUv,d), sceneP=pos(vUv,sceneD); float receiverTolerance=max(.0025,abs(c.z)*.00035); if(abs(sceneP.z-c.z)>receiverTolerance){gl_FragColor=color;return;} vec3 n=norm(vUv,c); vec3 axis=abs(n.z)<.95?vec3(0,0,1):vec3(0,1,0); vec3 t=normalize(cross(axis,n)), b=cross(n,t); float oc=0.0, count=0.0, rotation=hash(floor(gl_FragCoord.xy*.5))*6.2831853; for(int i=0;i<24;i++){if(i>=uSamples)continue; float q=(float(i)+.5)/float(max(uSamples,1)); float phi=float(i)*2.39996323+rotation; float z=mix(.16,.96,q); float radial=sqrt(max(1.0-z*z,0.0)); vec3 k=vec3(cos(phi)*radial,sin(phi)*radial,z); vec3 s=c+mat3(t,b,n)*k*uRadius*mix(.15,1.0,q*q); vec4 clip=uProjection*vec4(s,1.0); if(clip.w<=.000001)continue; vec2 uv=clip.xy/clip.w*.5+.5; if(uv.x<=.001||uv.y<=.001||uv.x>=.999||uv.y>=.999)continue; float sd=texture2D(tDepth,uv).x; if(!solid(sd))continue; vec3 sp=pos(uv,sd); float delta=sp.z-s.z; float localBias=max(uBias,abs(c.z)*.00012); float range=smoothstep(0.0,1.0,uRadius/max(abs(c.z-sp.z),.001)); float facing=smoothstep(-.15,.35,dot(n,normalize(sp-c+vec3(.000001)))); oc+=step(localBias,delta)*range*(1.0-facing*.35); count+=1.0;} float ao=count<1.0?1.0:pow(clamp(1.0-oc/count*uStrength,0.0,1.0),uPower); gl_FragColor=vec4(color.rgb*ao,color.a); }
                 `
             });
-            const postScene = new THREE.Scene(), postCamera = new THREE.OrthographicCamera(-1,1,1,-1,0,1), quad = new THREE.Mesh(new THREE.PlaneGeometry(2,2), material);
+            const postScene = new THREE.Scene(), postCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1), quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);
             postScene.add(quad);
             const state = { preview, renderer, sceneTarget, cubeTarget, depthTexture, sceneDepthTexture, material, uniforms, postScene, postCamera, quad, width: 1, height: 1, sceneWidth: 1, sceneHeight: 1, rendering: false };
             this.states.set(preview, state);
@@ -11779,7 +12267,7 @@ ${lumaForgeLightflowHelpers}`
                 state.rendering = false;
             }
         },
-        patchPreview(preview) { if (!preview?.renderer || this.patchedPreviews.has(preview)) return; const originalRender=preview.render; if(typeof originalRender!=='function')return; const manager=this; const patchedRender=function lightflowSSAORender(){ const result=originalRender.apply(this,arguments); manager.composite(this); return result; }; preview.render=patchedRender; this.patchedPreviews.set(preview,{originalRender,patchedRender}); },
+        patchPreview(preview) { if (!preview?.renderer || this.patchedPreviews.has(preview)) return; const originalRender = preview.render; if (typeof originalRender !== 'function') return; const manager = this; const patchedRender = function lightflowSSAORender() { const result = originalRender.apply(this, arguments); manager.composite(this); return result; }; preview.render = patchedRender; this.patchedPreviews.set(preview, { originalRender, patchedRender }); },
         patchAllPreviews() { collectShaderArchitectRenderPreviews().forEach(preview => this.patchPreview(preview)); }
     };
 
@@ -15017,7 +15505,7 @@ ${lumaForgeLightflowHelpers}`
             });
         },
 
-        applyBlockbenchTextureModeUniforms(targetMaterial, sourceState) {
+        applyBlockbenchTextureModeUniforms(targetMaterial, sourceState, mapDef) {
             if (!targetMaterial || !targetMaterial.uniforms) return;
 
             const layered = !!(sourceState && sourceState.layered);
@@ -15036,6 +15524,10 @@ ${lumaForgeLightflowHelpers}`
                 const value = layered
                     ? (layeredTextures[i] || this.getTransparentFallbackTexture())
                     : this.getTransparentFallbackTexture();
+
+                if (value && value.isTexture && mapDef) {
+                    this.configureTextureWrap(value, mapDef);
+                }
 
                 if (!targetMaterial.uniforms[key]) {
                     targetMaterial.uniforms[key] = {
@@ -15775,8 +16267,8 @@ if (vSaShadowStochastic > 0.5) {
                             alphaFragment = `float saShadowAlpha = clamp(diffuseColor.a * ${baseAlpha}, 0.0, 1.0);
 float saShadowNoise = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
 ${stochasticAlpha
-    ? 'if (saShadowAlpha <= saShadowNoise) discard;'
-    : `if (saShadowAlpha < ${sourceAlphaTest.toFixed(6)}) discard;`}`;
+                                    ? 'if (saShadowAlpha <= saShadowNoise) discard;'
+                                    : `if (saShadowAlpha < ${sourceAlphaTest.toFixed(6)}) discard;`}`;
                         }
 
                         compiledShader.fragmentShader = compiledShader.fragmentShader.replace(
@@ -15880,7 +16372,11 @@ ${stochasticAlpha
                 if (targetMaterial.map && mapDef) {
                     this.configureTextureWrap(targetMaterial.map, mapDef, { forceUpdate: true });
                 }
-                this.applyBlockbenchTextureModeUniforms(targetMaterial, sourceState);
+                this.applyBlockbenchTextureModeUniforms(
+                    targetMaterial,
+                    sourceState,
+                    mapDef
+                );
                 this.syncNativePBRUniforms(targetMaterial, sourceState, activeShader, getFallbackTexture());
 
                 if (!targetMaterial.uniforms.uWorldNormalMatrix) {
@@ -16388,7 +16884,11 @@ ${stochasticAlpha
                         if (mapDef && mat.map && mat.map.isTexture) {
                             this.configureTextureWrap(mat.map, mapDef);
                         }
-                        this.applyBlockbenchTextureModeUniforms(mat, sourceState);
+                        this.applyBlockbenchTextureModeUniforms(
+                            mat,
+                            sourceState,
+                            mapDef
+                        );
                         this.syncNativePBRUniforms(mat, sourceState, renderShader, this.getFallbackTexture());
 
                         ScreenSpaceReflectionManager.configureMaterial(mat, renderShader);
@@ -16728,25 +17228,25 @@ ${stochasticAlpha
                     element.render_intensity !== undefined
                         ? Math.max(0, Number(element.render_intensity) || 0)
                         : Math.max(0, Number(element.intensity) || 0)
-                ;
+                    ;
 
                 distanceArray[activeLightCount] =
                     element.distance !== undefined
                         ? Math.max(0, Number(element.distance) || 0)
                         : 0.0
-                ;
+                    ;
 
                 coneAngleArray[activeLightCount] =
                     THREE.MathUtils.degToRad(
                         Math.max(0.001, Math.min(89.9, Number(element.angle) || 45))
                     )
-                ;
+                    ;
 
                 penumbraArray[activeLightCount] =
                     element.penumbra !== undefined
                         ? Math.max(0, Math.min(1, Number(element.penumbra) || 0))
                         : 0.0
-                ;
+                    ;
 
                 castShadowArray[activeLightCount] = castsShadow ? 1 : 0;
                 shadowIndexArray[activeLightCount] = shadowIndex;
@@ -17190,6 +17690,13 @@ ${stochasticAlpha
                             this.selectedNativeUniformName,
                             MaterialManager.cloneUniformDefinition(def)
                         );
+
+                        if (
+                            this.selectedNativeUniformName === 'AUTO_TILE' &&
+                            this.activeMat.uniforms.map
+                        ) {
+                            this.activeMat.uniforms.map.repeat = true;
+                        }
                     },
                     removeUniform(key) {
                         this.$delete(this.activeMat.uniforms, key);
@@ -18825,8 +19332,8 @@ ${stochasticAlpha
         return new Promise((resolve, reject) => {
 
             // Use the existing ready flag when Light Manager has already loaded.
-            if (window.LIGHT_MANAGER_LOADED) {
-                resolve(window.LIGHT_MANAGER_LOADED);
+            if (window.LIGHT_MANAGER_LOADED && window.LightManagerUI && typeof window.applyIndestructibleFormGroups === 'function') {
+                resolve(window.LightManagerUI);
                 return;
             }
 
@@ -18843,10 +19350,11 @@ ${stochasticAlpha
 
             function onReady(event) {
                 if (finished) return;
+                if (!window.LIGHT_MANAGER_LOADED || !window.LightManagerUI || typeof window.applyIndestructibleFormGroups !== 'function') return;
                 finished = true;
 
                 clearTimeout(timer);
-                resolve(event.detail || window.LIGHT_MANAGER_LOADED);
+                resolve(window.LightManagerUI);
             }
 
             window.addEventListener('light_manager_initialized', onReady, { once: true });
@@ -18924,14 +19432,10 @@ ${stochasticAlpha
     let materialPropertiesShowAdvanced = false;
     let materialPropertiesUniformGroupsOpen = {};
     let activeMaterialOverridePreset = 'trailer_hero';
+    let activeMaterialOverrideScope = 'element';
 
-    let cube_material_instance;
-    let cube_material_instance_name;
-    let cube_face_material_instance;
-    let material_instance_properties_toolbar;
     let create_material_instance;
     let delete_material_instance;
-    let global_material_instance_text;
 
     function disposeTrackedResources() {
         const resources = deletables.slice();
@@ -18997,6 +19501,7 @@ ${stochasticAlpha
         version: '2.8.0',
         min_version: '4.9.0',
         variant: 'both',
+        dependencies: ['light_manager'],
 
         onload: async function () {
 
@@ -19265,210 +19770,160 @@ ${stochasticAlpha
                 ShaderEngine.requestPreviewRender({ cause });
             };
 
-            const worldBrightnessSlider = new window.ComboSlider('sa_world_brightness', {
-                label: 'shader_architect.world.brightness',
-                title: 'shader_architect.world.brightness.desc',
-                icon: 'brightness_6',
-                grow: true,
-                color: 'var(--color-axis-w)',
-                value: Number.isFinite(Number(getWorldSettingValue('brightness', 50)))
-                    ? Number(getWorldSettingValue('brightness', 50))
-                    : 50,
-                reset_value: 50,
-                min: 0,
-                max: 100,
-                step: 1,
-                allow_higher: false,
-                allow_lower: false,
-                onChange: function () {
-                    setWorldSettingValue('brightness', Number(this.value) || 0);
-                    refreshWorldRenderSettings('world_brightness_change');
-                }
-            });
+            let syncingWorldPanel = false;
+            let globalRendererPropertiesPanel = null;
+            const worldMarker = (index, tone, fallback) => window.LightManagerUI.markerColor(index, tone, fallback);
 
-            const worldShadingToggle = new Toggle('sa_world_shading', {
-                name: 'shader_architect.world.shading',
-                icon: 'wb_sunny',
-                category: 'render',
-                linked_setting: 'shading',
-                onChange: () => refreshWorldRenderSettings('world_shading_change')
-            });
-
-            const worldGridsToggle = new Toggle('sa_world_grids', {
-                name: 'shader_architect.world.grids',
-                icon: 'grid_on',
-                category: 'render',
-                linked_setting: 'grids',
-                onChange: () => ShaderEngine.requestPreviewRender({ cause: 'world_grid_change' })
-            });
-
-            const worldGroundToggle = new Toggle('sa_world_ground', {
-                name: 'shader_architect.world.ground',
-                icon: 'icon-format_free',
-                category: 'render',
-                linked_setting: 'ground_plane',
-                onChange: () => ShaderEngine.requestPreviewRender({ cause: 'world_ground_change' })
-            });
-
-            const worldAmbientOcclusionToggle = new Toggle('sa_world_ssao', {
-                name: 'Ambient Occlusion',
-                icon: 'grain',
-                category: 'render',
-                default: true,
-                value: AmbientOcclusionManager.settings.enabled,
-                onChange(value) {
-                    AmbientOcclusionManager.settings.enabled = !!value;
-                    AmbientOcclusionManager.patchAllPreviews();
-                    ShaderEngine.requestPreviewRender({ cause: 'ssao_toggle' });
-                }
-            });
-
-            const worldAmbientOcclusionSettings = new Action('sa_world_ssao_settings', {
-                name: 'Ambient Occlusion Settings',
-                icon: 'tune',
-                category: 'render',
-                condition: () => Project,
-                click() {
-                    const ao = AmbientOcclusionManager.settings;
-                    new Dialog('sa_ambient_occlusion_settings', {
-                        title: 'Ambient Occlusion',
-                        form: {
-                            quality: {
-                                label: 'Quality', type: 'select', value: String(ao.renderScale),
-                                options: { '0.5': 'Performance (50%)', '0.75': 'Balanced (75%)', '1': 'High (native resolution)' }
-                            },
-                            samples: { label: 'Samples', type: 'number', value: ao.samples, min: 4, max: 24, step: 1, description: 'Higher values reduce noise and improve contact detail.' },
-                            strength: { label: 'Strength', type: 'range', value: ao.strength, min: 0, max: 2, step: 0.01 },
-                            radius: { label: 'Radius', type: 'range', value: ao.radius, min: 0.05, max: 4, step: 0.01 },
-                            bias: { label: 'Bias', type: 'range', value: ao.bias, min: 0, max: 0.2, step: 0.001 },
-                            power: { label: 'Contrast', type: 'range', value: ao.power, min: 0.25, max: 4, step: 0.05 }
+            const openWorldAmbientOcclusionSettings = () => {
+                const ao = AmbientOcclusionManager.settings;
+                new Dialog('sa_ambient_occlusion_settings', {
+                    title: 'shader_architect.world.ao',
+                    form: {
+                        quality: {
+                            label: 'Quality', type: 'select', value: String(ao.renderScale),
+                            options: { '0.5': 'Performance (50%)', '0.75': 'Balanced (75%)', '1': 'High (native resolution)' }
                         },
-                        onConfirm(result) {
-                            ao.renderScale = Number(result.quality) || 1;
-                            ao.samples = Math.max(4, Math.min(24, Math.round(Number(result.samples) || 20)));
-                            ao.strength = Math.max(0, Math.min(2, Number(result.strength) || 0));
-                            ao.radius = Math.max(0.05, Math.min(4, Number(result.radius) || 0.05));
-                            ao.bias = Math.max(0, Math.min(0.2, Number(result.bias) || 0));
-                            ao.power = Math.max(0.25, Math.min(4, Number(result.power) || 1));
-                            AmbientOcclusionManager.patchAllPreviews();
-                            ShaderEngine.requestPreviewRender({ cause: 'ssao_settings' });
-                        }
-                    }).show();
-                }
-            });
-
-            const syncWorldToolbarControls = () => {
-                worldBrightnessSlider.set(Number(getWorldSettingValue('brightness', 50)) || 0);
-                [
-                    ['shading', worldShadingToggle],
-                    ['grids', worldGridsToggle],
-                    ['ground_plane', worldGroundToggle]
-                ].forEach(([settingKey, toggle]) => {
-                    if (!toggle) return;
-                    toggle.value = !!getWorldSettingValue(settingKey, toggle.value);
-                    if (typeof toggle.updateEnabledState === 'function') {
-                        toggle.updateEnabledState();
+                        samples: { label: 'Samples', type: 'number', value: ao.samples, min: 4, max: 24, step: 1, description: 'Higher values reduce noise and improve contact detail.' },
+                        strength: { label: 'Strength', type: 'range', value: ao.strength, min: 0, max: 2, step: 0.01 },
+                        radius: { label: 'Radius', type: 'range', value: ao.radius, min: 0.05, max: 4, step: 0.01 },
+                        bias: { label: 'Bias', type: 'range', value: ao.bias, min: 0, max: 0.2, step: 0.001 },
+                        power: { label: 'Contrast', type: 'range', value: ao.power, min: 0.25, max: 4, step: 0.05 }
+                    },
+                    onConfirm(result) {
+                        ao.renderScale = Number(result.quality) || 1;
+                        ao.samples = Math.max(4, Math.min(24, Math.round(Number(result.samples) || 20)));
+                        ao.strength = Math.max(0, Math.min(2, Number(result.strength) || 0));
+                        ao.radius = Math.max(0.05, Math.min(4, Number(result.radius) || 0.05));
+                        ao.bias = Math.max(0, Math.min(0.2, Number(result.bias) || 0));
+                        ao.power = Math.max(0.25, Math.min(4, Number(result.power) || 1));
+                        AmbientOcclusionManager.patchAllPreviews();
+                        ShaderEngine.requestPreviewRender({ cause: 'ssao_settings' });
                     }
-                });
-                worldAmbientOcclusionToggle.value = !!AmbientOcclusionManager.settings.enabled;
-                worldAmbientOcclusionToggle.updateEnabledState?.();
+                }).show();
             };
 
-            const worldSettingsToolbar = new Toolbar({
-                id: 'sa_world_settings',
-                name: 'panel.global_renderer_properties',
-                label: false,
-                condition: () => Project,
-                children: [
-                    'sa_world_brightness',
-                    '#',
-                    'sa_world_shading',
-                    'sa_world_ssao',
-                    'sa_world_ssao_settings',
-                    'sa_world_grids',
-                    'sa_world_ground'
-                ]
-            });
-
-            const worldSettingsListener = Blockbench.on('update_scene_shading', syncWorldToolbarControls);
-            syncWorldToolbarControls();
-            deletables.push(
-                worldBrightnessSlider,
-                worldShadingToggle,
-                worldAmbientOcclusionToggle,
-                worldAmbientOcclusionSettings,
-                worldGridsToggle,
-                worldGroundToggle,
-                worldSettingsToolbar,
-                worldSettingsListener
-            );
-
-            let renderWorkspaceMode = new Mode('render', {
-                name: 'Lightflow Render',
-                icon: 'photo_camera_back',
-                category: 'navigate',
-                condition: () => Project,
-                onSelect() {
-
+            const createWorldPanelForm = () => ({
+                world_header: {
+                    type: 'bar_display', value: tl('panel.global_renderer_properties'), icon: 'public',
+                    paragraph: false, expand: true, color: 'var(--color-text)'
+                },
+                world_shading: {
+                    type: 'action_toggle', value: !!getWorldSettingValue('shading', true),
+                    description: 'shader_architect.world.shading', icon_on: 'wb_sunny', icon_off: 'wb_sunny',
+                    bg_on: worldMarker(1, 'standard', '#F4D714'), color_on: 'var(--color-ui)',
+                    color_off: 'var(--color-subtle_text)'
+                },
+                world_ssao: {
+                    type: 'action_toggle', value: !!AmbientOcclusionManager.settings.enabled,
+                    description: 'shader_architect.world.ao', icon_on: 'grain', icon_off: 'grain',
+                    bg_on: worldMarker(4, 'standard', '#B55AF8'), color_on: 'var(--color-ui)',
+                    color_off: 'var(--color-subtle_text)'
+                },
+                world_ssao_settings: {
+                    type: 'action_button', icon: 'tune', description: 'shader_architect.world.ao_settings',
+                    color: worldMarker(4, 'pastel', '#C5A6E8'), click: openWorldAmbientOcclusionSettings
+                },
+                world_grids: {
+                    type: 'action_toggle', value: !!getWorldSettingValue('grids', true),
+                    description: 'shader_architect.world.grids', icon_on: 'grid_3x3', icon_off: 'grid_3x3_off',
+                    bg_on: worldMarker(0, 'standard', '#58C0FF'), color_on: 'var(--color-ui)',
+                    color_off: 'var(--color-subtle_text)'
+                },
+                world_ground: {
+                    type: 'action_toggle', value: !!getWorldSettingValue('ground_plane', true),
+                    description: 'shader_architect.world.ground', icon_on: 'layers', icon_off: 'layers_clear',
+                    bg_on: worldMarker(6, 'standard', '#00CE71'), color_on: 'var(--color-ui)',
+                    color_off: 'var(--color-subtle_text)'
+                },
+                world_brightness: {
+                    type: 'combo_slider', label: 'shader_architect.world.brightness', icon: 'brightness_6',
+                    description: 'shader_architect.world.brightness.desc', color: worldMarker(1, 'pastel', '#FFF899'),
+                    value: Number(getWorldSettingValue('brightness', 50)) || 0,
+                    resettable: true, reset_value: 50, min: 0, max: 100, step: 1
                 }
             });
-            deletables.push(renderWorkspaceMode);
 
-            Panels.outliner.condition.modes.push('render');
+            const syncWorldPanel = () => {
+                if (!globalRendererPropertiesPanel?.form || syncingWorldPanel) return;
+                const controls = globalRendererPropertiesPanel.form.form_data;
+                if (!controls) return;
+                syncingWorldPanel = true;
+                try {
+                    controls.world_brightness?.setValue?.(Number(getWorldSettingValue('brightness', 50)) || 0);
+                    controls.world_shading?.setValue?.(!!getWorldSettingValue('shading', true));
+                    controls.world_ssao?.setValue?.(!!AmbientOcclusionManager.settings.enabled);
+                    controls.world_grids?.setValue?.(!!getWorldSettingValue('grids', true));
+                    controls.world_ground?.setValue?.(!!getWorldSettingValue('ground_plane', true));
+                } finally {
+                    syncingWorldPanel = false;
+                }
+                globalRendererPropertiesPanel.form.update();
+            };
 
-            let globalRendererPropertiesPanel = new Panel('global_renderer_properties', {
-                icon: 'motion_mode',
+            globalRendererPropertiesPanel = new Panel('global_renderer_properties', {
+                name: 'panel.global_renderer_properties',
+                icon: 'public',
                 growable: true,
                 resizable: true,
                 condition: { modes: ['render'] },
                 default_position: {
-                    slot: "left_bar",
-                    float_position: [
-                        1322,
-                        57
-                    ],
-                    float_size: [
-                        314,
-                        57
-                    ],
-                    height: 57,
-                    folded: false,
-                    fixed_height: true,
-                    attached_to: "",
-                    attached_index: 0,
-                    sidebar_index: 0
+                    slot: 'left_bar', float_position: [1322, 57], float_size: [314, 120], height: 120,
+                    folded: false, fixed_height: false, attached_to: '', attached_index: 0, sidebar_index: 0
                 },
                 mode_positions: {
                     render: {
-                        slot: "left_bar",
-                        float_position: [
-                            1322,
-                            57
-                        ],
-                        float_size: [
-                            314,
-                            57
-                        ],
-                        height: 57,
-                        folded: false,
-                        fixed_height: true,
-                        attached_to: "",
-                        attached_index: 0,
-                        sidebar_index: 0
+                        slot: 'left_bar', float_position: [1322, 57], float_size: [314, 120], height: 120,
+                        folded: false, fixed_height: false, attached_to: '', attached_index: 0, sidebar_index: 0
                     }
                 },
-                toolbars: [
-                    worldSettingsToolbar
-                ]
+                form: createWorldPanelForm()
             });
 
-            deletables.push(globalRendererPropertiesPanel);
+            globalRendererPropertiesPanel.form.on('change', ({ result, changed_keys }) => {
+                if (syncingWorldPanel) return;
+                const keys = Array.isArray(changed_keys) && changed_keys.length ? changed_keys : Object.keys(result || {});
+                let shadingChanged = false;
+                let previewChanged = false;
+                if (keys.includes('world_brightness')) {
+                    setWorldSettingValue('brightness', Number(result.world_brightness) || 0);
+                    shadingChanged = true;
+                }
+                if (keys.includes('world_shading')) {
+                    setWorldSettingValue('shading', !!result.world_shading);
+                    shadingChanged = true;
+                }
+                if (keys.includes('world_grids')) {
+                    setWorldSettingValue('grids', !!result.world_grids);
+                    previewChanged = true;
+                }
+                if (keys.includes('world_ground')) {
+                    setWorldSettingValue('ground_plane', !!result.world_ground);
+                    previewChanged = true;
+                }
+                if (keys.includes('world_ssao')) {
+                    AmbientOcclusionManager.settings.enabled = !!result.world_ssao;
+                    AmbientOcclusionManager.patchAllPreviews();
+                    previewChanged = true;
+                }
+                if (shadingChanged) refreshWorldRenderSettings('world_panel_change');
+                else if (previewChanged) ShaderEngine.requestPreviewRender({ cause: 'world_panel_change' });
+            });
 
-
-
-            const setBarControl = (control, value) => {
-                if (control && typeof control.set === 'function') control.set(value);
-            };
+            window.applyIndestructibleFormGroups(globalRendererPropertiesPanel.form, [
+                {
+                    elements: ['world_header', '+', 'world_shading', 'world_ssao', 'world_ssao_settings', 'world_grids', 'world_ground'], gap: '2px',
+                    divider_color: 'var(--color-grid)',
+                    flex: {
+                        world_header: '1 1 auto', world_shading: '0 0 auto', world_ssao: '0 0 auto',
+                        world_ssao_settings: '0 0 auto', world_grids: '0 0 auto', world_ground: '0 0 auto'
+                    }
+                },
+                { elements: ['world_brightness'], gap: '2px', flex: { world_brightness: '1 1 100%' } }
+            ]);
+            const worldPanelStyles = window.LightManagerUI.addCompactPanelStyles('global_renderer_properties');
+            const worldSettingsListener = Blockbench.on('update_scene_shading', syncWorldPanel);
+            syncWorldPanel();
+            deletables.push(globalRendererPropertiesPanel, worldPanelStyles, worldSettingsListener);
 
             const getSelectedCubes = () => getSelectedShaderElements();
             const getSelectedCube = () => {
@@ -19479,20 +19934,18 @@ ${stochasticAlpha
             const areMultipleSelected = () => getSelectedCubes().length > 1;
             const ELEMENT_MATERIAL_SCOPE = 'element';
             const getActiveMaterialScope = () => {
-                let scope = cube_face_material_instance && typeof cube_face_material_instance.get === 'function'
-                    ? cube_face_material_instance.get()
-                    : ELEMENT_MATERIAL_SCOPE;
-
-                if (Array.isArray(scope)) {
-                    scope = scope[scope.length - 1] || ELEMENT_MATERIAL_SCOPE;
-                }
+                let scope = activeMaterialOverrideScope || ELEMENT_MATERIAL_SCOPE;
 
                 const elements = getSelectedCubes();
                 const faceScopeAvailable = elements.length > 0 && elements.every(element => (
                     typeof Cube !== 'undefined' && element instanceof Cube
                 ));
-                if (scope === ELEMENT_MATERIAL_SCOPE || !faceScopeAvailable) return ELEMENT_MATERIAL_SCOPE;
-                return MaterialManager.normalizeCubeFaceName(scope) || ELEMENT_MATERIAL_SCOPE;
+                if (scope === ELEMENT_MATERIAL_SCOPE || !faceScopeAvailable) {
+                    activeMaterialOverrideScope = ELEMENT_MATERIAL_SCOPE;
+                    return ELEMENT_MATERIAL_SCOPE;
+                }
+                activeMaterialOverrideScope = MaterialManager.normalizeCubeFaceName(scope) || ELEMENT_MATERIAL_SCOPE;
+                return activeMaterialOverrideScope;
             };
             const isFaceMaterialScope = scope => !!scope && scope !== ELEMENT_MATERIAL_SCOPE;
             const getCubeMaterialInstanceId = (cube, scope = ELEMENT_MATERIAL_SCOPE) => {
@@ -19583,12 +20036,111 @@ ${stochasticAlpha
                 if (changed) ShaderEngine.updateCubes(cubes, 'sanitize_instances');
             };
 
+            const getMaterialOverrideScopeOptions = () => {
+                const options = {
+                    element: {
+                        icon: 'view_in_ar',
+                        description: 'shader_architect.material_panel.face_scope.element',
+                        color: window.LightManagerUI.markerColor(9, 'pastel', '#E0E9FB')
+                    }
+                };
+                const elements = getSelectedCubes();
+                const supportsFaces = elements.length > 0 && elements.every(element => (
+                    typeof Cube !== 'undefined' && element instanceof Cube
+                ));
+                if (!supportsFaces) return options;
+                const faceLabels = ['N', 'S', 'E', 'W', 'U', 'D'];
+                const faceColors = [3, 5, 6, 8, 1, 0];
+                ['north', 'south', 'east', 'west', 'up', 'down'].forEach((face, index) => {
+                    options[face] = {
+                        name: faceLabels[index],
+                        description: `shader_architect.material_panel.face_scope.${face}`,
+                        color: window.LightManagerUI.markerColor(faceColors[index], 'standard', 'var(--color-text)')
+                    };
+                });
+                return options;
+            };
+
+            const assignSelectedMaterialInstance = nextInstanceId => {
+                if (!nextInstanceId || nextInstanceId === '__mixed__') return false;
+                if (nextInstanceId !== 'global' && !MaterialManager.instances[nextInstanceId]) return false;
+                const cubes = getSelectedCubes();
+                if (cubes.length === 0) return false;
+                const activeScope = getActiveMaterialScope();
+                const isFaceScope = isFaceMaterialScope(activeScope);
+                const labelKey = nextInstanceId === 'global'
+                    ? (isFaceScope ? 'shader_architect.material_panel.undo.clear_face_instance' : 'shader_architect.material_panel.undo.clear_instance')
+                    : (isFaceScope ? 'shader_architect.material_panel.undo.assign_face_instance' : 'shader_architect.material_panel.undo.assign_instance');
+
+                runMaterialInstanceUndo(labelKey, cubes, () => {
+                    cubes.forEach(cube => {
+                        if (nextInstanceId === 'global') {
+                            if (isFaceScope) MaterialManager.clearMaterialInstanceFromCubeFace(cube, activeScope, { apply: false });
+                            else MaterialManager.clearCubeMaterialAssignment(cube);
+                        } else if (isFaceScope) {
+                            MaterialManager.assignInstanceToCubeFace(cube, activeScope, nextInstanceId, { apply: false });
+                        } else {
+                            MaterialManager.assignInstanceToCube(cube, nextInstanceId, { apply: false });
+                        }
+                    });
+                });
+                ShaderEngine.updateCubes(cubes, 'update_instance');
+                return true;
+            };
+
+            const triggerMaterialPanelAction = action => {
+                if (!action) return;
+                if (typeof action.trigger === 'function') action.trigger();
+                else if (typeof action.click === 'function') action.click();
+            };
+
+            const createMaterialOverrideHeader = (instanceOptions, selectedInstanceId, contextText, instance = null) => ({
+                _sa_material_header: {
+                    type: 'bar_display', value: tl('shader_architect.material_panel.title'),
+                    paragraph: false, expand: true, color: 'var(--color-subtle_text)'
+                },
+                _sa_scope: {
+                    type: 'horizontal_select', value: getActiveMaterialScope(),
+                    description: 'shader_architect.material_panel.scope', expand: true,
+                    allow_empty: false, multi_select: true,
+                    background: 'var(--color-back)', divider_color: 'var(--color-border)',
+                    options: getMaterialOverrideScopeOptions()
+                },
+                _sa_instance: {
+                    type: 'compact_select', label: 'shader_architect.material_panel.instance', hide_label: true,
+                    description: 'shader_architect.material_panel.instance.desc', background: 'transparent',
+                    value: selectedInstanceId || 'global', options: instanceOptions
+                },
+                _sa_override_context: {
+                    type: 'bar_display', value: contextText, paragraph: false, expand: true,
+                    color: 'var(--color-text)', show_condition: () => !instance
+                },
+                _sa_instance_name: {
+                    type: 'compact_text', value: instance?.name || '',
+                    placeholder: 'shader_architect.material_panel.instance_name',
+                    description: 'shader_architect.material_panel.instance_name',
+                    show_condition: () => !!instance
+                },
+                _sa_create_instance: {
+                    type: 'action_button', icon: 'masked_transitions_add',
+                    description: 'shader_architect.material_panel.create_instance',
+                    color: window.LightManagerUI.markerColor(6, 'pastel', '#7BFFA3'),
+                    click: () => triggerMaterialPanelAction(create_material_instance)
+                },
+                _sa_delete_instance: {
+                    type: 'action_button', icon: 'delete',
+                    description: 'shader_architect.material_panel.delete_instance',
+                    color: window.LightManagerUI.markerColor(3, 'pastel', '#FF9B97'),
+                    show_condition: () => cubeHasMaterialInstance(getActiveMaterialScope()),
+                    click: () => triggerMaterialPanelAction(delete_material_instance)
+                }
+            });
+
             const updateMaterialInstancePanel = () => {
-                if (!Project.parsed || Blockbench.hasFlag('switching_project')) return;
+                if (!window.Project || !Project.parsed || Blockbench.hasFlag('switching_project')) return;
 
                 const cubes = getSelectedCubes();
                 if (cubes.length === 0) {
-                    global_material_instance_text.set(tl('shader_architect.material_panel.global_material'));
                     material_properties.form.form_config = {
                         no_cube_selected: {
                             type: 'bar_display',
@@ -19606,9 +20158,11 @@ ${stochasticAlpha
                 sanitizeSelectedMaterialInstances(cubes);
                 const activeScope = getActiveMaterialScope();
                 const isFaceScope = isFaceMaterialScope(activeScope);
-                global_material_instance_text.set(isFaceScope
+                const contextText = isFaceScope
                     ? tl('shader_architect.material_panel.element_material')
-                    : (MaterialManager.materials[ShaderEngine.globalRenderMode] ? MaterialManager.materials[ShaderEngine.globalRenderMode].name : tl('shader_architect.material_panel.global_material')));
+                    : (MaterialManager.materials[ShaderEngine.globalRenderMode]
+                        ? MaterialManager.materials[ShaderEngine.globalRenderMode].name
+                        : tl('shader_architect.material_panel.global_material'));
 
                 const isMultiple = areMultipleSelected();
                 const sameMaterialInstance = allSelectedHaveSameMaterialInstance(activeScope);
@@ -19633,10 +20187,10 @@ ${stochasticAlpha
                 }
 
                 if (isMultiple && !sameMaterialInstance) {
-                    cube_material_instance.setOptions(material_instances_options);
-                    cube_material_instance.update();
-                    setBarControl(cube_material_instance, '__mixed__');
-                    material_properties.form.form_config = {
+                    material_properties.form.form_config = Object.assign(
+                        {},
+                        createMaterialOverrideHeader(material_instances_options, '__mixed__', contextText),
+                        {
                         multiple_instances: {
                             type: 'bar_display',
                             value: tl('shader_architect.material_panel.multiple_instances'),
@@ -19645,39 +20199,49 @@ ${stochasticAlpha
                             expand: true,
                             color: 'var(--color-text)'
                         }
-                    };
+                        }
+                    );
                     material_properties.form.buildForm();
                 } else {
                     // Single cube, or multiple cubes that share the same material instance.
                     const firstCube = cubes[0];
                     const instanceId = getCubeMaterialInstanceId(firstCube, activeScope);
-                    cube_material_instance.setOptions(material_instances_options);
-                    cube_material_instance.update();
-                    setBarControl(cube_material_instance, instanceId ? instanceId : 'global');
+                    const selectedInstance = instanceId ? MaterialManager.instances[instanceId] : null;
+                    const overrideHeader = createMaterialOverrideHeader(
+                        material_instances_options,
+                        instanceId || 'global',
+                        contextText,
+                        selectedInstance
+                    );
 
-                    if (instanceId && MaterialManager.instances[instanceId]) {
-                        cube_material_instance_name.set(MaterialManager.instances[instanceId].name);
-                        cube_material_instance_name.update();
-
-                        const instance = MaterialManager.instances[instanceId];
+                    if (instanceId && selectedInstance) {
+                        const instance = selectedInstance;
                         MaterialManager.revalidateMaterialInstance(instance, { save: false });
 
                         const presetOptions = {};
-                        Object.entries(MATERIAL_OVERRIDE_PRESETS).forEach(([presetId, preset]) => {
-                            presetOptions[presetId] = tl(preset.label);
+                        Object.entries(MATERIAL_OVERRIDE_PRESETS).forEach(([presetId, preset], index) => {
+                            presetOptions[presetId] = {
+                                name: preset.label,
+                                icon: 'auto_awesome',
+                                color: window.LightManagerUI.markerColor((index + 4) % 10, 'pastel', '#C5A6E8')
+                            };
                         });
 
-                        let form_config = {
+                        let form_config = Object.assign({}, overrideHeader, {
                             _sa_override_preset: {
-                                type: 'select',
-                                label: tl('shader_architect.material_panel.quick_presets') + ':',
+                                type: 'compact_select',
+                                label: 'shader_architect.material_panel.quick_presets',
+                                hide_label: true,
                                 value: activeMaterialOverridePreset,
                                 options: presetOptions,
-                                description: tl('shader_architect.material_panel.quick_presets.desc')
+                                description: 'shader_architect.material_panel.quick_presets.desc',
+                                background: 'transparent'
                             },
                             _sa_apply_override_preset: {
-                                type: 'buttons',
-                                buttons: [tl('shader_architect.material_panel.apply_preset')],
+                                type: 'action_button',
+                                icon: 'auto_fix_high',
+                                description: 'shader_architect.material_panel.apply_preset',
+                                color: window.LightManagerUI.markerColor(4, 'pastel', '#C5A6E8'),
                                 click() {
                                     if (MaterialManager.applyMaterialOverridePreset(instance, activeMaterialOverridePreset)) {
                                         Blockbench.showQuickMessage(tl('shader_architect.message.preset_applied'), 1800);
@@ -19707,7 +20271,7 @@ ${stochasticAlpha
                                 description: tl('shader_architect.material_panel.show_advanced.desc'),
                                 padding_right: '32px'
                             }
-                        };
+                        });
                         const groupedUniformControls = {};
 
                         const isMaterialUniformGroupOpen = (groupId, groupDef) => {
@@ -19948,7 +20512,7 @@ ${stochasticAlpha
                         material_properties.form.buildForm();
                     }
                     else {
-                        material_properties.form.form_config = {
+                        material_properties.form.form_config = Object.assign({}, overrideHeader, {
                             no_instance: {
                                 type: 'bar_display',
                                 value: tl(isFaceScope ? 'shader_architect.material_panel.no_face_instance' : 'shader_architect.material_panel.no_instance'),
@@ -19957,20 +20521,11 @@ ${stochasticAlpha
                                 expand: true,
                                 color: 'var(--color-text)'
                             }
-                        };
+                        });
                         material_properties.form.buildForm();
                     }
                 }
-
-                material_instance_properties_toolbar.update();
             };
-
-            global_material_instance_text = new window.BarDisplay('sa_current_global_material', {
-                icon: 'info',
-                text: tl('shader_architect.material_panel.global_material'),
-                expand: true,
-                condition: () => { return !cubeHasMaterialInstance(getActiveMaterialScope()); }
-            });
 
             create_material_instance = new Action('sa_create_material_instance', {
                 name: 'shader_architect.material_panel.create_instance',
@@ -20145,167 +20700,10 @@ ${stochasticAlpha
                 }
             });
 
-            cube_material_instance = new CompactDropdownSelect('sa_cube_material_instance', {
-                name: 'shader_architect.material_panel.instance',
-                description: 'shader_architect.material_panel.instance.desc',
-                options: {
-                    global: { name: 'shader_architect.material_panel.global_material', icon: 'globe' }
-                },
-                condition: cubeSelectedCondition,
-                onChange: function () {
-                    if (this.value === '__mixed__') return;
-
-                    const cubes = getSelectedCubes();
-                    if (cubes.length === 0) return;
-
-                    const activeScope = getActiveMaterialScope();
-                    const isFaceScope = isFaceMaterialScope(activeScope);
-                    const nextInstanceId = this.value;
-                    const labelKey = nextInstanceId === 'global'
-                        ? (isFaceScope ? 'shader_architect.material_panel.undo.clear_face_instance' : 'shader_architect.material_panel.undo.clear_instance')
-                        : (isFaceScope ? 'shader_architect.material_panel.undo.assign_face_instance' : 'shader_architect.material_panel.undo.assign_instance');
-
-                    runMaterialInstanceUndo(labelKey, cubes, () => {
-                        cubes.forEach(cube => {
-                            if (nextInstanceId === 'global') {
-                                if (isFaceScope) {
-                                    MaterialManager.clearMaterialInstanceFromCubeFace(cube, activeScope, { apply: false });
-                                } else {
-                                    MaterialManager.clearCubeMaterialAssignment(cube);
-                                }
-                            } else {
-                                if (isFaceScope) {
-                                    MaterialManager.assignInstanceToCubeFace(cube, activeScope, nextInstanceId, { apply: false });
-                                } else {
-                                    MaterialManager.assignInstanceToCube(cube, nextInstanceId, { apply: false });
-                                }
-                            }
-                        });
-                    });
-
-                    ShaderEngine.updateCubes(cubes, 'update_instance');
-                    updateMaterialInstancePanel();
-                }
-            });
-
-            cube_face_material_instance = new HorizontalSelectWidget('sa_cube_face_material_instance', {
-                expand: true, // Will fill the horizontal space of the toolbar
-                bg_color: 'var(--color-back)', // Custom background color
-                divider_color: 'var(--color-border)', // Custom color for the '|' dividers
-                allow_empty: false, // Prevents deselecting the last active item
-                value: 'element',
-
-                options: {
-                    element: {
-                        //name: 'Element',
-                        icon: 'view_in_ar',
-                        color: 'var(--color-light)',
-                        description: 'shader_architect.material_panel.face_scope.element'
-                    },
-                    north: {
-                        name: 'N',
-                        color: 'var(--color-axis-x)',
-                        description: 'shader_architect.material_panel.face_scope.north'
-                    },
-                    south: {
-                        name: 'S',
-                        color: 'var(--color-axis-z)',
-                        description: 'shader_architect.material_panel.face_scope.south'
-                    },
-                    east: {
-                        name: 'E',
-                        color: 'var(--color-axis-y)',
-                        description: 'shader_architect.material_panel.face_scope.east'
-                    },
-                    west: {
-                        name: 'W',
-                        color: 'var(--color-axis-v)',
-                        description: 'shader_architect.material_panel.face_scope.west'
-                    },
-                    up: {
-                        name: 'U',
-                        color: 'var(--color-axis-w)',
-                        description: 'shader_architect.material_panel.face_scope.up'
-                    },
-                    down: {
-                        name: 'D',
-                        color: 'var(--color-axis-u)',
-                        description: 'shader_architect.material_panel.face_scope.down'
-                    }
-                },
-
-                onSelect: function (value) {
-                    const nextScope = Array.isArray(value)
-                        ? (value[value.length - 1] || ELEMENT_MATERIAL_SCOPE)
-                        : (value || ELEMENT_MATERIAL_SCOPE);
-                    const normalizedScope = nextScope === ELEMENT_MATERIAL_SCOPE
-                        ? ELEMENT_MATERIAL_SCOPE
-                        : (MaterialManager.normalizeCubeFaceName(nextScope) || ELEMENT_MATERIAL_SCOPE);
-
-                    if (value !== normalizedScope || Array.isArray(value)) {
-                        this.set(normalizedScope);
-                    }
-                    updateMaterialInstancePanel();
-                }
-            });
-            cube_face_material_instance.set(ELEMENT_MATERIAL_SCOPE);
-
-            cube_material_instance_name = new TextInputWidget('sa_material_instance_name', {
-                name: 'shader_architect.material_panel.instance_name',
-                placeholder: tl('shader_architect.material_panel.instance_name'),
-                default_text: tl('shader_architect.material_panel.new_instance_name'),
-                expand: true,
-                condition: () => {
-                    const cubes = getSelectedCubes();
-                    if (cubes.length === 0) return false;
-                    const activeScope = getActiveMaterialScope();
-                    if (areMultipleSelected() && !allSelectedHaveSameMaterialInstance(activeScope)) return false;
-                    return cubeHasMaterialInstance(activeScope);
-                },
-
-                onFinishEdit: (text, event) => {
-                    const cubes = getSelectedCubes();
-                    if (cubes.length === 0) return;
-                    const firstCube = cubes[0];
-                    const activeScope = getActiveMaterialScope();
-                    const instanceId = getCubeMaterialInstanceId(firstCube, activeScope);
-                    const instance = MaterialManager.instances[instanceId];
-                    if (instance && instance.name !== text) {
-                        runMaterialInstanceUndo('shader_architect.material_panel.undo.rename_instance', [], () => {
-                            const requestedName = typeof text === 'string' ? text.trim() : '';
-                            MaterialManager.renameMaterialInstance(instance, requestedName, {
-                                save: false,
-                                apply: false
-                            });
-                            if (requestedName && instance.name !== requestedName) {
-                                Blockbench.showQuickMessage(tl('shader_architect.message.instance_name_adjusted'), 1800);
-                            }
-                            MaterialManager.saveMaterialInstances({ cause: 'rename_instance' });
-                        });
-                        updateMaterialInstancePanel();
-                    }
-                }
-            });
-
-            material_instance_properties_toolbar = new Toolbar({
-                id: 'sa_material_instance_properties',
-                name: 'shader_architect.material_panel.title',
-                label: true,
-                condition: cubeSelectedCondition,
-                children: [
-                    'sa_cube_face_material_instance',
-                    '#',
-                    'sa_cube_material_instance',
-                    'sa_current_global_material',
-                    'sa_material_instance_name',
-                    'sa_create_material_instance',
-                    'sa_delete_material_instance'
-                ]
-            });
-            deletables.push(create_material_instance, delete_material_instance, cube_material_instance, cube_face_material_instance, cube_material_instance_name, global_material_instance_text, material_instance_properties_toolbar);
+            deletables.push(create_material_instance, delete_material_instance);
 
             const getEventCause = (event) => event && typeof event === 'object' ? event.cause : event;
-            const isProjectSwitching = () => !Project.parsed || Blockbench.hasFlag('switching_project');
+            const isProjectSwitching = () => !window.Project || !Project.parsed || Blockbench.hasFlag('switching_project');
             const skipMaterialPanelRefreshCauses = new Set(['project_update', 'select_project', 'rename_instance', 'update_form', 'update_instance_meta', 'sanitize_instances']);
 
             let materialPanelRenderListener = Blockbench.on('shader_update_complete', (event) => {
@@ -20318,7 +20716,7 @@ ${stochasticAlpha
 
             let materialPanelSelectionListener = Blockbench.on('update_selection', () => {
                 if (isProjectSwitching()) return;
-                cube_face_material_instance.set(ELEMENT_MATERIAL_SCOPE);
+                activeMaterialOverrideScope = ELEMENT_MATERIAL_SCOPE;
                 updateMaterialInstancePanel();
             });
             deletables.push(materialPanelSelectionListener);
@@ -20380,11 +20778,13 @@ ${stochasticAlpha
                 const baseMat = MaterialManager.materials[instance.baseMaterialId] || MaterialManager.materials['classic'];
                 material_instance_manager.form.form_config = {
                     manager_instance_id: {
-                        type: 'select',
+                        type: 'compact_select',
                         label: 'shader_architect.material_panel.select_instance',
+                        hide_label: true,
                         value: activeId,
                         options: getMaterialInstanceManagerOptions(),
-                        description: 'shader_architect.material_panel.select_instance.desc'
+                        description: 'shader_architect.material_panel.select_instance.desc',
+                        background: 'transparent'
                     },
                     manager_details_label: {
                         type: 'bar_display',
@@ -20401,11 +20801,12 @@ ${stochasticAlpha
                         placeholder: tl('shader_architect.material_panel.instance_name')
                     },
                     manager_base_material: {
-                        type: 'select',
+                        type: 'compact_select',
                         label: 'shader_architect.material_panel.base_material',
                         value: 'sa_' + (instance.baseMaterialId || 'classic'),
                         options: getGlobalMaterialMenuOptions(),
-                        description: 'shader_architect.material_panel.base_material.desc'
+                        description: 'shader_architect.material_panel.base_material.desc',
+                        background: 'transparent'
                     },
                     manager_instance_icon: {
                         type: 'text',
@@ -20426,6 +20827,7 @@ ${stochasticAlpha
             };
 
             material_instance_manager = new Panel('material_instance_manager', {
+                name: 'shader_architect.material_panel.instances_title',
                 icon: 'category',
                 growable: true,
                 resizable: true,
@@ -20438,9 +20840,9 @@ ${stochasticAlpha
                     ],
                     float_size: [
                         314,
-                        300
+                        260
                     ],
-                    height: 300,
+                    height: 260,
                     folded: false,
                     fixed_height: false,
                     attached_to: "global_renderer_properties",
@@ -20456,9 +20858,9 @@ ${stochasticAlpha
                         ],
                         float_size: [
                             314,
-                            300
+                            260
                         ],
-                        height: 300,
+                        height: 260,
                         folded: false,
                         fixed_height: false,
                         attached_to: "global_renderer_properties",
@@ -20477,6 +20879,14 @@ ${stochasticAlpha
                     }
                 }
             });
+
+            window.applyIndestructibleFormGroups(material_instance_manager.form, [
+                {
+                    elements: ['manager_details_label', '+', 'manager_instance_id'], gap: '2px',
+                    divider_color: 'var(--color-grid)',
+                    flex: { manager_details_label: '1 1 auto', manager_instance_id: '0 0 auto' }
+                }
+            ]);
 
             material_instance_manager.form.on('change', ({ result, changed_keys }) => {
                 if (isProjectSwitching()) return;
@@ -20580,6 +20990,7 @@ ${stochasticAlpha
             deletables.push(materialInstanceManagerListener);
 
             material_properties = new Panel('material_properties', {
+                name: 'shader_architect.material_panel.overrides_title',
                 icon: 'motion_mode',
                 growable: true,
                 resizable: true,
@@ -20592,9 +21003,9 @@ ${stochasticAlpha
                     ],
                     float_size: [
                         314,
-                        520
+                        420
                     ],
-                    height: 520,
+                    height: 420,
                     folded: false,
                     fixed_height: false,
                     attached_to: "",
@@ -20610,9 +21021,9 @@ ${stochasticAlpha
                         ],
                         float_size: [
                             314,
-                            520
+                            420
                         ],
-                        height: 520,
+                        height: 420,
                         folded: false,
                         fixed_height: false,
                         attached_to: "",
@@ -20620,9 +21031,6 @@ ${stochasticAlpha
                         sidebar_index: 1
                     }
                 },
-                toolbars: [
-                    material_instance_properties_toolbar
-                ],
                 form: {
                     no_cube_selected: {
                         type: 'bar_display',
@@ -20635,8 +21043,55 @@ ${stochasticAlpha
                 }
             });
 
+            window.applyIndestructibleFormGroups(material_properties.form, [
+                {
+                    elements: ['_sa_instance', '_sa_override_context', '_sa_instance_name', '_sa_create_instance', '_sa_delete_instance'], gap: '2px',
+                    flex: {
+                        _sa_instance: '0 0 auto', _sa_override_context: '1 1 auto', _sa_instance_name: '1 1 auto',
+                        _sa_create_instance: '0 0 auto', _sa_delete_instance: '0 0 auto'
+                    }
+                },
+                {
+                    elements: ['_sa_override_preset', '_sa_apply_override_preset'], gap: '2px',
+                    flex: { _sa_override_preset: '1 1 auto', _sa_apply_override_preset: '0 0 auto' }
+                }
+            ]);
+
             material_properties.form.on('change', ({ result, changed_keys }) => {
                 if (isProjectSwitching()) return;
+                const keysToProcess = Array.isArray(changed_keys) && changed_keys.length
+                    ? changed_keys
+                    : Object.keys(result || {});
+
+                if (keysToProcess.includes('_sa_scope')) {
+                    const currentScope = getActiveMaterialScope();
+                    const requestedValue = result && result._sa_scope;
+                    const requestedScope = Array.isArray(requestedValue)
+                        ? (requestedValue[requestedValue.length - 1] || ELEMENT_MATERIAL_SCOPE)
+                        : requestedValue;
+                    const normalizedScope = requestedScope === ELEMENT_MATERIAL_SCOPE
+                        ? ELEMENT_MATERIAL_SCOPE
+                        : (MaterialManager.normalizeCubeFaceName(requestedScope) || ELEMENT_MATERIAL_SCOPE);
+                    if (normalizedScope !== currentScope) {
+                        activeMaterialOverrideScope = normalizedScope;
+                        updateMaterialInstancePanel();
+                        return;
+                    }
+                }
+
+                if (keysToProcess.includes('_sa_instance')) {
+                    const activeScope = getActiveMaterialScope();
+                    const selectedCubes = getSelectedCubes();
+                    const currentInstanceId = selectedCubes.length && allSelectedHaveSameMaterialInstance(activeScope)
+                        ? (getCubeMaterialInstanceId(selectedCubes[0], activeScope) || 'global')
+                        : '__mixed__';
+                    const requestedInstanceId = result && result._sa_instance;
+                    if (requestedInstanceId && requestedInstanceId !== currentInstanceId) {
+                        if (assignSelectedMaterialInstance(requestedInstanceId)) updateMaterialInstancePanel();
+                        return;
+                    }
+                }
+
                 const advancedToggleKey = '_sa_show_advanced_uniforms';
                 const nextShowAdvanced = result && Object.prototype.hasOwnProperty.call(result, advancedToggleKey)
                     ? !!result[advancedToggleKey]
@@ -20651,10 +21106,26 @@ ${stochasticAlpha
                 const instanceId = getCubeMaterialInstanceId(firstCube, activeScope);
                 if (!instanceId || !MaterialManager.instances[instanceId]) return;
                 const instance = MaterialManager.instances[instanceId];
+
+                if (keysToProcess.includes('_sa_instance_name')) {
+                    const requestedName = String(result?._sa_instance_name ?? '').trim();
+                    if (requestedName !== instance.name) {
+                        runMaterialInstanceUndo('shader_architect.material_panel.undo.rename_instance', [], () => {
+                            MaterialManager.renameMaterialInstance(instance, requestedName, {
+                                save: false,
+                                apply: false
+                            });
+                            MaterialManager.saveMaterialInstances({ cause: 'rename_instance' });
+                        });
+                        if (requestedName && instance.name !== requestedName) {
+                            Blockbench.showQuickMessage(tl('shader_architect.message.instance_name_adjusted'), 1800);
+                        }
+                        updateMaterialInstancePanel();
+                        return;
+                    }
+                }
+
                 let uniformChanged = false;
-                const keysToProcess = Array.isArray(changed_keys) && changed_keys.length
-                    ? changed_keys
-                    : Object.keys(result || {});
 
                 for (let key of keysToProcess) {
                     if (key === '_sa_override_preset') {
@@ -20665,6 +21136,8 @@ ${stochasticAlpha
                     } else if (key === '_sa_apply_override_preset') {
                         continue;
                     } else if (key === advancedToggleKey) {
+                        continue;
+                    } else if (['_sa_material_header', '_sa_scope', '_sa_instance', '_sa_override_context', '_sa_instance_name', '_sa_create_instance', '_sa_delete_instance'].includes(key)) {
                         continue;
                     } else if (MaterialManager.isUniformGroupFormKey(key)) {
                         const groupId = MaterialManager.getUniformGroupIdFromFormKey(key);
@@ -20735,6 +21208,8 @@ ${stochasticAlpha
                 if (advancedModeChanged) updateMaterialInstancePanel();
             });
 
+            updateMaterialInstancePanel();
+
             const materialPanelStyle = Blockbench.addCSS(`
                 #panel_global_renderer_properties,
                 #panel_material_instance_manager,
@@ -20751,31 +21226,24 @@ ${stochasticAlpha
                     backdrop-filter: blur(8px);
                     border-bottom: 1px solid var(--color-border);
                 }
-                #panel_global_renderer_properties .toolbar_wrapper {
-                    margin: 6px;
-                    padding: 4px;
-                    border: 1px solid var(--color-border);
-                    border-radius: 7px;
-                    background: color-mix(in srgb, var(--color-back) 70%, var(--color-ui));
-                }
                 #panel_material_instance_manager .form,
                 #panel_material_properties .form {
                     overflow-y: auto !important;
                     overflow-x: hidden;
-                    padding: 8px !important;
+                    padding: 4px !important;
                     box-sizing: border-box;
                 }
                 #panel_material_instance_manager .dialog_bar,
                 #panel_material_properties .dialog_bar {
-                    margin: 0 0 7px !important;
-                    padding: 7px 8px !important;
-                    border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
-                    border-radius: 7px;
-                    background: color-mix(in srgb, var(--color-back) 72%, var(--color-ui));
+                    margin: 0 !important;
+                    padding: 3px 4px !important;
+                    border: 0;
+                    border-radius: 4px;
+                    background: transparent;
                 }
                 #panel_material_instance_manager .dialog_bar:hover,
                 #panel_material_properties .dialog_bar:hover {
-                    border-color: color-mix(in srgb, var(--color-accent) 42%, var(--color-border));
+                    background: color-mix(in srgb, var(--color-selected) 16%, transparent);
                 }
                 #panel_material_instance_manager .dialog_bar label,
                 #panel_material_properties .dialog_bar label {
@@ -20791,26 +21259,20 @@ ${stochasticAlpha
                     border-radius: 3px;
                 }
                 #panel_material_properties .dialog_bar[class*="form_bar__sa_uniform_group_"] {
-                    margin-top: 7px;
+                    margin-top: 4px !important;
                     padding: 0 !important;
                     background: color-mix(in srgb, var(--color-accent) 7%, var(--color-back)) !important;
-                    border-color: color-mix(in srgb, var(--color-accent) 24%, var(--color-border));
+                    border: 1px solid color-mix(in srgb, var(--color-accent) 24%, var(--color-border));
                     border-radius: 7px;
                 }
                 #panel_material_properties .dialog_bar[class*="form_bar__sa_uniform_group_"] .custom_checkbox {
                     height: 28px !important;
                     font-weight: 600;
                 }
-                #panel_material_properties .toolbar_wrapper {
-                    margin: 6px 8px 0;
-                    padding: 4px;
-                    border: 1px solid var(--color-border);
-                    border-radius: 7px;
-                    background: color-mix(in srgb, var(--color-back) 68%, var(--color-ui));
-                }
-
             `);
-            deletables.push(materialPanelStyle);
+            const materialInstancesCompactStyle = window.LightManagerUI.addCompactPanelStyles('material_instance_manager');
+            const materialOverridesCompactStyle = window.LightManagerUI.addCompactPanelStyles('material_properties');
+            deletables.push(materialPanelStyle, materialInstancesCompactStyle, materialOverridesCompactStyle);
 
             deletables.push(material_properties);
 
@@ -21050,13 +21512,9 @@ ${stochasticAlpha
             renderModeSelector = undefined;
             material_instance_manager = undefined;
             material_properties = undefined;
-            cube_material_instance = undefined;
-            cube_material_instance_name = undefined;
-            cube_face_material_instance = undefined;
-            material_instance_properties_toolbar = undefined;
             create_material_instance = undefined;
             delete_material_instance = undefined;
-            global_material_instance_text = undefined;
+            activeMaterialOverrideScope = 'element';
         }
     });
 

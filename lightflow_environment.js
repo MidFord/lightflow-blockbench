@@ -57,6 +57,9 @@
         shadow_resolution: 2048,
         shadow_bias: -0.00035,
         shadow_normal_bias: 0.025,
+        shadow_auto_fit: true,
+        shadow_fit_corners: null,
+        show_shadow_gizmo: true,
         pixelated_shadows: false,
         pixel_shadow_steps: 4,
         pixel_shadow_scale: 2
@@ -86,9 +89,13 @@
     let skyMaterial = null;
     let sunLight = null;
     let sunTarget = null;
+    let sunShadowGizmo = null;
+    let sunShadowGizmoDrag = null;
+    let sunShadowGizmoRaycaster = null;
+    let sunShadowGizmoMouse = null;
+    let effectiveShadowFrustum = null;
+    const sunShadowGizmoListeners = [];
     let settingsAction = null;
-    let timeSlider = null;
-    let animateToggle = null;
     let environmentPanel = null;
     let syncingEnvironmentPanel = false;
     let vanillaCloudTexture = null;
@@ -117,6 +124,34 @@
         if (typeof tl !== 'function') return fallback || key;
         const translated = tl(key);
         return translated === key ? (fallback || key) : translated;
+    }
+
+    function markerColor(index, tone = 'pastel', fallback = 'var(--color-accent)') {
+        return window.LightManagerUI?.markerColor?.(index, tone, fallback) || fallback;
+    }
+
+    function waitForLightManager(timeout = 5000) {
+        return new Promise((resolve, reject) => {
+            if (window.LIGHT_MANAGER_LOADED && window.LightManagerUI && typeof window.applyIndestructibleFormGroups === 'function') {
+                resolve(window.LightManagerUI);
+                return;
+            }
+            let finished = false;
+            const timer = setTimeout(() => {
+                if (finished) return;
+                finished = true;
+                window.removeEventListener('light_manager_initialized', onReady);
+                reject(new Error('Lightflow Environment requires Light Manager.'));
+            }, timeout);
+            function onReady() {
+                if (finished || !window.LightManagerUI || typeof window.applyIndestructibleFormGroups !== 'function') return;
+                finished = true;
+                clearTimeout(timer);
+                window.removeEventListener('light_manager_initialized', onReady);
+                resolve(window.LightManagerUI);
+            }
+            window.addEventListener('light_manager_initialized', onReady);
+        });
     }
 
     function normalizeHex(value, fallback) {
@@ -169,13 +204,19 @@
         result.cloud_contrast = clamp(finite(result.cloud_contrast, 1), 0.1, 4);
         result.cloud_brightness = clamp(finite(result.cloud_brightness, 1), 0, 4);
         result.sun_cast_shadows = result.sun_cast_shadows !== false;
-        result.shadow_area = clamp(finite(result.shadow_area, 48), 2, 1024);
-        result.shadow_near = clamp(finite(result.shadow_near, 0.1), 0.001, 10000);
-        result.shadow_far = Math.max(result.shadow_near + 1, clamp(finite(result.shadow_far, 480), 2, 10000));
+        result.shadow_area = clamp(finite(result.shadow_area, 48), 2, 100000);
+        result.shadow_near = clamp(finite(result.shadow_near, 0.1), 0.001, 100000);
+        result.shadow_far = Math.max(result.shadow_near + 1, clamp(finite(result.shadow_far, 480), 2, 100000));
         result.shadow_resolution = [256, 512, 1024, 2048, 4096, 8192].includes(Number(result.shadow_resolution))
             ? Number(result.shadow_resolution) : 2048;
         result.shadow_bias = clamp(finite(result.shadow_bias, -0.00035), -0.1, 0.1);
         result.shadow_normal_bias = clamp(finite(result.shadow_normal_bias, 0.025), 0, 2);
+        result.shadow_auto_fit = result.shadow_auto_fit !== false;
+        result.shadow_fit_corners = Array.isArray(result.shadow_fit_corners) && result.shadow_fit_corners.length === 24 &&
+            result.shadow_fit_corners.every(value => Number.isFinite(Number(value)))
+            ? result.shadow_fit_corners.map(Number)
+            : null;
+        result.show_shadow_gizmo = result.show_shadow_gizmo !== false;
         result.pixelated_shadows = !!result.pixelated_shadows;
         result.pixel_shadow_steps = Math.round(clamp(finite(result.pixel_shadow_steps, 4), 2, 16));
         result.pixel_shadow_scale = Math.round(clamp(finite(result.pixel_shadow_scale, 2), 1, 16));
@@ -563,6 +604,159 @@
         return true;
     }
 
+    function getActiveShadowFrustum() {
+        return effectiveShadowFrustum || {
+            area: settings.shadow_area,
+            near: settings.shadow_near,
+            far: settings.shadow_far
+        };
+    }
+
+    function getShadowViewQuaternion(position, target) {
+        const matrix = new THREE.Matrix4();
+        matrix.lookAt(position, target, new THREE.Vector3(0, 1, 0));
+        return new THREE.Quaternion().setFromRotationMatrix(matrix);
+    }
+
+    function buildShadowFrustumWorldCorners(frustum, position, quaternion) {
+        const area = Math.max(0.001, finite(frustum.area, settings.shadow_area));
+        const near = Math.max(0.001, finite(frustum.near, settings.shadow_near));
+        const far = Math.max(near + 0.001, finite(frustum.far, settings.shadow_far));
+        const corners = [];
+        [-near, -far].forEach(z => {
+            [-area, area].forEach(x => {
+                [-area, area].forEach(y => {
+                    corners.push(new THREE.Vector3(x, y, z).applyQuaternion(quaternion).add(position));
+                });
+            });
+        });
+        return corners;
+    }
+
+    function getBoxWorldCorners(box) {
+        const min = box.min;
+        const max = box.max;
+        return [
+            new THREE.Vector3(min.x, min.y, min.z), new THREE.Vector3(max.x, min.y, min.z),
+            new THREE.Vector3(max.x, max.y, min.z), new THREE.Vector3(min.x, max.y, min.z),
+            new THREE.Vector3(min.x, min.y, max.z), new THREE.Vector3(max.x, min.y, max.z),
+            new THREE.Vector3(max.x, max.y, max.z), new THREE.Vector3(min.x, max.y, max.z)
+        ];
+    }
+
+    function getWorldAlignedShadowCorners(corners) {
+        const box = new THREE.Box3().setFromPoints(corners);
+        return box.isEmpty() ? [] : getBoxWorldCorners(box);
+    }
+
+    function getReferenceShadowFitCorners() {
+        const referenceDirection = new THREE.Vector3().fromArray(getSunDirection(6000)).normalize();
+        const referenceDistance = Math.max(160, settings.shadow_far * 0.38);
+        const position = referenceDirection.multiplyScalar(referenceDistance);
+        const target = new THREE.Vector3(0, 0, 0);
+        const quaternion = getShadowViewQuaternion(position, target);
+        return getWorldAlignedShadowCorners(buildShadowFrustumWorldCorners({
+            area: settings.shadow_area,
+            near: settings.shadow_near,
+            far: settings.shadow_far
+        }, position, quaternion));
+    }
+
+    function getShadowFitCorners() {
+        if (Array.isArray(settings.shadow_fit_corners) && settings.shadow_fit_corners.length === 24) {
+            const corners = [];
+            for (let index = 0; index < settings.shadow_fit_corners.length; index += 3) {
+                corners.push(new THREE.Vector3(
+                    settings.shadow_fit_corners[index],
+                    settings.shadow_fit_corners[index + 1],
+                    settings.shadow_fit_corners[index + 2]
+                ));
+            }
+            return getWorldAlignedShadowCorners(corners);
+        }
+        return getReferenceShadowFitCorners();
+    }
+
+    function updateSunShadowPlacement(celestialDirection) {
+        if (!sunLight || !sunTarget) return;
+        const direction = new THREE.Vector3().fromArray(celestialDirection);
+        if (direction.lengthSq() < 1e-8) direction.set(0, 1, 0);
+        else direction.normalize();
+
+        /*
+         * The marked region stays fixed in world space. Only the directional
+         * shadow camera moves with the celestial light, so refit its symmetric
+         * orthographic bounds and depth range around the same eight corners.
+        */
+        const fitCorners = settings.shadow_auto_fit ? getShadowFitCorners() : null;
+        const targetPosition = fitCorners
+            ? new THREE.Box3().setFromPoints(fitCorners).getCenter(new THREE.Vector3())
+            : new THREE.Vector3(0, 0, 0);
+        const nearestRegionProjection = fitCorners
+            ? fitCorners.reduce((projection, corner) => Math.max(
+                projection,
+                corner.clone().sub(targetPosition).dot(direction)
+            ), -Infinity)
+            : 0;
+        const distance = settings.shadow_auto_fit
+            ? Math.max(160, nearestRegionProjection + 1)
+            : Math.max(160, settings.shadow_far * 0.38);
+        const lightPosition = targetPosition.clone().add(direction.multiplyScalar(distance));
+        sunLight.position.copy(lightPosition);
+        sunTarget.position.copy(targetPosition);
+        sunLight.updateMatrixWorld(true);
+        sunTarget.updateMatrixWorld(true);
+
+        if (!fitCorners) {
+            effectiveShadowFrustum = {
+                area: settings.shadow_area,
+                near: settings.shadow_near,
+                far: settings.shadow_far
+            };
+            return;
+        }
+
+        const viewQuaternion = getShadowViewQuaternion(lightPosition, targetPosition);
+        const inverseViewQuaternion = viewQuaternion.clone().invert();
+        let area = 0;
+        let near = Infinity;
+        let far = -Infinity;
+        fitCorners.forEach(corner => {
+            const local = corner.clone().sub(lightPosition).applyQuaternion(inverseViewQuaternion);
+            area = Math.max(area, Math.abs(local.x), Math.abs(local.y));
+            const depth = -local.z;
+            near = Math.min(near, depth);
+            far = Math.max(far, depth);
+        });
+
+        const lateralPadding = Math.max(0.25, area * 0.015);
+        const depthSpan = Math.max(1, far - near);
+        const depthPadding = Math.max(0.5, depthSpan * 0.01);
+        effectiveShadowFrustum = {
+            area: Math.max(2, area + lateralPadding),
+            near: Math.max(0.001, near - depthPadding),
+            far: Math.max(Math.max(0.001, near - depthPadding) + 1, far + depthPadding)
+        };
+    }
+
+    function captureShadowFitRegion(frustum) {
+        if (!sunLight || !sunTarget) return;
+        const position = new THREE.Vector3();
+        const target = new THREE.Vector3();
+        sunLight.getWorldPosition(position);
+        sunTarget.getWorldPosition(target);
+        if (sunShadowGizmoDrag?.viewPosition) position.copy(sunShadowGizmoDrag.viewPosition);
+        const quaternion = sunShadowGizmoDrag?.viewQuaternion
+            ? sunShadowGizmoDrag.viewQuaternion.clone()
+            : sunShadowGizmo?.root
+                ? sunShadowGizmo.root.quaternion.clone()
+                : getShadowViewQuaternion(position, target);
+        const corners = getWorldAlignedShadowCorners(
+            buildShadowFrustumWorldCorners(frustum, position, quaternion)
+        );
+        settings.shadow_fit_corners = corners.flatMap(corner => corner.toArray());
+    }
+
     function configureSunShadow(force) {
         if (!sunLight?.shadow) return;
         const renderer = window.Preview?.selected?.renderer || window.main_preview?.renderer;
@@ -574,14 +768,15 @@
             // Use the conservative fallback.
         }
         const resolution = Math.min(settings.shadow_resolution, maxTextureSize);
-        const area = settings.shadow_area;
+        const frustum = getActiveShadowFrustum();
+        const area = frustum.area;
         const shadow = sunLight.shadow;
-        const recreate = force || shadow.mapSize.width !== resolution || shadow.camera.left !== -area;
+        const recreate = force || shadow.mapSize.width !== resolution || shadow.mapSize.height !== resolution;
         sunLight.castShadow = !!settings.sun_cast_shadows;
         shadow.mapSize.set(resolution, resolution);
         Object.assign(shadow.camera, {
             left: -area, right: area, top: area, bottom: -area,
-            near: settings.shadow_near, far: settings.shadow_far
+            near: frustum.near, far: frustum.far
         });
         shadow.bias = settings.shadow_bias;
         shadow.normalBias = settings.shadow_normal_bias;
@@ -592,6 +787,294 @@
             shadow.map = null;
         }
         shadow.needsUpdate = true;
+    }
+
+    function registerSunShadowCanvasGizmo(object) {
+        if (!object || !window.Canvas || !Array.isArray(Canvas.gizmos)) return;
+        if (!Canvas.gizmos.includes(object)) Canvas.gizmos.push(object);
+    }
+
+    function unregisterSunShadowCanvasGizmo(object) {
+        if (!object || !window.Canvas || !Array.isArray(Canvas.gizmos)) return;
+        const index = Canvas.gizmos.indexOf(object);
+        if (index >= 0) Canvas.gizmos.splice(index, 1);
+    }
+
+    function pushSunShadowGizmoLine(vertices, a, b) {
+        vertices.push(a[0], a[1], a[2], b[0], b[1], b[2]);
+    }
+
+    function getShadowFitBox() {
+        return new THREE.Box3().setFromPoints(getShadowFitCorners());
+    }
+
+    function buildSunShadowGizmoVertices() {
+        const size = getShadowFitBox().getSize(new THREE.Vector3()).multiplyScalar(0.5);
+        const x = Math.max(0.001, size.x);
+        const y = Math.max(0.001, size.y);
+        const z = Math.max(0.001, size.z);
+        const vertices = [];
+        const corners = [
+            [-x, -y, -z], [x, -y, -z],
+            [x, y, -z], [-x, y, -z],
+            [-x, -y, z], [x, -y, z],
+            [x, y, z], [-x, y, z]
+        ];
+        [
+            [0, 1], [1, 2], [2, 3], [3, 0],
+            [4, 5], [5, 6], [6, 7], [7, 4],
+            [0, 4], [1, 5], [2, 6], [3, 7]
+        ].forEach(edge => pushSunShadowGizmoLine(vertices, corners[edge[0]], corners[edge[1]]));
+        pushSunShadowGizmoLine(vertices, [-x, 0, 0], [x, 0, 0]);
+        pushSunShadowGizmoLine(vertices, [0, -y, 0], [0, y, 0]);
+        pushSunShadowGizmoLine(vertices, [0, 0, -z], [0, 0, z]);
+        return vertices;
+    }
+
+    function makeSunShadowGizmoHandle(root, name, color, axis, sign) {
+        const material = new THREE.MeshBasicMaterial({
+            color,
+            transparent: true,
+            opacity: 0.95,
+            depthTest: false,
+            depthWrite: false
+        });
+        const handle = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 8), material);
+        handle.name = `lightflow_environment_shadow_${name}`;
+        handle.renderOrder = 1003;
+        handle.userData.lightflowEnvironmentShadowHandle = { name, axis, sign };
+        root.add(handle);
+        return handle;
+    }
+
+    function createSunShadowGizmo() {
+        if (!window.THREE || !window.Canvas?.scene || sunShadowGizmo) return sunShadowGizmo;
+        const root = new THREE.Group();
+        root.name = 'lightflow_environment_shadow_gizmo';
+        root.renderOrder = 1001;
+        root.raycast = () => { };
+
+        const lineMaterial = new THREE.LineBasicMaterial({
+            color: 0xfff3c4,
+            transparent: true,
+            opacity: 0.38,
+            depthTest: false,
+            depthWrite: false
+        });
+        const line = new THREE.LineSegments(new THREE.BufferGeometry(), lineMaterial);
+        line.name = 'lightflow_environment_shadow_area';
+        line.raycast = () => { };
+        root.add(line);
+
+        const handles = {
+            boundPX: makeSunShadowGizmoHandle(root, 'bound_px', 0xb55af8, 'x', 1),
+            boundNX: makeSunShadowGizmoHandle(root, 'bound_nx', 0xb55af8, 'x', -1),
+            boundPY: makeSunShadowGizmoHandle(root, 'bound_py', 0xb55af8, 'y', 1),
+            boundNY: makeSunShadowGizmoHandle(root, 'bound_ny', 0xb55af8, 'y', -1),
+            near: makeSunShadowGizmoHandle(root, 'near', 0xec9218, 'z', 1),
+            far: makeSunShadowGizmoHandle(root, 'far', 0xfa565d, 'z', -1)
+        };
+        Canvas.scene.add(root);
+        registerSunShadowCanvasGizmo(root);
+        sunShadowGizmo = { root, line, lineMaterial, handles, signature: '' };
+        return sunShadowGizmo;
+    }
+
+    function getSunShadowGizmoControlScale(localPosition) {
+        const preview = window.Preview?.selected || window.main_preview;
+        if (!preview || typeof preview.calculateControlScale !== 'function' || !sunShadowGizmo?.root) return 0.45;
+        const worldPosition = localPosition.clone();
+        sunShadowGizmo.root.localToWorld(worldPosition);
+        return Math.max(0.08, preview.calculateControlScale(worldPosition) || 0.45) * 0.52;
+    }
+
+    function updateSunShadowGizmo() {
+        const gizmo = createSunShadowGizmo();
+        if (!gizmo || !sunLight || !sunTarget) return;
+        const shouldShow = !!(
+            settings.show_shadow_gizmo &&
+            settings.enabled &&
+            settings.sun_enabled &&
+            settings.sun_cast_shadows &&
+            settings.shadow_auto_fit &&
+            (!window.Canvas || Canvas.show_gizmos !== false)
+        );
+        gizmo.root.visible = shouldShow;
+        if (!shouldShow) return;
+
+        const fitBox = getShadowFitBox();
+        const center = fitBox.getCenter(new THREE.Vector3());
+        const halfSize = fitBox.getSize(new THREE.Vector3()).multiplyScalar(0.5);
+        gizmo.root.position.copy(center);
+        gizmo.root.quaternion.identity();
+        gizmo.root.scale.setScalar(1);
+        gizmo.lineMaterial.color.copy(sunLight.color);
+
+        const signature = [
+            fitBox.min.x, fitBox.min.y, fitBox.min.z,
+            fitBox.max.x, fitBox.max.y, fitBox.max.z
+        ].join('|');
+        if (gizmo.signature !== signature) {
+            const geometry = new THREE.BufferGeometry();
+            geometry.setAttribute('position', new THREE.Float32BufferAttribute(buildSunShadowGizmoVertices(), 3));
+            gizmo.line.geometry.dispose();
+            gizmo.line.geometry = geometry;
+            gizmo.signature = signature;
+        }
+
+        const positions = {
+            boundPX: new THREE.Vector3(halfSize.x, 0, 0),
+            boundNX: new THREE.Vector3(-halfSize.x, 0, 0),
+            boundPY: new THREE.Vector3(0, halfSize.y, 0),
+            boundNY: new THREE.Vector3(0, -halfSize.y, 0),
+            near: new THREE.Vector3(0, 0, halfSize.z),
+            far: new THREE.Vector3(0, 0, -halfSize.z)
+        };
+        Object.keys(gizmo.handles).forEach(key => {
+            const handle = gizmo.handles[key];
+            handle.position.copy(positions[key]);
+            handle.scale.setScalar(getSunShadowGizmoControlScale(positions[key]));
+        });
+    }
+
+    function disposeSunShadowGizmo() {
+        sunShadowGizmoDrag = null;
+        sunShadowGizmoListeners.splice(0).forEach(listener => listener());
+        if (!sunShadowGizmo) return;
+        unregisterSunShadowCanvasGizmo(sunShadowGizmo.root);
+        sunShadowGizmo.root.parent?.remove?.(sunShadowGizmo.root);
+        sunShadowGizmo.root.traverse(object => {
+            object.geometry?.dispose?.();
+            const materials = Array.isArray(object.material) ? object.material : (object.material ? [object.material] : []);
+            materials.forEach(material => material?.dispose?.());
+        });
+        sunShadowGizmo = null;
+        sunShadowGizmoRaycaster = null;
+        sunShadowGizmoMouse = null;
+        effectiveShadowFrustum = null;
+    }
+
+    function getSunShadowGizmoPreview(event) {
+        const target = event?.target;
+        if (!target) return window.Preview?.selected || window.main_preview || null;
+        const canvas = target.tagName === 'CANVAS'
+            ? target
+            : (typeof target.closest === 'function' ? target.closest('.preview canvas') : null);
+        return (canvas && canvas.preview) || window.Preview?.selected || window.main_preview || null;
+    }
+
+    function setSunShadowGizmoRay(event, preview) {
+        if (!preview?.canvas || !preview.camera) return null;
+        sunShadowGizmoRaycaster = sunShadowGizmoRaycaster || new THREE.Raycaster();
+        sunShadowGizmoMouse = sunShadowGizmoMouse || new THREE.Vector2();
+        const rect = preview.canvas.getBoundingClientRect();
+        sunShadowGizmoMouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+        sunShadowGizmoMouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+        sunShadowGizmoRaycaster.setFromCamera(sunShadowGizmoMouse, preview.camera);
+        return sunShadowGizmoRaycaster.ray;
+    }
+
+    function projectSunShadowGizmoEvent(event, drag) {
+        const ray = setSunShadowGizmoRay(event, drag.preview);
+        if (!ray) return null;
+        const point = new THREE.Vector3();
+        return ray.intersectPlane(drag.plane, point) ? point : null;
+    }
+
+    function stopSunShadowGizmoEvent(event) {
+        event?.preventDefault?.();
+        event?.stopPropagation?.();
+        event?.stopImmediatePropagation?.();
+    }
+
+    function updateSunShadowGizmoDrag(event) {
+        const drag = sunShadowGizmoDrag;
+        if (!drag || !sunShadowGizmo?.root) return;
+        const worldPoint = projectSunShadowGizmoEvent(event, drag);
+        if (!worldPoint) return;
+        const localPoint = drag.viewPosition && drag.inverseViewQuaternion
+            ? worldPoint.clone().sub(drag.viewPosition).applyQuaternion(drag.inverseViewQuaternion)
+            : sunShadowGizmo.root.worldToLocal(worldPoint.clone());
+        const axis = drag.handle.axis;
+        if (!['x', 'y', 'z'].includes(axis)) return;
+        const halfSize = drag.startHalfSize.clone();
+        halfSize[axis] = clamp(Math.abs(localPoint[axis]), 0.001, 100000);
+        const min = drag.startCenter.clone().sub(halfSize);
+        const max = drag.startCenter.clone().add(halfSize);
+        const corners = getBoxWorldCorners(new THREE.Box3(min, max));
+        applySettings({
+            shadow_auto_fit: true,
+            shadow_fit_corners: corners.flatMap(corner => corner.toArray())
+        }, {
+            cause: 'shadow_gizmo',
+            forceShadow: false,
+            syncPanel: false
+        });
+    }
+
+    function installSunShadowGizmoInteraction() {
+        if (typeof document === 'undefined' || sunShadowGizmoListeners.length) return;
+        const onPointerDown = event => {
+            if (event.button !== 0 || !sunShadowGizmo?.root?.visible || window.Canvas?.show_gizmos === false) return;
+            const preview = getSunShadowGizmoPreview(event);
+            if (!preview?.canvas || event.target !== preview.canvas) return;
+            setSunShadowGizmoRay(event, preview);
+            const handles = Object.values(sunShadowGizmo.handles).filter(handle => handle.visible !== false);
+            const hit = sunShadowGizmoRaycaster.intersectObjects(handles, false)[0];
+            const handle = hit?.object?.userData?.lightflowEnvironmentShadowHandle;
+            if (!hit || !handle) return;
+            const normal = new THREE.Vector3(0, 0, -1);
+            preview.camera.getWorldDirection(normal);
+            const fitBox = getShadowFitBox();
+            sunShadowGizmoDrag = {
+                handle,
+                preview,
+                plane: new THREE.Plane().setFromNormalAndCoplanarPoint(normal, hit.point),
+                viewPosition: sunShadowGizmo.root.position.clone(),
+                viewQuaternion: sunShadowGizmo.root.quaternion.clone(),
+                inverseViewQuaternion: sunShadowGizmo.root.quaternion.clone().invert(),
+                startCenter: fitBox.getCenter(new THREE.Vector3()),
+                startHalfSize: fitBox.getSize(new THREE.Vector3()).multiplyScalar(0.5),
+                original: {
+                    shadow_auto_fit: settings.shadow_auto_fit,
+                    shadow_fit_corners: Array.isArray(settings.shadow_fit_corners)
+                        ? settings.shadow_fit_corners.slice()
+                        : null
+                }
+            };
+            stopSunShadowGizmoEvent(event);
+        };
+        const onPointerMove = event => {
+            if (!sunShadowGizmoDrag) return;
+            stopSunShadowGizmoEvent(event);
+            updateSunShadowGizmoDrag(event);
+        };
+        const onPointerUp = event => {
+            if (!sunShadowGizmoDrag) return;
+            stopSunShadowGizmoEvent(event);
+            sunShadowGizmoDrag = null;
+        };
+        const onKeyDown = event => {
+            if (!sunShadowGizmoDrag || event.key !== 'Escape') return;
+            const original = sunShadowGizmoDrag.original;
+            sunShadowGizmoDrag = null;
+            stopSunShadowGizmoEvent(event);
+            applySettings(original, {
+                cause: 'shadow_gizmo_cancel',
+                forceShadow: false,
+                captureShadowFitRegion: false
+            });
+        };
+        document.addEventListener('pointerdown', onPointerDown, true);
+        document.addEventListener('pointermove', onPointerMove, true);
+        document.addEventListener('pointerup', onPointerUp, true);
+        document.addEventListener('keydown', onKeyDown, true);
+        sunShadowGizmoListeners.push(
+            () => document.removeEventListener('pointerdown', onPointerDown, true),
+            () => document.removeEventListener('pointermove', onPointerMove, true),
+            () => document.removeEventListener('pointerup', onPointerUp, true),
+            () => document.removeEventListener('keydown', onKeyDown, true)
+        );
     }
 
     function setColor(target, value) {
@@ -654,12 +1137,11 @@
             sunLight.visible = !!(settings.enabled && settings.sun_enabled && state.sunIntensity > 0.0001);
             sunLight.intensity = state.sunIntensity;
             setColor(sunLight.color, state.sunColor);
-            sunLight.position.fromArray(state.celestialDirection)
-                .multiplyScalar(Math.max(160, settings.shadow_far * 0.38));
-            sunTarget.position.set(0, 0, 0);
+            updateSunShadowPlacement(state.celestialDirection);
             configureSunShadow(!!options.forceShadow);
             sunLight.updateMatrixWorld(true);
             sunTarget.updateMatrixWorld(true);
+            updateSunShadowGizmo();
         }
 
         if (window.ShaderEngine) {
@@ -671,7 +1153,11 @@
             }
         }
         if (typeof window.LightManagerMarkShadowsDirty === 'function') {
-            window.LightManagerMarkShadowsDirty();
+            window.LightManagerMarkShadowsDirty({ scene: !!options.forceShadow });
+        }
+        if (typeof window.LightManagerPrepareRender === 'function') {
+            const preview = window.Preview?.selected || window.main_preview || window.MediaPreview || null;
+            window.LightManagerPrepareRender(preview, { force: !!options.forceShadow });
         }
     }
 
@@ -701,18 +1187,53 @@
         Blockbench.dispatchEvent?.('lightflow_environment_changed', detail);
     }
 
-    function syncToolbar() {
-        timeSlider?.set?.(settings.time);
-        if (animateToggle) {
-            animateToggle.value = settings.animate_time;
-            animateToggle.updateEnabledState?.();
+    function syncEnvironmentPanel(options = {}) {
+        if (!environmentPanel?.form || syncingEnvironmentPanel) return;
+        const controls = environmentPanel.form.form_data;
+        if (!controls) return;
+        syncingEnvironmentPanel = true;
+        try {
+            controls.time?.setValue?.(settings.time);
+            if (options.timeOnly) return;
+            controls.enabled?.setValue?.(settings.enabled);
+            controls.preset?.setValue?.(settings.preset);
+            controls.animate_time?.setValue?.(settings.animate_time);
+            controls.sky_intensity?.setValue?.(settings.sky_intensity);
+            controls.environment_strength?.setValue?.(settings.environment_strength);
+            controls.cloud_mode?.setValue?.(settings.cloud_mode);
+        } finally {
+            syncingEnvironmentPanel = false;
         }
+        environmentPanel.form.update();
     }
 
     function applySettings(next, options = {}) {
-        settings = normalizeSettings(Object.assign({}, settings, next || {}));
+        const incoming = next || {};
+        const frustumKeys = ['shadow_area', 'shadow_near', 'shadow_far'];
+        const hasFrustumEdit = frustumKeys.some(key => Object.prototype.hasOwnProperty.call(incoming, key));
+        const shouldCaptureFitRegion = hasFrustumEdit && (
+            options.captureShadowFitRegion === true ||
+            (
+                options.captureShadowFitRegion !== false &&
+                options.cause !== 'dialog_preview' &&
+                options.cause !== 'dialog_confirm'
+            )
+        );
+        const activeFrustum = getActiveShadowFrustum();
+        const manualFrustum = {
+            area: Object.prototype.hasOwnProperty.call(incoming, 'shadow_area') ? incoming.shadow_area : activeFrustum.area,
+            near: Object.prototype.hasOwnProperty.call(incoming, 'shadow_near') ? incoming.shadow_near : activeFrustum.near,
+            far: Object.prototype.hasOwnProperty.call(incoming, 'shadow_far') ? incoming.shadow_far : activeFrustum.far
+        };
+        const merged = Object.assign({}, settings, incoming);
+        if (shouldCaptureFitRegion) {
+            merged.shadow_area = manualFrustum.area;
+            merged.shadow_near = manualFrustum.near;
+            merged.shadow_far = manualFrustum.far;
+        }
+        settings = normalizeSettings(merged);
+        if (shouldCaptureFitRegion) captureShadowFitRegion(manualFrustum);
         saveSettings();
-        syncToolbar();
         if (options.syncPanel !== false) syncEnvironmentPanel();
         updateScene({ forceShadow: options.forceShadow !== false });
         dispatchChanged(options.cause || 'settings');
@@ -758,8 +1279,77 @@
         };
     }
 
+    function collectEnvironmentSceneFitTargets(fitTool) {
+        const targets = [];
+        const seen = new Set();
+        const roots = Array.isArray(window.Outliner?.root) && Outliner.root.length
+            ? Outliner.root
+            : (Array.isArray(window.Outliner?.elements) ? Outliner.elements : []);
+        roots.forEach(node => fitTool.addTargetNode(node, targets, seen));
+        return targets;
+    }
+
+    function getEnvironmentShadowFitSource() {
+        const fitTool = window.LightManagerFitTool;
+        if (!fitTool) return null;
+
+        const selectedTargets = fitTool.getSelectedTargets();
+        const selectedPoints = fitTool.collectTargetPoints(selectedTargets);
+        if (selectedTargets.length && selectedPoints.length) {
+            return { targets: selectedTargets, points: selectedPoints, mode: 'selection' };
+        }
+
+        const sceneTargets = collectEnvironmentSceneFitTargets(fitTool);
+        const scenePoints = fitTool.collectTargetPoints(sceneTargets);
+        if (!sceneTargets.length || !scenePoints.length) return null;
+        return { targets: sceneTargets, points: scenePoints, mode: 'scene' };
+    }
+
+    function fitEnvironmentShadowRegion() {
+        const source = getEnvironmentShadowFitSource();
+        if (!source) {
+            Blockbench.showQuickMessage(tr(
+                'lightflow_environment.message.fit_no_geometry',
+                'No geometry is available to fit the environment shadow region.'
+            ));
+            return false;
+        }
+
+        const box = window.LightManagerFitTool.getPointsBox(source.points);
+        if (!box || box.isEmpty()) return false;
+        const size = box.getSize(new THREE.Vector3());
+        const margin = Math.max(0.25, Math.max(size.x, size.y, size.z) * 0.015);
+        box.expandByScalar(margin);
+        const min = box.min;
+        const max = box.max;
+        const corners = [
+            [min.x, min.y, min.z], [max.x, min.y, min.z],
+            [max.x, max.y, min.z], [min.x, max.y, min.z],
+            [min.x, min.y, max.z], [max.x, min.y, max.z],
+            [max.x, max.y, max.z], [min.x, max.y, max.z]
+        ];
+        applySettings({
+            shadow_auto_fit: true,
+            shadow_fit_corners: corners.flat()
+        }, {
+            cause: 'fit_shadow_region',
+            forceShadow: false,
+            syncPanel: true
+        });
+
+        const messageKey = source.mode === 'selection'
+            ? 'lightflow_environment.message.fit_selection'
+            : 'lightflow_environment.message.fit_scene';
+        const fallback = source.mode === 'selection'
+            ? 'Environment shadows fitted to the selected geometry.'
+            : 'Environment shadows fitted to all scene geometry.';
+        Blockbench.showQuickMessage(tr(messageKey, fallback));
+        return true;
+    }
+
     function createDialogForm() {
         const textureOptions = getTextureOptions();
+        const shadowFrustum = getActiveShadowFrustum();
         return {
             preset: { type: 'select', label: 'lightflow_environment.field.preset', value: settings.preset,
                 options: { vanilla: 'Minecraft Vanilla', vibrant_visuals: 'Minecraft Vibrant Visuals' } },
@@ -817,11 +1407,19 @@
             cloud_brightness: { type: 'range', label: 'lightflow_environment.field.cloud_brightness', value: settings.cloud_brightness, min: 0, max: 4, step: 0.05, condition: form => !!form.clouds_enabled },
             _shadows: '_',
             sun_cast_shadows: { type: 'checkbox', label: 'lightflow_environment.field.cast_shadows', value: settings.sun_cast_shadows, condition: form => !!form.sun_enabled },
-            shadow_area: { type: 'number', label: 'lightflow_environment.field.shadow_area', value: settings.shadow_area, min: 2, max: 1024, step: 1, condition: form => !!form.sun_cast_shadows },
+            fit_shadow_region: {
+                type: 'buttons',
+                buttons: ['lightflow_environment.action.fit_shadow_region'],
+                click: fitEnvironmentShadowRegion,
+                condition: form => !!form.sun_cast_shadows
+            },
+            shadow_auto_fit: { type: 'checkbox', label: 'lightflow_environment.field.shadow_auto_fit', value: settings.shadow_auto_fit, condition: form => !!form.sun_cast_shadows },
+            show_shadow_gizmo: { type: 'checkbox', label: 'lightflow_environment.field.show_shadow_gizmo', value: settings.show_shadow_gizmo, condition: form => !!form.sun_cast_shadows && !!form.shadow_auto_fit },
+            shadow_area: { type: 'number', label: 'lightflow_environment.field.shadow_area', value: shadowFrustum.area, min: 2, max: 100000, step: 1, condition: form => !!form.sun_cast_shadows && !form.shadow_auto_fit },
             shadow_resolution: { type: 'select', label: 'lightflow_environment.field.shadow_resolution', value: String(settings.shadow_resolution),
                 options: { '256': '256', '512': '512', '1024': '1024', '2048': '2048', '4096': '4096', '8192': '8192' }, condition: form => !!form.sun_cast_shadows },
-            shadow_near: { type: 'number', label: 'lightflow_environment.field.shadow_near', value: settings.shadow_near, min: 0.001, step: 0.1, condition: form => !!form.sun_cast_shadows },
-            shadow_far: { type: 'number', label: 'lightflow_environment.field.shadow_far', value: settings.shadow_far, min: 2, step: 1, condition: form => !!form.sun_cast_shadows },
+            shadow_near: { type: 'number', label: 'lightflow_environment.field.shadow_near', value: shadowFrustum.near, min: 0.001, step: 0.1, condition: form => !!form.sun_cast_shadows && !form.shadow_auto_fit },
+            shadow_far: { type: 'number', label: 'lightflow_environment.field.shadow_far', value: shadowFrustum.far, min: 2, step: 1, condition: form => !!form.sun_cast_shadows && !form.shadow_auto_fit },
             shadow_bias: { type: 'number', label: 'lightflow_environment.field.shadow_bias', value: settings.shadow_bias, min: -0.1, max: 0.1, step: 0.00005, condition: form => !!form.sun_cast_shadows },
             shadow_normal_bias: { type: 'number', label: 'lightflow_environment.field.normal_bias', value: settings.shadow_normal_bias, min: 0, max: 2, step: 0.005, condition: form => !!form.sun_cast_shadows },
             pixelated_shadows: { type: 'checkbox', label: 'lightflow_environment.field.pixelated_shadows', value: settings.pixelated_shadows, condition: form => !!form.sun_cast_shadows },
@@ -832,37 +1430,95 @@
 
     function createPanelForm() {
         return {
-            enabled: { type: 'checkbox', label: 'lightflow_environment.field.enabled', value: settings.enabled },
-            preset: { type: 'select', label: 'lightflow_environment.field.preset', value: settings.preset,
-                options: { vanilla: 'Minecraft Vanilla', vibrant_visuals: 'Minecraft Vibrant Visuals' } },
-            time: { type: 'range', label: 'lightflow_environment.field.time', value: settings.time, min: 0, max: 23999, step: 100 },
-            animate_time: { type: 'checkbox', label: 'lightflow_environment.field.animate', value: settings.animate_time },
-            sky_intensity: { type: 'range', label: 'lightflow_environment.field.sky_intensity', value: settings.sky_intensity, min: 0, max: 4, step: 0.05 },
-            environment_strength: { type: 'range', label: 'lightflow_environment.field.environment', value: settings.environment_strength, min: 0, max: 4, step: 0.05 },
-            cloud_mode: { type: 'select', label: 'lightflow_environment.field.cloud_mode', value: settings.cloud_mode,
-                options: { procedural: 'lightflow_environment.option.cloud_procedural', vanilla: 'lightflow_environment.option.cloud_vanilla', texture: 'lightflow_environment.option.cloud_texture' } },
-            panel_advanced: { type: 'buttons', buttons: ['lightflow_environment.action.open'], click() { openSettingsDialog(); } }
+            enabled: {
+                type: 'action_toggle', value: settings.enabled, description: 'lightflow_environment.field.enabled',
+                icon_on: 'public', icon_off: 'public_off', bg_on: markerColor(0, 'standard', '#58C0FF'),
+                color_on: 'var(--color-ui)', color_off: 'var(--color-subtle_text)', icon_size: '22px'
+            },
+            preset: {
+                type: 'compact_select', label: 'lightflow_environment.field.preset', hide_label: true,
+                description: 'lightflow_environment.field.preset', background: 'transparent', value: settings.preset,
+                options: {
+                    vanilla: { name: 'Minecraft Vanilla', icon: 'landscape', color: markerColor(0, 'pastel', '#A2EBFF') },
+                    vibrant_visuals: { name: 'Minecraft Vibrant Visuals', icon: 'auto_awesome', color: markerColor(1, 'pastel', '#FFF899') }
+                }
+            },
+            animate_time: {
+                type: 'action_toggle', value: settings.animate_time, description: 'lightflow_environment.field.animate',
+                icon_on: 'pause_circle', icon_off: 'play_circle', bg_on: markerColor(6, 'standard', '#00CE71'),
+                color_on: 'var(--color-ui)', color_off: markerColor(6, 'pastel', '#7BFFA3')
+            },
+            panel_advanced: {
+                type: 'action_button', icon: 'tune', description: 'lightflow_environment.action.open',
+                color: markerColor(4, 'pastel', '#C5A6E8'), click: openSettingsDialog
+            },
+            fit_shadow_region: {
+                type: 'action_button', icon: 'center_focus_strong',
+                description: 'lightflow_environment.action.fit_shadow_region.desc',
+                color: markerColor(4, 'pastel', '#C5A6E8'), click: fitEnvironmentShadowRegion
+            },
+            time: {
+                type: 'combo_slider', label: 'lightflow_environment.field.time', icon: 'schedule',
+                color: markerColor(1, 'pastel', '#FFF899'), value: settings.time,
+                resettable: true, reset_value: DEFAULT_SETTINGS.time, min: 0, max: 23999, step: 100
+            },
+            sky_label: {
+                type: 'bar_display', icon: 'wb_twilight', paragraph: false, expand: false,
+                color: 'var(--color-subtle_text)', description: 'lightflow_environment.field.sky_intensity'
+            },
+            sky_intensity: {
+                type: 'combo_slider', label: 'lightflow_environment.field.sky_intensity', icon: 'wb_sunny',
+                background: 'transparent', color: markerColor(2, 'pastel', '#F1BB75'),
+                icon_color: markerColor(2, 'pastel', '#F1BB75'), compact: true, popup_width: '300px',
+                value: settings.sky_intensity, resettable: true, reset_value: DEFAULT_SETTINGS.sky_intensity,
+                min: 0, max: 4, step: 0.05
+            },
+            environment_strength: {
+                type: 'combo_slider', label: 'lightflow_environment.field.environment', icon: 'language',
+                background: 'transparent', color: markerColor(6, 'pastel', '#7BFFA3'),
+                icon_color: markerColor(6, 'pastel', '#7BFFA3'), compact: true, popup_width: '300px',
+                value: settings.environment_strength, resettable: true, reset_value: DEFAULT_SETTINGS.environment_strength,
+                min: 0, max: 4, step: 0.05
+            },
+            cloud_mode: {
+                type: 'compact_select', label: 'lightflow_environment.field.cloud_mode', hide_label: true,
+                description: 'lightflow_environment.field.cloud_mode', background: 'transparent', value: settings.cloud_mode,
+                options: {
+                    procedural: { name: 'lightflow_environment.option.cloud_procedural', icon: 'grain', color: markerColor(9, 'pastel', '#E0E9FB') },
+                    vanilla: { name: 'lightflow_environment.option.cloud_vanilla', icon: 'cloud', color: markerColor(0, 'pastel', '#A2EBFF') },
+                    texture: { name: 'lightflow_environment.option.cloud_texture', icon: 'texture', color: markerColor(8, 'pastel', '#FFA5D5') }
+                }
+            }
         };
     }
 
-    function syncEnvironmentPanel() {
-        if (!environmentPanel?.form || syncingEnvironmentPanel) return;
-        syncingEnvironmentPanel = true;
-        environmentPanel.form.form_config = createPanelForm();
-        environmentPanel.form.buildForm();
-        syncingEnvironmentPanel = false;
-    }
-
     function openSettingsDialog() {
+        const formConfig = createDialogForm();
+        let previousShadowFrustum = {
+            shadow_area: formConfig.shadow_area.value,
+            shadow_near: formConfig.shadow_near.value,
+            shadow_far: formConfig.shadow_far.value
+        };
+        const applyDialogSettings = (form, options) => {
+            const shadowFrustumChanged = ['shadow_area', 'shadow_near', 'shadow_far'].some(key => (
+                Math.abs(finite(form[key], previousShadowFrustum[key]) - finite(previousShadowFrustum[key], 0)) > 1e-6
+            ));
+            previousShadowFrustum = {
+                shadow_area: form.shadow_area,
+                shadow_near: form.shadow_near,
+                shadow_far: form.shadow_far
+            };
+            applySettings(form, { ...options, captureShadowFitRegion: shadowFrustumChanged });
+        };
         new Dialog('lightflow_environment_composer_dialog', {
             title: 'lightflow_environment.dialog.title',
             width: 720,
-            form: createDialogForm(),
+            form: formConfig,
             onFormChange(form) {
-                applySettings(form, { cause: 'dialog_preview', forceShadow: false, syncPanel: false });
+                applyDialogSettings(form, { cause: 'dialog_preview', forceShadow: false, syncPanel: false });
             },
             onConfirm(form) {
-                applySettings(form, { cause: 'dialog_confirm', forceShadow: true, syncPanel: true });
+                applyDialogSettings(form, { cause: 'dialog_confirm', forceShadow: true, syncPanel: true });
             }
         }).show();
     }
@@ -876,67 +1532,60 @@
             condition: () => !!window.Project,
             click: openSettingsDialog
         });
-        timeSlider = new NumSlider('lightflow_environment_time', {
-            name: 'lightflow_environment.field.time',
-            icon: 'schedule',
-            category: 'view',
-            condition: () => !!window.Project,
-            value: settings.time,
-            min: 0, max: 23999, step: 100,
-            onChange() {
-                applySettings({ time: this.value }, { cause: 'time_slider', forceShadow: false });
-            }
-        });
-        animateToggle = new Toggle('lightflow_environment_animate', {
-            name: 'lightflow_environment.field.animate',
-            icon: 'play_circle',
-            category: 'view',
-            condition: () => !!window.Project,
-            value: settings.animate_time,
-            onChange(value) {
-                applySettings({ animate_time: !!value }, { cause: 'animate_toggle', forceShadow: false });
-            }
-        });
-        const toolbar = new Toolbar({
-            id: 'lightflow_environment_toolbar',
-            name: 'lightflow_environment.plugin.title',
-            children: ['lightflow_environment_composer', 'lightflow_environment_time', 'lightflow_environment_animate']
-        });
         environmentPanel = new Panel('lightflow_environment_panel', {
-            name: 'lightflow_environment.plugin.title',
+            name: 'lightflow_environment.panel.title',
             icon: 'wb_twilight',
             growable: true,
             resizable: true,
             expand_button: true,
             condition: { modes: ['render'], project: true },
             default_position: {
-                slot: 'right_bar', float_position: [0, 0], float_size: [340, 460], height: 390,
+                slot: 'right_bar', float_position: [0, 0], float_size: [314, 200], height: 200,
                 folded: false, attached_to: 'outliner', attached_index: 1, sidebar_index: 1
             },
             mode_positions: {
                 render: {
-                    slot: 'right_bar', height: 390, folded: false,
+                    slot: 'right_bar', height: 200, folded: false,
                     attached_to: 'outliner', attached_index: 1, sidebar_index: 1
                 }
             },
             insert_after: 'outliner',
-            toolbars: [toolbar],
             form: createPanelForm()
         });
         environmentPanel.form.on('change', ({ result }) => {
             if (syncingEnvironmentPanel) return;
-            applySettings(result, { cause: 'environment_panel', forceShadow: false, syncPanel: false });
+            const panelResult = {};
+            ['enabled', 'preset', 'time', 'animate_time', 'sky_intensity', 'environment_strength', 'cloud_mode'].forEach(key => {
+                if (result && Object.prototype.hasOwnProperty.call(result, key)) panelResult[key] = result[key];
+            });
+            applySettings(panelResult, { cause: 'environment_panel', forceShadow: false, syncPanel: false });
         });
+        window.applyIndestructibleFormGroups(environmentPanel.form, [
+            {
+                elements: ['enabled', 'preset', '+', 'animate_time', 'fit_shadow_region', 'panel_advanced'], gap: '2px',
+                divider_color: 'var(--color-grid)',
+                flex: { enabled: '0 0 auto', preset: '0 0 auto', animate_time: '0 0 auto', fit_shadow_region: '0 0 auto', panel_advanced: '0 0 auto' }
+            },
+            { elements: ['time'], gap: '2px', flex: { time: '1 1 100%' } },
+            {
+                elements: ['sky_label', 'sky_intensity', 'environment_strength', 'cloud_mode'], gap: '2px',
+                flex: { sky_label: '0 0 auto', sky_intensity: '0 0 auto', environment_strength: '0 0 auto', cloud_mode: '0 0 auto' }
+            }
+        ]);
+        const panelStyles = window.LightManagerUI.addCompactPanelStyles('lightflow_environment_panel');
         MenuBar.menus.view.addAction(settingsAction, '9');
-        deletables.push(settingsAction, timeSlider, animateToggle, toolbar, environmentPanel);
-        syncToolbar();
+        deletables.push(settingsAction, environmentPanel, panelStyles);
+        syncEnvironmentPanel();
     }
 
     function installTranslations() {
         const translations = {
             'lightflow_environment.plugin.title': 'Lightflow Environment',
+            'lightflow_environment.panel.title': 'ENVIRONMENT',
             'lightflow_environment.action.open': 'Environment Composer...',
             'lightflow_environment.action.open.desc': 'Compose a Minecraft sky, time, sun, moon, clouds, ambient response, and directional shadows',
+            'lightflow_environment.action.fit_shadow_region': 'Fit Shadow Region to Selection / Scene',
+            'lightflow_environment.action.fit_shadow_region.desc': 'Fit environment shadows to selected geometry, or to all scene geometry when nothing is selected',
             'lightflow_environment.dialog.title': 'Minecraft Environment Composer',
             'lightflow_environment.field.preset': 'Sky Model',
             'lightflow_environment.field.enabled': 'Render Environment',
@@ -990,6 +1639,8 @@
             'lightflow_environment.field.cloud_contrast': 'Cloud Contrast',
             'lightflow_environment.field.cloud_brightness': 'Cloud Brightness',
             'lightflow_environment.field.cast_shadows': 'Sun Cast Shadows',
+            'lightflow_environment.field.shadow_auto_fit': 'Fixed World Shadow Coverage Box',
+            'lightflow_environment.field.show_shadow_gizmo': 'Show Editable Fixed Shadow Box',
             'lightflow_environment.field.shadow_area': 'Shadow Capture Area',
             'lightflow_environment.field.shadow_resolution': 'Shadow Resolution',
             'lightflow_environment.field.shadow_near': 'Shadow Near Plane',
@@ -998,12 +1649,19 @@
             'lightflow_environment.field.normal_bias': 'Shadow Normal Bias',
             'lightflow_environment.field.pixelated_shadows': 'Vibrant Visuals Pixel Shadows',
             'lightflow_environment.field.pixel_shadow_steps': 'Shadow Tone Steps',
-            'lightflow_environment.field.pixel_shadow_scale': 'Shadow Pixel Size'
+            'lightflow_environment.field.pixel_shadow_scale': 'Shadow Pixel Size',
+            'lightflow_environment.message.light_manager_required': 'Lightflow Environment requires Light Manager.',
+            'lightflow_environment.message.fit_selection': 'Environment shadows fitted to the selected geometry.',
+            'lightflow_environment.message.fit_scene': 'Environment shadows fitted to all scene geometry.',
+            'lightflow_environment.message.fit_no_geometry': 'No geometry is available to fit the environment shadow region.'
         };
         Language.addTranslations('en', translations);
         Language.addTranslations('es', Object.assign({}, translations, {
             'lightflow_environment.plugin.title': 'Entorno Lightflow',
+            'lightflow_environment.panel.title': 'ENTORNO',
             'lightflow_environment.action.open': 'Compositor de entorno...',
+            'lightflow_environment.action.fit_shadow_region': 'Ajustar región de sombras a selección / escena',
+            'lightflow_environment.action.fit_shadow_region.desc': 'Ajusta las sombras a la geometría seleccionada o a toda la escena cuando no hay selección',
             'lightflow_environment.dialog.title': 'Compositor de entorno Minecraft',
             'lightflow_environment.field.preset': 'Modelo de cielo',
             'lightflow_environment.field.enabled': 'Renderizar entorno',
@@ -1043,8 +1701,14 @@
             'lightflow_environment.field.cloud_contrast': 'Contraste de nubes',
             'lightflow_environment.field.cloud_brightness': 'Brillo de nubes',
             'lightflow_environment.field.cast_shadows': 'El sol proyecta sombras',
+            'lightflow_environment.field.shadow_auto_fit': 'Caja fija mundial de cobertura de sombras',
+            'lightflow_environment.field.show_shadow_gizmo': 'Mostrar caja fija de sombras editable',
             'lightflow_environment.field.shadow_area': 'Área de captura de sombras',
-            'lightflow_environment.field.pixelated_shadows': 'Sombras pixeladas Vibrant Visuals'
+            'lightflow_environment.field.pixelated_shadows': 'Sombras pixeladas Vibrant Visuals',
+            'lightflow_environment.message.light_manager_required': 'Lightflow Environment requiere Light Manager.',
+            'lightflow_environment.message.fit_selection': 'Sombras del entorno ajustadas a la geometría seleccionada.',
+            'lightflow_environment.message.fit_scene': 'Sombras del entorno ajustadas a toda la geometría de la escena.',
+            'lightflow_environment.message.fit_no_geometry': 'No hay geometría disponible para ajustar la región de sombras.'
         }));
     }
 
@@ -1062,6 +1726,7 @@
     function loadProjectSettings(project) {
         const activeProject = project || window.Project;
         if (!activeProject) return;
+        effectiveShadowFrustum = null;
         const raw = activeProject[PROJECT_PROPERTY];
         if (typeof raw === 'string' && raw.trim()) {
             try {
@@ -1072,7 +1737,6 @@
         } else {
             settings = loadSettings();
         }
-        syncToolbar();
         syncEnvironmentPanel();
         updateScene({ forceShadow: true });
         dispatchChanged('project_load');
@@ -1090,7 +1754,7 @@
             settings.time = mod(settings.time + deltaSeconds * 24000 / Math.max(settings.day_length_seconds, 1), 24000);
             if (timestamp - lastRenderTime < 33) return;
             lastRenderTime = timestamp;
-            syncToolbar();
+            syncEnvironmentPanel({ timeOnly: true });
             updateScene({ forceShadow: false });
             dispatchChanged('animation');
             requestPreviewRender();
@@ -1099,6 +1763,7 @@
     }
 
     function disposeScene() {
+        disposeSunShadowGizmo();
         if (sunLight) {
             if (window.three_lights?.[sunLight.uuid] === sunLight) delete window.three_lights[sunLight.uuid];
             sunLight.parent?.remove?.(sunLight);
@@ -1136,13 +1801,25 @@
         version: PLUGIN_VERSION,
         min_version: '4.9.0',
         variant: 'both',
+        dependencies: ['light_manager'],
 
-        onload() {
+        async onload() {
+            try {
+                await waitForLightManager();
+            } catch (error) {
+                Blockbench.showToastNotification({
+                    text: tr('lightflow_environment.message.light_manager_required', 'Lightflow Environment requires Light Manager.'),
+                    icon: 'error',
+                    expire: 10000
+                });
+                return;
+            }
             registerProjectProperty();
             installUI();
             createSky();
             createSunLight();
             updateScene({ forceShadow: true });
+            installSunShadowGizmoInteraction();
 
             window.LightflowEnvironment = {
                 get settings() { return Object.assign({}, settings); },
@@ -1168,12 +1845,13 @@
             };
             const textureListeners = ['add_texture', 'remove_texture', 'update_texture']
                 .map(eventName => Blockbench.on(eventName, textureChanged));
+            const viewListener = Blockbench.on('update_view', () => updateSunShadowGizmo());
             const lightManagerListener = () => {
                 ensureSunLightParent();
                 updateScene({ forceShadow: true });
             };
             window.addEventListener('light_manager_initialized', lightManagerListener);
-            deletables.push(selectListener, loadListener, parsedListener, ...textureListeners, {
+            deletables.push(selectListener, loadListener, parsedListener, ...textureListeners, viewListener, {
                 delete() { window.removeEventListener('light_manager_initialized', lightManagerListener); }
             });
             startAnimation();

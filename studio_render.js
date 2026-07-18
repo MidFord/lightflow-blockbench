@@ -64,10 +64,7 @@
     let frameAction;
     let resetFrameAction;
     let sceneComposerAction;
-    let viewportBloomToggle;
-    let sceneBloomStrength;
     let sceneComposerPanel;
-    let sceneComposerToolbar;
     let sceneComposerProjectListener;
     let sceneComposerModeListener;
     let syncingSceneComposerPanel = false;
@@ -369,6 +366,7 @@
             'studio_render.field.vignette': 'Vignette',
             'studio_render.action.scene_composer': 'Scene Composer...',
             'studio_render.action.scene_composer.desc': 'Match realtime viewport post-processing to Studio Render and coordinate the Lightflow environment',
+            'studio_render.panel.composer': 'COMPOSER',
             'studio_render.field.zoom': 'Focal Length',
             'studio_render.field.gpu': 'GPU',
             'studio_render.field.gpu_renderer': 'Renderer',
@@ -486,6 +484,7 @@
             'studio_render.field.vignette': 'Viñeta',
             'studio_render.action.scene_composer': 'Compositor de escena...',
             'studio_render.action.scene_composer.desc': 'Iguala el postprocesado del viewport con Studio Render y coordina el entorno Lightflow',
+            'studio_render.panel.composer': 'COMPOSITOR',
             'studio_render.field.zoom': 'Distancia Focal',
             'studio_render.field.gpu': 'GPU',
             'studio_render.field.gpu_renderer': 'Renderer',
@@ -3748,18 +3747,6 @@
                 type: 'range', label: 'studio_render.field.bloom_strength', value: settings.bloom_strength,
                 min: 0, max: 3, step: 0.05, condition: form => !!form.bloom_enabled
             },
-            bloom_threshold: {
-                type: 'range', label: 'studio_render.field.bloom_threshold', value: settings.bloom_threshold,
-                min: 0, max: 1, step: 0.01, condition: form => !!form.bloom_enabled
-            },
-            bloom_radius: {
-                type: 'range', label: 'studio_render.field.bloom_radius', value: settings.bloom_radius,
-                min: 1, max: 96, step: 1, condition: form => !!form.bloom_enabled
-            },
-            bloom_emissive_strength: {
-                type: 'range', label: 'studio_render.field.bloom_emissive_strength', value: settings.bloom_emissive_strength,
-                min: 0, max: 6, step: 0.05, condition: form => !!form.bloom_enabled
-            },
             composer_advanced: {
                 type: 'buttons', buttons: ['studio_render.action.open_advanced'],
                 click() { openSceneComposerDialog(); }
@@ -3799,10 +3786,6 @@
             }
         }
 
-        if (viewportBloomToggle) {
-            viewportBloomToggle.value = !!currentSettings.viewport_bloom_enabled;
-            viewportBloomToggle.updateEnabledState?.();
-        }
         refreshSceneComposerPreviews();
     }
 
@@ -3871,6 +3854,9 @@
     }
 
     function addStyles() {
+        const palette = Array.isArray(globalThis.markerColors) ? globalThis.markerColors : [];
+        const previewColor = palette[0]?.pastel || '#A2EBFF';
+        const bloomColor = palette[8]?.pastel || '#FFA5D5';
         stylesheet = Blockbench.addCSS(`
             #studio_render_frame {
                 position: absolute;
@@ -4094,6 +4080,39 @@
                 background: rgba(72, 210, 125, 0.12);
                 box-shadow: inset 0 0 0 1px rgba(72, 210, 125, 0.24);
             }
+            #panel_lightflow_scene_composer_panel {
+                overflow-y: auto !important;
+                overflow-x: hidden;
+                background: var(--color-ui);
+            }
+            #panel_lightflow_scene_composer_panel .dialog_bar {
+                min-height: 27px;
+                margin: 0;
+                padding-top: 1px;
+                padding-bottom: 1px;
+                box-sizing: border-box;
+            }
+            #panel_lightflow_scene_composer_panel .form_bar_viewport_bloom_enabled,
+            #panel_lightflow_scene_composer_panel .form_bar_bloom_enabled {
+                border-left: 3px solid ${previewColor};
+                padding-left: 7px;
+            }
+            #panel_lightflow_scene_composer_panel .form_bar_bloom_enabled {
+                border-left-color: ${bloomColor};
+            }
+            #panel_lightflow_scene_composer_panel .form_bar_viewport_bloom_fps input[type="range"] {
+                --color-thumb: ${previewColor};
+            }
+            #panel_lightflow_scene_composer_panel .form_bar_bloom_strength input[type="range"] {
+                --color-thumb: ${bloomColor};
+            }
+            #panel_lightflow_scene_composer_panel::-webkit-scrollbar {
+                width: 6px;
+            }
+            #panel_lightflow_scene_composer_panel::-webkit-scrollbar-thumb {
+                background: var(--color-button);
+                border-radius: 3px;
+            }
         `);
     }
 
@@ -4112,9 +4131,6 @@
         if (frameAction) frameAction.delete();
         if (resetFrameAction) resetFrameAction.delete();
         if (sceneComposerAction) sceneComposerAction.delete();
-        if (viewportBloomToggle) viewportBloomToggle.delete();
-        if (sceneBloomStrength) sceneBloomStrength.delete();
-        if (sceneComposerToolbar) sceneComposerToolbar.delete();
         if (sceneComposerPanel) sceneComposerPanel.delete();
         if (sceneComposerProjectListener) sceneComposerProjectListener.delete?.();
         if (sceneComposerModeListener) sceneComposerModeListener.delete?.();
@@ -4193,50 +4209,8 @@
                 click: openSceneComposerDialog
             });
 
-            viewportBloomToggle = new Toggle('lightflow_viewport_bloom', {
-                name: 'studio_render.field.viewport_bloom_enabled',
-                icon: 'flare',
-                category: 'view',
-                condition: () => !!getPreview(),
-                value: !!currentSettings.viewport_bloom_enabled,
-                onChange(value) {
-                    currentSettings.viewport_bloom_enabled = !!value;
-                    saveSettings(normalizeForm(currentSettings));
-                    syncSceneComposerPanel();
-                    refreshSceneComposerPreviews();
-                }
-            });
-
-            sceneBloomStrength = new NumSlider('lightflow_scene_bloom_strength', {
-                name: 'studio_render.field.bloom_strength',
-                icon: 'blur_on',
-                category: 'view',
-                condition: () => !!getPreview(),
-                value: currentSettings.bloom_strength,
-                min: 0,
-                max: 3,
-                step: 0.05,
-                onChange() {
-                    currentSettings.bloom_strength = clamp(toNumber(this.value, 0.8), 0, 3);
-                    currentSettings.bloom_enabled = currentSettings.bloom_strength > 0;
-                    saveSettings(normalizeForm(currentSettings));
-                    syncSceneComposerPanel();
-                    refreshSceneComposerPreviews();
-                }
-            });
-
-            sceneComposerToolbar = new Toolbar({
-                id: 'lightflow_scene_composer_toolbar',
-                name: 'studio_render.action.scene_composer',
-                children: [
-                    'lightflow_scene_composer',
-                    'lightflow_viewport_bloom',
-                    'lightflow_scene_bloom_strength'
-                ]
-            });
-
             sceneComposerPanel = new Panel('lightflow_scene_composer_panel', {
-                name: 'studio_render.action.scene_composer',
+                name: 'studio_render.panel.composer',
                 icon: 'auto_fix_high',
                 growable: true,
                 resizable: true,
@@ -4245,8 +4219,8 @@
                 default_position: {
                     slot: 'right_bar',
                     float_position: [0, 0],
-                    float_size: [340, 420],
-                    height: 360,
+                    float_size: [314, 200],
+                    height: 200,
                     folded: false,
                     attached_to: window.Panels?.lightflow_environment_panel ? 'lightflow_environment_panel' : 'outliner',
                     attached_index: 2,
@@ -4255,7 +4229,7 @@
                 mode_positions: {
                     render: {
                         slot: 'right_bar',
-                        height: 360,
+                        height: 200,
                         folded: false,
                         attached_to: window.Panels?.lightflow_environment_panel ? 'lightflow_environment_panel' : 'outliner',
                         attached_index: 2,
@@ -4263,7 +4237,6 @@
                     }
                 },
                 insert_after: window.Panels?.lightflow_environment_panel ? 'lightflow_environment_panel' : 'outliner',
-                toolbars: [sceneComposerToolbar],
                 form: createSceneComposerPanelForm(currentSettings)
             });
 

@@ -115,6 +115,34 @@
         return translated === key ? (fallback || key) : translated;
     }
 
+    function markerColor(index, tone = 'pastel', fallback = 'var(--color-accent)') {
+        return window.LightManagerUI?.markerColor?.(index, tone, fallback) || fallback;
+    }
+
+    function waitForLightManager(timeout = 5000) {
+        return new Promise((resolve, reject) => {
+            if (window.LIGHT_MANAGER_LOADED && window.LightManagerUI && typeof window.applyIndestructibleFormGroups === 'function') {
+                resolve(window.LightManagerUI);
+                return;
+            }
+            let finished = false;
+            const timer = setTimeout(() => {
+                if (finished) return;
+                finished = true;
+                window.removeEventListener('light_manager_initialized', onReady);
+                reject(new Error('Lightflow Atmosphere requires Light Manager.'));
+            }, timeout);
+            function onReady() {
+                if (finished || !window.LightManagerUI || typeof window.applyIndestructibleFormGroups !== 'function') return;
+                finished = true;
+                clearTimeout(timer);
+                window.removeEventListener('light_manager_initialized', onReady);
+                resolve(window.LightManagerUI);
+            }
+            window.addEventListener('light_manager_initialized', onReady);
+        });
+    }
+
     function colorArrayToHex(value) {
         const source = Array.isArray(value) ? value : [255, 255, 255];
         return '#' + source.slice(0, 3).map(channel => {
@@ -2240,22 +2268,63 @@
                 type: 'bar_display', value: volume.name, icon: volume.density_mode === 'cloud' ? 'cloud' : 'blur_on',
                 paragraph: false, expand: true, color: 'var(--color-text)'
             },
-            panel_enabled: { type: 'checkbox', label: 'lightflow_atmosphere.field.enabled', value: volume.enabled !== false },
+            panel_enabled: {
+                type: 'action_toggle', value: volume.enabled !== false, description: 'lightflow_atmosphere.field.enabled',
+                icon_on: 'blur_on', icon_off: 'blur_off', bg_on: markerColor(0, 'standard', '#58C0FF'),
+                color_on: 'var(--color-ui)', color_off: 'var(--color-subtle_text)', icon_size: '22px'
+            },
             panel_mode: {
-                type: 'select', label: 'lightflow_atmosphere.field.density_mode', value: volume.density_mode,
-                options: { uniform: 'lightflow_atmosphere.option.uniform', height: 'lightflow_atmosphere.option.height', cloud: 'lightflow_atmosphere.option.cloud' }
+                type: 'compact_select', label: 'lightflow_atmosphere.field.density_mode', hide_label: true,
+                description: 'lightflow_atmosphere.field.density_mode', background: 'transparent', value: volume.density_mode,
+                options: {
+                    uniform: { name: 'lightflow_atmosphere.option.uniform', icon: 'blur_on', color: markerColor(9, 'pastel', '#E0E9FB') },
+                    height: { name: 'lightflow_atmosphere.option.height', icon: 'gradient', color: markerColor(0, 'pastel', '#A2EBFF') },
+                    cloud: { name: 'lightflow_atmosphere.option.cloud', icon: 'cloud', color: markerColor(4, 'pastel', '#C5A6E8') }
+                }
             },
             panel_composite: {
-                type: 'select', label: 'lightflow_atmosphere.field.composite_mode', value: volume.composite_mode,
-                options: { physical: 'lightflow_atmosphere.option.physical', shafts: 'lightflow_atmosphere.option.shafts' }
+                type: 'compact_select', label: 'lightflow_atmosphere.field.composite_mode', hide_label: true,
+                description: 'lightflow_atmosphere.field.composite_mode', background: 'transparent', value: volume.composite_mode,
+                options: {
+                    physical: { name: 'lightflow_atmosphere.option.physical', icon: 'air', color: markerColor(6, 'pastel', '#7BFFA3') },
+                    shafts: { name: 'lightflow_atmosphere.option.shafts', icon: 'flare', color: markerColor(1, 'pastel', '#FFF899') }
+                }
             },
-            panel_density: { type: 'range', label: 'lightflow_atmosphere.field.density', value: volume.density, min: 0, max: 0.3, step: 0.001 },
-            panel_scattering: { type: 'range', label: 'lightflow_atmosphere.field.scattering', value: volume.scattering_strength, min: 0, max: 4, step: 0.01 },
-            panel_anisotropy: { type: 'range', label: 'lightflow_atmosphere.field.anisotropy', value: volume.anisotropy, min: -0.92, max: 0.92, step: 0.01 },
-            panel_shadows: { type: 'checkbox', label: 'lightflow_atmosphere.field.receive_shadows', value: volume.receive_shadows !== false },
+            panel_density: {
+                type: 'combo_slider', label: 'lightflow_atmosphere.field.density', icon: 'opacity',
+                color: markerColor(0, 'pastel', '#A2EBFF'), value: volume.density,
+                resettable: true, reset_value: 0.032, min: 0, max: 0.3, step: 0.001
+            },
+            optics_label: {
+                type: 'bar_display', icon: 'lens_blur', paragraph: false, expand: false,
+                color: 'var(--color-subtle_text)', description: 'lightflow_atmosphere.field.scattering'
+            },
+            panel_scattering: {
+                type: 'combo_slider', label: 'lightflow_atmosphere.field.scattering', icon: 'light_mode',
+                background: 'transparent', color: markerColor(1, 'pastel', '#FFF899'),
+                icon_color: markerColor(1, 'pastel', '#FFF899'), compact: true, popup_width: '300px',
+                value: volume.scattering_strength, resettable: true, reset_value: 1, min: 0, max: 4, step: 0.01
+            },
+            panel_anisotropy: {
+                type: 'combo_slider', label: 'lightflow_atmosphere.field.anisotropy', icon: 'compare_arrows',
+                background: 'transparent', color: markerColor(8, 'pastel', '#FFA5D5'),
+                icon_color: markerColor(8, 'pastel', '#FFA5D5'), compact: true, popup_width: '300px',
+                value: volume.anisotropy, resettable: true, reset_value: 0.18,
+                min: -0.92, max: 0.92, step: 0.01, allow_lower: true
+            },
+            panel_shadows: {
+                type: 'action_toggle', value: volume.receive_shadows !== false,
+                description: 'lightflow_atmosphere.field.receive_shadows', icon_on: 'ev_shadow', icon_off: 'contrast_rtl_off',
+                bg_on: markerColor(5, 'standard', '#4D89FF'), color_on: 'var(--color-ui)',
+                color_off: markerColor(5, 'pastel', '#A6C8FF')
+            },
             advanced: {
-                type: 'buttons', buttons: ['lightflow_atmosphere.button.advanced'],
-                click() { openVolumeDialog(); }
+                type: 'action_button', icon: 'tune', description: 'lightflow_atmosphere.button.advanced',
+                color: markerColor(4, 'pastel', '#C5A6E8'), click: openVolumeDialog
+            },
+            quality: {
+                type: 'action_button', icon: 'speed', description: 'lightflow_atmosphere.action.settings',
+                color: markerColor(6, 'pastel', '#7BFFA3'), click: openSettingsDialog
             }
         };
     }
@@ -2276,12 +2345,12 @@
             resizable: true,
             condition: { modes: ['edit', 'render'], method: () => getSelectedVolumes().length > 0 },
             default_position: {
-                slot: 'right_bar', float_position: [0, 0], float_size: [320, 430], height: 430,
+                slot: 'right_bar', float_position: [0, 0], float_size: [314, 200], height: 200,
                 attached_to: 'transform', attached_index: 1, sidebar_index: 2
             },
             mode_positions: {
-                edit: { slot: 'right_bar', height: 430, attached_to: 'transform', attached_index: 1, sidebar_index: 2 },
-                render: { slot: 'left_bar', height: 430, attached_to: 'material_properties', attached_index: 2, sidebar_index: 2 }
+                edit: { slot: 'right_bar', height: 200, attached_to: 'transform', attached_index: 1, sidebar_index: 2 },
+                render: { slot: 'left_bar', height: 200, attached_to: 'material_properties', attached_index: 2, sidebar_index: 2 }
             },
             form: panelForm(getSelectedVolumes()[0])
         });
@@ -2305,7 +2374,24 @@
             Undo.finishEdit(tr('lightflow_atmosphere.undo.edit', 'Edit Volume Domain'));
             requestPreviewRender();
         });
-        deletables.push(atmospherePanel);
+        window.applyIndestructibleFormGroups(atmospherePanel.form, [
+            {
+                elements: ['summary', '+', 'panel_enabled', 'panel_mode', 'panel_composite'], gap: '2px',
+                divider_color: 'var(--color-grid)',
+                flex: { summary: '1 1 auto', panel_enabled: '0 0 auto', panel_mode: '0 0 auto', panel_composite: '0 0 auto' }
+            },
+            { elements: ['panel_density'], gap: '2px', flex: { panel_density: '1 1 100%' } },
+            {
+                elements: ['optics_label', 'panel_scattering', 'panel_anisotropy', '+', 'panel_shadows', 'advanced', 'quality'], gap: '2px',
+                divider_color: 'var(--color-grid)',
+                flex: {
+                    optics_label: '0 0 auto', panel_scattering: '0 0 auto', panel_anisotropy: '0 0 auto',
+                    panel_shadows: '0 0 auto', advanced: '0 0 auto', quality: '0 0 auto'
+                }
+            }
+        ]);
+        const panelStyles = window.LightManagerUI.addCompactPanelStyles('lightflow_atmosphere_properties');
+        deletables.push(atmospherePanel, panelStyles);
     }
 
     function openSettingsDialog() {
@@ -2387,7 +2473,7 @@
             'lightflow_atmosphere.action.edit': 'Edit Volume Domain',
             'lightflow_atmosphere.action.fit': 'Fit Volume to Selection',
             'lightflow_atmosphere.action.settings': 'Atmosphere Quality...',
-            'lightflow_atmosphere.panel.title': 'ATMOSPHERE',
+            'lightflow_atmosphere.panel.title': 'VOLUME',
             'lightflow_atmosphere.panel.none': 'Select a Volume Domain',
             'lightflow_atmosphere.dialog.edit': 'Volume Domain',
             'lightflow_atmosphere.dialog.edit_many': 'Edit Volume Domains',
@@ -2442,7 +2528,8 @@
             'lightflow_atmosphere.undo.add': 'Add Volume Domain',
             'lightflow_atmosphere.undo.edit': 'Edit Volume Domain',
             'lightflow_atmosphere.undo.fit': 'Fit Volume Domain',
-            'lightflow_atmosphere.message.render_failed': 'Atmosphere disabled after a GPU render error'
+            'lightflow_atmosphere.message.render_failed': 'Atmosphere disabled after a GPU render error',
+            'lightflow_atmosphere.message.light_manager_required': 'Lightflow Atmosphere requires Light Manager.'
         });
         Language.addTranslations('es', {
             'lightflow_atmosphere.plugin.title': 'Atmósfera Lightflow',
@@ -2451,7 +2538,7 @@
             'lightflow_atmosphere.action.edit': 'Editar dominio volumétrico',
             'lightflow_atmosphere.action.fit': 'Ajustar volumen a la selección',
             'lightflow_atmosphere.action.settings': 'Calidad de atmósfera...',
-            'lightflow_atmosphere.panel.title': 'ATMÓSFERA',
+            'lightflow_atmosphere.panel.title': 'VOLUMEN',
             'lightflow_atmosphere.panel.none': 'Selecciona un dominio volumétrico',
             'lightflow_atmosphere.dialog.edit': 'Dominio volumétrico',
             'lightflow_atmosphere.dialog.edit_many': 'Editar dominios volumétricos',
@@ -2506,7 +2593,8 @@
             'lightflow_atmosphere.undo.add': 'Añadir dominio volumétrico',
             'lightflow_atmosphere.undo.edit': 'Editar dominio volumétrico',
             'lightflow_atmosphere.undo.fit': 'Ajustar dominio volumétrico',
-            'lightflow_atmosphere.message.render_failed': 'La atmósfera se desactivó tras un error de render de la GPU'
+            'lightflow_atmosphere.message.render_failed': 'La atmósfera se desactivó tras un error de render de la GPU',
+            'lightflow_atmosphere.message.light_manager_required': 'Lightflow Atmosphere requiere Light Manager.'
         });
     }
 
@@ -2540,8 +2628,19 @@
         version: PLUGIN_VERSION,
         min_version: '4.9.0',
         variant: 'both',
+        dependencies: ['light_manager'],
 
-        onload() {
+        async onload() {
+            try {
+                await waitForLightManager();
+            } catch (error) {
+                Blockbench.showToastNotification({
+                    text: tr('lightflow_atmosphere.message.light_manager_required', 'Lightflow Atmosphere requires Light Manager.'),
+                    icon: 'error',
+                    expire: 10000
+                });
+                return;
+            }
             registerVolumeElement();
             installActions();
             createAtmospherePanel();
