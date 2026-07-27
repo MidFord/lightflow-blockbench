@@ -1,4 +1,7 @@
-# Lightflow for Blockbench
+<h1>
+  <img src="./assets/lightflow_beta_icon.png" alt="Lightflow" width="80" align="right">
+  Lightflow for Blockbench
+</h1>
 
 > **Light, shape, atmosphere, and final renders — without leaving Blockbench.**
 
