@@ -51,27 +51,63 @@ The repository is currently being prepared for a wider public release. Feedback 
 ## Requirements
 
 - **Blockbench 4.9.0 or newer**.
-- Blockbench Desktop is strongly recommended.
+- **Blockbench Desktop is strongly recommended.**
 - A WebGL-capable GPU; a dedicated GPU is recommended for Atmosphere, realtime Bloom, high-resolution shadows, and 4K/8K exports.
+- If your computer has both integrated and dedicated graphics, configure your operating system to run Blockbench with the **high-performance / dedicated GPU**. This can make viewport previews, realtime effects, and final renders significantly faster.
 - All Lightflow modules should come from the same build.
 - Use `.bbmodel` for working files that need Lightflow project data to persist.
 
 ## Installation
 
-Lightflow is **not in the Plugin Marketplace yet**. Install it manually:
+Lightflow is **not in the Plugin Marketplace yet**. You can install it directly from its raw GitHub URLs or from downloaded files.
 
-1. Download or clone this repository.
-2. In Blockbench, open **File → Plugins**.
-3. Choose **Load Plugin from File**.
-4. Load the modules in this order:
-   1. `light_manager.js`
-   2. `lightflow_environment.js`
-   3. `shader_architect.js`
-   4. `lightflow_atmosphere.js`
-   5. `studio_render.js`
-5. Restart Blockbench or reload the plugins after updating them.
+### Install from URL
 
-> **Important:** Light Manager is the foundation module. Environment, Shader Architect, and Atmosphere depend on it.
+In Blockbench, open **File → Plugins → Load Plugin from URL**, then paste and install each URL **one at a time in this order**. Each field below can be copied independently:
+
+1. **Light Manager**
+
+```text
+https://raw.githubusercontent.com/MidFord/lightflow-blockbench/refs/heads/main/light_manager.js
+```
+
+2. **Shader Architect**
+
+```text
+https://raw.githubusercontent.com/MidFord/lightflow-blockbench/refs/heads/main/shader_architect.js
+```
+
+3. **Studio Render**
+
+```text
+https://raw.githubusercontent.com/MidFord/lightflow-blockbench/refs/heads/main/studio_render.js
+```
+
+4. **Lightflow Atmosphere**
+
+```text
+https://raw.githubusercontent.com/MidFord/lightflow-blockbench/refs/heads/main/lightflow_atmosphere.js
+```
+
+5. **Lightflow Environment**
+
+```text
+https://raw.githubusercontent.com/MidFord/lightflow-blockbench/refs/heads/main/lightflow_environment.js
+```
+
+Restart Blockbench or reload the plugins after installing or updating them.
+
+> **Important:** Light Manager is the foundation module and must be installed first.
+>
+> **Current maturity:** Light Manager, Shader Architect, and Studio Render are currently the most complete and polished modules. Lightflow Atmosphere and Lightflow Environment are functional, but remain in a more active beta stage and may change more frequently.
+
+### Install from downloaded files
+
+You can also download or clone the repository and use **File → Plugins → Load Plugin from File**. Load the same five JavaScript files in the order shown above.
+
+### Dedicated GPU recommendation
+
+Use **Blockbench Desktop** whenever possible. If your system has a dedicated GPU, configure your operating system or GPU control panel so Blockbench uses the **high-performance GPU** instead of integrated graphics. This improves realtime preview performance and can reduce final render times.
 
 For update instructions, common installation problems, and development builds, see **[Installation Guide](docs/INSTALLATION.md)**.
 
