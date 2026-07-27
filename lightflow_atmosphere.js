@@ -75,15 +75,57 @@
     let addVolumeAction = null;
     let editVolumeAction = null;
     let settingsAction = null;
-    let stylesheet = null;
+    let volumePreviewController = null;
     let animationFrame = null;
     let previewRenderFrame = null;
     let lastAnimatedFrame = 0;
+    let storageWriteFailureReported = false;
     let lastPreviewPatchCheck = 0;
     let syncingPanel = false;
     let atmosphereRevision = 0;
     let atmosphereProject = null;
     const deletables = [];
+    const publishedWindowBindings = new Map();
+
+    /*
+     * VolumeElement stores project data, the panel edits that data, and
+     * AtmosphereManager converts the active volumes into cached depth and
+     * composite passes. Preview.render is wrapped only at this final boundary.
+     */
+
+    function publishWindowBinding(name, value) {
+        if (!publishedWindowBindings.has(name)) {
+            publishedWindowBindings.set(name, {
+                hadOwnValue: Object.prototype.hasOwnProperty.call(window, name),
+                previousValue: window[name],
+                ownedValue: value
+            });
+        } else {
+            publishedWindowBindings.get(name).ownedValue = value;
+        }
+        window[name] = value;
+        return value;
+    }
+
+    function restoreWindowBindings() {
+        Array.from(publishedWindowBindings.entries()).reverse().forEach(([name, binding]) => {
+            if (window[name] !== binding.ownedValue) return;
+            if (binding.hadOwnValue) window[name] = binding.previousValue;
+            else delete window[name];
+        });
+        publishedWindowBindings.clear();
+    }
+
+    function disposeRegisteredResources() {
+        deletables.splice(0).reverse().forEach(resource => {
+            if (!resource || typeof resource.delete !== 'function') return;
+            try {
+                resource.delete();
+            } catch (error) {
+                console.warn('[Lightflow Atmosphere] Failed to release a registered resource.', error);
+            }
+        });
+    }
 
     function clamp(value, min, max) {
         return Math.max(min, Math.min(max, Number(value)));
@@ -99,6 +141,7 @@
             const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
             return Object.assign({}, DEFAULT_SETTINGS, parsed && typeof parsed === 'object' ? parsed : {});
         } catch (error) {
+            console.warn('[Lightflow Atmosphere] Saved settings are invalid; using defaults.', error);
             return Object.assign({}, DEFAULT_SETTINGS);
         }
     }
@@ -107,7 +150,10 @@
         try {
             localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
         } catch (error) {
-            // Local storage is optional; project volumes remain fully usable.
+            if (!storageWriteFailureReported) {
+                console.warn('[Lightflow Atmosphere] Settings could not be persisted; project volumes remain usable.', error);
+                storageWriteFailureReported = true;
+            }
         }
     }
 
@@ -322,6 +368,7 @@
         }
 
         bool volumeInterval(int index, vec3 rayOrigin, vec3 rayDirection, out vec2 interval) {
+            interval = vec2(0.0);
             vec3 localOrigin = (uVolumeInverse[index] * vec4(rayOrigin, 1.0)).xyz;
             vec3 localDirection = (uVolumeInverse[index] * vec4(rayDirection, 0.0)).xyz;
             if (uVolumeShapeMode[index].x < 0.5) {
@@ -435,9 +482,13 @@
         }
 
         float lightShadow(int slot, vec3 worldPoint) {
-            if (slot == 0) return shadowCompare0(worldPoint);
-            if (slot == 1) return shadowCompare1(worldPoint);
-            return 1.0;
+            float visibility = 1.0;
+            if (slot == 0) {
+                visibility = shadowCompare0(worldPoint);
+            } else if (slot == 1) {
+                visibility = shadowCompare1(worldPoint);
+            }
+            return visibility;
         }
 
         vec3 volumeLighting(int volumeIndex, vec3 worldPoint, vec3 viewDirection) {
@@ -1876,6 +1927,53 @@
 
             get origin() { return this.position; }
 
+            resize(value, axis, negative, allowNegative, bidirectional) {
+                if (axis < 0 || axis > 2) return this;
+
+                const oldSize = this.temp_data.old_size || this.size;
+                if (this.temp_data.lightflow_resize_size !== oldSize) {
+                    this.temp_data.lightflow_resize_size = oldSize;
+                    this.temp_data.lightflow_resize_position = this.position.slice();
+                }
+
+                const initialSize = Math.max(0.01, Math.abs(finite(oldSize[axis], this.size[axis])));
+                const modify = value instanceof Function ? value : size => size + finite(value, 0);
+                let requestedSize;
+
+                if (bidirectional) {
+                    let difference = modify(initialSize) - initialSize;
+                    if (negative) difference *= -1;
+                    requestedSize = initialSize + difference * 2;
+                } else if (negative) {
+                    requestedSize = -modify(-initialSize);
+                } else {
+                    requestedSize = modify(initialSize);
+                }
+
+                const nextSize = Math.max(0.01, finite(requestedSize, initialSize));
+                this.size[axis] = nextSize;
+
+                if (!bidirectional) {
+                    const initialPosition = this.temp_data.lightflow_resize_position || this.position;
+                    const centerShift = (nextSize - initialSize) * (negative ? -0.5 : 0.5);
+                    const offset = new THREE.Vector3();
+                    offset.setComponent(axis, centerShift);
+                    offset.applyEuler(new THREE.Euler(
+                        Math.degToRad(this.rotation[0]),
+                        Math.degToRad(this.rotation[1]),
+                        Math.degToRad(this.rotation[2]),
+                        window.Format?.euler_order || 'ZYX'
+                    ));
+                    this.position[0] = initialPosition[0] + offset.x;
+                    this.position[1] = initialPosition[1] + offset.y;
+                    this.position[2] = initialPosition[2] + offset.z;
+                }
+
+                this.preview_controller.updateTransform(this);
+                TickUpdates.selection = true;
+                return this;
+            }
+
             extend(object) {
                 for (const key in LightflowVolumeElement.properties) LightflowVolumeElement.properties[key].merge(this, object);
                 sanitizeVolume(this);
@@ -1915,17 +2013,19 @@
                 unique_name: true,
                 movable: true,
                 rotatable: true,
+                resizable: true,
                 hide_in_screenshot: true
             };
         }
 
         VolumeElement = LightflowVolumeElement;
-        window.LightflowVolumeElement = VolumeElement;
+        publishWindowBinding('LightflowVolumeElement', VolumeElement);
         VolumeElement.prototype.title = 'Volume Domain';
         VolumeElement.prototype.type = 'lightflow_volume';
         VolumeElement.prototype.icon = 'blur_on';
         VolumeElement.prototype.movable = true;
         VolumeElement.prototype.rotatable = true;
+        VolumeElement.prototype.resizable = true;
         VolumeElement.prototype.needsUniqueName = true;
         VolumeElement.prototype.name_regex = () => window.Format?.node_name_regex ?? 'a-zA-Z0-9_';
         VolumeElement.prototype.menu = new Menu([
@@ -1939,38 +2039,41 @@
         ]);
         VolumeElement.prototype.buttons = [Outliner.buttons.export, Outliner.buttons.locked, Outliner.buttons.visibility];
 
-        new Property(VolumeElement, 'string', 'name', { default: 'Volume Domain' });
-        new Property(VolumeElement, 'string', 'shape', { default: 'box' });
-        new Property(VolumeElement, 'string', 'density_mode', { default: 'uniform' });
-        new Property(VolumeElement, 'string', 'composite_mode', { default: 'physical' });
-        new Property(VolumeElement, 'vector', 'position');
-        new Property(VolumeElement, 'vector', 'rotation');
-        new Property(VolumeElement, 'vector', 'size', { default: [32, 16, 32] });
-        new Property(VolumeElement, 'boolean', 'visibility', { default: true });
-        new Property(VolumeElement, 'boolean', 'enabled', { default: true });
-        new Property(VolumeElement, 'number', 'density', { default: 0.04, min: 0 });
-        new Property(VolumeElement, 'vector', 'scattering_color', { default: [232, 240, 255] });
-        new Property(VolumeElement, 'number', 'scattering_strength', { default: 0.9, min: 0 });
-        new Property(VolumeElement, 'vector', 'absorption_color', { default: [235, 242, 255] });
-        new Property(VolumeElement, 'number', 'absorption', { default: 0.18, min: 0 });
-        new Property(VolumeElement, 'number', 'anisotropy', { default: 0.35 });
-        new Property(VolumeElement, 'number', 'ambient', { default: 0.12, min: 0 });
-        new Property(VolumeElement, 'number', 'shadow_fill', { default: 0.1, min: 0 });
-        new Property(VolumeElement, 'boolean', 'receive_shadows', { default: true });
-        new Property(VolumeElement, 'number', 'bloom_contribution', { default: 1, min: 0 });
-        new Property(VolumeElement, 'number', 'edge_feather', { default: 0.12, min: 0 });
-        new Property(VolumeElement, 'number', 'height_falloff', { default: 1.2, min: 0 });
-        new Property(VolumeElement, 'number', 'height_offset', { default: 0.1, min: 0 });
-        new Property(VolumeElement, 'number', 'noise_scale', { default: 3.2, min: 0.01 });
-        new Property(VolumeElement, 'number', 'noise_detail', { default: 3, min: 1 });
-        new Property(VolumeElement, 'number', 'coverage', { default: 0.45, min: 0 });
-        new Property(VolumeElement, 'number', 'erosion', { default: 0.22, min: 0.01 });
-        new Property(VolumeElement, 'vector', 'wind_direction', { default: [1, 0, 0] });
-        new Property(VolumeElement, 'number', 'wind_speed', { default: 0 });
+        const volumeProperties = [
+            new Property(VolumeElement, 'string', 'name', { default: 'Volume Domain' }),
+            new Property(VolumeElement, 'string', 'shape', { default: 'box' }),
+            new Property(VolumeElement, 'string', 'density_mode', { default: 'uniform' }),
+            new Property(VolumeElement, 'string', 'composite_mode', { default: 'physical' }),
+            new Property(VolumeElement, 'vector', 'position'),
+            new Property(VolumeElement, 'vector', 'rotation'),
+            new Property(VolumeElement, 'vector', 'size', { default: [32, 16, 32] }),
+            new Property(VolumeElement, 'boolean', 'visibility', { default: true }),
+            new Property(VolumeElement, 'boolean', 'enabled', { default: true }),
+            new Property(VolumeElement, 'number', 'density', { default: 0.04, min: 0 }),
+            new Property(VolumeElement, 'vector', 'scattering_color', { default: [232, 240, 255] }),
+            new Property(VolumeElement, 'number', 'scattering_strength', { default: 0.9, min: 0 }),
+            new Property(VolumeElement, 'vector', 'absorption_color', { default: [235, 242, 255] }),
+            new Property(VolumeElement, 'number', 'absorption', { default: 0.18, min: 0 }),
+            new Property(VolumeElement, 'number', 'anisotropy', { default: 0.35 }),
+            new Property(VolumeElement, 'number', 'ambient', { default: 0.12, min: 0 }),
+            new Property(VolumeElement, 'number', 'shadow_fill', { default: 0.1, min: 0 }),
+            new Property(VolumeElement, 'boolean', 'receive_shadows', { default: true }),
+            new Property(VolumeElement, 'number', 'bloom_contribution', { default: 1, min: 0 }),
+            new Property(VolumeElement, 'number', 'edge_feather', { default: 0.12, min: 0 }),
+            new Property(VolumeElement, 'number', 'height_falloff', { default: 1.2, min: 0 }),
+            new Property(VolumeElement, 'number', 'height_offset', { default: 0.1, min: 0 }),
+            new Property(VolumeElement, 'number', 'noise_scale', { default: 3.2, min: 0.01 }),
+            new Property(VolumeElement, 'number', 'noise_detail', { default: 3, min: 1 }),
+            new Property(VolumeElement, 'number', 'coverage', { default: 0.45, min: 0 }),
+            new Property(VolumeElement, 'number', 'erosion', { default: 0.22, min: 0.01 }),
+            new Property(VolumeElement, 'vector', 'wind_direction', { default: [1, 0, 0] }),
+            new Property(VolumeElement, 'number', 'wind_speed', { default: 0 })
+        ];
+        deletables.push(...volumeProperties);
 
         OutlinerElement.registerType(VolumeElement, 'lightflow_volume');
 
-        new NodePreviewController(VolumeElement, {
+        volumePreviewController = new NodePreviewController(VolumeElement, {
             setup(element) {
                 const mesh = new THREE.Object3D();
                 Project.nodes_3d[element.uuid] = mesh;
@@ -1988,12 +2091,16 @@
                     depthTest: true,
                     depthWrite: false
                 });
-                const boxGeometry = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1));
-                const sphereGeometry = new THREE.WireframeGeometry(new THREE.SphereGeometry(0.5, 16, 10));
-                mesh.boxGizmo = new THREE.LineSegments(boxGeometry, lineMaterial.clone());
+                const boxSourceGeometry = new THREE.BoxGeometry(1, 1, 1);
+                const sphereSourceGeometry = new THREE.SphereGeometry(0.5, 16, 10);
+                const boxGeometry = new THREE.EdgesGeometry(boxSourceGeometry);
+                const sphereGeometry = new THREE.WireframeGeometry(sphereSourceGeometry);
+                boxSourceGeometry.dispose();
+                sphereSourceGeometry.dispose();
+                mesh.boxGizmo = new THREE.LineSegments(boxGeometry, lineMaterial);
                 mesh.sphereGizmo = new THREE.LineSegments(sphereGeometry, lineMaterial.clone());
-                mesh.boxGizmo.raycast = () => {};
-                mesh.sphereGizmo.raycast = () => {};
+                mesh.boxGizmo.raycast = () => { };
+                mesh.sphereGizmo.raycast = () => { };
                 mesh.add(mesh.boxGizmo, mesh.sphereGizmo);
 
                 const selectionMaterial = new THREE.MeshBasicMaterial({
@@ -2113,8 +2220,148 @@
         return volume;
     }
 
+    const ATMOSPHERE_DIALOG_SECTIONS = {
+        _domain: { label: 'lightflow_atmosphere.group.domain', icon: 'blur_on' },
+        _optics: { label: 'lightflow_atmosphere.group.optics', icon: 'lens_blur' },
+        _density_shape: { label: 'lightflow_atmosphere.group.shape', icon: 'gradient' },
+        _viewport: { label: 'lightflow_atmosphere.group.viewport', icon: 'visibility' },
+        _render: { label: 'lightflow_atmosphere.group.render', icon: 'photo_camera' },
+        _advanced: { label: 'lightflow_atmosphere.group.performance', icon: 'speed' }
+    };
+
+    const ATMOSPHERE_SELECT_ICONS = {
+        preset: { custom: 'tune', soft_mist: 'blur_on', godrays: 'flare', clouds: 'cloud', stage_haze: 'filter_hdr', cinematic_dust: 'auto_awesome' },
+        shape: { box: 'check_box_outline_blank', sphere: 'circle' },
+        density_mode: { uniform: 'blur_on', height: 'gradient', cloud: 'cloud' },
+        composite_mode: { physical: 'air', shafts: 'flare' },
+        preview_quality: { draft: 'speed', balanced: 'balance', high: 'high_quality', ultra: 'auto_awesome' },
+        render_quality: { draft: 'speed', balanced: 'balance', high: 'high_quality', ultra: 'auto_awesome' }
+    };
+
+    function getAtmosphereFormUI() {
+        const api = window.LightManagerUI;
+        const required = ['bar_display', 'combo_slider', 'compact_select', 'custom_checkbox'];
+        return api && required.every(type => api.formElementTypes?.includes(type)) ? api : null;
+    }
+
+    function getAtmosphereSelectOptions(key, options) {
+        const source = typeof options === 'function' ? options() : (options || {});
+        const iconMap = ATMOSPHERE_SELECT_ICONS[key] || {};
+        return Object.fromEntries(Object.entries(source).map(([optionKey, option]) => {
+            if (option && typeof option === 'object') {
+                return [optionKey, {
+                    ...option,
+                    name: tr(option.name || optionKey, option.name || optionKey),
+                    icon: option.icon || iconMap[optionKey] || 'tune'
+                }];
+            }
+            return [optionKey, {
+                name: tr(option, option || optionKey),
+                icon: iconMap[optionKey] || 'tune'
+            }];
+        }));
+    }
+
+    function enhanceAtmosphereDialogForm(form) {
+        if (!getAtmosphereFormUI()) return form;
+        const enhanced = {};
+        Object.entries(form).forEach(([key, original]) => {
+            const section = ATMOSPHERE_DIALOG_SECTIONS[key];
+            if (section) {
+                enhanced[`atmosphere_section${key}`] = {
+                    type: 'bar_display',
+                    icon: section.icon,
+                    value: tr(section.label, section.label),
+                    expand: true,
+                    color: 'var(--color-text)'
+                };
+                return;
+            }
+            if (!original || typeof original !== 'object') {
+                enhanced[key] = original;
+                return;
+            }
+            if (original.type === 'select') {
+                enhanced[key] = {
+                    ...original,
+                    type: 'compact_select',
+                    options: getAtmosphereSelectOptions(key, original.options),
+                    show_value_text: true,
+                    expand: true
+                };
+                return;
+            }
+            if (original.type === 'checkbox') {
+                enhanced[key] = {
+                    ...original,
+                    type: 'custom_checkbox',
+                    layout: 'space_between',
+                    icon_on: 'check_box',
+                    icon_off: 'check_box_outline_blank',
+                    icon_size: '24px',
+                    icon_color_on: 'var(--color-accent)',
+                    icon_color_off: 'var(--color-subtle_text)'
+                };
+                return;
+            }
+            if (original.type === 'range') {
+                const resetValue = DEFAULT_SETTINGS[key];
+                enhanced[key] = {
+                    ...original,
+                    type: 'combo_slider',
+                    resettable: Number.isFinite(resetValue),
+                    reset_value: Number.isFinite(resetValue) ? resetValue : original.value
+                };
+                return;
+            }
+            enhanced[key] = original;
+        });
+        return enhanced;
+    }
+
+    function addAtmosphereDialogStyles() {
+        const style = Blockbench.addCSS(`
+            #lightflow_atmosphere_volume_dialog .dialog_content,
+            #lightflow_atmosphere_settings_dialog .dialog_content {
+                scrollbar-gutter: stable;
+            }
+            #lightflow_atmosphere_volume_dialog [class*="form_bar_atmosphere_section_"],
+            #lightflow_atmosphere_settings_dialog [class*="form_bar_atmosphere_section_"] {
+                min-height: 34px;
+                margin: 10px 0 4px;
+                padding: 0 8px;
+                border-left: 3px solid var(--color-accent);
+                border-bottom: 1px solid var(--color-border);
+                background: color-mix(in srgb, var(--color-ui) 84%, var(--color-back));
+            }
+            #lightflow_atmosphere_volume_dialog [class*="form_bar_atmosphere_section_"]:first-child,
+            #lightflow_atmosphere_settings_dialog [class*="form_bar_atmosphere_section_"]:first-child {
+                margin-top: 0;
+            }
+            #lightflow_atmosphere_volume_dialog [class*="form_bar_atmosphere_section_"] .bar_display,
+            #lightflow_atmosphere_settings_dialog [class*="form_bar_atmosphere_section_"] .bar_display {
+                justify-content: flex-start;
+                gap: 7px;
+                font-weight: 600;
+            }
+            #lightflow_atmosphere_volume_dialog .compact_dropdown_select:focus-visible,
+            #lightflow_atmosphere_volume_dialog .custom_checkbox:focus-visible,
+            #lightflow_atmosphere_settings_dialog .compact_dropdown_select:focus-visible,
+            #lightflow_atmosphere_settings_dialog .custom_checkbox:focus-visible {
+                outline: 2px solid var(--color-accent);
+                outline-offset: 2px;
+            }
+            #lightflow_atmosphere_volume_dialog .custom_checkbox:hover,
+            #lightflow_atmosphere_settings_dialog .custom_checkbox:hover {
+                background: var(--color-button);
+            }
+        `);
+        deletables.push(style);
+    }
+
     function volumeDialogForm(volume) {
-        return {
+        return enhanceAtmosphereDialogForm({
+            _domain: '_',
             preset: {
                 type: 'select',
                 label: 'lightflow_atmosphere.field.preset',
@@ -2188,7 +2435,7 @@
                 type: 'number', label: 'lightflow_atmosphere.field.wind_speed', value: volume.wind_speed, min: -8, max: 8, step: 0.01,
                 condition: form => form.density_mode === 'cloud'
             }
-        };
+        });
     }
 
     function normalizeDialogResult(result, volume) {
@@ -2264,24 +2511,26 @@
             },
             panel_enabled: {
                 type: 'action_toggle', value: volume.enabled !== false, description: 'lightflow_atmosphere.field.enabled',
-                icon_on: 'blur_on', icon_off: 'blur_off', bg_on: markerColor(0, 'standard', '#58C0FF'),
+                icon_on: 'blur_on', icon_off: 'blur_off', bg_on: "var(--color-accent)",
                 color_on: 'var(--color-ui)', color_off: 'var(--color-subtle_text)', icon_size: '22px'
             },
             panel_mode: {
                 type: 'compact_select', label: 'lightflow_atmosphere.field.density_mode', hide_label: true,
                 description: 'lightflow_atmosphere.field.density_mode', background: 'transparent', value: volume.density_mode,
+                show_value_text: false, expand: false,
                 options: {
-                    uniform: { name: 'lightflow_atmosphere.option.uniform', icon: 'blur_on', color: markerColor(9, 'pastel', '#E0E9FB') },
-                    height: { name: 'lightflow_atmosphere.option.height', icon: 'gradient', color: markerColor(0, 'pastel', '#A2EBFF') },
-                    cloud: { name: 'lightflow_atmosphere.option.cloud', icon: 'cloud', color: markerColor(4, 'pastel', '#C5A6E8') }
+                    uniform: { name: tr('lightflow_atmosphere.option.uniform', 'Uniform Fog'), icon: 'mist', color: markerColor(9, 'pastel', '#E0E9FB') },
+                    height: { name: tr('lightflow_atmosphere.option.height', 'Height Fog'), icon: 'gradient', color: markerColor(0, 'pastel', '#A2EBFF') },
+                    cloud: { name: tr('lightflow_atmosphere.option.cloud', 'Procedural Clouds'), icon: 'cloud', color: markerColor(4, 'pastel', '#C5A6E8') }
                 }
             },
             panel_composite: {
                 type: 'compact_select', label: 'lightflow_atmosphere.field.composite_mode', hide_label: true,
                 description: 'lightflow_atmosphere.field.composite_mode', background: 'transparent', value: volume.composite_mode,
+                show_value_text: false, expand: false,
                 options: {
-                    physical: { name: 'lightflow_atmosphere.option.physical', icon: 'air', color: markerColor(6, 'pastel', '#7BFFA3') },
-                    shafts: { name: 'lightflow_atmosphere.option.shafts', icon: 'flare', color: markerColor(1, 'pastel', '#FFF899') }
+                    physical: { name: tr('lightflow_atmosphere.option.physical', 'Physical Medium'), icon: 'air', color: markerColor(6, 'pastel', '#7BFFA3') },
+                    shafts: { name: tr('lightflow_atmosphere.option.shafts', 'Light Shafts'), icon: 'flare', color: markerColor(1, 'pastel', '#FFF899') }
                 }
             },
             panel_density: {
@@ -2289,26 +2538,39 @@
                 color: markerColor(0, 'pastel', '#A2EBFF'), value: volume.density,
                 resettable: true, reset_value: 0.032, min: 0, max: 0.3, step: 0.001
             },
+            edge_feather: {
+                type: 'combo_slider', description: 'lightflow_atmosphere.field.edge_feather', icon: 'deblur',
+                color: markerColor(0, 'pastel', '#A2EBFF'), value: volume.edge_feather,
+                resettable: true, reset_value: 0.032, min: 0.001, max: 1.0, step: 0.001
+            },
             optics_label: {
-                type: 'bar_display', icon: 'lens_blur', paragraph: false, expand: false,
+                type: 'bar_display', icon: 'lens_blur', paragraph: false, expand: true,
+                value: tr('lightflow_atmosphere.group.optics', 'Optics & Lighting'),
                 color: 'var(--color-subtle_text)', description: 'lightflow_atmosphere.field.scattering'
             },
             panel_scattering: {
                 type: 'combo_slider', label: 'lightflow_atmosphere.field.scattering', icon: 'light_mode',
                 background: 'transparent', color: markerColor(1, 'pastel', '#FFF899'),
-                icon_color: markerColor(1, 'pastel', '#FFF899'), compact: true, popup_width: '300px',
+                icon_color: markerColor(1, 'pastel', '#FFF899'), compact: true, popup_width: '360px',
                 value: volume.scattering_strength, resettable: true, reset_value: 1, min: 0, max: 4, step: 0.01
             },
             panel_anisotropy: {
                 type: 'combo_slider', label: 'lightflow_atmosphere.field.anisotropy', icon: 'compare_arrows',
                 background: 'transparent', color: markerColor(8, 'pastel', '#FFA5D5'),
-                icon_color: markerColor(8, 'pastel', '#FFA5D5'), compact: true, popup_width: '300px',
+                icon_color: markerColor(8, 'pastel', '#FFA5D5'), compact: true, popup_width: '360px',
                 value: volume.anisotropy, resettable: true, reset_value: 0.18,
                 min: -0.92, max: 0.92, step: 0.01, allow_lower: true
             },
+            shadow_fill: {
+                type: 'combo_slider', label: 'lightflow_atmosphere.field.shadow_fill', icon: 'tonality_2',
+                background: 'transparent', color: markerColor(2, 'pastel', '#F1BB75'),
+                icon_color: markerColor(2, 'pastel', '#F1BB75'), compact: true, popup_width: '360px',
+                value: volume.shadow_fill, resettable: true, reset_value: 0.18,
+                min: 0.0, max: 1.0, step: 0.001
+            },
             panel_shadows: {
-                type: 'action_toggle', value: volume.receive_shadows !== false,
-                description: 'lightflow_atmosphere.field.receive_shadows', icon_on: 'ev_shadow', icon_off: 'contrast_rtl_off',
+                type: 'action_toggle', value: volume.receive_shadows !== false, icon_size: '24px',
+                description: 'lightflow_atmosphere.field.receive_shadows', icon_on: 'stroke_partial', icon_off: 'contrast_rtl_off',
                 bg_on: markerColor(5, 'standard', '#4D89FF'), color_on: 'var(--color-ui)',
                 color_off: markerColor(5, 'pastel', '#A6C8FF')
             },
@@ -2335,28 +2597,28 @@
         atmospherePanel = new Panel('lightflow_atmosphere_properties', {
             name: 'lightflow_atmosphere.panel.title',
             icon: 'blur_on',
-            growable: true,
+            growable: false,
             resizable: true,
-            condition: { modes: ['edit', 'render'], method: () => getSelectedVolumes().length > 0 },
+            condition: { modes: ['edit', 'render'], method: () => (Project.mode === 'render' || getSelectedVolumes().length > 0) },
             default_position: {
-                slot: 'right_bar', float_position: [0, 0], float_size: [314, 200], height: 200,
+                slot: 'right_bar', float_position: [0, 0], float_size: [314, 240], height: 240,
                 attached_to: 'transform', attached_index: 1, sidebar_index: 2
             },
             mode_positions: {
-                edit: { slot: 'right_bar', height: 200, attached_to: 'transform', attached_index: 1, sidebar_index: 2 },
-                render: { slot: 'left_bar', height: 200, attached_to: 'material_properties', attached_index: 2, sidebar_index: 2 }
+                edit: { slot: 'right_bar', height: 240, attached_to: 'transform', attached_index: 1, sidebar_index: 2 },
+                render: { slot: 'left_bar', height: 260, attached_to: 'light_properties', attached_index: 1, sidebar_index: 1 }
             },
             form: panelForm(getSelectedVolumes()[0])
         });
-        atmospherePanel.form.on('change', ({ result, changed_keys }) => {
+        const atmospherePanelListener = atmospherePanel.form.on('change', ({ result, changed_keys }) => {
             if (syncingPanel) return;
             const volume = getSelectedVolumes()[0];
             if (!volume) return;
             const keys = Array.isArray(changed_keys) && changed_keys.length ? changed_keys : Object.keys(result || {});
             const mapping = {
-                panel_enabled: 'enabled', panel_mode: 'density_mode', panel_density: 'density',
+                panel_enabled: 'enabled', panel_mode: 'density_mode', panel_density: 'density', edge_feather: 'edge_feather',
                 panel_composite: 'composite_mode', panel_scattering: 'scattering_strength',
-                panel_anisotropy: 'anisotropy', panel_shadows: 'receive_shadows'
+                panel_anisotropy: 'anisotropy', shadow_fill: 'shadow_fill', panel_shadows: 'receive_shadows'
             };
             const config = {};
             keys.forEach(key => {
@@ -2369,30 +2631,33 @@
             requestPreviewRender();
         });
         window.applyIndestructibleFormGroups(atmospherePanel.form, [
-            {
-                elements: ['summary', '+', 'panel_enabled', 'panel_mode', 'panel_composite'], gap: '2px',
+            /*{
+                elements: ['summary', '+', 'panel_enabled'], gap: '2px',
                 divider_color: 'var(--color-grid)',
-                flex: { summary: '1 1 auto', panel_enabled: '0 0 auto', panel_mode: '0 0 auto', panel_composite: '0 0 auto' }
-            },
+                flex: { summary: '1 1 auto', panel_enabled: '0 0 auto' }
+            },*/
+            { elements: ['panel_enabled', '+', '_', '+', 'panel_mode', 'panel_composite'], gap: '2px', flex: {panel_enabled: '0 0 auto', panel_mode: '0 0 auto', panel_composite: '0 0 auto' } },
             { elements: ['panel_density'], gap: '2px', flex: { panel_density: '1 1 100%' } },
+            { elements: ['optics_label'], gap: '2px', flex: { optics_label: '1 1 100%' } },
             {
-                elements: ['optics_label', 'panel_scattering', 'panel_anisotropy', '+', 'panel_shadows', 'advanced', 'quality'], gap: '2px',
+                elements: ['panel_scattering', 'panel_anisotropy', 'shadow_fill', '+', 'panel_shadows', 'advanced', 'quality'], gap: '2px',
                 divider_color: 'var(--color-grid)',
                 flex: {
-                    optics_label: '0 0 auto', panel_scattering: '0 0 auto', panel_anisotropy: '0 0 auto',
+                    panel_scattering: '0 0 auto', panel_anisotropy: '0 0 auto', shadow_fill: '0 0 auto',
                     panel_shadows: '0 0 auto', advanced: '0 0 auto', quality: '0 0 auto'
                 }
             }
         ]);
         const panelStyles = window.LightManagerUI.addCompactPanelStyles('lightflow_atmosphere_properties');
-        deletables.push(atmospherePanel, panelStyles);
+        deletables.push(atmospherePanel, panelStyles, atmospherePanelListener);
     }
 
     function openSettingsDialog() {
         const settings = AtmosphereManager.settings;
         new Dialog('lightflow_atmosphere_settings_dialog', {
             title: tr('lightflow_atmosphere.settings.title', 'Atmosphere Quality'),
-            form: {
+            form: enhanceAtmosphereDialogForm({
+                _viewport: '_',
                 enabled: { type: 'checkbox', label: 'lightflow_atmosphere.field.enabled', value: settings.enabled },
                 preview_quality: { type: 'select', label: 'lightflow_atmosphere.settings.preview_quality', value: settings.preview_quality, options: QUALITY_OPTIONS },
                 preview_scale: { type: 'range', label: 'lightflow_atmosphere.settings.preview_scale', value: settings.preview_scale, min: 0.25, max: 1, step: 0.05 },
@@ -2404,7 +2669,7 @@
                 helper_mask: { type: 'checkbox', label: 'lightflow_atmosphere.settings.helper_mask', value: settings.helper_mask },
                 static_cache: { type: 'checkbox', label: 'lightflow_atmosphere.settings.static_cache', value: settings.static_cache !== false },
                 frustum_culling: { type: 'checkbox', label: 'lightflow_atmosphere.settings.frustum_culling', value: settings.frustum_culling !== false }
-            },
+            }),
             onConfirm(result) {
                 AtmosphereManager.settings = Object.assign({}, settings, {
                     enabled: !!result.enabled,
@@ -2453,7 +2718,7 @@
             click() { openSettingsDialog(); }
         });
         [addVolumeAction, editVolumeAction, fitAction, settingsAction].forEach(action => deletables.push(action));
-        Interface.Panels.outliner.menu.addAction(addVolumeAction, '3');
+        BarItems.add_element.side_menu.addAction(addVolumeAction, '3');
         MenuBar.menus.edit.addAction(addVolumeAction, '9');
         MenuBar.menus.edit.addAction(editVolumeAction, '9');
         MenuBar.menus.view.addAction(settingsAction, '9');
@@ -2471,6 +2736,12 @@
             'lightflow_atmosphere.panel.none': 'Select a Volume Domain',
             'lightflow_atmosphere.dialog.edit': 'Volume Domain',
             'lightflow_atmosphere.dialog.edit_many': 'Edit Volume Domains',
+            'lightflow_atmosphere.group.domain': 'Domain Setup',
+            'lightflow_atmosphere.group.optics': 'Optics & Lighting',
+            'lightflow_atmosphere.group.shape': 'Shape & Motion',
+            'lightflow_atmosphere.group.viewport': 'Viewport',
+            'lightflow_atmosphere.group.render': 'Studio Render',
+            'lightflow_atmosphere.group.performance': 'Performance',
             'lightflow_atmosphere.field.preset': 'Quick Setup',
             'lightflow_atmosphere.field.enabled': 'Enabled',
             'lightflow_atmosphere.field.shape': 'Domain Shape',
@@ -2587,12 +2858,21 @@
             'lightflow_atmosphere.undo.add': 'Añadir dominio volumétrico',
             'lightflow_atmosphere.undo.edit': 'Editar dominio volumétrico',
             'lightflow_atmosphere.undo.fit': 'Ajustar dominio volumétrico',
+            'lightflow_atmosphere.group.domain': 'Configuración del dominio',
+            'lightflow_atmosphere.group.optics': 'Óptica e iluminación',
+            'lightflow_atmosphere.group.shape': 'Forma y movimiento',
+            'lightflow_atmosphere.group.viewport': 'Viewport',
+            'lightflow_atmosphere.group.render': 'Studio Render',
+            'lightflow_atmosphere.group.performance': 'Rendimiento',
             'lightflow_atmosphere.message.render_failed': 'La atmósfera se desactivó tras un error de render de la GPU',
             'lightflow_atmosphere.message.light_manager_required': 'Lightflow Atmosphere requiere Light Manager.'
         });
     }
 
     function startAnimationLoop() {
+        if (animationFrame !== null) cancelAnimationFrame(animationFrame);
+        lastAnimatedFrame = 0;
+        lastPreviewPatchCheck = 0;
         const tick = time => {
             if (AtmosphereManager.disposed) return;
             animationFrame = requestAnimationFrame(tick);
@@ -2618,7 +2898,7 @@
         icon: 'blur_on',
         author: 'MidFord327',
         description: 'Production-ready local fog, occluded additive light shafts, and procedural cloud domains for the Lightflow rendering suite.',
-        tags: ['Lightflow', 'Rendering', 'Volumetrics', 'Fog', 'God Rays', 'Clouds'],
+        tags: ['Lightflow', 'Rendering', 'Volumetrics'],
         version: PLUGIN_VERSION,
         min_version: '4.9.0',
         variant: 'both',
@@ -2633,14 +2913,30 @@
                 });
                 return;
             }
+            addAtmosphereDialogStyles();
             registerVolumeElement();
             installActions();
             createAtmospherePanel();
             AtmosphereManager.init();
-            window.LightflowAtmosphere = AtmosphereManager;
+            publishWindowBinding('LightflowAtmosphere', AtmosphereManager);
 
             const studioListener = Blockbench.on('studio_render_pre_tile', event => AtmosphereManager.prepareStudioTile(event));
-            const selectionListener = Blockbench.on('update_selection', () => syncAtmospherePanel());
+            const selectionListener = Blockbench.on('update_selection', () => {
+                syncAtmospherePanel();
+
+                if (atmospherePanel.isVisible() && LightflowVolumeElement.selected.length === 0) {
+                    if (Project.mode === 'edit') {
+                        Panels.transform.selectTab(Panels.transform);
+                    }
+                }
+
+                const renderElementSelected = [window.Cube, window.Mesh, window.TextureMesh, window.LightElement].some(ElementType => (
+                    ElementType && Array.isArray(ElementType.selected) && ElementType.selected.length > 0
+                ));
+                if (Project.mode === 'render' && LightflowVolumeElement.selected.length > 0 && !renderElementSelected) {
+                    Panels.light_properties?.selectTab(atmospherePanel);
+                }
+            });
             const lifecycleHydrator = window.LightflowLifecycle?.registerHydrator?.(
                 'lightflow_atmosphere',
                 ({ project, model, isCurrent, deferred }) => {
@@ -2688,7 +2984,7 @@
             if (typeof previewRenderFrame === 'number') cancelAnimationFrame(previewRenderFrame);
             previewRenderFrame = null;
             AtmosphereManager.dispose();
-            deletables.splice(0).reverse().forEach(item => item?.delete?.());
+            disposeRegisteredResources();
             if (VolumeElement?.all) {
                 VolumeElement.all.forEach(volume => {
                     const mesh = volume?.mesh;
@@ -2700,19 +2996,26 @@
                     mesh?.sphereSelection?.geometry?.dispose?.();
                     mesh?.boxSelection?.material?.dispose?.();
                     mesh?.sphereSelection?.material?.dispose?.();
+                    mesh?.geometry?.dispose?.();
+                    mesh?.parent?.remove?.(mesh);
+                    if (window.Project?.nodes_3d?.[volume.uuid] === mesh) {
+                        delete Project.nodes_3d[volume.uuid];
+                    }
                 });
             }
-            delete OutlinerElement.types.lightflow_volume;
-            if (NodePreviewController.controllers?.lightflow_volume) NodePreviewController.controllers.lightflow_volume.delete();
-            delete window.LightflowAtmosphere;
-            delete window.LightflowVolumeElement;
+            if (OutlinerElement.types.lightflow_volume === VolumeElement) {
+                delete OutlinerElement.types.lightflow_volume;
+            }
+            if (NodePreviewController.controllers?.lightflow_volume === volumePreviewController) {
+                volumePreviewController.delete();
+            }
+            restoreWindowBindings();
             VolumeElement = null;
+            volumePreviewController = null;
             atmospherePanel = null;
             addVolumeAction = null;
             editVolumeAction = null;
             settingsAction = null;
-            stylesheet?.remove?.();
-            stylesheet = null;
         }
     });
 })();

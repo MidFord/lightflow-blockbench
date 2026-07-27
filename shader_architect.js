@@ -7,6 +7,22 @@
 
 (function () {
 
+    'use strict';
+
+    /*
+     * Material Studio edits MaterialManager definitions. ShaderEngine resolves
+     * the active view-mode policy, applies the resulting material to meshes,
+     * and synchronizes light/uniform data. AO, SSR, and the promotional rim are
+     * separate post-process managers and therefore have independent cleanup.
+     */
+
+    const shaderArchitectReportedWarnings = new Set();
+    function warnShaderArchitectOnce(key, message, error) {
+        if (shaderArchitectReportedWarnings.has(key)) return;
+        shaderArchitectReportedWarnings.add(key);
+        console.warn(message, error);
+    }
+
     const getShaderElementTypes = () => {
         const types = [];
         if (typeof Cube !== 'undefined') types.push(Cube);
@@ -51,11 +67,7 @@
 
     const getShaderElementMesh = element => {
         if (!element) return null;
-        try {
-            return element.mesh || (window.Project?.nodes_3d ? Project.nodes_3d[element.uuid] : null) || null;
-        } catch (error) {
-            return null;
-        }
+        return element.mesh || (window.Project?.nodes_3d ? Project.nodes_3d[element.uuid] : null) || null;
     };
 
     function isSystemUniform(name) {
@@ -67,8 +79,34 @@
             lower.startsWith('light_');
     }
 
-    const getBlockbenchTextureForCube = (element, faceName, sourceMaterial) => {
+    const getBlockbenchTextureForElement = (element, faceName, sourceMaterial) => {
         if (!element || typeof Texture === 'undefined' || !Texture.all) return null;
+
+        const getTextureForSourceMaterial = () => {
+            if (!sourceMaterial) return null;
+
+            const sourceMap = sourceMaterial.map || sourceMaterial.uniforms?.map?.value || null;
+            const exactMaterialMatch = Texture.all.find(texture => {
+                if (!texture) return false;
+                const material = typeof texture.getMaterial === 'function' ? texture.getMaterial() : texture.material;
+                return material === sourceMaterial;
+            });
+            if (exactMaterialMatch || !sourceMap) return exactMaterialMatch || null;
+
+            return Texture.all.find(texture => {
+                if (!texture) return false;
+                const material = typeof texture.getMaterial === 'function' ? texture.getMaterial() : texture.material;
+                const map = material?.map || material?.uniforms?.map?.value || texture.texture || texture.three_texture;
+                return map === sourceMap;
+            }) || null;
+        };
+
+        // Mesh material slots do not map to the six named Cube directions.
+        // Resolve their native material first so each slot keeps its own face texture.
+        if (!faceName) {
+            const matchingTexture = getTextureForSourceMaterial();
+            if (matchingTexture) return matchingTexture;
+        }
 
         if (element.faces) {
             const preferredCubeOrder = ['north', 'south', 'east', 'west', 'up', 'down'];
@@ -113,16 +151,8 @@
             }
         }
 
-        if (sourceMaterial) {
-            const sourceMap = sourceMaterial.map || sourceMaterial.uniforms?.map?.value || null;
-            const matchingTexture = Texture.all.find(texture => {
-                if (!texture) return false;
-                const material = typeof texture.getMaterial === 'function' ? texture.getMaterial() : texture.material;
-                const map = material?.map || material?.uniforms?.map?.value || texture.texture || texture.three_texture;
-                return material === sourceMaterial || (!!sourceMap && map === sourceMap);
-            });
-            if (matchingTexture) return matchingTexture;
-        }
+        const matchingTexture = getTextureForSourceMaterial();
+        if (matchingTexture) return matchingTexture;
 
         return null;
     };
@@ -201,6 +231,7 @@
             textureAlphaProfileCache.set(texture, { source, stamp, profile });
             return profile;
         } catch (error) {
+            // Cross-origin or detached canvases cannot be sampled; opaque is the safe profile.
             return fallback;
         }
     }
@@ -259,7 +290,7 @@
                 sourceContext.faceName ||
                 sourceContext.sa_source_face_name
             );
-            const bbTex = getBlockbenchTextureForCube(cube, faceName);
+            const bbTex = getBlockbenchTextureForElement(cube, faceName);
             return (bbTex && bbTex.render_mode === 'emissive') ? true : false;
         }
 
@@ -275,7 +306,7 @@
                     sourceContext.faceName ||
                     sourceContext.sa_source_face_name
                 );
-                texture = getBlockbenchTextureForCube(cube, faceName);
+                texture = getBlockbenchTextureForElement(cube, faceName);
             }
 
             return getBlockbenchTextureSize(texture) || defaultValue;
@@ -541,13 +572,14 @@
 
 
 
-    // =========================================================================
-    // 1. INTERNATIONALIZATION (Translations)
-    // =========================================================================
+    // Translations
     Language.addTranslations('en', {
+        'action.view_mode.lightflow': 'Lightflow',
         'panel.global_renderer_properties': 'WORLD',
         'panel.material_instance_manager': 'INSTANCES',
         'panel.material_properties': 'OVERRIDES',
+        'shader_architect.element.cast_shadow': 'Cast Shadows',
+        'shader_architect.element.cast_shadow.desc': 'Allow the selected element to cast shadows onto other surfaces.',
 
         'shader_architect.material_panel.no_selected': 'Select a single cube or multiple cubes to edit their material instance properties.',
         'shader_architect.material_panel.no_instance': 'Create a material instance to override the global material on this cube.',
@@ -569,6 +601,8 @@
         'shader_architect.material_panel.face_scope.west': 'West Face',
         'shader_architect.material_panel.face_scope.up': 'Up Face',
         'shader_architect.material_panel.face_scope.down': 'Down Face',
+        'shader_architect.material_panel.geometry_auto_tile': 'Auto Tile',
+        'shader_architect.material_panel.geometry_auto_tile.desc': 'Enable geometry-driven auto tiling for the selected element or face. A material instance with global Auto Tile enabled still applies to every face.',
         'shader_architect.material_panel.base_material': 'Base Material',
         'shader_architect.material_panel.base_material.desc': 'Select the FancyShaderMaterial that provides the shader code and uniform defaults for this instance.',
         'shader_architect.material_panel.instance': 'Material Instance',
@@ -587,6 +621,12 @@
         'shader_architect.material_panel.create_instance.desc': 'Create a project material instance from a base material and assign it to the selected cubes.',
         'shader_architect.material_panel.delete_instance': 'Delete Material Instance',
         'shader_architect.material_panel.delete_instance.desc': 'Delete the selected material instance from this project and clear it from every cube using it.',
+        'shader_architect.material_panel.save_instance': 'Save Override',
+        'shader_architect.material_panel.save_instance.desc': 'Save all material overrides into the current project.',
+        'shader_architect.material_panel.export_instance': 'Export Override',
+        'shader_architect.material_panel.export_instance.desc': 'Export this material override as a shareable .sami preset.',
+        'shader_architect.material_panel.import_instance': 'Import Override',
+        'shader_architect.material_panel.import_instance.desc': 'Import one or more .sami material override presets into this project.',
         'shader_architect.material_panel.show_advanced': 'Advanced controls',
         'shader_architect.material_panel.show_advanced.desc': 'Show technical material controls for detailed tuning.',
         'shader_architect.uniform_group.core': 'Core',
@@ -607,6 +647,9 @@
         'shader_architect.material_panel.undo.assign_face_instance': 'Assign face material instance',
         'shader_architect.material_panel.undo.clear_face_instance': 'Use element material',
         'shader_architect.material_panel.undo.rename_instance': 'Rename material instance',
+        'shader_architect.material_panel.undo.import_instance': 'Import material override',
+        'shader_architect.material_panel.undo.apply_preset': 'Apply material override preset',
+        'shader_architect.material_panel.undo.set_geometry_auto_tile': 'Set geometry Auto Tile',
         "menu.shader_architect": "Shader Architect",
         "action.sa_global_mode": "World Render Mode",
         "shader_architect.menu.material_studio": "Material Studio",
@@ -615,6 +658,18 @@
         "shader_architect.menu.clear_material": "Clear Material Override",
         "shader_architect.ui.global_mode": "Global Scene Material:",
         "shader_architect.dialog.studio_title": "Material Studio",
+        "shader_architect.warmup.title": "Preparing Lightflow Shaders",
+        "shader_architect.warmup.heading": "Preparing shaders",
+        "shader_architect.warmup.description": "Lightflow is compiling the shader variants used by its presets and the current scene. Blockbench may pause briefly while your graphics driver prepares them.",
+        "shader_architect.warmup.once": "Each shader variant is prepared only once per Blockbench session. After this finishes, switching presets or opening another scene that reuses these materials will be smooth.",
+        "shader_architect.warmup.status.pending": "Analyzing scene materials...",
+        "shader_architect.warmup.status.scene": "Compiling scene material overrides...",
+        "shader_architect.warmup.status.light": "Preparing the new light configuration...",
+        "shader_architect.warmup.status.preset": "Compiling reusable preset shaders...",
+        "shader_architect.warmup.status.global": "Applying global shader preset...",
+        "shader_architect.warmup.status.ready": "Shaders ready",
+        "shader_architect.warmup.status.warning": "Preparation finished with warnings",
+        "shader_architect.warmup.counter": "Shader variants",
         "shader_architect.toast.applied": "Material applied to scene.",
         "shader_architect.toast.exported": "Material Exported successfully.",
         "shader_architect.toast.imported": "Material Imported successfully.",
@@ -627,14 +682,41 @@
         "shader_architect.message.instance_save_failed": "Material instance was created, but Shader Architect could not save it into the project data.",
         "shader_architect.message.instance_not_persistent": "Material overrides are temporary in this format. Save as .bbmodel to keep them.",
         "shader_architect.message.instance_name_adjusted": "Material instance name was adjusted to stay unique.",
+        "shader_architect.message.instance_saved": "Material overrides saved to the project.",
+        "shader_architect.message.instance_exported": "Material override exported.",
+        "shader_architect.message.instance_imported": "Material override imported.",
+        "shader_architect.message.instances_imported": "Material overrides imported.",
+        "shader_architect.message.instance_import_failed": "This file does not contain a valid Shader Architect material override.",
+        "shader_architect.message.preset_incompatible": "This preset is not compatible with the override's base material.",
         "shader_architect.message.delete_material_confirm": "Delete this material?",
         "shader_architect.message.validation_webgl_unavailable": "WebGL is not available for validation.",
         "shader_architect.message.link_failed": "Failed to link shaders.",
         "shader_architect.world.brightness": "Brightness",
         "shader_architect.world.brightness.desc": "Global Blockbench viewport brightness.",
+        "shader_architect.world.fov": "FOV",
+        "shader_architect.world.fov.desc": "Global Blockbench viewport field of view.",
         "shader_architect.world.shading": "Shading",
         "shader_architect.world.ao": "Ambient Occlusion",
         "shader_architect.world.ao_settings": "Ambient Occlusion Settings",
+        "shader_architect.world.ao.quality": "Quality",
+        "shader_architect.world.ao.quality.performance": "Performance (50%)",
+        "shader_architect.world.ao.quality.balanced": "Balanced (75%)",
+        "shader_architect.world.ao.quality.high": "High (native resolution)",
+        "shader_architect.world.ao.samples": "Samples",
+        "shader_architect.world.ao.samples.desc": "Higher values reduce noise and improve contact detail.",
+        "shader_architect.world.ao.strength": "Strength",
+        "shader_architect.world.ao.strength.desc": "Controls how strongly nearby geometry darkens contact areas.",
+        "shader_architect.world.ao.radius": "Radius",
+        "shader_architect.world.ao.radius.desc": "Sets the world-space distance used to search for nearby occluders.",
+        "shader_architect.world.ao.bias": "Bias",
+        "shader_architect.world.ao.bias.desc": "Separates nearby surfaces to prevent false self-occlusion.",
+        "shader_architect.world.ao.power": "Contrast",
+        "shader_architect.world.ao.power.desc": "Shapes the contrast between open surfaces and occluded contacts.",
+        "shader_architect.world.ao.group.quality": "Quality & Resolution",
+        "shader_architect.world.ao.group.appearance": "Appearance",
+        "shader_architect.world.ao.group.precision": "Contact Precision",
+        "shader_architect.world.ao.reset": "Restore AO defaults",
+        "shader_architect.world.ao.reset.desc": "Reset every Ambient Occlusion control to its project defaults.",
         "shader_architect.world.grids": "Grid",
         "shader_architect.world.ground": "Ground",
         "shader_architect.material.new_material": "New Material",
@@ -672,13 +754,13 @@
         "shader_architect.ui.allow_lower": "Allow Lower",
 
         "shader_architect.preset.classic": "Classic Shader",
-        "shader_architect.preset.pbr_metallic_roughness": "Lightflow Principled PBR",
-        "shader_architect.preset.vibrant_visuals_pbr": "Vibrant Visuals PBR",
+        "shader_architect.preset.pbr_metallic_roughness": "Lightflow (PBR)",
+        "shader_architect.preset.vibrant_visuals_pbr": "Vibrant Visuals (PBR)",
         "shader_architect.preset.lightflow": "Lightflow",
         "shader_architect.preset.shaded_lightflow": "Lightflow (Legacy)",
         "shader_architect.preset.pixelated_shaded_lightflow": "Pixelated Lightflow",
-        "shader_architect.preset.cinematic_craft": "Cinematic Craft",
-        "shader_architect.preset.luma_forge": "Cinematic Craft (Legacy ID)",
+        "shader_architect.preset.cinematic_craft": "Rendercraft",
+        "shader_architect.preset.luma_forge": "Rendercraft (Legacy ID)",
         "shader_architect.material_panel.quick_presets": "Material Override Presets",
         "shader_architect.material_panel.quick_presets.desc": "Apply a tuned starting point without replacing this override.",
         "shader_architect.material_panel.apply_preset": "Apply Preset",
@@ -687,6 +769,7 @@
         "shader_architect.material_panel.preset_soft_daylight": "Soft Daylight",
         "shader_architect.material_panel.preset_night_drama": "Night Drama",
         "shader_architect.material_panel.preset_clean_product": "Clean Product",
+        "shader_architect.material_panel.preset_vanilla_shadows": "Pixel Shadows",
         "shader_architect.message.preset_applied": "Material preset applied",
         "shader_architect.preset.realview_pbr": "RealView PBR",
 
@@ -699,6 +782,8 @@
         "shader_architect.uniform.LIGHTCOLOR.desc": "Overall color tint multiplier applied to the final render",
         "shader_architect.uniform.SHADE": "Shade",
         "shader_architect.uniform.SHADE.desc": "Toggle scene shading/shadowing systems",
+        "shader_architect.uniform.AFFECTED_BY_LIGHT": "Affected by Light",
+        "shader_architect.uniform.AFFECTED_BY_LIGHT.desc": "Let lights, cast shadows, and face shading affect this material. Disable it to show the texture color directly.",
         "shader_architect.uniform.LIGHTSIDE": "Light Side",
         "shader_architect.uniform.LIGHTSIDE.desc": "Side direction representing the main lighting vector",
         "shader_architect.uniform.EMISSIVE": "Emissive",
@@ -935,6 +1020,8 @@
         "shader_architect.uniform.uUseSSSMaskMap.desc": "Use the alpha channel of a Blockbench MER Subsurface map as the per-pixel SSS mask",
         "shader_architect.uniform.uEmissiveColor": "Emit Color",
         "shader_architect.uniform.uEmissiveColor.desc": "Self-illumination emissive color",
+        "shader_architect.uniform.uEmissiveUseTexture": "Texture Emit",
+        "shader_architect.uniform.uEmissiveUseTexture.desc": "Use the textured base color instead of Emit Color for self-illumination",
         "shader_architect.uniform.uEmissiveStrength": "Emit Power",
         "shader_architect.uniform.uEmissiveStrength.desc": "Intensity multiplier for self-illumination emission",
         "shader_architect.uniform.uUseBaseColorMap": "Base Map",
@@ -1040,7 +1127,7 @@
         "shader_architect.uniform.uLFPixelatedShadowStrength": "Pixel Strength",
         "shader_architect.uniform.uLFPixelatedShadowStrength.desc": "Controls how strongly pixelated shadows replace the original shadow result",
         "shader_architect.uniform.AUTO_TILE": "Auto Tile",
-        "shader_architect.uniform.AUTO_TILE.desc": "Scale texture tiling from face size",
+        "shader_architect.uniform.AUTO_TILE.desc": "Enable geometry-based texture tiling globally for every face using this material",
         "shader_architect.uniform.TILING": "Tiling",
         "shader_architect.uniform.TILING.desc": "Manual texture repeat scale",
         "shader_architect.uniform.uClampLighting": "Clamp Light",
@@ -1072,9 +1159,12 @@
     });
 
     Language.addTranslations('es', {
+        'action.view_mode.lightflow': 'Lightflow',
         'panel.global_renderer_properties': 'MUNDO',
         'panel.material_instance_manager': 'INSTANCIAS',
         'panel.material_properties': 'REEMPLAZOS',
+        'shader_architect.element.cast_shadow': 'Proyectar sombras',
+        'shader_architect.element.cast_shadow.desc': 'Permite que el elemento seleccionado proyecte sombras sobre otras superficies.',
         'shader_architect.material_panel.no_selected': 'Selecciona uno o varios cubos para editar sus instancias de material.',
         'shader_architect.material_panel.no_instance': 'Crea una instancia de material para sobrescribir el material global en este cubo.',
         'shader_architect.material_panel.no_face_instance': 'Asigna una instancia de material a esta cara para sobrescribir el material del elemento.',
@@ -1094,6 +1184,8 @@
         'shader_architect.material_panel.face_scope.west': 'Cara oeste',
         'shader_architect.material_panel.face_scope.up': 'Cara superior',
         'shader_architect.material_panel.face_scope.down': 'Cara inferior',
+        'shader_architect.material_panel.geometry_auto_tile': 'Auto Tile',
+        'shader_architect.material_panel.geometry_auto_tile.desc': 'Activa el autotile controlado por geometria para el elemento o la cara seleccionada. Una instancia con Auto Tile global activo sigue aplicandolo a todas las caras.',
         'shader_architect.material_panel.base_material': 'Material base',
         'shader_architect.material_panel.base_material.desc': 'Elige el FancyShaderMaterial que aporta el shader y los uniforms por defecto de esta instancia.',
         'shader_architect.material_panel.instance': 'Instancia de material',
@@ -1112,6 +1204,12 @@
         'shader_architect.material_panel.create_instance.desc': 'Crea una instancia de material del proyecto desde un material base y la asigna a los cubos seleccionados.',
         'shader_architect.material_panel.delete_instance': 'Eliminar instancia de material',
         'shader_architect.material_panel.delete_instance.desc': 'Elimina la instancia de material seleccionada del proyecto y la limpia de todos los cubos que la usan.',
+        'shader_architect.material_panel.save_instance': 'Guardar override',
+        'shader_architect.material_panel.save_instance.desc': 'Guarda todos los overrides de material en el proyecto actual.',
+        'shader_architect.material_panel.export_instance': 'Exportar override',
+        'shader_architect.material_panel.export_instance.desc': 'Exporta este override de material como un preset .sami compartible.',
+        'shader_architect.material_panel.import_instance': 'Importar override',
+        'shader_architect.material_panel.import_instance.desc': 'Importa uno o varios presets .sami de material override en este proyecto.',
         'shader_architect.material_panel.show_advanced': 'Controles avanzados',
         'shader_architect.material_panel.show_advanced.desc': 'Muestra controles tecnicos del material para ajuste detallado.',
         'shader_architect.uniform_group.core': 'Base',
@@ -1132,6 +1230,9 @@
         'shader_architect.material_panel.undo.assign_face_instance': 'Asignar instancia de material a cara',
         'shader_architect.material_panel.undo.clear_face_instance': 'Usar material del elemento',
         'shader_architect.material_panel.undo.rename_instance': 'Renombrar instancia de material',
+        'shader_architect.material_panel.undo.import_instance': 'Importar material override',
+        'shader_architect.material_panel.undo.apply_preset': 'Aplicar preset de material override',
+        'shader_architect.material_panel.undo.set_geometry_auto_tile': 'Cambiar Auto Tile de geometria',
         "menu.shader_architect": "Shader Architect",
         "action.sa_global_mode": "Modo de Render",
         "shader_architect.menu.material_studio": "Estudio de Materiales",
@@ -1140,6 +1241,18 @@
         "shader_architect.menu.clear_material": "Limpiar Material (Usar Global)",
         "shader_architect.ui.global_mode": "Material de Escena Global:",
         "shader_architect.dialog.studio_title": "Estudio de Materiales",
+        "shader_architect.warmup.title": "Preparando shaders de Lightflow",
+        "shader_architect.warmup.heading": "Preparando shaders",
+        "shader_architect.warmup.description": "Lightflow está compilando las variantes de shader que utilizan sus presets y la escena actual. Blockbench puede pausarse brevemente mientras el controlador gráfico las prepara.",
+        "shader_architect.warmup.once": "Cada variante de shader se prepara una sola vez por sesión de Blockbench. Al terminar, cambiar de preset o abrir otra escena que reutilice estos materiales será fluido.",
+        "shader_architect.warmup.status.pending": "Analizando los materiales de la escena...",
+        "shader_architect.warmup.status.scene": "Compilando los overrides de materiales de la escena...",
+        "shader_architect.warmup.status.light": "Preparando la nueva configuracion de luces...",
+        "shader_architect.warmup.status.preset": "Compilando shaders reutilizables de presets...",
+        "shader_architect.warmup.status.global": "Aplicando el preset global de shader...",
+        "shader_architect.warmup.status.ready": "Shaders listos",
+        "shader_architect.warmup.status.warning": "La preparación terminó con advertencias",
+        "shader_architect.warmup.counter": "Variantes de shader",
         "shader_architect.toast.applied": "Material aplicado a la escena.",
         "shader_architect.toast.exported": "Material Exportado exitosamente.",
         "shader_architect.toast.imported": "Material Importado exitosamente.",
@@ -1152,14 +1265,41 @@
         "shader_architect.message.instance_save_failed": "La instancia se creo, pero Shader Architect no pudo guardarla en los datos del proyecto.",
         "shader_architect.message.instance_not_persistent": "Los overrides son temporales en este formato. Guarda como .bbmodel para conservarlos.",
         "shader_architect.message.instance_name_adjusted": "El nombre de la instancia se ajusto para mantenerse unico.",
+        "shader_architect.message.instance_saved": "Overrides de material guardados en el proyecto.",
+        "shader_architect.message.instance_exported": "Override de material exportado.",
+        "shader_architect.message.instance_imported": "Override de material importado.",
+        "shader_architect.message.instances_imported": "Overrides de material importados.",
+        "shader_architect.message.instance_import_failed": "El archivo no contiene un material override valido de Shader Architect.",
+        "shader_architect.message.preset_incompatible": "Este preset no es compatible con el material base del override.",
         "shader_architect.message.delete_material_confirm": "Eliminar este material?",
         "shader_architect.message.validation_webgl_unavailable": "WebGL no esta disponible para validar.",
         "shader_architect.message.link_failed": "No se pudieron vincular los shaders.",
         "shader_architect.world.brightness": "Brillo",
         "shader_architect.world.brightness.desc": "Brillo global del viewport de Blockbench.",
+        "shader_architect.world.fov": "FOV",
+        "shader_architect.world.fov.desc": "Campo de visión vertical del viewport de Blockbench.",
         "shader_architect.world.shading": "Sombreado",
         "shader_architect.world.ao": "Oclusión ambiental",
         "shader_architect.world.ao_settings": "Ajustes de oclusión ambiental",
+        "shader_architect.world.ao.quality": "Calidad",
+        "shader_architect.world.ao.quality.performance": "Rendimiento (50%)",
+        "shader_architect.world.ao.quality.balanced": "Equilibrado (75%)",
+        "shader_architect.world.ao.quality.high": "Alta (resolución nativa)",
+        "shader_architect.world.ao.samples": "Muestras",
+        "shader_architect.world.ao.samples.desc": "Valores mayores reducen el ruido y mejoran el detalle de contacto.",
+        "shader_architect.world.ao.strength": "Intensidad",
+        "shader_architect.world.ao.strength.desc": "Controla cuanto oscurece la geometria cercana las zonas de contacto.",
+        "shader_architect.world.ao.radius": "Radio",
+        "shader_architect.world.ao.radius.desc": "Define la distancia en el mundo usada para buscar oclusores cercanos.",
+        "shader_architect.world.ao.bias": "Sesgo",
+        "shader_architect.world.ao.bias.desc": "Separa superficies cercanas para evitar autooclusion falsa.",
+        "shader_architect.world.ao.power": "Contraste",
+        "shader_architect.world.ao.power.desc": "Ajusta el contraste entre superficies abiertas y contactos ocluidos.",
+        "shader_architect.world.ao.group.quality": "Calidad y resolucion",
+        "shader_architect.world.ao.group.appearance": "Apariencia",
+        "shader_architect.world.ao.group.precision": "Precision de contacto",
+        "shader_architect.world.ao.reset": "Restaurar AO",
+        "shader_architect.world.ao.reset.desc": "Restablece cada control de oclusion ambiental a los valores del proyecto.",
         "shader_architect.world.grids": "Grid",
         "shader_architect.world.ground": "Suelo",
         "shader_architect.material.new_material": "Material nuevo",
@@ -1197,21 +1337,22 @@
         "shader_architect.ui.allow_lower": "Permitir menor",
 
         "shader_architect.preset.classic": "Shader Clásico",
-        "shader_architect.preset.pbr_metallic_roughness": "PBR Principled Lightflow",
-        "shader_architect.preset.vibrant_visuals_pbr": "PBR Vibrant Visuals",
+        "shader_architect.preset.pbr_metallic_roughness": "Lightflow (PBR)",
+        "shader_architect.preset.vibrant_visuals_pbr": "Vibrant Visuals (PBR)",
         "shader_architect.preset.lightflow": "Lightflow",
         "shader_architect.preset.shaded_lightflow": "Lightflow (Compatibilidad)",
         "shader_architect.preset.pixelated_shaded_lightflow": "Lightflow Pixelado",
-        "shader_architect.preset.cinematic_craft": "Cinematic Craft",
-        "shader_architect.preset.luma_forge": "Cinematic Craft (ID heredado)",
+        "shader_architect.preset.cinematic_craft": "Rendercraft",
+        "shader_architect.preset.luma_forge": "Rendercraft (ID heredado)",
         "shader_architect.material_panel.quick_presets": "Presets de Material Override",
         "shader_architect.material_panel.quick_presets.desc": "Aplica un punto de partida ajustado sin reemplazar este override.",
         "shader_architect.material_panel.apply_preset": "Aplicar preset",
         "shader_architect.material_panel.preset_balanced": "Equilibrado",
         "shader_architect.material_panel.preset_trailer_hero": "Héroe de tráiler",
         "shader_architect.material_panel.preset_soft_daylight": "Luz diurna suave",
-        "shader_architect.material_panel.preset_night_drama": "Drama nocturno",
+        "shader_architect.material_panel.preset_balanced": "Equilibrado",
         "shader_architect.material_panel.preset_clean_product": "Producto limpio",
+        "shader_architect.material_panel.preset_vanilla_shadows": "Sombras Pixel",
         "shader_architect.message.preset_applied": "Preset de material aplicado",
         "shader_architect.preset.realview_pbr": "RealView PBR",
 
@@ -1222,6 +1363,8 @@
         "shader_architect.uniform.LIGHTCOLOR.desc": "Tinte general aplicado al resultado final",
         "shader_architect.uniform.SHADE": "Sombra",
         "shader_architect.uniform.SHADE.desc": "Activa el sombreado del material",
+        "shader_architect.uniform.AFFECTED_BY_LIGHT": "Afectado por la luz",
+        "shader_architect.uniform.AFFECTED_BY_LIGHT.desc": "Permite que las luces, las sombras proyectadas y el sombreado de caras afecten este material. Desactivalo para mostrar directamente el color de la textura.",
         "shader_architect.uniform.LIGHTSIDE": "Lado Luz",
         "shader_architect.uniform.LIGHTSIDE.desc": "Direccion usada para la luz base",
         "shader_architect.uniform.EMISSIVE": "Emisivo",
@@ -1310,6 +1453,8 @@
         "shader_architect.uniform.uUseSSSMaskMap.desc": "Usa el canal alfa de MER Subsurface como mascara SSS por pixel",
         "shader_architect.uniform.uEmissiveColor": "Color Emit",
         "shader_architect.uniform.uEmissiveColor.desc": "Color de autoiluminacion",
+        "shader_architect.uniform.uEmissiveUseTexture": "Emit Textura",
+        "shader_architect.uniform.uEmissiveUseTexture.desc": "Usa el color base texturizado en vez de Color Emit para la autoiluminacion",
         "shader_architect.uniform.uEmissiveStrength": "Pot Emit",
         "shader_architect.uniform.uEmissiveStrength.desc": "Intensidad de autoiluminacion",
         "shader_architect.uniform.uUseBaseColorMap": "Mapa Base",
@@ -1555,7 +1700,7 @@
         "shader_architect.uniform.uClampLighting": "Limitar Luz",
         "shader_architect.uniform.uClampLighting.desc": "Evita que la luz se pase de rango",
         "shader_architect.uniform.AUTO_TILE": "Auto Tile",
-        "shader_architect.uniform.AUTO_TILE.desc": "Ajusta repeticion por tamano de cara",
+        "shader_architect.uniform.AUTO_TILE.desc": "Activa el autotile basado en geometria globalmente para todas las caras que usan este material",
         "shader_architect.uniform.TILING": "Tile",
         "shader_architect.uniform.TILING.desc": "Repeticion manual de textura",
         "shader_architect.uniform.uLFPixelatedShadowsEnabled": "Sombras píxel",
@@ -1598,20 +1743,41 @@
         return Language.get(key) || key;
     }*/
 
-    // =========================================================================
-    // 2. CSS & PRISM.JS SYNTAX HIGHLIGHTING
-    // =========================================================================
+    // Shared constants and editor styling
     const PLUGIN_STYLE_ID = 'shader-architect-styles';
     const PROJECT_MATERIAL_INSTANCES_PROP = 'sa_material_instances_json';
+    const PROJECT_AMBIENT_OCCLUSION_PROP = 'sa_ambient_occlusion_settings_json';
+    const DEFAULT_AMBIENT_OCCLUSION_SETTINGS = Object.freeze({
+        enabled: true,
+        strength: 0.62,
+        radius: 0.34,
+        bias: 0.1,
+        power: 1.1,
+        renderScale: 1.0,
+        samples: 20
+    });
     const CUBE_MATERIAL_INSTANCES_FALLBACK_PROP = 'sa_material_instances_registry_json';
     const MATERIAL_INSTANCES_UNDO_ASPECT = 'sa_material_instances';
+    const MATERIAL_INSTANCE_FILE_FORMAT = 'shader_architect_material_instance';
+    const MATERIAL_INSTANCE_FILE_VERSION = '1.0';
+    const MATERIAL_INSTANCE_FILE_EXTENSION = 'sami';
     const GLOBAL_MATERIAL_LIST_EVENT = 'update_global_material_list';
     const FACE_MATERIAL_INSTANCES_PROP = 'sa_face_material_instance_ids';
+    const ELEMENT_AUTO_TILE_PROP = 'sa_auto_tile';
+    const FACE_AUTO_TILE_PROP = 'sa_face_auto_tile';
+    const MESH_FACE_AUTO_TILE_PROP = 'sa_mesh_face_auto_tile';
+    const ELEMENT_CAST_SHADOW_PROP = 'sa_cast_shadow';
     const CUBE_FACE_NAMES = ['north', 'south', 'east', 'west', 'up', 'down'];
     const MATERIAL_SLOT_FACE_ORDER = ['east', 'west', 'up', 'down', 'south', 'north'];
     const SCREEN_SPACE_REFLECTION_TARGET_MAX_SIZE = 960;
     const MATERIAL_UNIFORM_GROUP_FORM_PREFIX = '_sa_uniform_group_';
     const ANIMATION_SYSTEM_UNIFORM_KEYS = ['SHADE', 'LIGHTSIDE', 'LIGHTCOLOR', 'uAmbientColor', 'uAmbient', 'EMISSIVE', 'TEXTURE_SIZE'];
+    const GLOBAL_SHADER_PRESET_IDS = [
+        'lightflow',
+        'pbr_metallic_roughness',
+        'vibrant_visuals_pbr',
+        'cinematic_craft'
+    ];
     const MATERIAL_UNIFORM_GROUPS = {
         core: { label: 'shader_architect.uniform_group.core', icon: 'tune', order: 10, defaultOpen: true },
         texture: { label: 'shader_architect.uniform_group.texture', icon: 'texture', order: 20, defaultOpen: false },
@@ -1628,11 +1794,29 @@
     const MATERIAL_OVERRIDE_PRESETS = {
         balanced: {
             label: 'shader_architect.material_panel.preset_balanced',
+            icon: 'balance',
+            color: '#8CC8F7',
+            compatibleMaterials: ['*'],
             reset: true,
             values: {}
         },
+        vanilla_shadows: {
+            label: 'shader_architect.material_panel.preset_vanilla_shadows',
+            icon: 'transition_fade',
+            color: '#52a535',
+            compatibleMaterials: ['*'],
+            requiredUniforms: ['uLFPixelatedShadowsEnabled'],
+            reset: false,
+            values: {
+                uLFPixelatedShadowsEnabled: true
+            }
+        },
         trailer_hero: {
             label: 'shader_architect.material_panel.preset_trailer_hero',
+            icon: 'movie_filter',
+            color: '#C5A6E8',
+            compatibleMaterials: ['cinematic_craft', 'luma_forge'],
+            requiredUniforms: ['uAmbient', 'uExposure', 'uLightWrap', 'BEVEL_ENABLED', 'PROMO_RIM_ENABLED'],
             values: {
                 SHADOWS: true,
                 uAmbient: 0.28,
@@ -1641,65 +1825,12 @@
                 uShadowStrength: 1.0,
                 uShadowFloor: 0.10,
                 BEVEL_ENABLED: true,
-                BEVEL_WIDTH: 0.10,
-                BEVEL_HIGHLIGHT: 0.42,
-                BEVEL_SHADOW: 0.34,
+                BEVEL_WIDTH: 0.04,
+                BEVEL_HIGHLIGHT: 0.1,
+                BEVEL_SHADOW: 0.1,
                 PROMO_RIM_ENABLED: true,
                 PROMO_RIM_WIDTH: 2.2,
-                PROMO_RIM_INTENSITY: 0.72,
-                OUTLINE_ELEMENT_ENABLED: false
-            }
-        },
-        soft_daylight: {
-            label: 'shader_architect.material_panel.preset_soft_daylight',
-            values: {
-                SHADOWS: true,
-                uAmbient: 0.46,
-                uExposure: 1.02,
-                uLightWrap: 0.24,
-                uShadowStrength: 0.78,
-                uShadowFloor: 0.24,
-                BEVEL_ENABLED: true,
-                BEVEL_WIDTH: 0.07,
-                BEVEL_HIGHLIGHT: 0.24,
-                BEVEL_SHADOW: 0.18,
-                PROMO_RIM_ENABLED: true,
-                PROMO_RIM_WIDTH: 1.35,
-                PROMO_RIM_INTENSITY: 0.28
-            }
-        },
-        night_drama: {
-            label: 'shader_architect.material_panel.preset_night_drama',
-            values: {
-                SHADOWS: true,
-                uAmbient: 0.16,
-                uExposure: 1.18,
-                uLightWrap: 0.04,
-                uShadowStrength: 1.0,
-                uShadowFloor: 0.04,
-                BEVEL_ENABLED: true,
-                BEVEL_WIDTH: 0.08,
-                BEVEL_HIGHLIGHT: 0.34,
-                BEVEL_SHADOW: 0.46,
-                PROMO_RIM_ENABLED: true,
-                PROMO_RIM_WIDTH: 2.8,
-                PROMO_RIM_INTENSITY: 0.92
-            }
-        },
-        clean_product: {
-            label: 'shader_architect.material_panel.preset_clean_product',
-            values: {
-                SHADOWS: true,
-                uAmbient: 0.38,
-                uExposure: 1.0,
-                uLightWrap: 0.16,
-                uShadowStrength: 0.84,
-                uShadowFloor: 0.20,
-                BEVEL_ENABLED: true,
-                BEVEL_WIDTH: 0.055,
-                BEVEL_HIGHLIGHT: 0.20,
-                BEVEL_SHADOW: 0.16,
-                PROMO_RIM_ENABLED: false,
+                PROMO_RIM_INTENSITY: 0.25,
                 OUTLINE_ELEMENT_ENABLED: false
             }
         }
@@ -1741,6 +1872,79 @@ vec4 saSampleBaseMap(vec2 uv) {
         );
     }
 
+    function injectUnaffectedByLightFragment(fragmentShader) {
+        let result = String(fragmentShader || '');
+        if (!result || result.includes('SA_UNLIT_TEXTURE_BRANCH')) return result;
+        if (!/uniform\s+sampler2D\s+map\s*;/.test(result)) return result;
+
+        const mainMatch = /void\s+main\s*\([^)]*\)\s*\{/.exec(result);
+        if (!mainMatch) return result;
+        const bodyStart = mainMatch.index + mainMatch[0].length;
+        let bodyEnd = -1;
+        let braceDepth = 1;
+        let lineComment = false;
+        let blockComment = false;
+        for (let index = bodyStart; index < result.length; index++) {
+            const current = result[index];
+            const next = result[index + 1];
+            if (lineComment) {
+                if (current === '\n') lineComment = false;
+                continue;
+            }
+            if (blockComment) {
+                if (current === '*' && next === '/') {
+                    blockComment = false;
+                    index++;
+                }
+                continue;
+            }
+            if (current === '/' && next === '/') {
+                lineComment = true;
+                index++;
+                continue;
+            }
+            if (current === '/' && next === '*') {
+                blockComment = true;
+                index++;
+                continue;
+            }
+            if (current === '{') braceDepth++;
+            if (current === '}' && --braceDepth === 0) {
+                bodyEnd = index;
+                break;
+            }
+        }
+        if (bodyEnd < 0) return result;
+
+        const mainBody = result.slice(bodyStart, bodyEnd);
+        const sampleMatch = mainBody.match(
+            /(vec4\s+([A-Za-z_]\w*)\s*=\s*(?:texture2D\s*\(\s*map\s*,[\s\S]*?\)|saSampleBaseMap\s*\([\s\S]*?\))\s*;)/
+        );
+        if (!sampleMatch) return result;
+
+        const sampleName = sampleMatch[2];
+        const unlitBranch = `
+    // SA_UNLIT_TEXTURE_BRANCH
+    if (!AFFECTED_BY_LIGHT) {
+        if (${sampleName}.a < 0.01) {
+            discard;
+        }
+        gl_FragColor = ${sampleName};
+        return;
+    }
+`;
+
+        const patchedBody = mainBody.replace(sampleMatch[0], sampleMatch[0] + unlitBranch);
+        result = result.slice(0, bodyStart) + patchedBody + result.slice(bodyEnd);
+        if (!/uniform\s+bool\s+AFFECTED_BY_LIGHT\s*;/.test(result)) {
+            result = result.replace(
+                /uniform\s+sampler2D\s+map\s*;/,
+                match => `uniform bool AFFECTED_BY_LIGHT;\n${match}`
+            );
+        }
+        return result;
+    }
+
     const NATIVE_PBR_FRAGMENT = `
 uniform bool uUseNativePBR;
 uniform vec3 uBaseColor;
@@ -1748,6 +1952,7 @@ uniform float uBaseAlpha;
 uniform float uMetallic;
 uniform float uRoughness;
 uniform vec3 uEmissiveColor;
+uniform bool uEmissiveUseTexture;
 uniform float uEmissiveStrength;
 uniform bool uUseMetallicRoughnessMap;
 uniform bool uUseBlockbenchMERMap;
@@ -1826,9 +2031,16 @@ float saGetNativePBRRoughness(vec2 uv) {
 }
 
 vec3 saGetNativePBREmissive(vec2 uv, vec3 baseColor) {
-    if (!uUseNativePBR) return vec3(0.0);
     float strength = max(uEmissiveStrength, 0.0);
-    vec3 emissive = uEmissiveColor * strength;
+    vec3 emissive = uEmissiveUseTexture
+        ? max(baseColor, vec3(0.0)) * strength
+        : vec3(0.0);
+
+    if (!uUseNativePBR) return emissive;
+
+    if (!uEmissiveUseTexture) {
+        emissive += uEmissiveColor * strength;
+    }
 
     if (uUseEmissiveMap) {
         emissive += texture2D(uEmissiveMap, uv * uEmissiveMapScale).rgb * strength;
@@ -1858,6 +2070,7 @@ vec3 saApplyBlockbenchRenderModeEmission(vec3 litColor, vec3 baseColor, float al
             uMetallic: { type: 'float', value: 0.0, expose: false, min: 0.0, max: 1.0, step: 0.05 },
             uRoughness: { type: 'float', value: 0.5, expose: false, min: 0.0, max: 1.0, step: 0.05 },
             uEmissiveColor: { type: 'vec3', value: new THREE.Vector3(1, 1, 1), hexValue: '#ffffff', expose: false, is_color: true },
+            uEmissiveUseTexture: { type: 'bool', value: false, expose: false },
             uEmissiveStrength: { type: 'float', value: 0.0, expose: false, min: 0.0, max: 10.0, step: 0.1 },
             uUseMetallicRoughnessMap: { type: 'bool', value: false, expose: false },
             uUseBlockbenchMERMap: { type: 'bool', value: false, expose: false },
@@ -1901,9 +2114,60 @@ vec3 saApplyBlockbenchRenderModeEmission(vec3 litColor, vec3 baseColor, float al
         return !!def && (def.is_color === true || def.type === 'color');
     }
 
+    function normalizeColorHex(value, fallback = '#ffffff') {
+        const normalizeString = (input) => {
+            if (typeof input !== 'string') return '';
+            const trimmed = input.trim();
+            const shortMatch = trimmed.match(/^#([0-9a-f]{3})$/i);
+            if (shortMatch) {
+                return '#' + shortMatch[1]
+                    .split('')
+                    .map(channel => channel + channel)
+                    .join('')
+                    .toLowerCase();
+            }
+            const hexMatch = trimmed.match(/^#([0-9a-f]{6})(?:[0-9a-f]{2})?$/i);
+            return hexMatch ? '#' + hexMatch[1].toLowerCase() : '';
+        };
+
+        const directHex = normalizeString(value);
+        if (directHex) return directHex;
+
+        if (value && typeof value === 'object') {
+            if (typeof value.toHexString === 'function') {
+                const methodHex = normalizeString(value.toHexString());
+                if (methodHex) return methodHex;
+            }
+            if (typeof value.toHex === 'function') {
+                const methodHex = normalizeString('#' + value.toHex());
+                if (methodHex) return methodHex;
+            }
+
+            const originalHex = normalizeString(value._originalInput);
+            if (originalHex) return originalHex;
+
+            if (value.isColor && typeof value.getHexString === 'function') {
+                const threeHex = normalizeString('#' + value.getHexString());
+                if (threeHex) return threeHex;
+            }
+
+            const red = Number(value._r);
+            const green = Number(value._g);
+            const blue = Number(value._b);
+            if (Number.isFinite(red) && Number.isFinite(green) && Number.isFinite(blue)) {
+                const channelToHex = channel => Math.round(
+                    Math.max(0, Math.min(255, channel))
+                ).toString(16).padStart(2, '0');
+                return '#' + channelToHex(red) + channelToHex(green) + channelToHex(blue);
+            }
+        }
+
+        return normalizeString(fallback) || '#ffffff';
+    }
+
     function vectorToColorHex(value, fallback = '#ffffff') {
-        if (typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value)) {
-            return value;
+        if (typeof value === 'string') {
+            return normalizeColorHex(value, fallback);
         }
         if (value && value.isColor && typeof value.getHexString === 'function') {
             return '#' + value.getHexString();
@@ -1919,7 +2183,7 @@ vec3 saApplyBlockbenchRenderModeEmission(vec3 litColor, vec3 baseColor, float al
     }
 
     function colorHexToVector(hex, targetValue, dimensions = 3) {
-        const color = new THREE.Color(hex || '#ffffff');
+        const color = new THREE.Color(normalizeColorHex(hex));
         if (dimensions === 4) {
             const alpha = targetValue && Number.isFinite(Number(targetValue.w))
                 ? Number(targetValue.w)
@@ -1931,13 +2195,18 @@ vec3 saApplyBlockbenchRenderModeEmission(vec3 litColor, vec3 baseColor, float al
 
     function getUniformColorHex(def, fallback = '#ffffff') {
         if (!def) return fallback;
-        if (def.hexValue) return def.hexValue;
+        if (def.hexValue) {
+            return normalizeColorHex(def.hexValue, vectorToColorHex(def.value, fallback));
+        }
         return vectorToColorHex(def.value, fallback);
     }
 
     function syncColorUniformValue(def, hex) {
         if (!def) return def;
-        const nextHex = hex || getUniformColorHex(def);
+        const nextHex = normalizeColorHex(
+            hex || def.hexValue,
+            vectorToColorHex(def.value)
+        );
         def.hexValue = nextHex;
         if (def.type === 'vec4') {
             def.value = colorHexToVector(nextHex, def.value, 4);
@@ -1983,7 +2252,7 @@ vec3 saApplyBlockbenchRenderModeEmission(vec3 litColor, vec3 baseColor, float al
         if (name === 'map' || name === 'AUTO_TILE' || name === 'TILING' || /Map|TEXTURE_SIZE/.test(name)) {
             return 'texture';
         }
-        if (/^(uLight|LIGHTCOLOR|LIGHTSIDE|SHADE|max_light_number|uAmbient|uExposure|uToneMapping|uStylizedNormalInfluence|uLightWrap|uClampLighting)/.test(name)) {
+        if (/^(uLight|LIGHTCOLOR|LIGHTSIDE|SHADE|AFFECTED_BY_LIGHT|max_light_number|uAmbient|uExposure|uToneMapping|uStylizedNormalInfluence|uLightWrap|uClampLighting)/.test(name)) {
             return 'lighting';
         }
         if (/^(uBaseColor|uMetallic|uRoughness|uClearcoat|uAnisotropy|uSheen|uTransmission|uThickness|uAttenuation|uIOR|uThinWalled|uIridescence|uSSS|uUseSSS|uEmissive|uSpecularTint|uNormalScale|EMISSIVE|uAO$)/.test(name)) {
@@ -2042,6 +2311,7 @@ vec3 saApplyBlockbenchRenderModeEmission(vec3 litColor, vec3 baseColor, float al
 
     function createMaterialLightingUniforms() {
         return {
+            AFFECTED_BY_LIGHT: { type: 'bool', value: true, expose: true },
             max_light_number: { type: 'int', value: 0, expose: true, min: 0, max: 16, step: 1, allow_higher: false, allow_lower: false },
             uAmbient: { type: 'float', value: 0.3, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: true, allow_lower: false },
             uAmbientColor: { type: 'vec3', value: new THREE.Vector3(1, 1, 1), hexValue: '#ffffff', expose: true, is_color: true },
@@ -2305,67 +2575,73 @@ vec3 saSSRFallbackReflection(vec4 clipPosition, vec3 rayDir, float roughness, ou
     vec2 screenUv = (clipPosition.xy / max(clipPosition.w, 0.0001)) * 0.5 + 0.5;
     vec2 uv = screenUv + rayDir.xy * clamp(uSSRDistortion, 0.0, 0.5) / max(0.35, abs(rayDir.z));
     hitFade = saSSRScreenEdgeFade(uv);
+    vec3 reflection = vec3(0.0);
     if (saSSROutsideScreen(uv)) {
-        return saSSRSampleEnvironment(rayDir, roughness, hitFade);
+        reflection = saSSRSampleEnvironment(rayDir, roughness, hitFade);
+    } else {
+        reflection = saSSRSampleScene(uv, roughness);
     }
-    return saSSRSampleScene(uv, roughness);
+    return reflection;
 }
 
 vec3 saSSRRaymarch(vec3 viewPosition, vec3 rayDir, vec4 clipPosition, float roughness, out float hitFade) {
     hitFade = 0.0;
+    vec3 reflection = vec3(0.0);
 
     if (uSA_SSRHasDepth != 1) {
-        return saSSRFallbackReflection(clipPosition, rayDir, roughness, hitFade);
-    }
+        reflection = saSSRFallbackReflection(clipPosition, rayDir, roughness, hitFade);
+    } else {
+        vec2 hitUv = vec2(0.0);
+        float hitDistance = 0.0;
+        float maxDistance = max(uSSRMaxDistance, 1.0);
+        float startDistance = max(0.025, maxDistance * 0.002);
+        float qualitySteps = mix(12.0, float(SA_SSR_STEPS), clamp(uSSRQuality, 0.0, 1.0));
 
-    vec2 hitUv = vec2(0.0);
-    float hitDistance = 0.0;
-    float maxDistance = max(uSSRMaxDistance, 1.0);
-    float startDistance = max(0.025, maxDistance * 0.002);
-    float qualitySteps = mix(12.0, float(SA_SSR_STEPS), clamp(uSSRQuality, 0.0, 1.0));
+        for (int i = 0; i < SA_SSR_STEPS; i++) {
+            if (float(i) >= qualitySteps) break;
 
-    for (int i = 0; i < SA_SSR_STEPS; i++) {
-        if (float(i) >= qualitySteps) break;
+            float stepRatio = (float(i) + 1.0) / qualitySteps;
+            float rayDistance = mix(startDistance, maxDistance, stepRatio * stepRatio);
+            vec3 rayPosition = viewPosition + rayDir * rayDistance;
 
-        float stepRatio = (float(i) + 1.0) / qualitySteps;
-        float rayDistance = mix(startDistance, maxDistance, stepRatio * stepRatio);
-        vec3 rayPosition = viewPosition + rayDir * rayDistance;
+            if (rayPosition.z > -uSA_SSRCameraNear) break;
 
-        if (rayPosition.z > -uSA_SSRCameraNear) break;
+            vec4 rayClip = uSA_SSRCameraProjectionMatrix * vec4(rayPosition, 1.0);
+            if (rayClip.w <= 0.0) break;
 
-        vec4 rayClip = uSA_SSRCameraProjectionMatrix * vec4(rayPosition, 1.0);
-        if (rayClip.w <= 0.0) break;
+            vec2 uv = (rayClip.xy / rayClip.w) * 0.5 + 0.5;
+            if (saSSROutsideScreen(uv)) break;
 
-        vec2 uv = (rayClip.xy / rayClip.w) * 0.5 + 0.5;
-        if (saSSROutsideScreen(uv)) break;
+            float sceneDepth = texture2D(uSA_SSRDepth, uv).x;
+            if (sceneDepth >= 0.9999) continue;
 
-        float sceneDepth = texture2D(uSA_SSRDepth, uv).x;
-        if (sceneDepth >= 0.9999) continue;
+            float sceneViewZ = saSSRDepthToViewZ(sceneDepth);
+            float depthDelta = rayPosition.z - sceneViewZ;
+            float thickness = max(uSSRThickness, 0.001) + rayDistance * max(uSSRDepthBias, 0.0);
 
-        float sceneViewZ = saSSRDepthToViewZ(sceneDepth);
-        float depthDelta = rayPosition.z - sceneViewZ;
-        float thickness = max(uSSRThickness, 0.001) + rayDistance * max(uSSRDepthBias, 0.0);
+            if (depthDelta <= 0.0 && depthDelta > -thickness) {
+                vec2 wave = vec2(
+                    sin((uv.y + uSA_SSRTime * 0.09) * 90.0),
+                    cos((uv.x - uSA_SSRTime * 0.07) * 70.0)
+                ) * clamp(uSSRDistortion, 0.0, 0.5) * 0.012;
 
-        if (depthDelta <= 0.0 && depthDelta > -thickness) {
-            vec2 wave = vec2(
-                sin((uv.y + uSA_SSRTime * 0.09) * 90.0),
-                cos((uv.x - uSA_SSRTime * 0.07) * 70.0)
-            ) * clamp(uSSRDistortion, 0.0, 0.5) * 0.012;
+                hitUv = uv + wave;
+                hitDistance = rayDistance;
 
-            hitUv = uv + wave;
-            hitDistance = rayDistance;
+                float fadeStart = clamp(uSSRDistanceFade, 0.0, 1.0) * maxDistance;
+                hitFade = saSSRScreenEdgeFade(hitUv) *
+                    (1.0 - smoothstep(fadeStart, maxDistance, hitDistance));
+                break;
+            }
+        }
 
-            float fadeStart = clamp(uSSRDistanceFade, 0.0, 1.0) * maxDistance;
-            hitFade = saSSRScreenEdgeFade(hitUv) *
-                (1.0 - smoothstep(fadeStart, maxDistance, hitDistance));
-            break;
+        if (hitFade <= 0.0 || saSSROutsideScreen(hitUv)) {
+            reflection = saSSRSampleEnvironment(rayDir, roughness, hitFade);
+        } else {
+            reflection = saSSRSampleScene(hitUv, roughness);
         }
     }
-
-    if (hitFade <= 0.0 || saSSROutsideScreen(hitUv)) {
-        return saSSRSampleEnvironment(rayDir, roughness, hitFade);
-    }
-    return saSSRSampleScene(hitUv, roughness);
+    return reflection;
 }
 
 vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPosition, vec4 clipPosition, float materialRoughness, float materialIntensity) {
@@ -2400,13 +2676,18 @@ uniform bool AUTO_TILE;
 uniform vec2 TILING;
 uniform vec2 TEXTURE_SIZE;
 
-vec2 lfResolveTextureTiling(vec2 faceSize) {
-    if (AUTO_TILE) {
+vec2 lfResolveTextureTiling(vec2 faceSize, float geometryAutoTile) {
+    if (geometryAutoTile > 0.5) {
         return abs(faceSize) /
             max(abs(TEXTURE_SIZE), vec2(1.0));
     }
 
     return TILING;
+}
+
+// Backward-compatible overload for custom shaders that still use the uniform.
+vec2 lfResolveTextureTiling(vec2 faceSize) {
+    return lfResolveTextureTiling(faceSize, AUTO_TILE ? 1.0 : 0.0);
 }
 
 #endif
@@ -2437,23 +2718,23 @@ vec3 lfSafeShadowNormal(vec3 normalValue) {
 
 /*
     worldPosition:
-        Posición mundial final del vértice.
+        Final world-space vertex position.
 
     worldNormal:
-        Normal física mundial. No debe ser la normal estilizada,
-        ya que shadowNormalBias debe seguir la geometría real.
+        Physical world-space normal. This must not be the stylized normal,
+        because shadowNormalBias must follow the real geometry.
 
     normalizedFaceUv:
-        UV local de la cara, normalmente entre 0 y 1.
+        Face-local UV, usually between 0 and 1.
 
     faceSize:
-        Tamaño global de la cara en píxeles o unidades voxel.
+        Global face size in pixels or voxel units.
 
     uvSize:
-        Tamaño normalizado de la región UV.
+        Normalized UV region size.
 
     affectedByShadow:
-        Influencia por cara, entre 0 y 1.
+        Per-face influence between 0 and 1.
 */
 void lfPixelatedShadowVertexSetup(
     const in vec4 worldPosition,
@@ -2644,8 +2925,8 @@ vec4 lfpsGetRawShadowCoordAtDelta(
     bool basisIsValid
 ) {
     /*
-        Estas derivadas deben evaluarse antes de cualquier discard
-        y fuera de ramas divergentes dependientes del fragmento.
+        Evaluate these derivatives before any discard and outside
+        divergent fragment-dependent branches.
     */
     vec4 dCoordDx = dFdx(currentShadowCoord);
     vec4 dCoordDy = dFdy(currentShadowCoord);
@@ -2789,11 +3070,11 @@ vec4 lfpsGetPointShadowCoord(
 }
 
 /*
-    Devuelve:
+    Returns:
 
-    x = producto de sombras direccionales
-    y = producto de sombras spot
-    z = producto de sombras puntuales
+    x = directional shadow product
+    y = spot shadow product
+    z = point shadow product
 */
 vec3 lfpsGetRawShadowByType() {
     vec3 shadowByType = vec3(1.0);
@@ -2801,9 +3082,8 @@ vec3 lfpsGetRawShadowByType() {
 #ifdef USE_SHADOWMAP
 
     /*
-        Ambos son uniforms, por lo que esta rama es uniforme durante
-        todo el draw call y puede evitar el trabajo costoso cuando
-        el efecto está desactivado.
+        Both values are uniforms, so this branch stays uniform across
+        the draw call and can skip expensive work while the effect is off.
     */
     if (
         !uLFPixelatedShadowsEnabled ||
@@ -2994,10 +3274,10 @@ float lfpsFinalizeShadow(float rawShadow) {
 }
 
 /*
-    API simple.
+    Simple API.
 
-    Multiplica todas las sombras de todas las clases.
-    Ideal cuando existe una única luz principal con sombras.
+    Multiplies all shadows from every light class.
+    Best when one primary light casts shadows.
 */
 float lfGetPixelatedCombinedShadow() {
     vec3 rawShadow =
@@ -3011,7 +3291,7 @@ float lfGetPixelatedCombinedShadow() {
 }
 
 /*
-    API recomendada para Lightflow.
+    Recommended API for Lightflow.
 
     x = directional
     y = spot
@@ -3153,15 +3433,13 @@ float lfGetRegularShadowForLight(
     int lightType,
     int shadowIndex
 ) {
+    float shadow = lfGetRegularPointShadowByIndex(shadowIndex);
     if (lightType == LF_SHADOW_LIGHT_DIRECTIONAL) {
-        return lfGetRegularDirectionalShadowByIndex(shadowIndex);
+        shadow = lfGetRegularDirectionalShadowByIndex(shadowIndex);
+    } else if (lightType == LF_SHADOW_LIGHT_SPOT) {
+        shadow = lfGetRegularSpotShadowByIndex(shadowIndex);
     }
-
-    if (lightType == LF_SHADOW_LIGHT_SPOT) {
-        return lfGetRegularSpotShadowByIndex(shadowIndex);
-    }
-
-    return lfGetRegularPointShadowByIndex(shadowIndex);
+    return shadow;
 }
 
 float lfGetPixelatedShadowForLightType(
@@ -3227,6 +3505,33 @@ float lfGetLightShadow(
 `;
 
     const pluginStyle = /*css*/`
+    #sa_ambient_occlusion_settings .dialog_content {
+        scrollbar-gutter: stable;
+    }
+
+    #sa_ambient_occlusion_settings .form_bar_quality_header,
+    #sa_ambient_occlusion_settings .form_bar_appearance_header,
+    #sa_ambient_occlusion_settings .form_bar_precision_header {
+        min-height: 34px;
+        margin: 10px 0 4px;
+        padding: 0 8px;
+        border-left: 3px solid var(--color-accent);
+        border-bottom: 1px solid var(--color-border);
+        background: color-mix(in srgb, var(--color-ui) 84%, var(--color-back));
+    }
+
+    #sa_ambient_occlusion_settings .form_bar_quality_header {
+        margin-top: 0;
+    }
+
+    #sa_ambient_occlusion_settings .form_bar_quality_header .bar_display,
+    #sa_ambient_occlusion_settings .form_bar_appearance_header .bar_display,
+    #sa_ambient_occlusion_settings .form_bar_precision_header .bar_display {
+        justify-content: flex-start;
+        gap: 7px;
+        font-weight: 600;
+    }
+
     /* Dialog Layout Restructuring for fixed window with internal scrollbars */
     #sa_material_studio_dialog {
         display: flex !important;
@@ -3882,6 +4187,37 @@ float lfGetLightShadow(
         min-height: 30px;
         border-radius: 5px;
     }
+    #sa_material_studio_dialog .sa-quick-tweaks {
+        padding: 12px 10px !important;
+        scrollbar-gutter: stable;
+    }
+    #sa_material_studio_dialog .sa-quick-tweaks h3 {
+        margin-bottom: 7px;
+    }
+    #sa_material_studio_dialog .sa-quick-tweaks .sa-uniform-row {
+        margin-bottom: 6px !important;
+        padding: 7px 8px !important;
+        border-radius: 5px;
+    }
+    #sa_material_studio_dialog .sa-quick-tweaks input[type="checkbox"] {
+        width: 18px;
+        height: 18px;
+        min-height: 0 !important;
+        padding: 0 !important;
+        margin: 0;
+        flex: 0 0 18px;
+        accent-color: var(--color-accent);
+    }
+    #sa_material_studio_dialog .sa-quick-tweaks input[type="range"] {
+        min-height: 18px;
+    }
+    #sa_material_studio_dialog .sa-quick-tweaks button:focus-visible,
+    #sa_material_studio_dialog .sa-quick-tweaks input:focus-visible,
+    #sa_material_studio_dialog .sa-icon-btn:focus-visible,
+    #sa_material_studio_dialog .sa-vscode-tab:focus-visible {
+        outline: 2px solid var(--color-accent) !important;
+        outline-offset: 2px;
+    }
     @media (max-width: 1050px) {
         #sa_material_studio_dialog .sa-studio-sidebar {
             width: 230px;
@@ -3889,6 +4225,93 @@ float lfGetLightShadow(
         #sa_material_studio_dialog .sa-studio-sidebar.sa-right {
             width: 245px;
         }
+    }
+
+    #sa_shader_warmup_dialog {
+        width: min(500px, calc(100vw - 40px));
+    }
+    #sa_shader_warmup_dialog .dialog_content {
+        padding: 20px 22px 18px;
+    }
+    #sa_shader_warmup_dialog .sa-warmup-content {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+    }
+    #sa_shader_warmup_dialog .sa-warmup-intro {
+        display: grid;
+        grid-template-columns: 40px minmax(0, 1fr);
+        gap: 14px;
+        align-items: start;
+    }
+    #sa_shader_warmup_dialog .sa-warmup-icon {
+        display: grid;
+        place-items: center;
+        width: 40px;
+        height: 40px;
+        border-radius: 50%;
+        color: var(--color-accent_text);
+        background: var(--color-accent);
+    }
+    #sa_shader_warmup_dialog .sa-warmup-icon .material-icons {
+        font-size: 24px;
+    }
+    #sa_shader_warmup_dialog .sa-warmup-icon:not(.ready):not(.warning) .material-icons {
+        animation: sa-warmup-spin 1.05s linear infinite;
+    }
+    #sa_shader_warmup_dialog .sa-warmup-icon.ready {
+        color: #d8ffe6;
+        background: #27844c;
+    }
+    #sa_shader_warmup_dialog .sa-warmup-icon.warning {
+        color: #2b2100;
+        background: #e8b735;
+    }
+    #sa_shader_warmup_dialog .sa-warmup-heading {
+        margin: 0 0 5px;
+        font-size: 1.08em;
+        font-weight: 600;
+        color: var(--color-text);
+    }
+    #sa_shader_warmup_dialog .sa-warmup-description,
+    #sa_shader_warmup_dialog .sa-warmup-once {
+        margin: 0;
+        line-height: 1.45;
+    }
+    #sa_shader_warmup_dialog .sa-warmup-description {
+        color: var(--color-text);
+    }
+    #sa_shader_warmup_dialog .sa-warmup-once {
+        padding: 10px 12px;
+        border-left: 3px solid var(--color-accent);
+        border-radius: 4px;
+        color: var(--color-subtle_text);
+        background: color-mix(in srgb, var(--color-ui) 80%, transparent);
+    }
+    #sa_shader_warmup_dialog .sa-warmup-status-row {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 16px;
+        min-width: 0;
+    }
+    #sa_shader_warmup_dialog .sa-warmup-status {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-weight: 600;
+    }
+    #sa_shader_warmup_dialog .sa-warmup-count {
+        flex: 0 0 auto;
+        color: var(--color-subtle_text);
+        font-variant-numeric: tabular-nums;
+    }
+    #sa_shader_warmup_dialog .progress_bar {
+        margin: 0 22px 20px;
+    }
+    @keyframes sa-warmup-spin {
+        to { transform: rotate(360deg); }
     }
     `;
 
@@ -3909,9 +4332,7 @@ float lfGetLightShadow(
         };
     }
 
-    // =========================================================================
-    // 3. CORE MATERIAL FRAMEWORK
-    // =========================================================================
+    // Material framework
 
     class FancyShaderMaterial {
         constructor(props) {
@@ -3926,6 +4347,14 @@ float lfGetLightShadow(
             this.supportsScreenSpaceReflections = props.supportsScreenSpaceReflections !== undefined
                 ? props.supportsScreenSpaceReflections
                 : false;
+
+            if (!this.uniforms.AFFECTED_BY_LIGHT) {
+                this.uniforms.AFFECTED_BY_LIGHT = {
+                    type: 'bool',
+                    value: true,
+                    expose: true
+                };
+            }
 
             if (this.enableShadows) {
                 this.uniforms = addMaterialLightingUniforms(this.uniforms);
@@ -4058,6 +4487,35 @@ float lfGetLightShadow(
 
         get materialInstances() {
             return this.instances;
+        },
+
+        get materialOverridePresets() {
+            return MATERIAL_OVERRIDE_PRESETS;
+        },
+
+        registerMaterialOverridePreset(id, preset = {}) {
+            const presetId = typeof id === 'string' ? id.trim() : '';
+            if (!presetId || !preset || typeof preset !== 'object') return null;
+
+            const normalized = Object.assign({}, preset, {
+                label: preset.label || presetId,
+                icon: preset.icon || 'auto_awesome',
+                compatibleMaterials: Array.isArray(preset.compatibleMaterials)
+                    ? preset.compatibleMaterials.slice()
+                    : ['*'],
+                requiredUniforms: Array.isArray(preset.requiredUniforms)
+                    ? preset.requiredUniforms.slice()
+                    : [],
+                values: Object.assign({}, preset.values || {})
+            });
+            MATERIAL_OVERRIDE_PRESETS[presetId] = normalized;
+            if (typeof Blockbench !== 'undefined') {
+                Blockbench.dispatchEvent('shader_architect_material_instances_changed', {
+                    cause: 'register_override_preset',
+                    presetId
+                });
+            }
+            return normalized;
         },
 
         init() {
@@ -4392,7 +4850,9 @@ float lfGetLightShadow(
                         this.materials[mat.id] = mat;
                     });
                 }
-            } catch (ignore) { }
+            } catch (error) {
+                console.warn('[Shader Architect] Saved custom materials could not be loaded.', error);
+            }
         },
 
         getActiveProject() {
@@ -4553,7 +5013,8 @@ float lfGetLightShadow(
                     Blockbench.dispatchEvent('shader_architect_material_instances_changed', { cause: options.cause ? options.cause : 'save_instances' });
                 }
                 return saved;
-            } catch (ignore) {
+            } catch (error) {
+                console.warn('[Shader Architect] Material instances could not be saved.', error);
                 return false;
             }
         },
@@ -4573,7 +5034,9 @@ float lfGetLightShadow(
                     let instance = FancyShaderMaterialInstance.fromJSON(iJson);
                     this.instances[instance.id] = instance;
                 });
-            } catch (ignore) { }
+            } catch (error) {
+                console.warn('[Shader Architect] Material instances could not be loaded.', error);
+            }
 
             return this.instances;
         },
@@ -4774,26 +5237,28 @@ float lfGetLightShadow(
             return this.createMaterialInstance(baseMaterialIdOrProps, props);
         },
 
-        registerMaterialInstance(instanceOrProps) {
+        registerMaterialInstance(instanceOrProps, options = {}) {
             const instance = instanceOrProps instanceof FancyShaderMaterialInstance
                 ? instanceOrProps
                 : new FancyShaderMaterialInstance(instanceOrProps || {});
             const base = this.materials[instance.baseMaterialId] || this.materials['classic'];
             if (!base) return null;
 
-            this.ensureMaterialInstanceIdentity(instance);
+            this.ensureMaterialInstanceIdentity(instance, options);
             if (!instance.uniforms || Object.keys(instance.uniforms).length === 0) {
                 instance.uniforms = this.cloneUniformMap(base.uniforms || {});
             }
 
             this.revalidateMaterialInstance(instance, { save: false });
             this.instances[instance.id] = instance;
-            this.saveMaterialInstances({ cause: 'register_instance' });
+            if (options.save !== false) {
+                this.saveMaterialInstances({ cause: options.cause || 'register_instance' });
+            }
             return instance;
         },
 
-        registerInstance(instanceOrProps) {
-            return this.registerMaterialInstance(instanceOrProps);
+        registerInstance(instanceOrProps, options = {}) {
+            return this.registerMaterialInstance(instanceOrProps, options);
         },
 
         clearCubeMaterialAssignment(cube, options = {}) {
@@ -4858,6 +5323,7 @@ float lfGetLightShadow(
                 try {
                     parsed = JSON.parse(raw);
                 } catch (error) {
+                    warnShaderArchitectOnce('face-material-overrides', '[Shader Architect] Ignoring invalid face material override data.', error);
                     return {};
                 }
             }
@@ -4936,10 +5402,13 @@ float lfGetLightShadow(
             const changed = this.setCubeFaceMaterialInstanceOverrides(cube, overrides, options);
 
             if (changed && options.apply !== false) {
-                ShaderEngine.applyToMesh(cube, this.resolveCubeMaterial(cube, ShaderEngine.globalRenderMode));
-                ShaderEngine.updateLightUniforms();
-                MinecraftPromotionalSilhouetteManager.invalidateGroups();
-                ShaderEngine.requestPreviewRender({ cause: 'assign_face_material_instance' });
+                const activatedLightflow = ShaderEngine.activateLightflowViewMode('assign_face_material_instance');
+                if (!activatedLightflow) {
+                    ShaderEngine.applyToMesh(cube, this.resolveCubeMaterial(cube, ShaderEngine.globalRenderMode));
+                    ShaderEngine.updateLightUniforms();
+                    MinecraftPromotionalSilhouetteManager.invalidateGroups();
+                    ShaderEngine.requestPreviewRender({ cause: 'assign_face_material_instance' });
+                }
             }
 
             return changed;
@@ -5037,6 +5506,202 @@ float lfGetLightShadow(
             return changed;
         },
 
+        getCubeFaceAutoTileOverrides(cube) {
+            if (!cube) return {};
+            const raw = cube[FACE_AUTO_TILE_PROP];
+            if (!raw) return {};
+
+            let parsed = raw;
+            if (typeof raw === 'string') {
+                try {
+                    parsed = JSON.parse(raw);
+                } catch (error) {
+                    warnShaderArchitectOnce('face-auto-tile-overrides', '[Shader Architect] Ignoring invalid face auto-tile data.', error);
+                    return {};
+                }
+            }
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+
+            const normalized = {};
+            Object.keys(parsed).forEach(faceKey => {
+                const faceName = this.normalizeCubeFaceName(faceKey);
+                if (faceName && typeof parsed[faceKey] === 'boolean') {
+                    normalized[faceName] = parsed[faceKey];
+                }
+            });
+            return normalized;
+        },
+
+        setCubeFaceAutoTileOverrides(cube, overrides, options = {}) {
+            if (!cube) return false;
+            const normalized = {};
+            if (overrides && typeof overrides === 'object') {
+                Object.keys(overrides).forEach(faceKey => {
+                    const faceName = this.normalizeCubeFaceName(faceKey);
+                    if (faceName && typeof overrides[faceKey] === 'boolean') {
+                        normalized[faceName] = overrides[faceKey];
+                    }
+                });
+            }
+
+            const ordered = {};
+            CUBE_FACE_NAMES.forEach(faceName => {
+                if (Object.prototype.hasOwnProperty.call(normalized, faceName)) {
+                    ordered[faceName] = normalized[faceName];
+                }
+            });
+
+            const nextValue = Object.keys(ordered).length ? JSON.stringify(ordered) : '';
+            const previousValue = cube[FACE_AUTO_TILE_PROP] || '';
+            if (previousValue === nextValue) return false;
+
+            cube[FACE_AUTO_TILE_PROP] = nextValue;
+            if (options.markDirty !== false) this.markProjectDirty();
+            return true;
+        },
+
+        getMeshFaceAutoTileOverrides(mesh) {
+            if (!mesh) return {};
+            const raw = mesh[MESH_FACE_AUTO_TILE_PROP];
+            if (!raw) return {};
+
+            let parsed = raw;
+            if (typeof raw === 'string') {
+                try {
+                    parsed = JSON.parse(raw);
+                } catch (error) {
+                    warnShaderArchitectOnce('mesh-face-auto-tile-overrides', '[Shader Architect] Ignoring invalid mesh face auto-tile data.', error);
+                    return {};
+                }
+            }
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+
+            const normalized = {};
+            Object.keys(parsed).forEach(faceKey => {
+                if (
+                    mesh.faces &&
+                    Object.prototype.hasOwnProperty.call(mesh.faces, faceKey) &&
+                    typeof parsed[faceKey] === 'boolean'
+                ) {
+                    normalized[faceKey] = parsed[faceKey];
+                }
+            });
+            return normalized;
+        },
+
+        setMeshFaceAutoTileOverrides(mesh, overrides, options = {}) {
+            if (!mesh) return false;
+            const ordered = {};
+            if (mesh.faces && overrides && typeof overrides === 'object') {
+                Object.keys(mesh.faces).forEach(faceKey => {
+                    if (typeof overrides[faceKey] === 'boolean') {
+                        ordered[faceKey] = overrides[faceKey];
+                    }
+                });
+            }
+
+            const nextValue = Object.keys(ordered).length ? JSON.stringify(ordered) : '';
+            const previousValue = mesh[MESH_FACE_AUTO_TILE_PROP] || '';
+            if (previousValue === nextValue) return false;
+
+            mesh[MESH_FACE_AUTO_TILE_PROP] = nextValue;
+            if (options.markDirty !== false) this.markProjectDirty();
+            return true;
+        },
+
+        getElementAutoTile(element, face = null) {
+            if (!element) return false;
+            const faceName = this.normalizeCubeFaceName(face);
+            if (faceName) {
+                const overrides = this.getCubeFaceAutoTileOverrides(element);
+                if (Object.prototype.hasOwnProperty.call(overrides, faceName)) {
+                    return overrides[faceName];
+                }
+            }
+            if (
+                face &&
+                typeof Mesh !== 'undefined' &&
+                element instanceof Mesh &&
+                element.faces &&
+                Object.prototype.hasOwnProperty.call(element.faces, face)
+            ) {
+                const overrides = this.getMeshFaceAutoTileOverrides(element);
+                if (Object.prototype.hasOwnProperty.call(overrides, face)) {
+                    return overrides[face];
+                }
+            }
+            return !!element[ELEMENT_AUTO_TILE_PROP];
+        },
+
+        setElementAutoTile(element, enabled, options = {}) {
+            if (!element) return false;
+            const nextValue = !!enabled;
+            let changed = !!element[ELEMENT_AUTO_TILE_PROP] !== nextValue;
+            element[ELEMENT_AUTO_TILE_PROP] = nextValue;
+
+            if (options.clearFaceOverrides !== false && element[FACE_AUTO_TILE_PROP]) {
+                changed = this.setCubeFaceAutoTileOverrides(element, {}, {
+                    markDirty: false
+                }) || changed;
+            }
+            if (options.clearFaceOverrides !== false && element[MESH_FACE_AUTO_TILE_PROP]) {
+                changed = this.setMeshFaceAutoTileOverrides(element, {}, {
+                    markDirty: false
+                }) || changed;
+            }
+            if (!changed) return false;
+            if (options.markDirty !== false) this.markProjectDirty();
+
+            if (options.apply !== false) {
+                const activatedLightflow = nextValue && ShaderEngine.activateLightflowViewMode('set_element_auto_tile');
+                if (!activatedLightflow) ShaderEngine.updateCubes([element], 'set_element_auto_tile');
+            }
+            return true;
+        },
+
+        setCubeFaceAutoTile(cube, face, enabled, options = {}) {
+            const faceName = this.normalizeCubeFaceName(face);
+            if (!cube || !faceName) return false;
+            const overrides = this.getCubeFaceAutoTileOverrides(cube);
+            const nextValue = !!enabled;
+            if (
+                Object.prototype.hasOwnProperty.call(overrides, faceName) &&
+                overrides[faceName] === nextValue
+            ) return false;
+
+            overrides[faceName] = nextValue;
+            const changed = this.setCubeFaceAutoTileOverrides(cube, overrides, options);
+            if (changed && options.apply !== false) {
+                const activatedLightflow = nextValue && ShaderEngine.activateLightflowViewMode('set_face_auto_tile');
+                if (!activatedLightflow) ShaderEngine.updateCubes([cube], 'set_face_auto_tile');
+            }
+            return changed;
+        },
+
+        clearCubeFaceAutoTile(cube, face, options = {}) {
+            const faceName = this.normalizeCubeFaceName(face);
+            if (!cube || !faceName) return false;
+            const overrides = this.getCubeFaceAutoTileOverrides(cube);
+            if (!Object.prototype.hasOwnProperty.call(overrides, faceName)) return false;
+            delete overrides[faceName];
+            const changed = this.setCubeFaceAutoTileOverrides(cube, overrides, options);
+            if (changed && options.apply !== false) {
+                ShaderEngine.updateCubes([cube], 'clear_face_auto_tile');
+            }
+            return changed;
+        },
+
+        hasGeometryAutoTileEnabled(element) {
+            if (!element) return false;
+            if (typeof Cube !== 'undefined' && element instanceof Cube) {
+                return CUBE_FACE_NAMES.some(faceName => this.getElementAutoTile(element, faceName));
+            }
+            if (typeof Mesh !== 'undefined' && element instanceof Mesh && element.faces) {
+                return Object.keys(element.faces).some(faceKey => this.getElementAutoTile(element, faceKey));
+            }
+            return !!element[ELEMENT_AUTO_TILE_PROP];
+        },
+
         clearMissingMaterialInstanceFromCube(cube, missingInstanceId) {
             if (!cube || !missingInstanceId) return false;
             if (cube.sa_material_instance_id !== missingInstanceId) return false;
@@ -5080,7 +5745,9 @@ float lfGetLightShadow(
             const instance = this.getMaterialInstance(instanceOrId);
             if (!instance) return null;
 
-            const data = instance.toJSON();
+            const data = options.portable
+                ? this.createMaterialInstanceExportData(instance)
+                : instance.toJSON();
             return options.asObject ? data : JSON.stringify(data, null, 4);
         },
 
@@ -5088,9 +5755,52 @@ float lfGetLightShadow(
             return this.exportMaterialInstance(instanceOrId, options);
         },
 
+        createMaterialInstanceExportData(instanceOrId) {
+            const instance = this.getMaterialInstance(instanceOrId);
+            if (!instance) return null;
+
+            const base = this.materials[instance.baseMaterialId] || null;
+            return {
+                sa_format: MATERIAL_INSTANCE_FILE_FORMAT,
+                sa_format_version: MATERIAL_INSTANCE_FILE_VERSION,
+                baseMaterial: {
+                    id: instance.baseMaterialId,
+                    name: base ? this.getMaterialDisplayName(base) : instance.baseMaterialId,
+                    icon: base && base.icon ? base.icon : 'texture'
+                },
+                materialInstance: instance.toJSON()
+            };
+        },
+
+        exportMaterialInstancePreset(instanceOrId, options = {}) {
+            return this.exportMaterialInstance(instanceOrId, Object.assign({}, options, { portable: true }));
+        },
+
+        extractMaterialInstanceImportData(data) {
+            const parsed = typeof data === 'string' ? JSON.parse(data) : data;
+            if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') return null;
+
+            if (parsed.sa_format === MATERIAL_INSTANCE_FILE_FORMAT) {
+                return parsed.materialInstance || parsed.instance || null;
+            }
+
+            const candidate = parsed.materialInstance || parsed.instance || parsed;
+            if (!candidate || Array.isArray(candidate) || typeof candidate !== 'object') return null;
+
+            const format = typeof candidate.sa_format_version === 'string'
+                ? candidate.sa_format_version
+                : '';
+            const hasInstanceFormat = format.includes('instance');
+            const hasLegacyInstanceShape = !!(
+                (candidate.baseMaterialId || candidate.materialId) &&
+                (candidate.uniforms || candidate.uniformOverrides)
+            );
+            return hasInstanceFormat || hasLegacyInstanceShape ? candidate : null;
+        },
+
         importMaterialInstance(data, options = {}) {
             try {
-                const parsed = typeof data === 'string' ? JSON.parse(data) : data;
+                const parsed = this.extractMaterialInstanceImportData(data);
                 if (!parsed) return null;
 
                 const instance = FancyShaderMaterialInstance.fromJSON(parsed);
@@ -5103,8 +5813,13 @@ float lfGetLightShadow(
                 }
 
                 if (options.name) instance.name = options.name;
-                return this.registerMaterialInstance(instance);
+                return this.registerMaterialInstance(instance, {
+                    overwrite: !!options.overwrite,
+                    save: options.save,
+                    cause: options.cause || 'import_instance'
+                });
             } catch (error) {
+                console.warn('[Shader Architect] Material-instance import failed.', error);
                 return null;
             }
         },
@@ -5340,7 +6055,15 @@ float lfGetLightShadow(
             if (!this.areUniformsCompatible(baseDef, nextDef)) return null;
             instance.uniforms[uniformName] = nextDef;
             this.saveMaterialInstances();
-            ShaderEngine.updateAllUniforms('set_material_instance_uniform');
+            if (uniformName === 'AUTO_TILE' || uniformName === 'AFFECTED_BY_LIGHT') {
+                ShaderEngine.updateAllCubes(
+                    uniformName === 'AUTO_TILE'
+                        ? 'set_material_instance_auto_tile'
+                        : 'set_material_instance_affected_by_light'
+                );
+            } else {
+                ShaderEngine.updateAllUniforms('set_material_instance_uniform');
+            }
             return nextDef;
         },
 
@@ -5358,7 +6081,15 @@ float lfGetLightShadow(
 
             instance.uniforms[uniformName] = this.cloneUniformDefinition(baseDef);
             this.saveMaterialInstances();
-            ShaderEngine.updateAllUniforms('reset_material_instance_uniform');
+            if (uniformName === 'AUTO_TILE' || uniformName === 'AFFECTED_BY_LIGHT') {
+                ShaderEngine.updateAllCubes(
+                    uniformName === 'AUTO_TILE'
+                        ? 'reset_material_instance_auto_tile'
+                        : 'reset_material_instance_affected_by_light'
+                );
+            } else {
+                ShaderEngine.updateAllUniforms('reset_material_instance_uniform');
+            }
             return instance.uniforms[uniformName];
         },
 
@@ -5375,7 +6106,7 @@ float lfGetLightShadow(
 
             instance.uniforms = this.cloneUniformMap(base.uniforms || {});
             this.saveMaterialInstances();
-            ShaderEngine.updateAllUniforms('reset_material_instance_uniforms');
+            ShaderEngine.updateAllCubes('reset_material_instance_uniforms');
             return instance;
         },
 
@@ -5383,11 +6114,62 @@ float lfGetLightShadow(
             return this.resetMaterialInstanceUniforms(instanceOrId);
         },
 
+        getMaterialOverridePreset(presetId) {
+            return presetId ? MATERIAL_OVERRIDE_PRESETS[presetId] || null : null;
+        },
+
+        isMaterialOverridePresetCompatible(instanceOrId, presetOrId) {
+            const instance = this.getMaterialInstance(instanceOrId);
+            const preset = typeof presetOrId === 'string'
+                ? this.getMaterialOverridePreset(presetOrId)
+                : presetOrId;
+            const base = instance && (this.materials[instance.baseMaterialId] || null);
+            if (!instance || !preset || !base) return false;
+
+            const compatibleMaterials = Array.isArray(preset.compatibleMaterials)
+                ? preset.compatibleMaterials
+                : ['*'];
+            if (
+                !compatibleMaterials.includes('*') &&
+                !compatibleMaterials.includes(instance.baseMaterialId) &&
+                !compatibleMaterials.includes(base.id)
+            ) {
+                return false;
+            }
+
+            const requiredUniforms = Array.isArray(preset.requiredUniforms)
+                ? preset.requiredUniforms
+                : [];
+            return requiredUniforms.every(uniformName => !!(base.uniforms && base.uniforms[uniformName]));
+        },
+
+        getCompatibleMaterialOverridePresets(instanceOrId) {
+            const compatible = {};
+            Object.entries(MATERIAL_OVERRIDE_PRESETS).forEach(([presetId, preset]) => {
+                if (this.isMaterialOverridePresetCompatible(instanceOrId, preset)) {
+                    compatible[presetId] = preset;
+                }
+            });
+            return compatible;
+        },
+
+        getMaterialOverridePresetOptions(instanceOrId) {
+            const options = {};
+            Object.entries(this.getCompatibleMaterialOverridePresets(instanceOrId)).forEach(([presetId, preset]) => {
+                options[presetId] = {
+                    name: preset.label,
+                    icon: preset.icon || 'auto_awesome',
+                    color: preset.color || undefined
+                };
+            });
+            return options;
+        },
+
         applyMaterialOverridePreset(instanceOrId, presetId, options = {}) {
             const instance = this.getMaterialInstance(instanceOrId);
             const preset = MATERIAL_OVERRIDE_PRESETS[presetId];
             const base = instance && (this.materials[instance.baseMaterialId] || this.materials['classic']);
-            if (!instance || !preset || !base) return false;
+            if (!instance || !preset || !base || !this.isMaterialOverridePresetCompatible(instance, preset)) return false;
 
             if (preset.reset) {
                 instance.uniforms = this.cloneUniformMap(base.uniforms || {});
@@ -5409,7 +6191,7 @@ float lfGetLightShadow(
 
             if (!changed) return false;
             this.saveMaterialInstances({ cause: options.cause || 'apply_override_preset' });
-            ShaderEngine.updateAllUniforms(options.cause || 'apply_override_preset');
+            ShaderEngine.updateAllCubes(options.cause || 'apply_override_preset');
             return true;
         },
 
@@ -5420,10 +6202,13 @@ float lfGetLightShadow(
             cube.sa_material_instance_id = instance.id;
             cube.sa_material_id = instance.baseMaterialId;
             if (options.apply !== false) {
-                ShaderEngine.applyToMesh(cube, this.getRenderMaterialForInstance(instance));
-                ShaderEngine.updateLightUniforms();
-                MinecraftPromotionalSilhouetteManager.invalidateGroups();
-                ShaderEngine.requestPreviewRender({ cause: 'assign_material_instance' });
+                const activatedLightflow = ShaderEngine.activateLightflowViewMode('assign_material_instance');
+                if (!activatedLightflow) {
+                    ShaderEngine.applyToMesh(cube, this.getRenderMaterialForInstance(instance));
+                    ShaderEngine.updateLightUniforms();
+                    MinecraftPromotionalSilhouetteManager.invalidateGroups();
+                    ShaderEngine.requestPreviewRender({ cause: 'assign_material_instance' });
+                }
             }
             return true;
         },
@@ -5525,9 +6310,10 @@ float lfGetLightShadow(
                 name: tl('shader_architect.preset.classic'),
                 icon: 'grid_view',
                 isCustom: false,
-                 vertex: `
+                vertex: `
                      //Classic
                      attribute float highlight;
+                    attribute float autoTile;
                     attribute vec2 globalFaceSize;
 
                      uniform bool SHADE;
@@ -5535,6 +6321,7 @@ float lfGetLightShadow(
 
                      varying vec2 vUv;
                     varying vec2 vFaceSize;
+                    varying float vAutoTile;
                      varying float light;
                      varying float lift;
 
@@ -5558,11 +6345,12 @@ float lfGetLightShadow(
                          lift = (highlight == 2.0) ? 0.22 : (highlight == 1.0) ? 0.1 : 0.0;
                          vUv = uv;
                         vFaceSize = globalFaceSize;
+                        vAutoTile = autoTile;
 
                          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
                      }
                  `,
-                 fragment: `
+                fragment: `
                     ${LIGHTFLOW_TEXTURE_TILING}
 
                      uniform sampler2D map;
@@ -5571,12 +6359,13 @@ float lfGetLightShadow(
 
                      varying vec2 vUv;
                     varying vec2 vFaceSize;
+                    varying float vAutoTile;
                      varying float light;
                      varying float lift;
 
                      void main() {
                         vec2 materialUv =
-                            vUv * lfResolveTextureTiling(vFaceSize);
+                            vUv * lfResolveTextureTiling(vFaceSize, vAutoTile);
                         vec4 color = texture2D(map, materialUv);
                          if(color.a < 0.01) discard;
 
@@ -5593,33 +6382,33 @@ float lfGetLightShadow(
                         }
                     }
                  `,
-                 uniforms: {
+                uniforms: {
                     "map": { type: "sampler2D", value: null, repeat: true, expose: true },
                     "LIGHTCOLOR": { type: "vec3", value: new THREE.Vector3(1, 1, 1), hexValue: "#ffffff", expose: true, is_color: true },
-                     "SHADE": { type: "bool", value: true, expose: true },
-                     "LIGHTSIDE": { type: "int", value: 0, expose: true, min: 0, max: 5, step: 1, allow_higher: false, allow_lower: false },
+                    "SHADE": { type: "bool", value: true, expose: true },
+                    "LIGHTSIDE": { type: "int", value: 0, expose: true, min: 0, max: 5, step: 1, allow_higher: false, allow_lower: false },
                     "EMISSIVE": { type: "bool", value: false, expose: true },
                     "AUTO_TILE": { type: "bool", value: false, expose: true },
                     "TILING": { type: "vec2", value: new THREE.Vector2(1, 1), expose: true, min: 0.1, max: 10.0, step: 0.1 },
                     "TEXTURE_SIZE": { type: "vec2", value: new THREE.Vector2(16, 16), expose: false }
-                 }
-             });
+                }
+            });
 
             const createLightflowPixelatedShadowUniforms = (options = {}) => {
                 const config = {
                     enabled: options.enabled ?? false,
                     resolution: options.resolution ?? 1.0,
-                    levels: options.levels ?? 0,
+                    levels: options.levels ?? 1,
                     globalResolution: options.globalResolution ?? false,
-                    strength: options.strength ?? 1.0
+                    strength: options.strength ?? 0.75
                 };
 
                 return {
                     /*
                         Master toggle.
 
-                        Mantiene el shader compilado y permite activar o
-                        desactivar el efecto sin reconstruir el material.
+                        Keeps the shader compiled and allows the effect to
+                        be toggled without rebuilding the material.
                     */
                     "uLFPixelatedShadowsEnabled": {
                         type: "bool",
@@ -5629,11 +6418,11 @@ float lfGetLightShadow(
                     },
 
                     /*
-                        Multiplicador de resolución de la cuadrícula.
+                        Grid resolution multiplier.
 
-                        1.0 = un píxel de sombra por píxel lógico.
-                        < 1.0 = bloques de sombra más grandes.
-                        > 1.0 = sombras pixeladas más detalladas.
+                        1.0 = one shadow pixel per logical pixel.
+                        < 1.0 = larger shadow blocks.
+                        > 1.0 = more detailed pixelated shadows.
                     */
                     "uLFPixelatedShadowResolution": {
                         type: "float",
@@ -5648,11 +6437,11 @@ float lfGetLightShadow(
                     },
 
                     /*
-                        Cantidad de escalones de intensidad.
+                        Number of intensity steps.
 
-                        0 = intensidad continua.
-                        1 = transición binaria aproximada.
-                        2–8 = varios niveles de sombra.
+                        0 = continuous intensity.
+                        1 = approximate binary transition.
+                        2–8 = multiple shadow levels.
                     */
                     "uLFPixelatedShadowLevels": {
                         type: "float",
@@ -5667,7 +6456,7 @@ float lfGetLightShadow(
                     },
 
                     /*
-                        Define cómo se calcula la cuadrícula:
+                        Defines how the grid is calculated:
 
                         false:
                             uvSize * faceSize
@@ -5675,8 +6464,8 @@ float lfGetLightShadow(
                         true:
                             globalFaceSize
 
-                        El modo global evita que la densidad cambie debido
-                        al tamaño de la región UV dentro de la textura.
+                        Global mode prevents density from changing with
+                        the UV region size inside the texture.
                     */
                     "uLFPixelatedShadowGlobalResolution": {
                         type: "bool",
@@ -5686,10 +6475,10 @@ float lfGetLightShadow(
                     },
 
                     /*
-                        Mezcla entre sombra normal y sombra pixelada.
+                        Blend between regular and pixelated shadows.
 
-                        0.0 = sin influencia.
-                        1.0 = efecto completo.
+                        0.0 = no influence.
+                        1.0 = full effect.
                     */
                     "uLFPixelatedShadowStrength": {
                         type: "float",
@@ -5706,22 +6495,20 @@ float lfGetLightShadow(
             };
 
 
-            // =========================================================================
-            // PBR METALLIC/ROUGHNESS SHADER - corrected v2 for Shader Architect / Blockbench
-            // Based on the working shaded_lightflow light + shadow path.
-            // =========================================================================
-            let pbr_metallic_roughness = new FancyShaderMaterial({
+            // Metallic/roughness PBR using the same light and shadow contract as Lightflow.
+            const pbrMetallicRoughness = new FancyShaderMaterial({
                 id: 'pbr_metallic_roughness',
                 name: tl('shader_architect.preset.pbr_metallic_roughness'),
                 icon: 'hexagon',
                 isCustom: false,
-                 vertex: `#include <common>
+                vertex: `#include <common>
 
 ${LIGHTFLOW_PIXELATED_SHADOWS_VERTEX}
 ${LIGHTFLOW_TEXTURE_TILING}
 
 attribute float highlight;
 attribute float affected_by_shadow;
+attribute float autoTile;
 attribute vec2 normalizedFaceUv;
 attribute vec2 globalFaceSize;
 attribute vec2 uvSize;
@@ -5733,6 +6520,7 @@ uniform float uStylizedNormalInfluence;
 
 varying vec2 vUv;
 varying vec2 vFaceSize;
+varying float vAutoTile;
 varying float lift;
 varying vec3 vWorldPos;
 varying vec3 vWorldNormal;
@@ -5793,6 +6581,7 @@ void main() {
 
     vUv = uv;
     vFaceSize = globalFaceSize;
+    vAutoTile = autoTile;
     vViewDir = safeNormalizeVertex(cameraPosition - vWorldPos, vec3(0.0, 0.0, 1.0));
     vec4 saSSRViewPosition4 = modelViewMatrix * vec4(position, 1.0);
     vSA_SSRViewPosition = saSSRViewPosition4.xyz;
@@ -5809,7 +6598,7 @@ void main() {
         normalizedFaceUv,
         globalFaceSize,
         uvSize * abs(
-            lfResolveTextureTiling(globalFaceSize)
+            lfResolveTextureTiling(globalFaceSize, autoTile)
         ),
         affected_by_shadow
     );
@@ -5829,9 +6618,7 @@ uniform sampler2D map;
 uniform vec3 LIGHTCOLOR;
 uniform bool EMISSIVE;
 
-// -------------------------------------------------------------------------
-// PBR material properties
-// -------------------------------------------------------------------------
+// PBR material properties.
 uniform vec3 uBaseColor;
 uniform float uBaseAlpha;
 uniform float uMetallic;
@@ -5882,11 +6669,10 @@ uniform float uNativeSSSWeight;
 uniform bool uNativeSSSUseMask;
 
 uniform vec3 uEmissiveColor;
+uniform bool uEmissiveUseTexture;
 uniform float uEmissiveStrength;
 
-// -------------------------------------------------------------------------
-// Optional texture maps. Do not compare samplers in GLSL; use these flags.
-// -------------------------------------------------------------------------
+// Optional texture maps use flags because GLSL cannot compare samplers.
 uniform bool uUseBaseColorMap;
 uniform bool uUseMetallicRoughnessMap;
 uniform bool uUseBlockbenchMERMap;
@@ -5916,9 +6702,7 @@ uniform float uEnvSpecularStrength;
 uniform float uSpecularIntensity;
 uniform float uSpecularTint;
 
-// -------------------------------------------------------------------------
-// Lightflow-compatible light arrays
-// -------------------------------------------------------------------------
+// Lightflow-compatible light arrays.
 uniform vec3 uLightPos[16];
 uniform vec3 uLightDir[16];
 uniform float uLightIntensity[16];
@@ -5948,6 +6732,7 @@ uniform float uAODirectInfluence;
 
 varying vec2 vUv;
 varying vec2 vFaceSize;
+varying float vAutoTile;
 varying float lift;
 varying vec3 vWorldPos;
 varying vec3 vWorldNormal;
@@ -5979,9 +6764,7 @@ vec3 saturateVec3(vec3 x) {
     return clamp(x, vec3(0.0), vec3(1.0));
 }
 
-// -------------------------------------------------------------------------
-// BRDF helpers: stable GGX / Smith / Schlick for WebGL 1 era GLSL.
-// -------------------------------------------------------------------------
+// Stable GGX, Smith, and Schlick helpers for WebGL 1 GLSL.
 vec3 F_Schlick(vec3 f0, float VdotH) {
     float fc = pow5(saturate(1.0 - VdotH));
     return f0 + (vec3(1.0) - f0) * fc;
@@ -6083,13 +6866,16 @@ float computeSpotAttenuation(int lightIndex, vec3 lightDir) {
 
 vec3 getLightDirection(int lightIndex, vec3 worldPos) {
     int type = uLightType[lightIndex];
+    vec3 direction = safeNormalize(
+        uLightPos[lightIndex] - worldPos,
+        vec3(0.0, 1.0, 0.0)
+    );
 
     if (type == SA_LIGHT_DIRECTIONAL) {
-        return safeNormalize(-uLightDir[lightIndex], vec3(0.0, 1.0, 0.0));
+        direction = safeNormalize(-uLightDir[lightIndex], vec3(0.0, 1.0, 0.0));
     }
 
-    vec3 lightVec = uLightPos[lightIndex] - worldPos;
-    return safeNormalize(lightVec, vec3(0.0, 1.0, 0.0));
+    return direction;
 }
 
 float getLightAttenuation(int lightIndex, vec3 worldPos, vec3 lightDir) {
@@ -6123,9 +6909,7 @@ vec3 getLightRadiance(int lightIndex, float attenuation) {
         * PI;
 }
 
-// -------------------------------------------------------------------------
-// Ambient occlusion: same stylized face-cavity idea as shaded_lightflow.
-// -------------------------------------------------------------------------
+// Stylized face-cavity ambient occlusion shared with shaded_lightflow.
 float computeFaceCavityAO(vec2 faceUv) {
     vec2 uv = clamp(faceUv, vec2(0.0), vec2(1.0));
     float radius = clamp(uAORadius, 0.0001, 0.5);
@@ -6300,7 +7084,7 @@ void buildAnisotropyFrame(
 
 void main() {
     vec2 materialUv =
-        vUv * lfResolveTextureTiling(vFaceSize);
+        vUv * lfResolveTextureTiling(vFaceSize, vAutoTile);
     vec4 texel = texture2D(map, materialUv);
     texel.a *= clamp(uBaseAlpha, 0.0, 1.0);
 
@@ -6326,7 +7110,8 @@ void main() {
     bool nativeSSSActive = uSSSUseNativePBR && uNativeSSSEnabled;
     bool useSSSMask = uUseSSSMaskMap || (nativeSSSActive && uNativeSSSUseMask);
     float sssMask = useSSSMask ? 0.0 : 1.0;
-    vec3 emissive = uEmissiveColor * max(uEmissiveStrength, 0.0);
+    float emissiveStrength = max(uEmissiveStrength, 0.0);
+    vec3 emissive = vec3(0.0);
 
     if (uUseBaseColorMap) {
         baseColor *= texture2D(
@@ -6334,6 +7119,12 @@ void main() {
             materialUv * uBaseColorMapScale
         ).rgb;
     }
+
+    emissive += (
+        uEmissiveUseTexture
+            ? max(baseColor, vec3(0.0))
+            : uEmissiveColor
+    ) * emissiveStrength;
 
     if (uUseMetallicRoughnessMap) {
         vec4 mr = texture2D(
@@ -6343,7 +7134,7 @@ void main() {
         metallic *= mr.r;
         roughness *= uUseBlockbenchMERMap ? mr.b : mr.g;
         if (uUseBlockbenchMERMap) {
-            emissive += baseColor * mr.g * max(uEmissiveStrength, 0.0);
+            emissive += baseColor * mr.g * emissiveStrength;
         }
         if (useSSSMask) {
             // Blockbench's MER Subsurface convention stores the SSS mask in alpha.
@@ -6362,7 +7153,7 @@ void main() {
         emissive += texture2D(
             uEmissiveMap,
             materialUv * uEmissiveMapScale
-        ).rgb * max(uEmissiveStrength, 0.0);
+        ).rgb * emissiveStrength;
     }
 
     metallic = clamp(metallic, 0.0, 1.0);
@@ -6691,6 +7482,7 @@ void main() {
 
                     // Emission
                     "uEmissiveColor": { type: "vec3", value: new THREE.Vector3(0, 0, 0), hexValue: "#000000", expose: true, is_color: true },
+                    "uEmissiveUseTexture": { type: "bool", value: false, expose: true },
                     "uEmissiveStrength": { type: "float", value: 0.0, expose: true, min: 0.0, max: 10.0, step: 0.1, allow_higher: true, allow_lower: false },
 
                     // Texture enable flags. Set these to true only when a real texture exists.
@@ -6788,9 +7580,9 @@ void main() {
             });
 
             const vibrantVisualsUniforms = {};
-            Object.keys(pbr_metallic_roughness.uniforms).forEach(key => {
+            Object.keys(pbrMetallicRoughness.uniforms).forEach(key => {
                 vibrantVisualsUniforms[key] = cloneUniformDefinition(
-                    pbr_metallic_roughness.uniforms[key]
+                    pbrMetallicRoughness.uniforms[key]
                 );
             });
             const setVibrantDefault = (name, value) => {
@@ -6810,13 +7602,13 @@ void main() {
             setVibrantDefault('uLFPixelatedShadowsEnabled', true);
             setVibrantDefault('uLFPixelatedShadowLevels', 4.0);
 
-            const vibrant_visuals_pbr = new FancyShaderMaterial({
+            const vibrantVisualsPbr = new FancyShaderMaterial({
                 id: 'vibrant_visuals_pbr',
                 name: tl('shader_architect.preset.vibrant_visuals_pbr'),
                 icon: 'landscape_2',
                 isCustom: false,
-                vertex: pbr_metallic_roughness.vertex,
-                fragment: pbr_metallic_roughness.fragment,
+                vertex: pbrMetallicRoughness.vertex,
+                fragment: pbrMetallicRoughness.fragment,
                 uniforms: vibrantVisualsUniforms,
                 supportsScreenSpaceReflections: true,
                 enableShadows: true
@@ -6852,7 +7644,7 @@ void main() {
                     ? {}
                     : (
                         config.pixelatedShadows &&
-                        typeof config.pixelatedShadows === 'object'
+                            typeof config.pixelatedShadows === 'object'
                             ? config.pixelatedShadows
                             : null
                     );
@@ -7156,6 +7948,15 @@ void main() {
 
                 Object.assign(uniforms, createNativePBRUniforms());
 
+                // Lightflow exposes texture-driven emission without changing
+                // the existing default look or requiring a native PBR group.
+                uniforms.uEmissiveColor.value = new THREE.Vector3(0, 0, 0);
+                uniforms.uEmissiveColor.hexValue = "#000000";
+                uniforms.uEmissiveUseTexture.expose = true;
+                uniforms.uEmissiveStrength.expose = true;
+                uniforms.uEmissiveStrength.allow_higher = true;
+                uniforms.uEmissiveStrength.allow_lower = false;
+
                 if (config.shadows) {
                     uniforms["uLightCastShadow"] = {
                         type: "intv",
@@ -7231,6 +8032,7 @@ varying vec3 vWorldPos;
 varying vec3 vWorldNormal;
 
 //attributes
+attribute float autoTile;
 attribute vec2 normalizedFaceUv;
 attribute vec2 globalFaceSize;
 attribute vec2 uvSize;
@@ -7239,6 +8041,7 @@ attribute vec2 uvSize;
 varying vec2 v_normalizedFaceUv;
 varying vec2 v_faceSize;
 varying vec2 v_uvSize;
+varying float v_autoTile;
 
 vec3 applyLightSide(vec3 n) {
     vec3 N = n;
@@ -7288,6 +8091,7 @@ void main() {
     v_normalizedFaceUv = normalizedFaceUv;
     v_faceSize = globalFaceSize;
     v_uvSize = uvSize;
+    v_autoTile = autoTile;
 
     lift = highlight == 2.0 ? 0.22 :
            highlight == 1.0 ? 0.10 :
@@ -7299,7 +8103,7 @@ void main() {
         normalizedFaceUv,
         globalFaceSize,
         uvSize * abs(
-            lfResolveTextureTiling(globalFaceSize)
+            lfResolveTextureTiling(globalFaceSize, autoTile)
         ),
         affected_by_shadow
     );
@@ -7358,6 +8162,7 @@ varying vec2 vUv;
 varying vec2 v_normalizedFaceUv;
 varying vec2 v_faceSize;
 varying vec2 v_uvSize;
+varying float v_autoTile;
 varying float lift;
 varying vec3 vWorldPos;
 varying vec3 vWorldNormal;
@@ -7495,7 +8300,7 @@ float computeVoxelAO(vec2 faceUv, vec3 normal) {
     return clamp(ao, clamp(uAOMin, 0.0, 1.0), 1.0);
 }
 
-// --- TONE MAPPING (Linear Workflow Compatible) ---
+// Linear-workflow tone mapping.
 
 // ACES Filmic Tone Mapping
 vec3 acesFilm(vec3 x) {
@@ -7570,7 +8375,7 @@ vec3 applyToneMapping(vec3 color) {
 
 void main() {
     vec2 tiling_value =
-        lfResolveTextureTiling(v_faceSize);
+        lfResolveTextureTiling(v_faceSize, v_autoTile);
     vec4 texel = texture2D(map, vUv * tiling_value);
     texel = saApplyNativePBRBaseColor(texel);
 
@@ -7579,7 +8384,7 @@ void main() {
 
     if (texel.a < 0.01) discard;
 
-    // --- LINEARIZE INPUT TEXTURE ---
+    // Linearize the input texture.
     // Converts input texture from sRGB to Linear space so lighting calculations are correct.
     texel.rgb = pow(max(texel.rgb, vec3(0.0)), vec3(2.2));
 
@@ -7619,7 +8424,7 @@ void main() {
     float directAO = mix(1.0, ambientOcclusion, clamp(uAODirectInfluence, 0.0, 1.0));
     vec3 lighting = ambientLight + directLight * directAO;
 
-    // --- LIGHTING CLAMP (Checkbox) ---
+    // Optional lighting clamp.
     if (uClampLighting) {
         float maxChannel = max(lighting.r, max(lighting.g, lighting.b));
         if (maxChannel > 1.0) {
@@ -7655,7 +8460,7 @@ void main() {
 
     finalColor = applyToneMapping(finalColor);
 
-    // --- GAMMA CORRECTION ---
+    // Gamma correction.
     // Converts the final linear color into sRGB space for correct display output.
     finalColor = pow(max(finalColor, vec3(0.0)), vec3(1.0 / 2.2));
 
@@ -7664,13 +8469,15 @@ void main() {
                 uniforms: createLightflowUniforms({
                     shadows: true,
                     pixelatedShadows: {
-                        enabled: false
+                        enabled: false,
+                        levels: 1,
+                        strength: 0.75
                     }
                 }),
                 enableShadows: true
             });
 
-            let shaded_lightflow = new FancyShaderMaterial({
+            const shadedLightflow = new FancyShaderMaterial({
                 id: 'shaded_lightflow',
                 name: tl('shader_architect.preset.shaded_lightflow'),
                 icon: 'flare',
@@ -7697,6 +8504,7 @@ varying vec3 vSA_SSRViewNormal;
 varying vec4 vSA_SSRClipPosition;
 
 //attributes
+attribute float autoTile;
 attribute vec2 normalizedFaceUv;
 attribute vec2 globalFaceSize;
 attribute vec2 uvSize;
@@ -7705,6 +8513,7 @@ attribute vec2 uvSize;
 varying vec2 v_normalizedFaceUv;
 varying vec2 v_faceSize;
 varying vec2 v_uvSize;
+varying float v_autoTile;
 
 vec3 applyLightSide(vec3 n) {
     vec3 N = n;
@@ -7754,6 +8563,7 @@ void main() {
     v_normalizedFaceUv = normalizedFaceUv;
     v_faceSize = globalFaceSize;
     v_uvSize = uvSize;
+    v_autoTile = autoTile;
     vec4 saSSRViewPosition4 = modelViewMatrix * vec4(position, 1.0);
     vSA_SSRViewPosition = saSSRViewPosition4.xyz;
     vSA_SSRViewNormal = normalize(normalMatrix * normal);
@@ -7769,7 +8579,7 @@ void main() {
         normalizedFaceUv,
         globalFaceSize,
         uvSize * abs(
-            lfResolveTextureTiling(globalFaceSize)
+            lfResolveTextureTiling(globalFaceSize, autoTile)
         ),
         affected_by_shadow
     );
@@ -7833,6 +8643,7 @@ varying vec3 vWorldNormal;
 varying vec2 v_normalizedFaceUv;
 varying vec2 v_faceSize;
 varying vec2 v_uvSize;
+varying float v_autoTile;
 
 #define SA_LIGHT_POINT 0
 #define SA_LIGHT_DIRECTIONAL 1
@@ -7920,7 +8731,7 @@ vec3 computeLightContribution(int lightIndex, vec3 normal, vec3 worldPos) {
     return max(uLightColor[lightIndex], vec3(0.0)) * diffuse * intensity * attenuation;
 }
 
-// --- SHADOW FUNCTIONS ---
+// Shadow sampling.
 
 float getDirectionalShadowByIndex(int shadowIndex) {
     float result = 1.0;
@@ -8031,7 +8842,7 @@ float getCustomLightShadow(int lightIndex) {
     return mix(1.0, shadow, clamp(uShadowStrength, 0.0, 1.0));
 }
 
-// --- VOXEL-FRIENDLY AMBIENT OCCLUSION ---
+// Voxel-friendly ambient occlusion.
 
 float computeVoxelAO(vec2 faceUv, vec3 normal) {
     if (!uAOEnabled) return 1.0;
@@ -8072,7 +8883,7 @@ float computeVoxelAO(vec2 faceUv, vec3 normal) {
     return clamp(ao, clamp(uAOMin, 0.0, 1.0), 1.0);
 }
 
-// --- TONE MAPPING (Linear Workflow Compatible) ---
+// Linear-workflow tone mapping.
 
 vec3 acesFilm(vec3 x) {
     float a = 2.51;
@@ -8141,7 +8952,7 @@ vec3 applyToneMapping(vec3 color) {
 
 void main() {
     vec2 tiling_value =
-        lfResolveTextureTiling(v_faceSize);
+        lfResolveTextureTiling(v_faceSize, v_autoTile);
     vec4 texel = texture2D(map, vUv * tiling_value);
     texel = saApplyNativePBRBaseColor(texel);
 
@@ -8150,7 +8961,7 @@ void main() {
 
     if (texel.a < 0.01) discard;
 
-    // --- LINEARIZE INPUT TEXTURE ---
+    // Linearize the input texture.
     // Converts input texture from sRGB to Linear space so lighting math is calculated correctly.
     #if defined( sRGBToLinear )
         texel.rgb = sRGBToLinear(texel.rgb);
@@ -8194,7 +9005,7 @@ void main() {
     float directAO = mix(1.0, ambientOcclusion, clamp(uAODirectInfluence, 0.0, 1.0));
     vec3 lighting = ambientLight + directLight * directAO;
 
-    // --- LIGHTING CLAMP ---
+    // Optional lighting clamp.
     if (uClampLighting) {
         float maxChannel = max(lighting.r, max(lighting.g, lighting.b));
         if (maxChannel > 1.0) {
@@ -8210,7 +9021,7 @@ void main() {
     finalColor += texel.rgb * lighting * nativeMetallic * (1.0 - nativeRoughness) * uNativePBRSpecularStrength * 0.35;
     finalColor += nativeEmissive;
 
-    // --- HANDLE LIFT INTENSITY ---
+    // Apply lift intensity.
     // Applying flat offsets directly in linear space can destroy dark areas.
     // If lift is high, apply a soft tint reduction to preserve midtones.
     finalColor += vec3(lift);
@@ -8233,7 +9044,7 @@ void main() {
     // Apply Tonemapping in Linear Space
     finalColor = applyToneMapping(finalColor);
 
-    // --- GAMMA CORRECTION ---
+    // Gamma correction.
     // Converts the processed linear colors back to sRGB for display.
     finalColor = pow(max(finalColor, vec3(0.0)), vec3(1.0 / 2.2));
 
@@ -8249,7 +9060,9 @@ void main() {
                 uniforms: createLightflowUniforms({
                     shadows: true,
                     pixelatedShadows: {
-                        enabled: false
+                        enabled: false,
+                        levels: 1,
+                        strength: 0.75
                     },
                     screenSpaceReflections: true
                 }),
@@ -8257,7 +9070,7 @@ void main() {
                 enableShadows: true
             });
 
-            let pixelated_shaded_lightflow = new FancyShaderMaterial({
+            const _pixelatedShadedLightflowPrototype = new FancyShaderMaterial({
                 id: 'pixelated_shaded_lightflow',
                 name: tl('shader_architect.preset.pixelated_shaded_lightflow'),
                 icon: 'blur_on',
@@ -8270,6 +9083,7 @@ ${LIGHTFLOW_TEXTURE_TILING}
 
 attribute float highlight;
 attribute float affected_by_shadow;
+attribute float autoTile;
 attribute vec2 normalizedFaceUv;
 attribute vec2 faceSize;
 attribute vec2 globalFaceSize;
@@ -8283,6 +9097,7 @@ uniform float uStylizedNormalInfluence;
 varying vec2 vUv;
 varying vec2 vNormalizedFaceUv;
 varying vec2 vfaceSize;
+varying float vAutoTile;
 
 varying float lift;
 varying vec3 vWorldPos;
@@ -8335,6 +9150,7 @@ void main() {
     vUv = uv;
     vNormalizedFaceUv = normalizedFaceUv;
     vfaceSize = globalFaceSize;
+    vAutoTile = autoTile;
 
     lift = highlight == 2.0 ? 0.22 :
            highlight == 1.0 ? 0.10 :
@@ -8346,7 +9162,7 @@ void main() {
         normalizedFaceUv,
         globalFaceSize,
         uvSize * abs(
-            lfResolveTextureTiling(globalFaceSize)
+            lfResolveTextureTiling(globalFaceSize, autoTile)
         ),
         affected_by_shadow
     );
@@ -8407,6 +9223,7 @@ uniform float uAOFaceNormalWeight;
 varying vec2 vUv;
 varying vec2 vNormalizedFaceUv;
 varying vec2 vfaceSize;
+varying float vAutoTile;
 
 varying float lift;
 varying vec3 vWorldPos;
@@ -8719,7 +9536,7 @@ vec3 applyToneMapping(vec3 color) {
 
 void main() {
     vec2 tiling_value =
-        lfResolveTextureTiling(vfaceSize);
+        lfResolveTextureTiling(vfaceSize, vAutoTile);
 
     vec2 tiledUv = vUv * tiling_value;
     vec4 texel = texture2D(map, tiledUv);
@@ -8878,7 +9695,7 @@ void main() {
             });
 
 
-            let minecraft_promotional_bevel = new FancyShaderMaterial({
+            const minecraftPromotionalBevel = new FancyShaderMaterial({
                 id: 'minecraft_promotional_bevel',
                 name: 'Minecraft Promotional Bevel',
                 icon: 'star_shine',
@@ -8889,6 +9706,7 @@ void main() {
 #include <shadowmap_pars_vertex>
 
 attribute float highlight;
+attribute float autoTile;
 attribute vec2 normalizedFaceUv;
 attribute vec2 faceSize;
 attribute vec2 globalFaceSize;
@@ -8903,6 +9721,7 @@ varying vec2 vPromoElementUv;
 varying vec2 vPromoElementSize;
 varying vec2 vPromoGlobalFaceSize;
 varying vec2 vPromoElementUvSize;
+varying float vPromoAutoTile;
 
 varying vec3 vPromoWorldPosition;
 varying vec3 vPromoWorldNormal;
@@ -8975,6 +9794,7 @@ void main() {
     vPromoElementSize = faceSize;
     vPromoGlobalFaceSize = globalFaceSize;
     vPromoElementUvSize = uvSize;
+    vPromoAutoTile = autoTile;
 
     if (SHADE) {
         vec3 lightingNormal = promoApplyLightSide(
@@ -9102,6 +9922,7 @@ varying vec2 vPromoElementUv;
 varying vec2 vPromoElementSize;
 varying vec2 vPromoGlobalFaceSize;
 varying vec2 vPromoElementUvSize;
+varying float vPromoAutoTile;
 
 varying vec3 vPromoWorldPosition;
 varying vec3 vPromoWorldNormal;
@@ -9111,7 +9932,7 @@ varying float vPromoHighlightLift;
 
 vec2 promoGetMapUv() {
     return vPromoMapUv *
-        lfResolveTextureTiling(vPromoGlobalFaceSize);
+        lfResolveTextureTiling(vPromoGlobalFaceSize, vPromoAutoTile);
 }
 
 #define SA_PROMO_POINT_LIGHT 0
@@ -9603,12 +10424,12 @@ vec4 promoGetAlphaBands(
     if (!BEVEL_ALPHA_ENABLED || width <= 0.0) {
         return vec4(0.0);
     }
-    
+
     vec2 safeSize = max(abs(vPromoElementSize), vec2(0.0001));
     vec2 localStep = vec2(width) / safeSize;
-    
+
     bool validJacobian = length(elementToMapJacobian[0]) + length(elementToMapJacobian[1]) > 0.000001;
-    
+
     vec2 fallbackMapStep = max(
         abs(vPromoElementUvSize) * width / max(TEXTURE_SIZE, vec2(1.0)),
         vec2(0.00001)
@@ -9623,13 +10444,13 @@ vec4 promoGetAlphaBands(
     // Diagonal-neighbor alpha sampling.
     vec2 stepTL = vec2(-localStep.x, localStep.y);
     vec2 mStepTL = validJacobian ? elementToMapJacobian * stepTL : vec2(-fallbackMapStep.x, fallbackMapStep.y);
-    
+
     vec2 stepTR = vec2(localStep.x, localStep.y);
     vec2 mStepTR = validJacobian ? elementToMapJacobian * stepTR : vec2(fallbackMapStep.x, fallbackMapStep.y);
-    
+
     vec2 stepBL = vec2(-localStep.x, -localStep.y);
     vec2 mStepBL = validJacobian ? elementToMapJacobian * stepBL : vec2(-fallbackMapStep.x, -fallbackMapStep.y);
-    
+
     vec2 stepBR = vec2(localStep.x, -localStep.y);
     vec2 mStepBR = validJacobian ? elementToMapJacobian * stepBR : vec2(fallbackMapStep.x, -fallbackMapStep.y);
 
@@ -9711,7 +10532,7 @@ vec3 promoApplyBevel(
         max(BEVEL_WIDTH, 0.00001),
         BEVEL_SOFTNESS
     );
-    
+
     vec4 alphaBands = promoGetAlphaBands(sourceAlpha, max(BEVEL_WIDTH, 0.00001), elementToMapJacobian);
     edgeBands = max(edgeBands, alphaBands);
 
@@ -9864,7 +10685,7 @@ vec3 promoApplyBevel(
 
     if (innerGlowEnabled) {
         float faceIllumination = 1.0;
-        
+
         if (BEVEL_GLOW_REQUIRE_LIGHT_FACING) {
             float glowFaceThreshold = clamp(
                 BEVEL_GLOW_FACE_THRESHOLD,
@@ -9885,7 +10706,7 @@ vec3 promoApplyBevel(
             max(BEVEL_GLOW_WIDTH, BEVEL_WIDTH),
             BEVEL_GLOW_SOFTNESS
         );
-        
+
         vec4 alphaGlowBands = promoGetAlphaBands(sourceAlpha, max(BEVEL_GLOW_WIDTH, BEVEL_WIDTH), elementToMapJacobian);
         glowBands = max(glowBands, alphaGlowBands);
 
@@ -10489,7 +11310,7 @@ void main() {
 
                     BEVEL_ALPHA_ENABLED: {
                         type: 'bool',
-                        value: false,
+                        value: true,
                         expose: true
                     },
 
@@ -10499,7 +11320,7 @@ void main() {
                     */
                     BEVEL_WIDTH: {
                         type: 'float',
-                        value: 0.12,
+                        value: 0.04,
                         expose: true,
                         min: 0.0,
                         max: 1.0,
@@ -10554,7 +11375,7 @@ void main() {
 
                     BEVEL_SHADOW: {
                         type: 'float',
-                        value: 0.35,
+                        value: 0.1,
                         expose: true,
                         min: 0.0,
                         max: 1.0,
@@ -10565,7 +11386,7 @@ void main() {
 
                     BEVEL_SHADOW_SATURATION: {
                         type: 'float',
-                        value: 1.0,
+                        value: 0.5,
                         expose: true,
                         min: 0.0,
                         max: 1.0,
@@ -10647,7 +11468,7 @@ void main() {
 
                     BEVEL_GLOW_WIDTH: {
                         type: 'float',
-                        value: 0.16,
+                        value: 0.06,
                         expose: true,
                         min: 0.0,
                         max: 2.0,
@@ -10877,8 +11698,8 @@ void main() {
             });
 
             const lumaForgeUniforms = {};
-            for (const key in minecraft_promotional_bevel.uniforms) {
-                lumaForgeUniforms[key] = cloneUniformDefinition(minecraft_promotional_bevel.uniforms[key]);
+            for (const key in minecraftPromotionalBevel.uniforms) {
+                lumaForgeUniforms[key] = cloneUniformDefinition(minecraftPromotionalBevel.uniforms[key]);
             }
             Object.assign(
                 lumaForgeUniforms,
@@ -10893,17 +11714,17 @@ void main() {
                 lumaForgeUniforms[key].value = cloneUniformValue(value);
             });
 
-            const lumaForgeLightflowHelpersStart = shaded_lightflow.fragment.indexOf('#define SA_LIGHT_POINT');
-            const lumaForgeLightflowHelpersEnd = shaded_lightflow.fragment.indexOf('void main() {', lumaForgeLightflowHelpersStart);
-            const lumaForgeLightflowHelpers = shaded_lightflow.fragment.slice(
+            const lumaForgeLightflowHelpersStart = shadedLightflow.fragment.indexOf('#define SA_LIGHT_POINT');
+            const lumaForgeLightflowHelpersEnd = shadedLightflow.fragment.indexOf('void main() {', lumaForgeLightflowHelpersStart);
+            const lumaForgeLightflowHelpers = shadedLightflow.fragment.slice(
                 lumaForgeLightflowHelpersStart,
                 lumaForgeLightflowHelpersEnd
             );
-            const lumaForgePromoMain = minecraft_promotional_bevel.fragment.slice(
-                minecraft_promotional_bevel.fragment.indexOf('void main() {')
+            const lumaForgePromoMain = minecraftPromotionalBevel.fragment.slice(
+                minecraftPromotionalBevel.fragment.indexOf('void main() {')
             );
 
-            const lumaForgeVertex = minecraft_promotional_bevel.vertex
+            const lumaForgeVertex = minecraftPromotionalBevel.vertex
                 .replace(
                     `#include <common>
 #include <shadowmap_pars_vertex>
@@ -10915,9 +11736,11 @@ ${LIGHTFLOW_TEXTURE_TILING}
                 )
                 .replace(
                     `attribute float highlight;
+attribute float autoTile;
 attribute vec2 normalizedFaceUv;`,
                     `attribute float highlight;
 attribute float affected_by_shadow;
+attribute float autoTile;
 attribute vec2 normalizedFaceUv;`
                 )
                 .replace(
@@ -10931,7 +11754,7 @@ attribute vec2 normalizedFaceUv;`
         normalizedFaceUv,
         globalFaceSize,
         uvSize * abs(
-            lfResolveTextureTiling(globalFaceSize)
+            lfResolveTextureTiling(globalFaceSize, autoTile)
         ),
         affected_by_shadow
     );
@@ -10974,7 +11797,7 @@ varying vec4 vSA_SSRClipPosition;
                     ``
                 );
 
-            const lumaForgeFragment = minecraft_promotional_bevel.fragment
+            const lumaForgeFragment = minecraftPromotionalBevel.fragment
                 .replace(
                     `#include <common>
 ${LIGHTFLOW_TEXTURE_TILING}
@@ -11223,7 +12046,7 @@ ${lumaForgeLightflowHelpers}`
 }`
                 );
 
-            let cinematic_craft = new FancyShaderMaterial({
+            const cinematicCraft = new FancyShaderMaterial({
                 id: 'cinematic_craft',
                 name: tl('shader_architect.preset.cinematic_craft'),
                 icon: 'movie_filter',
@@ -11235,7 +12058,7 @@ ${lumaForgeLightflowHelpers}`
                 uniforms: lumaForgeUniforms
             });
 
-            let realview_pbr = new FancyShaderMaterial({
+            const _realviewPbrPrototype = new FancyShaderMaterial({
                 id: 'realview_pbr',
                 name: tl('shader_architect.preset.realview_pbr'),
                 icon: 'hdr_on_select',
@@ -11393,24 +12216,22 @@ ${lumaForgeLightflowHelpers}`
              * so disabling shadows no longer requires changing material or
              * recompiling the scene. The legacy id stays readable for older
              * .bbmodel files but is hidden from enumerable UI lists. */
-            shaded_lightflow.id = 'lightflow';
-            shaded_lightflow.name = tl('shader_architect.preset.lightflow');
-            shaded_lightflow.icon = 'light_mode';
-            this.materials['lightflow'] = shaded_lightflow;
+            shadedLightflow.id = 'lightflow';
+            shadedLightflow.name = tl('shader_architect.preset.lightflow');
+            shadedLightflow.icon = 'light_mode';
+            this.materials['lightflow'] = shadedLightflow;
             Object.defineProperty(this.materials, 'shaded_lightflow', {
-                value: shaded_lightflow,
+                value: shadedLightflow,
                 configurable: true,
                 writable: true,
                 enumerable: false
             });
-            this.materials['pbr_metallic_roughness'] = pbr_metallic_roughness;
-            this.materials['vibrant_visuals_pbr'] = vibrant_visuals_pbr;
-            this.materials['pixelated_shaded_lightflow'] = pixelated_shaded_lightflow;
-            this.materials['minecraft_promotional_bevel'] = minecraft_promotional_bevel;
-            this.materials['cinematic_craft'] = cinematic_craft;
+            this.materials['pbr_metallic_roughness'] = pbrMetallicRoughness;
+            this.materials['vibrant_visuals_pbr'] = vibrantVisualsPbr;
+            this.materials['cinematic_craft'] = cinematicCraft;
             // Preserve projects and .samat files created before the public rename.
             Object.defineProperty(this.materials, 'luma_forge', {
-                value: cinematic_craft,
+                value: cinematicCraft,
                 configurable: true,
                 writable: true,
                 enumerable: false
@@ -11418,13 +12239,10 @@ ${lumaForgeLightflowHelpers}`
             //this.materials['uv_shadow'] = uv_shadow;
             // The new PBR material occupies the former hologram slot.
             // This keeps existing app references working.
-            //this.materials['realview_pbr'] = realview_pbr;
         }
     };
 
-    // =========================================================================
-    // 4. ANIMATION & SHADER ENGINE
-    // =========================================================================
+    // Shader engine and animation
     function collectShaderArchitectRenderPreviews() {
         const previews = new Set();
 
@@ -11616,6 +12434,10 @@ ${lumaForgeLightflowHelpers}`
 
             const manager = this;
             const patchedRender = function shaderArchitectSSRRender() {
+                if (ShaderEngine.shouldDeferPreviewRenderForShaderWarmup?.()) {
+                    ShaderEngine.pendingShaderWarmupRender = true;
+                    return;
+                }
                 manager.preparePreviewForRender(this, {
                     studio: !!this.sa_studio_render_active
                 });
@@ -11732,7 +12554,8 @@ ${lumaForgeLightflowHelpers}`
 
         configureMaterial(material, activeShader) {
             const shaderSupportsSSR = MaterialManager.hasScreenSpaceReflectionSupport(activeShader);
-            if (!shaderSupportsSSR || !material || !material.uniforms) {
+            const affectedByLight = activeShader?.uniforms?.AFFECTED_BY_LIGHT?.value !== false;
+            if (!shaderSupportsSSR || !affectedByLight || !material || !material.uniforms) {
                 if (material) material.sa_uses_screen_space_reflections = false;
                 return false;
             }
@@ -11923,6 +12746,10 @@ ${lumaForgeLightflowHelpers}`
                 captureSucceeded = true;
             } catch (error) {
                 state.hasCaptured = false;
+                if (!state.captureFailureReported) {
+                    state.captureFailureReported = true;
+                    console.warn('[Shader Architect] SSR scene capture failed.', error);
+                }
             } finally {
                 renderer.setRenderTarget(previousTarget);
                 renderer.autoClear = previousAutoClear;
@@ -11977,13 +12804,102 @@ ${lumaForgeLightflowHelpers}`
         patchedPreviews: new Map(),
         scenePartitionCache: null,
         scenePartitionDirty: true,
-        depthMaterialCache: new WeakMap(),
-        depthMaterialResources: new Set(),
+        geometryMaterialCache: new WeakMap(),
+        geometryMaterialResources: new Set(),
         disposed: false,
-        settings: { enabled: true, strength: 0.62, radius: 0.34, bias: 0.04, power: 1.1, renderScale: 1.0, samples: 20 },
+        settings: { ...DEFAULT_AMBIENT_OCCLUSION_SETTINGS },
+        projectSettingsProperty: null,
+
+        normalizeSettings(source = {}) {
+            if (!source || typeof source !== 'object') source = {};
+            const defaults = DEFAULT_AMBIENT_OCCLUSION_SETTINGS;
+            const numberInRange = (value, fallback, min, max) => {
+                const number = Number(value);
+                return Number.isFinite(number) ? Math.max(min, Math.min(max, number)) : fallback;
+            };
+            const requestedScale = Number(source.renderScale);
+            const renderScale = [0.5, 0.75, 1].includes(requestedScale)
+                ? requestedScale
+                : defaults.renderScale;
+            return {
+                enabled: typeof source.enabled === 'boolean' ? source.enabled : defaults.enabled,
+                strength: numberInRange(source.strength, defaults.strength, 0, 2),
+                radius: numberInRange(source.radius, defaults.radius, 0.05, 4),
+                bias: numberInRange(source.bias, defaults.bias, 0, 0.2),
+                power: numberInRange(source.power, defaults.power, 0.25, 4),
+                renderScale,
+                samples: Math.round(numberInRange(source.samples, defaults.samples, 4, 32))
+            };
+        },
+        registerProjectSettingsProperty() {
+            if (this.projectSettingsProperty || typeof Property === 'undefined') {
+                return this.projectSettingsProperty;
+            }
+            const project = typeof Project !== 'undefined' ? Project : null;
+            const projectClass = typeof ModelProject !== 'undefined'
+                ? ModelProject
+                : (project?.constructor && project.constructor !== Object ? project.constructor : null);
+            if (!projectClass) return null;
+            this.projectSettingsProperty = new Property(projectClass, 'string', PROJECT_AMBIENT_OCCLUSION_PROP, {
+                default: '',
+                exposed: true
+            });
+            return this.projectSettingsProperty;
+        },
+        applySettings(source, options = {}) {
+            Object.assign(this.settings, this.normalizeSettings(source));
+            if (options.persist) this.saveProjectSettings(options.project);
+            if (options.refresh !== false) {
+                this.patchAllPreviews();
+                ShaderEngine.requestPreviewRender({ cause: options.cause || 'ssao_settings' });
+            }
+            if (typeof Blockbench !== 'undefined') {
+                Blockbench.dispatchEvent('shader_architect_ambient_occlusion_changed', {
+                    settings: { ...this.settings },
+                    cause: options.cause || 'ssao_settings'
+                });
+            }
+            return this.settings;
+        },
+        loadProjectSettings(project = (typeof Project !== 'undefined' ? Project : null), options = {}) {
+            let source = DEFAULT_AMBIENT_OCCLUSION_SETTINGS;
+            const serialized = project?.[PROJECT_AMBIENT_OCCLUSION_PROP];
+            if (typeof serialized === 'string' && serialized.trim()) {
+                try {
+                    source = JSON.parse(serialized);
+                } catch (error) {
+                    warnShaderArchitectOnce(
+                        'ambient_occlusion_project_settings',
+                        '[Shader Architect] Ambient Occlusion project settings could not be loaded.',
+                        error
+                    );
+                }
+            }
+            return this.applySettings(source, {
+                refresh: options.refresh,
+                cause: options.cause || 'ssao_project_hydrate'
+            });
+        },
+        saveProjectSettings(project = (typeof Project !== 'undefined' ? Project : null)) {
+            if (!project) return false;
+            const serialized = JSON.stringify(this.normalizeSettings(this.settings));
+            if (project[PROJECT_AMBIENT_OCCLUSION_PROP] === serialized) return true;
+            project[PROJECT_AMBIENT_OCCLUSION_PROP] = serialized;
+            if (project.saved !== undefined) project.saved = false;
+            return true;
+        },
+        resetProjectSettings(project = (typeof Project !== 'undefined' ? Project : null), options = {}) {
+            return this.applySettings(DEFAULT_AMBIENT_OCCLUSION_SETTINGS, {
+                persist: true,
+                project,
+                refresh: options.refresh,
+                cause: options.cause || 'ssao_reset'
+            });
+        },
 
         init() {
             this.disposed = false;
+            this.loadProjectSettings(undefined, { refresh: false, cause: 'ssao_init' });
             this.invalidateSceneCache();
             this.patchAllPreviews();
         },
@@ -12000,63 +12916,334 @@ ${lumaForgeLightflowHelpers}`
             this.states.forEach(state => {
                 state.sceneTarget?.dispose?.();
                 state.cubeTarget?.dispose?.();
-                state.material?.dispose?.();
+                state.aoTarget?.dispose?.();
+                state.blurTarget?.dispose?.();
+                state.aoMaterial?.dispose?.();
+                state.blurMaterial?.dispose?.();
+                state.compositeMaterial?.dispose?.();
                 state.quad?.geometry?.dispose?.();
             });
             this.states.clear();
-            this.depthMaterialResources.forEach(material => material?.dispose?.());
-            this.depthMaterialResources.clear();
-            this.depthMaterialCache = new WeakMap();
+            this.geometryMaterialResources.forEach(material => material?.dispose?.());
+            this.geometryMaterialResources.clear();
+            this.geometryMaterialCache = new WeakMap();
             this.invalidateSceneCache();
         },
         hasLightflowMaterial() {
             return this.getScenePartition().receiverMeshes.length > 0;
         },
         materialReceivesAO(material) {
+            if (material?.uniforms?.AFFECTED_BY_LIGHT?.value === false) return false;
             const id = String(material?.sa_shader_id || '').toLowerCase();
             return !!id && id !== 'classic';
         },
         createState(preview) {
             const renderer = preview?.renderer;
             if (!renderer || !THREE.DepthTexture || !THREE.WebGLRenderTarget) return null;
+            /*
+             * Prefer the 24-bit-or-better depth attachment exposed by
+             * UnsignedIntType. The old `UnsignedShortType || UnsignedIntType`
+             * expression always selected 16-bit depth and quantized a flat
+             * quad differently on either side of its internal triangle edge.
+             */
+            const depthType = THREE.UnsignedIntType || THREE.UnsignedShortType;
             const depthTexture = new THREE.DepthTexture(1, 1);
-            depthTexture.type = THREE.UnsignedShortType || THREE.UnsignedIntType;
+            depthTexture.type = depthType;
             depthTexture.format = THREE.DepthFormat;
             depthTexture.minFilter = THREE.NearestFilter;
             depthTexture.magFilter = THREE.NearestFilter;
             depthTexture.generateMipmaps = false;
             const sceneDepthTexture = new THREE.DepthTexture(1, 1);
-            sceneDepthTexture.type = THREE.UnsignedShortType || THREE.UnsignedIntType;
+            sceneDepthTexture.type = depthType;
             sceneDepthTexture.format = THREE.DepthFormat;
             sceneDepthTexture.minFilter = THREE.NearestFilter;
             sceneDepthTexture.magFilter = THREE.NearestFilter;
             sceneDepthTexture.generateMipmaps = false;
             const sceneTarget = new THREE.WebGLRenderTarget(1, 1, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBAFormat, depthBuffer: true, stencilBuffer: false, depthTexture: sceneDepthTexture });
             if (!sceneTarget.depthTexture) sceneTarget.depthTexture = sceneDepthTexture;
-            const cubeTarget = new THREE.WebGLRenderTarget(1, 1, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBAFormat, depthBuffer: true, stencilBuffer: false, depthTexture });
+            /*
+             * cubeTarget is a compact geometry buffer: RGB stores the real
+             * view-space surface normal and its depth attachment stores the
+             * receiver depth. Nearest sampling prevents normals from opposite
+             * sides of a silhouette from being blended together.
+             */
+            const cubeTarget = new THREE.WebGLRenderTarget(1, 1, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, format: THREE.RGBAFormat, depthBuffer: true, stencilBuffer: false, depthTexture });
             if (!cubeTarget.depthTexture) cubeTarget.depthTexture = depthTexture;
+            const aoTarget = new THREE.WebGLRenderTarget(1, 1, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBAFormat, depthBuffer: false, stencilBuffer: false });
+            const blurTarget = new THREE.WebGLRenderTarget(1, 1, { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBAFormat, depthBuffer: false, stencilBuffer: false });
+            [sceneTarget, cubeTarget, aoTarget, blurTarget].forEach(target => {
+                if (target?.texture) {
+                    target.texture.generateMipmaps = false;
+                    if (THREE.LinearEncoding !== undefined) target.texture.encoding = THREE.LinearEncoding;
+                }
+            });
+
             const uniforms = {
-                tScene: { value: sceneTarget.texture }, tSceneDepth: { value: sceneTarget.depthTexture || sceneDepthTexture }, tDepth: { value: cubeTarget.depthTexture || depthTexture }, uResolution: { value: new THREE.Vector2(1, 1) },
+                tSceneDepth: { value: sceneTarget.depthTexture || sceneDepthTexture },
+                tDepth: { value: cubeTarget.depthTexture || depthTexture },
+                tNormal: { value: cubeTarget.texture },
+                uResolution: { value: new THREE.Vector2(1, 1) },
                 uProjection: { value: new THREE.Matrix4() }, uInverseProjection: { value: new THREE.Matrix4() },
                 uRadius: { value: this.settings.radius }, uBias: { value: this.settings.bias }, uStrength: { value: this.settings.strength }, uPower: { value: this.settings.power }, uSamples: { value: this.settings.samples }
             };
-            const material = new THREE.ShaderMaterial({
+            const aoMaterial = new THREE.ShaderMaterial({
                 uniforms, depthTest: false, depthWrite: false, toneMapped: false,
                 vertexShader: 'varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position.xy,0.0,1.0); }',
                 fragmentShader: `
                     precision highp float;
-                    uniform sampler2D tScene, tSceneDepth, tDepth; uniform vec2 uResolution; uniform mat4 uProjection, uInverseProjection;
-                    uniform float uRadius, uBias, uStrength, uPower; uniform int uSamples; varying vec2 vUv;
-                    bool solid(float d){ return d > 0.000001 && d < 0.999999; }
-                    vec3 pos(vec2 uv, float d){ vec4 p=uInverseProjection*vec4(uv*2.0-1.0,d*2.0-1.0,1.0); return p.xyz/max(p.w,0.000001); }
-                    vec3 norm(vec2 uv, vec3 c){ vec2 t=1.0/max(uResolution,vec2(1.0)); vec2 ur=clamp(uv+vec2(t.x,0.0),0.0,1.0), ul=clamp(uv-vec2(t.x,0.0),0.0,1.0), uu=clamp(uv+vec2(0.0,t.y),0.0,1.0), ud=clamp(uv-vec2(0.0,t.y),0.0,1.0); float dr=texture2D(tDepth,ur).x, dl=texture2D(tDepth,ul).x, du=texture2D(tDepth,uu).x, dd=texture2D(tDepth,ud).x; vec3 pr=solid(dr)?pos(ur,dr):c, pl=solid(dl)?pos(ul,dl):c, pu=solid(du)?pos(uu,du):c, pd=solid(dd)?pos(ud,dd):c; vec3 dx=abs(pr.z-c.z)<abs(c.z-pl.z)?pr-c:c-pl; vec3 dy=abs(pu.z-c.z)<abs(c.z-pd.z)?pu-c:c-pd; vec3 n=cross(dx,dy); float n2=dot(n,n); if(n2<.00000001)return normalize(-c); n*=inversesqrt(n2); return dot(n,-c)<0.0?-n:n; }
-                    float hash(vec2 p){ return fract(sin(dot(p,vec2(12.9898,78.233)))*43758.5453); }
-                    void main(){ vec4 color=texture2D(tScene,vUv); float d=texture2D(tDepth,vUv).x; float sceneD=texture2D(tSceneDepth,vUv).x; if(!solid(d)||!solid(sceneD)){gl_FragColor=color;return;} vec3 c=pos(vUv,d), sceneP=pos(vUv,sceneD); float receiverTolerance=max(.0025,abs(c.z)*.00035); if(abs(sceneP.z-c.z)>receiverTolerance){gl_FragColor=color;return;} vec3 n=norm(vUv,c); vec3 axis=abs(n.z)<.95?vec3(0,0,1):vec3(0,1,0); vec3 t=normalize(cross(axis,n)), b=cross(n,t); float oc=0.0, count=0.0, rotation=hash(floor(gl_FragCoord.xy*.5))*6.2831853; for(int i=0;i<24;i++){if(i>=uSamples)continue; float q=(float(i)+.5)/float(max(uSamples,1)); float phi=float(i)*2.39996323+rotation; float z=mix(.16,.96,q); float radial=sqrt(max(1.0-z*z,0.0)); vec3 k=vec3(cos(phi)*radial,sin(phi)*radial,z); vec3 s=c+mat3(t,b,n)*k*uRadius*mix(.15,1.0,q*q); vec4 clip=uProjection*vec4(s,1.0); if(clip.w<=.000001)continue; vec2 uv=clip.xy/clip.w*.5+.5; if(uv.x<=.001||uv.y<=.001||uv.x>=.999||uv.y>=.999)continue; float sd=texture2D(tDepth,uv).x; if(!solid(sd))continue; vec3 sp=pos(uv,sd); float delta=sp.z-s.z; float localBias=max(uBias,abs(c.z)*.00012); float range=smoothstep(0.0,1.0,uRadius/max(abs(c.z-sp.z),.001)); float facing=smoothstep(-.15,.35,dot(n,normalize(sp-c+vec3(.000001)))); oc+=step(localBias,delta)*range*(1.0-facing*.35); count+=1.0;} float ao=count<1.0?1.0:pow(clamp(1.0-oc/count*uStrength,0.0,1.0),uPower); gl_FragColor=vec4(color.rgb*ao,color.a); }
+                    uniform sampler2D tSceneDepth;
+                    uniform sampler2D tDepth;
+                    uniform sampler2D tNormal;
+                    uniform vec2 uResolution;
+                    uniform mat4 uProjection;
+                    uniform mat4 uInverseProjection;
+                    uniform float uRadius;
+                    uniform float uBias;
+                    uniform float uStrength;
+                    uniform float uPower;
+                    uniform int uSamples;
+                    varying vec2 vUv;
+
+                    bool solidDepth(float depth) {
+                        return depth > 0.000001 && depth < 0.999999;
+                    }
+
+                    vec3 viewPosition(vec2 uv, float depth) {
+                        vec4 position = uInverseProjection * vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+                        return position.xyz / max(position.w, 0.000001);
+                    }
+
+                    vec3 viewNormal(vec2 uv) {
+                        vec3 normal = texture2D(tNormal, uv).xyz * 2.0 - 1.0;
+                        float lengthSquared = dot(normal, normal);
+                        return lengthSquared > 0.000001
+                            ? normal * inversesqrt(lengthSquared)
+                            : vec3(0.0);
+                    }
+
+                    bool visibleReceiver(vec2 uv, float receiverDepth, vec3 receiverPosition) {
+                        float sceneDepth = texture2D(tSceneDepth, uv).x;
+                        if (!solidDepth(sceneDepth)) return false;
+                        vec3 scenePosition = viewPosition(uv, sceneDepth);
+                        float tolerance = max(0.0015, abs(receiverPosition.z) * 0.00012);
+                        return abs(scenePosition.z - receiverPosition.z) <= tolerance;
+                    }
+
+                    float hash12(vec2 value) {
+                        return fract(sin(dot(value, vec2(12.9898, 78.233))) * 43758.5453);
+                    }
+
+                    void main() {
+                        float depth = texture2D(tDepth, vUv).x;
+                        if (!solidDepth(depth)) {
+                            gl_FragColor = vec4(1.0);
+                            return;
+                        }
+
+                        vec3 center = viewPosition(vUv, depth);
+                        if (!visibleReceiver(vUv, depth, center)) {
+                            gl_FragColor = vec4(1.0);
+                            return;
+                        }
+
+                        vec3 normal = viewNormal(vUv);
+                        if (dot(normal, normal) < 0.5) {
+                            gl_FragColor = vec4(1.0);
+                            return;
+                        }
+
+                        vec3 axis = abs(normal.z) < 0.95 ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);
+                        vec3 tangent = normalize(cross(axis, normal));
+                        vec3 bitangent = cross(normal, tangent);
+                        mat3 basis = mat3(tangent, bitangent, normal);
+                        float occlusion = 0.0;
+                        float validSamples = 0.0;
+                        float rotation = hash12(gl_FragCoord.xy) * 6.28318530718;
+                        float localBias = max(uBias, max(uRadius * 0.003, abs(center.z) * 0.00002));
+                        float depthTransition = max(localBias * 0.75, uRadius * 0.015);
+                        float planeBias = max(localBias * 0.25, uRadius * 0.0015);
+                        float planeTransition = max(planeBias, uRadius * 0.012);
+
+                        for (int i = 0; i < 32; i++) {
+                            if (i >= uSamples) continue;
+                            float sequence = (float(i) + 0.5) / float(max(uSamples, 1));
+                            float phi = float(i) * 2.39996323 + rotation;
+                            float hemisphereZ = mix(0.16, 0.96, sequence);
+                            float radial = sqrt(max(1.0 - hemisphereZ * hemisphereZ, 0.0));
+                            vec3 kernel = vec3(cos(phi) * radial, sin(phi) * radial, hemisphereZ);
+                            vec3 samplePosition = center + basis * kernel * uRadius * mix(0.15, 1.0, sequence * sequence);
+                            vec4 clipPosition = uProjection * vec4(samplePosition, 1.0);
+                            if (clipPosition.w <= 0.000001) continue;
+                            vec2 sampleUv = clipPosition.xy / clipPosition.w * 0.5 + 0.5;
+                            if (sampleUv.x <= 0.001 || sampleUv.y <= 0.001 || sampleUv.x >= 0.999 || sampleUv.y >= 0.999) continue;
+
+                            float sampleDepth = texture2D(tDepth, sampleUv).x;
+                            if (!solidDepth(sampleDepth)) continue;
+                            vec3 surfacePosition = viewPosition(sampleUv, sampleDepth);
+                            vec3 separation = surfacePosition - center;
+                            float depthDelta = surfacePosition.z - samplePosition.z;
+                            float planeDelta = dot(separation, normal);
+                            float depthOccluder = smoothstep(localBias, localBias + depthTransition, depthDelta);
+                            float planeOccluder = smoothstep(planeBias, planeBias + planeTransition, planeDelta);
+                            float rangeWeight = 1.0 - smoothstep(uRadius * 0.25, uRadius * 1.5, length(separation));
+                            occlusion += depthOccluder * planeOccluder * rangeWeight;
+                            validSamples += 1.0;
+                        }
+
+                        float ao = validSamples < 1.0
+                            ? 1.0
+                            : pow(clamp(1.0 - occlusion / validSamples * uStrength, 0.0, 1.0), uPower);
+                        gl_FragColor = vec4(vec3(ao), 1.0);
+                    }
                 `
             });
-            const postScene = new THREE.Scene(), postCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1), quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), material);
+
+            const blurUniforms = {
+                tInput: { value: aoTarget.texture },
+                tSceneDepth: { value: sceneTarget.depthTexture || sceneDepthTexture },
+                tDepth: { value: cubeTarget.depthTexture || depthTexture },
+                tNormal: { value: cubeTarget.texture },
+                uDirection: { value: new THREE.Vector2(1, 0) },
+                uInverseProjection: { value: new THREE.Matrix4() }
+            };
+            const blurMaterial = new THREE.ShaderMaterial({
+                uniforms: blurUniforms,
+                depthTest: false,
+                depthWrite: false,
+                toneMapped: false,
+                vertexShader: 'varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position.xy,0.0,1.0); }',
+                fragmentShader: `
+                    precision highp float;
+                    uniform sampler2D tInput;
+                    uniform sampler2D tSceneDepth;
+                    uniform sampler2D tDepth;
+                    uniform sampler2D tNormal;
+                    uniform vec2 uDirection;
+                    uniform mat4 uInverseProjection;
+                    varying vec2 vUv;
+
+                    bool solidDepth(float depth) {
+                        return depth > 0.000001 && depth < 0.999999;
+                    }
+
+                    vec3 viewPosition(vec2 uv, float depth) {
+                        vec4 position = uInverseProjection * vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+                        return position.xyz / max(position.w, 0.000001);
+                    }
+
+                    vec3 viewNormal(vec2 uv) {
+                        vec3 normal = texture2D(tNormal, uv).xyz * 2.0 - 1.0;
+                        float lengthSquared = dot(normal, normal);
+                        return lengthSquared > 0.000001
+                            ? normal * inversesqrt(lengthSquared)
+                            : vec3(0.0);
+                    }
+
+                    bool visibleReceiver(vec2 uv, float depth, vec3 position) {
+                        float sceneDepth = texture2D(tSceneDepth, uv).x;
+                        if (!solidDepth(sceneDepth)) return false;
+                        vec3 scenePosition = viewPosition(uv, sceneDepth);
+                        float tolerance = max(0.0015, abs(position.z) * 0.00012);
+                        return abs(scenePosition.z - position.z) <= tolerance;
+                    }
+
+                    void main() {
+                        float centerDepth = texture2D(tDepth, vUv).x;
+                        if (!solidDepth(centerDepth)) {
+                            gl_FragColor = vec4(1.0);
+                            return;
+                        }
+                        vec3 centerPosition = viewPosition(vUv, centerDepth);
+                        vec3 centerNormal = viewNormal(vUv);
+                        if (!visibleReceiver(vUv, centerDepth, centerPosition) || dot(centerNormal, centerNormal) < 0.5) {
+                            gl_FragColor = vec4(1.0);
+                            return;
+                        }
+
+                        float weightedAO = 0.0;
+                        float totalWeight = 0.0;
+                        float depthScale = max(0.002, abs(centerPosition.z) * 0.0025);
+                        for (int i = -3; i <= 3; i++) {
+                            vec2 sampleUv = clamp(vUv + uDirection * float(i), vec2(0.0), vec2(1.0));
+                            float sampleDepth = texture2D(tDepth, sampleUv).x;
+                            if (!solidDepth(sampleDepth)) continue;
+                            vec3 samplePosition = viewPosition(sampleUv, sampleDepth);
+                            if (!visibleReceiver(sampleUv, sampleDepth, samplePosition)) continue;
+                            vec3 sampleNormal = viewNormal(sampleUv);
+                            float normalSimilarity = max(dot(centerNormal, sampleNormal), 0.0);
+                            float normalWeight = pow(normalSimilarity, 32.0);
+                            float depthWeight = exp(-abs(samplePosition.z - centerPosition.z) / depthScale);
+                            float spatialWeight = exp(-float(i * i) * 0.32);
+                            float weight = spatialWeight * depthWeight * normalWeight;
+                            weightedAO += texture2D(tInput, sampleUv).r * weight;
+                            totalWeight += weight;
+                        }
+                        float ao = totalWeight > 0.00001
+                            ? weightedAO / totalWeight
+                            : texture2D(tInput, vUv).r;
+                        gl_FragColor = vec4(vec3(clamp(ao, 0.0, 1.0)), 1.0);
+                    }
+                `
+            });
+
+            const compositeUniforms = {
+                tScene: { value: sceneTarget.texture },
+                tAO: { value: aoTarget.texture },
+                tSceneDepth: { value: sceneTarget.depthTexture || sceneDepthTexture },
+                tDepth: { value: cubeTarget.depthTexture || depthTexture },
+                uInverseProjection: { value: new THREE.Matrix4() }
+            };
+            const compositeMaterial = new THREE.ShaderMaterial({
+                uniforms: compositeUniforms,
+                depthTest: false,
+                depthWrite: false,
+                toneMapped: false,
+                transparent: false,
+                vertexShader: 'varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position.xy,0.0,1.0); }',
+                fragmentShader: `
+                    precision highp float;
+                    uniform sampler2D tScene;
+                    uniform sampler2D tAO;
+                    uniform sampler2D tSceneDepth;
+                    uniform sampler2D tDepth;
+                    uniform mat4 uInverseProjection;
+                    varying vec2 vUv;
+
+                    bool solidDepth(float depth) {
+                        return depth > 0.000001 && depth < 0.999999;
+                    }
+
+                    vec3 viewPosition(vec2 uv, float depth) {
+                        vec4 position = uInverseProjection * vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+                        return position.xyz / max(position.w, 0.000001);
+                    }
+
+                    void main() {
+                        vec4 color = texture2D(tScene, vUv);
+                        float receiverDepth = texture2D(tDepth, vUv).x;
+                        float sceneDepth = texture2D(tSceneDepth, vUv).x;
+                        float ao = 1.0;
+                        if (solidDepth(receiverDepth) && solidDepth(sceneDepth)) {
+                            vec3 receiverPosition = viewPosition(vUv, receiverDepth);
+                            vec3 scenePosition = viewPosition(vUv, sceneDepth);
+                            float tolerance = max(0.0015, abs(receiverPosition.z) * 0.00012);
+                            if (abs(scenePosition.z - receiverPosition.z) <= tolerance) {
+                                ao = clamp(texture2D(tAO, vUv).r, 0.0, 1.0);
+                            }
+                        }
+                        gl_FragColor = vec4(color.rgb * ao, color.a);
+                    }
+                `
+            });
+            const postScene = new THREE.Scene(), postCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1), quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), aoMaterial);
             postScene.add(quad);
-            const state = { preview, renderer, sceneTarget, cubeTarget, depthTexture, sceneDepthTexture, material, uniforms, postScene, postCamera, quad, width: 1, height: 1, sceneWidth: 1, sceneHeight: 1, rendering: false };
+            const state = {
+                preview, renderer, sceneTarget, cubeTarget, aoTarget, blurTarget,
+                depthTexture, sceneDepthTexture, aoMaterial, blurMaterial,
+                compositeMaterial, uniforms, blurUniforms, compositeUniforms,
+                postScene, postCamera, quad, width: 1, height: 1,
+                sceneWidth: 1, sceneHeight: 1, rendering: false
+            };
             this.states.set(preview, state);
             return state;
         },
@@ -12079,6 +13266,8 @@ ${lumaForgeLightflowHelpers}`
             state.sceneHeight = sceneHeight;
             state.sceneTarget.setSize(sceneWidth, sceneHeight);
             state.cubeTarget.setSize(width, height);
+            state.aoTarget.setSize(width, height);
+            state.blurTarget.setSize(width, height);
             // Render-target viewports use physical pixels. Keep them on the
             // targets so Three.js r129 applies them without devicePixelRatio
             // conversion and without mutating Blockbench's logical viewport.
@@ -12088,6 +13277,12 @@ ${lumaForgeLightflowHelpers}`
             state.cubeTarget.viewport?.set?.(0, 0, width, height);
             state.cubeTarget.scissor?.set?.(0, 0, width, height);
             state.cubeTarget.scissorTest = false;
+            state.aoTarget.viewport?.set?.(0, 0, width, height);
+            state.aoTarget.scissor?.set?.(0, 0, width, height);
+            state.aoTarget.scissorTest = false;
+            state.blurTarget.viewport?.set?.(0, 0, width, height);
+            state.blurTarget.scissor?.set?.(0, 0, width, height);
+            state.blurTarget.scissorTest = false;
             state.uniforms.uResolution.value.set(width, height);
         },
         getScenePartition() {
@@ -12120,9 +13315,24 @@ ${lumaForgeLightflowHelpers}`
             });
             return changes;
         },
-        getDepthOnlyMaterial(sourceMaterial) {
+        getAOGeometryMaterial(sourceMaterial) {
             if (!sourceMaterial) return sourceMaterial;
-            let material = this.depthMaterialCache.get(sourceMaterial);
+            let material = this.geometryMaterialCache.get(sourceMaterial);
+            if (material?.userData?.saAOExcluded) return material;
+            if (!this.materialReceivesAO(sourceMaterial)) {
+                material = new THREE.ShaderMaterial({
+                    vertexShader: 'void main(){ gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+                    fragmentShader: 'void main(){ discard; }',
+                    depthTest: false,
+                    depthWrite: false,
+                    colorWrite: false
+                });
+                material.name = 'SA_AO_Excluded';
+                material.userData.saAOExcluded = true;
+                this.geometryMaterialCache.set(sourceMaterial, material);
+                this.geometryMaterialResources.add(material);
+                return material;
+            }
             if (!material) {
                 material = new THREE.ShaderMaterial({
                     uniforms: {
@@ -12133,8 +13343,10 @@ ${lumaForgeLightflowHelpers}`
                     },
                     vertexShader: `
                         varying vec2 vUv;
+                        varying vec3 vViewNormal;
                         void main() {
                             vUv = uv;
+                            vViewNormal = normalize(normalMatrix * normal);
                             gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
                         }
                     `,
@@ -12145,25 +13357,28 @@ ${lumaForgeLightflowHelpers}`
                         uniform float uOpacity;
                         uniform float uAlphaTest;
                         varying vec2 vUv;
+                        varying vec3 vViewNormal;
                         void main() {
                             float alpha = uOpacity;
                             if (uHasMap) alpha *= texture2D(map, vUv).a;
                             if (alpha < uAlphaTest) discard;
-                            gl_FragColor = vec4(1.0);
+                            vec3 normal = normalize(vViewNormal);
+                            if (!gl_FrontFacing) normal = -normal;
+                            gl_FragColor = vec4(normal * 0.5 + 0.5, 1.0);
                         }
                     `,
                     depthTest: sourceMaterial.depthTest !== false,
                     depthWrite: sourceMaterial.depthWrite !== false,
-                    colorWrite: false,
+                    colorWrite: true,
                     transparent: false,
                     blending: THREE.NoBlending,
                     side: sourceMaterial.shadowSide !== undefined
                         ? sourceMaterial.shadowSide
                         : (sourceMaterial.side !== undefined ? sourceMaterial.side : THREE.FrontSide)
                 });
-                material.name = 'SA_AO_DepthOnly';
-                this.depthMaterialCache.set(sourceMaterial, material);
-                this.depthMaterialResources.add(material);
+                material.name = 'SA_AO_Geometry';
+                this.geometryMaterialCache.set(sourceMaterial, material);
+                this.geometryMaterialResources.add(material);
             }
 
             const map = sourceMaterial.uniforms?.map?.value || sourceMaterial.map || null;
@@ -12181,14 +13396,14 @@ ${lumaForgeLightflowHelpers}`
                 : (sourceMaterial.side !== undefined ? sourceMaterial.side : THREE.FrontSide);
             return material;
         },
-        useDepthOnlyReceiverMaterials() {
+        useAOGeometryMaterials() {
             const changes = [];
             this.getScenePartition().receiverMeshes.forEach(mesh => {
                 if (!mesh?.material) return;
                 const original = mesh.material;
                 const replacement = Array.isArray(original)
-                    ? original.map(material => this.getDepthOnlyMaterial(material))
-                    : this.getDepthOnlyMaterial(original);
+                    ? original.map(material => this.getAOGeometryMaterial(material))
+                    : this.getAOGeometryMaterial(original);
                 changes.push({ mesh, material: original });
                 mesh.material = replacement;
             });
@@ -12219,10 +13434,15 @@ ${lumaForgeLightflowHelpers}`
                 state.uniforms.uBias.value = this.settings.bias;
                 state.uniforms.uStrength.value = this.settings.strength;
                 state.uniforms.uPower.value = this.settings.power;
-                state.uniforms.uSamples.value = Math.max(4, Math.min(24, Math.round(this.settings.samples || 20)));
+                const requestedSamples = Math.max(4, Math.min(32, Math.round(this.settings.samples || 20)));
+                state.uniforms.uSamples.value = preview.sa_studio_render_active
+                    ? Math.max(32, requestedSamples)
+                    : requestedSamples;
                 state.uniforms.uProjection.value.copy(camera.projectionMatrix);
                 if (camera.projectionMatrixInverse) state.uniforms.uInverseProjection.value.copy(camera.projectionMatrixInverse);
                 else if (state.uniforms.uInverseProjection.value.invert) state.uniforms.uInverseProjection.value.copy(camera.projectionMatrix).invert();
+                state.blurUniforms.uInverseProjection.value.copy(state.uniforms.uInverseProjection.value);
+                state.compositeUniforms.uInverseProjection.value.copy(state.uniforms.uInverseProjection.value);
 
                 renderer.autoClear = true;
                 renderer.setScissorTest?.(false);
@@ -12235,22 +13455,50 @@ ${lumaForgeLightflowHelpers}`
                 renderer.render(Canvas.scene, camera);
 
                 const hidden = this.hideNonCubeObjects();
-                const depthMaterialChanges = this.useDepthOnlyReceiverMaterials();
+                const geometryMaterialChanges = this.useAOGeometryMaterials();
                 renderer.setRenderTarget(state.cubeTarget);
                 renderer.clear(true, true, true);
                 try { renderer.render(Canvas.scene, camera); }
                 finally {
-                    this.restoreReceiverMaterials(depthMaterialChanges);
+                    this.restoreReceiverMaterials(geometryMaterialChanges);
                     hidden.forEach(object => { object.visible = true; });
                 }
-                state.lightflowDepthStamp = performance.now();
+                // Raw AO at the receiver resolution.
+                state.quad.material = state.aoMaterial;
+                renderer.setRenderTarget(state.aoTarget);
+                renderer.clear(true, true, true);
+                renderer.render(state.postScene, state.postCamera);
 
+                /*
+                 * A separable bilateral pass removes sample noise and the last
+                 * sub-pixel depth steps while refusing to cross depth/normal
+                 * discontinuities. This keeps contact corners crisp instead of
+                 * blurring AO over silhouettes or unrelated foreground meshes.
+                 */
+                state.quad.material = state.blurMaterial;
+                state.blurUniforms.tInput.value = state.aoTarget.texture;
+                state.blurUniforms.uDirection.value.set(1 / state.width, 0);
+                renderer.setRenderTarget(state.blurTarget);
+                renderer.clear(true, true, true);
+                renderer.render(state.postScene, state.postCamera);
+
+                state.blurUniforms.tInput.value = state.blurTarget.texture;
+                state.blurUniforms.uDirection.value.set(0, 1 / state.height);
+                renderer.setRenderTarget(state.aoTarget);
+                renderer.clear(true, true, true);
+                renderer.render(state.postScene, state.postCamera);
+
+                state.quad.material = state.compositeMaterial;
                 renderer.setRenderTarget(previousTarget || null);
                 if (previousViewport) renderer.setViewport?.(previousViewport);
                 if (previousScissor) renderer.setScissor?.(previousScissor);
                 renderer.setScissorTest?.(previousScissorTest);
                 renderer.clear(true, true, true);
                 renderer.render(state.postScene, state.postCamera);
+                // Atmosphere may reuse both depth buffers immediately after
+                // this wrapper returns. Timestamp the completed AO frame so
+                // the extra quality passes do not make valid depth look stale.
+                state.lightflowDepthStamp = performance.now();
             } catch (error) {
                 console.warn('[Lightflow SSAO] disabled after render failure', error);
                 this.settings.enabled = false;
@@ -12561,20 +13809,71 @@ ${lumaForgeLightflowHelpers}`
                 true
             );
 
+            const packedSeedFragment = `
+                const float SA_PROMO_SEED_PRECISION = 65500.0;
+
+                vec2 promoPackSeedCoordinate(float coordinate) {
+                    float encoded =
+                        floor(
+                            clamp(coordinate, 0.0, 1.0) *
+                            SA_PROMO_SEED_PRECISION +
+                            0.5
+                        ) +
+                        1.0;
+                    float highByte = floor(encoded / 256.0);
+                    float lowByte = encoded - highByte * 256.0;
+                    return vec2(highByte, lowByte) / 255.0;
+                }
+
+                float promoUnpackSeedCoordinate(vec2 packedCoordinate) {
+                    vec2 bytes = floor(packedCoordinate * 255.0 + 0.5);
+                    float encoded = bytes.x * 256.0 + bytes.y;
+                    return clamp(
+                        (encoded - 1.0) / SA_PROMO_SEED_PRECISION,
+                        0.0,
+                        1.0
+                    );
+                }
+
+                vec4 promoPackSeedUv(vec2 seedUv) {
+                    return vec4(
+                        promoPackSeedCoordinate(seedUv.x),
+                        promoPackSeedCoordinate(seedUv.y)
+                    );
+                }
+
+                vec2 promoUnpackSeedUv(vec4 packedSeed) {
+                    return vec2(
+                        promoUnpackSeedCoordinate(packedSeed.rg),
+                        promoUnpackSeedCoordinate(packedSeed.ba)
+                    );
+                }
+
+                float promoHasPackedSeed(vec4 packedSeed) {
+                    return step(
+                        0.001,
+                        dot(abs(packedSeed), vec4(1.0))
+                    );
+                }
+            `;
+
             const dilationFragment = `
                 #define SA_PROMO_RIM_MAX_RADIUS 12
+
+                ${packedSeedFragment}
 
                 uniform sampler2D uSource;
                 uniform vec2 uTexelSize;
                 uniform vec2 uDirection;
                 uniform float uRadius;
+                uniform int uSourceIsMask;
 
                 varying vec2 vPromoUv;
 
                 void main() {
-                    vec3 expandedColor = vec3(0.0);
-                    float nearestDepth = 1.0;
-                    float isMask = 0.0;
+                    vec2 nearestSeedUv = vec2(0.0);
+                    float nearestDistanceSquared = 1.0e20;
+                    float hasNearestSeed = 0.0;
 
                     for (int offset = -SA_PROMO_RIM_MAX_RADIUS; offset <= SA_PROMO_RIM_MAX_RADIUS; offset++) {
                         float sampleOffset = float(offset);
@@ -12589,23 +13888,54 @@ ${lumaForgeLightflowHelpers}`
                             uTexelSize *
                             sampleOffset;
 
+                        if (
+                            any(lessThan(sampleUv, vec2(0.0))) ||
+                            any(greaterThan(sampleUv, vec2(1.0)))
+                        ) {
+                            continue;
+                        }
+
                         vec4 sampleValue = texture2D(
                             uSource,
                             sampleUv
                         );
 
-                        if (sampleValue.a > 0.001) {
-                            float depth = (sampleValue.a - 0.01) / 0.99;
-                            if (isMask == 0.0 || depth < nearestDepth) {
-                                nearestDepth = depth;
-                                expandedColor = sampleValue.rgb;
-                                isMask = 1.0;
+                        float sampleHasSeed = uSourceIsMask == 1
+                            ? step(0.005, sampleValue.a)
+                            : promoHasPackedSeed(sampleValue);
+
+                        if (sampleHasSeed > 0.5) {
+                            vec2 seedUv = uSourceIsMask == 1
+                                ? sampleUv
+                                : promoUnpackSeedUv(sampleValue);
+                            vec2 seedDistancePixels =
+                                (seedUv - vPromoUv) /
+                                max(uTexelSize, vec2(0.0000001));
+                            float seedDistanceSquared = dot(
+                                seedDistancePixels,
+                                seedDistancePixels
+                            );
+
+                            /*
+                                Carry the nearest original silhouette texel,
+                                not the nearest intermediate texel or the
+                                front-most depth. This is a screen-space Voronoi
+                                propagation, so texture bands remain attached
+                                across perspective and multi-pass rim widths.
+                            */
+                            if (
+                                hasNearestSeed < 0.5 ||
+                                seedDistanceSquared < nearestDistanceSquared
+                            ) {
+                                nearestSeedUv = seedUv;
+                                nearestDistanceSquared = seedDistanceSquared;
+                                hasNearestSeed = 1.0;
                             }
                         }
                     }
 
-                    if (isMask > 0.5) {
-                        gl_FragColor = vec4(expandedColor, nearestDepth * 0.99 + 0.01);
+                    if (hasNearestSeed > 0.5) {
+                        gl_FragColor = promoPackSeedUv(nearestSeedUv);
                     } else {
                         gl_FragColor = vec4(0.0);
                     }
@@ -12618,7 +13948,8 @@ ${lumaForgeLightflowHelpers}`
                     uSource: { value: maskTarget.texture },
                     uTexelSize: { value: new THREE.Vector2(1.0, 1.0) },
                     uDirection: { value: new THREE.Vector2(1.0, 0.0) },
-                    uRadius: { value: 1.0 }
+                    uRadius: { value: 1.0 },
+                    uSourceIsMask: { value: 1 }
                 }
             );
             horizontalMaterial.name = 'SA_PromoSilhouetteDilateHorizontal';
@@ -12629,7 +13960,8 @@ ${lumaForgeLightflowHelpers}`
                     uSource: { value: horizontalTarget.texture },
                     uTexelSize: { value: new THREE.Vector2(1.0, 1.0) },
                     uDirection: { value: new THREE.Vector2(0.0, 1.0) },
-                    uRadius: { value: 1.0 }
+                    uRadius: { value: 1.0 },
+                    uSourceIsMask: { value: 0 }
                 }
             );
             verticalMaterial.name = 'SA_PromoSilhouetteDilateVertical';
@@ -12643,7 +13975,6 @@ ${lumaForgeLightflowHelpers}`
                     },
                     uRimColor: { value: new THREE.Vector3(1.0, 0.78, 0.26) },
                     uRimIntensity: { value: 1.0 },
-                    uRimRadius: { value: 1.0 },
                     uTexelSize: { value: new THREE.Vector2(1.0, 1.0) },
                     uRimDirection: { value: new THREE.Vector2(0.70, 0.65) },
                     uDirectionality: { value: 0.72 },
@@ -12666,15 +13997,14 @@ ${lumaForgeLightflowHelpers}`
                 fragmentShader: `
                     #include <packing>
 
+                    ${packedSeedFragment}
+
                     uniform sampler2D uOriginalMask;
                     uniform sampler2D uExpandedMask;
                     uniform sampler2D uSceneDepth;
 
-                    #define SA_PROMO_DIRECTION_SAMPLE_RADIUS 12
-
                     uniform vec3 uRimColor;
                     uniform float uRimIntensity;
-                    uniform float uRimRadius;
                     uniform vec2 uTexelSize;
                     uniform vec2 uRimDirection;
                     uniform float uDirectionality;
@@ -12701,64 +14031,28 @@ ${lumaForgeLightflowHelpers}`
                         return hsv.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), hsv.y);
                     }
 
-                    vec2 promoEstimateOutwardDirection() {
-                        vec2 inwardDirection = vec2(0.0);
-
-                        for (int radius = 1; radius <= SA_PROMO_DIRECTION_SAMPLE_RADIUS; radius++) {
-                            float pixelRadius = float(radius);
-
-                            if (pixelRadius > uRimRadius + 0.001) {
-                                continue;
-                            }
-
-                            vec2 sampleOffset = uTexelSize * pixelRadius;
-
-                            float sourceRight = texture2D(uOriginalMask, vPromoUv + vec2(sampleOffset.x, 0.0)).a;
-                            float sourceLeft = texture2D(uOriginalMask, vPromoUv - vec2(sampleOffset.x, 0.0)).a;
-                            float sourceTop = texture2D(uOriginalMask, vPromoUv + vec2(0.0, sampleOffset.y)).a;
-                            float sourceBottom = texture2D(uOriginalMask, vPromoUv - vec2(0.0, sampleOffset.y)).a;
-                            float sourceTopRight = texture2D(uOriginalMask, vPromoUv + sampleOffset).a;
-                            float sourceTopLeft = texture2D(uOriginalMask, vPromoUv + vec2(-sampleOffset.x, sampleOffset.y)).a;
-                            float sourceBottomRight = texture2D(uOriginalMask, vPromoUv + vec2(sampleOffset.x, -sampleOffset.y)).a;
-                            float sourceBottomLeft = texture2D(uOriginalMask, vPromoUv - sampleOffset).a;
-
-                            float inverseRadius = 1.0 / max(pixelRadius, 1.0);
-
-                            inwardDirection += vec2(1.0, 0.0) * step(0.005, sourceRight) * inverseRadius;
-                            inwardDirection += vec2(-1.0, 0.0) * step(0.005, sourceLeft) * inverseRadius;
-                            inwardDirection += vec2(0.0, 1.0) * step(0.005, sourceTop) * inverseRadius;
-                            inwardDirection += vec2(0.0, -1.0) * step(0.005, sourceBottom) * inverseRadius;
-                            inwardDirection += vec2(0.70710678, 0.70710678) * step(0.005, sourceTopRight) * inverseRadius;
-                            inwardDirection += vec2(-0.70710678, 0.70710678) * step(0.005, sourceTopLeft) * inverseRadius;
-                            inwardDirection += vec2(0.70710678, -0.70710678) * step(0.005, sourceBottomRight) * inverseRadius;
-                            inwardDirection += vec2(-0.70710678, -0.70710678) * step(0.005, sourceBottomLeft) * inverseRadius;
-                        }
-
-                        float inwardLength = length(inwardDirection);
-
-                        if (inwardLength <= 0.00001) {
-                            return vec2(0.0);
-                        }
-
-                        return -inwardDirection / inwardLength;
-                    }
-
                     void main() {
                         vec4 originalMaskSample = texture2D(uOriginalMask, vPromoUv);
-                        vec4 expandedMaskSample = texture2D(uExpandedMask, vPromoUv);
+                        vec4 expandedSeedSample = texture2D(uExpandedMask, vPromoUv);
 
                         float originalMask = step(0.005, originalMaskSample.a);
-                        float expandedMask = step(0.005, expandedMaskSample.a);
+                        float expandedMask = promoHasPackedSeed(expandedSeedSample);
                         float rimMask = max(expandedMask - originalMask, 0.0);
 
                         if (rimMask <= 0.0) {
                             discard;
                         }
 
+                        vec2 edgeSeedUv = promoUnpackSeedUv(expandedSeedSample);
+                        vec4 edgeMaskSample = texture2D(
+                            uOriginalMask,
+                            edgeSeedUv
+                        );
+
                         float visibility = 1.0;
 
                         if (uUseOcclusion == 1 && uHasSceneDepth == 1) {
-                            float targetDepth = (expandedMaskSample.a - 0.01) / 0.99;
+                            float targetDepth = (edgeMaskSample.a - 0.01) / 0.99;
 
                             float sceneDepth = unpackRGBAToDepth(
                                 texture2D(uSceneDepth, vPromoUv)
@@ -12774,7 +14068,13 @@ ${lumaForgeLightflowHelpers}`
                             }
                         }
 
-                        vec2 outwardDirection = promoEstimateOutwardDirection();
+                        vec2 outwardOffsetPixels =
+                            (vPromoUv - edgeSeedUv) /
+                            max(uTexelSize, vec2(0.0000001));
+                        float outwardLength = length(outwardOffsetPixels);
+                        vec2 outwardDirection = outwardLength > 0.00001
+                            ? outwardOffsetPixels / outwardLength
+                            : vec2(0.0);
                         vec2 artisticDirection = normalize(uRimDirection + vec2(0.00001));
 
                         float directionalAlignment = dot(outwardDirection, artisticDirection);
@@ -12809,12 +14109,12 @@ ${lumaForgeLightflowHelpers}`
                             // intensity to avoid a thick edge at Rim Power 0.
                             alpha *= smoothstep(0.0, 0.05, uRimIntensity);
 
-                            vec3 additiveBlend = expandedMaskSample.rgb + (uRimColor * max(uRimIntensity, 0.0));
+                            vec3 additiveBlend = edgeMaskSample.rgb + (uRimColor * max(uRimIntensity, 0.0));
                             vec3 hsv = promoRgbToHsv(clamp(additiveBlend, vec3(0.0), vec3(1.0)));
-                            
+
                             hsv.y = clamp(hsv.y, 0.0, 1.0);
                             hsv.z = clamp(hsv.z, 0.0, 1.0);
-                            
+
                             finalRimColor = promoHsvToRgb(hsv);
                         } else {
                             // Solid-color mode uses intensity as global alpha.
@@ -13541,6 +14841,7 @@ ${lumaForgeLightflowHelpers}`
         },
 
         getPromotionalRimConfig(material) {
+            if (material?.uniforms?.AFFECTED_BY_LIGHT?.value === false) return null;
             const shaderId = material && material.sa_shader_id;
             const hasPromotionalShaderId = ['minecraft_promotional_bevel', 'cinematic_craft', 'luma_forge'].includes(shaderId);
             const shaderSourceHasPromotionalRim =
@@ -14003,6 +15304,7 @@ ${lumaForgeLightflowHelpers}`
             */
             let remainingRadius = totalRadius;
             let sourceTexture = state.maskTarget.texture;
+            let sourceIsMask = true;
 
             while (remainingRadius > 0.001) {
                 const passRadius = Math.min(
@@ -14012,6 +15314,9 @@ ${lumaForgeLightflowHelpers}`
 
                 state.horizontalMaterial.uniforms.uSource.value =
                     sourceTexture;
+
+                state.horizontalMaterial.uniforms.uSourceIsMask.value =
+                    sourceIsMask ? 1 : 0;
 
                 state.horizontalMaterial.uniforms.uTexelSize.value.copy(
                     texelSize
@@ -14048,11 +15353,12 @@ ${lumaForgeLightflowHelpers}`
                     The next pass continues dilation from the previous vertical pass.
                 */
                 sourceTexture = state.verticalTarget.texture;
+                sourceIsMask = false;
                 remainingRadius -= passRadius;
             }
         },
 
-        compositeGroup(state, destinationTarget, group, camera, radius) {
+        compositeGroup(state, destinationTarget, group, camera) {
             const renderer = state.renderer;
             const config = group.config;
 
@@ -14071,8 +15377,6 @@ ${lumaForgeLightflowHelpers}`
 
             state.overlayMaterial.uniforms.uRimIntensity.value =
                 config.intensity;
-
-            state.overlayMaterial.uniforms.uRimRadius.value = radius;
 
             state.overlayMaterial.uniforms.uTexelSize.value.set(
                 1.0 / Math.max(state.width, 1),
@@ -14097,8 +15401,15 @@ ${lumaForgeLightflowHelpers}`
             state.overlayMaterial.uniforms.uUseOcclusion.value =
                 config.useOcclusion ? 1 : 0;
 
+            /*
+                Fixed color is an explicit override. Texture blending adds the
+                sampled edge texture to the rim color and can saturate light
+                textures to white (including when the selected color is black).
+                Keep that artistic blend available only for the light-driven
+                color modes so mode 0 renders PROMO_RIM_COLOR exactly.
+            */
             state.overlayMaterial.uniforms.uTextureBlend.value =
-                config.textureBlend ? 1 : 0;
+                config.textureBlend && config.colorMode > 0 ? 1 : 0;
 
             renderer.setRenderTarget(destinationTarget);
             renderer.render(
@@ -14255,8 +15566,7 @@ ${lumaForgeLightflowHelpers}`
                         state,
                         previousTarget,
                         group,
-                        preview.camera,
-                        radius
+                        preview.camera
                     );
                 });
 
@@ -14265,6 +15575,10 @@ ${lumaForgeLightflowHelpers}`
                 }
             } catch (error) {
                 state.silhouetteValid = false;
+                if (!state.renderFailureReported) {
+                    state.renderFailureReported = true;
+                    console.warn('[Shader Architect] Promotional silhouette rendering failed.', error);
+                }
             } finally {
                 renderer.setRenderTarget(previousTarget);
                 if (previousViewport && renderer.setViewport) {
@@ -14362,6 +15676,9 @@ ${lumaForgeLightflowHelpers}`
 
     const ShaderEngine = {
         globalRenderMode: 'classic',
+        pendingGlobalRenderMode: '',
+        globalRenderModeTransitionActive: false,
+        isUnloading: false,
         animationReq: null,
         pendingSceneUpdateFrame: null,
         pendingSceneUpdateCauses: null,
@@ -14371,11 +15688,41 @@ ${lumaForgeLightflowHelpers}`
         pendingPreviewRenderFrame: null,
         pendingPreviewRenderLightOnly: false,
         currentPreviewRenderLightOnly: false,
+        pendingShaderWarmupHandle: null,
+        pendingShaderWarmupHandleType: '',
+        pendingShaderWarmupRetryTimer: null,
+        shaderWarmupQueue: [],
+        shaderWarmupQueueKeys: new Set(),
+        shaderWarmupRendererKeys: new WeakMap(),
+        shaderWarmupRendererRecords: new WeakMap(),
+        shaderWarmupRecordUseCounter: 0,
+        shaderWarmupRecordLimit: 64,
+        shaderWarmupShadowMaterials: new Set(),
+        shaderWarmupStats: {
+            completed: 0,
+            failed: 0,
+            skipped: 0,
+            lastCause: '',
+            lastDurationMs: 0,
+            lastProgramDelta: 0
+        },
+        shaderWarmupCurrentTask: null,
+        shaderWarmupProgressSession: null,
+        shaderWarmupProgressDialog: null,
+        shaderWarmupProgressCloseTimer: null,
+        shaderWarmupProgressProjects: new WeakSet(),
         projectRevision: 0,
         activeProject: typeof Project !== 'undefined' ? Project : null,
         pendingSceneUpdateRevision: null,
         pendingLightUniformRevision: null,
         pendingPreviewRenderRevision: null,
+        pendingShaderWarmupRender: false,
+        lastLightProgramEnvironmentKey: '',
+        lightTopologyTransactionActive: false,
+        lightTopologyTransactionCause: '',
+        lightTopologyTransactionTimer: null,
+        nativePreviewLightsState: null,
+        lastShaderWarmupMaterials: null,
         lightUniformMaterialCache: null,
         lightUniformMaterialCacheDirty: true,
         animationUniformTargets: null,
@@ -14385,7 +15732,19 @@ ${lumaForgeLightflowHelpers}`
         lightUniformScratch: null,
         materialPool: new Map(),
         materialPoolObjectIds: new WeakMap(),
+        shaderSourceHashCache: new Map(),
+        fragmentShaderVariantCache: new Map(),
+        shaderCompilationCacheLimit: 128,
+        shaderCompilationCacheStats: {
+            hashHits: 0,
+            hashMisses: 0,
+            fragmentHits: 0,
+            fragmentMisses: 0
+        },
+        uvAttributeSignatures: new WeakMap(),
         nextMaterialPoolObjectId: 1,
+        materialPoolUseCounter: 0,
+        materialPoolIdleLimit: 64,
         clock: new THREE.Clock(),
 
         getSharedFrameUniform(name, fallbackValue) {
@@ -14476,6 +15835,7 @@ ${lumaForgeLightflowHelpers}`
                 material.uniformsNeedUpdate = true;
             };
             mesh.userData.saPerDrawUniformSync = true;
+            mesh.userData.saPerDrawUniformSyncHandler = mesh.onBeforeRender;
             mesh.userData.saPreviousOnBeforeRender = previous || null;
         },
 
@@ -14529,12 +15889,34 @@ ${lumaForgeLightflowHelpers}`
 
         hashMaterialShader(source) {
             const text = String(source || '');
+            if (this.shaderSourceHashCache.has(text)) {
+                this.shaderCompilationCacheStats.hashHits += 1;
+                return this.shaderSourceHashCache.get(text);
+            }
+
             let hash = 2166136261;
             for (let index = 0; index < text.length; index++) {
                 hash ^= text.charCodeAt(index);
                 hash = Math.imul(hash, 16777619);
             }
-            return (hash >>> 0).toString(36);
+            const result = (hash >>> 0).toString(36);
+            this.shaderCompilationCacheStats.hashMisses += 1;
+            this.rememberShaderCompilationCacheValue(this.shaderSourceHashCache, text, result);
+            return result;
+        },
+
+        rememberShaderCompilationCacheValue(cache, key, value) {
+            const limit = Math.max(16, Number(this.shaderCompilationCacheLimit) || 128);
+            if (!cache.has(key) && cache.size >= limit) {
+                cache.delete(cache.keys().next().value);
+            }
+            cache.set(key, value);
+            return value;
+        },
+
+        clearShaderCompilationCaches() {
+            this.shaderSourceHashCache.clear();
+            this.fragmentShaderVariantCache.clear();
         },
 
         getMaterialPoolKey(material) {
@@ -14563,9 +15945,11 @@ ${lumaForgeLightflowHelpers}`
             const reusable = bucket.find(candidate => this.materialsCanCollapse(candidate, material));
             if (reusable) {
                 if (material !== reusable && !material.is_sa_pooled) material.dispose?.();
+                reusable.sa_pool_last_used = ++this.materialPoolUseCounter;
                 return reusable;
             }
             material.is_sa_pooled = true;
+            material.sa_pool_last_used = ++this.materialPoolUseCounter;
             bucket.push(material);
             return material;
         },
@@ -14577,6 +15961,7 @@ ${lumaForgeLightflowHelpers}`
             this.materialPool.clear();
             this.materialPoolObjectIds = new WeakMap();
             this.nextMaterialPoolObjectId = 1;
+            this.materialPoolUseCounter = 0;
         },
 
         pruneMaterialPool() {
@@ -14585,10 +15970,39 @@ ${lumaForgeLightflowHelpers}`
                 const mesh = this.getCubeMesh(element);
                 this.getMaterialList(mesh?.material).forEach(material => inUse.add(material));
             });
+
+            inUse.forEach(material => {
+                if (material?.is_sa_pooled) {
+                    material.sa_pool_last_used = ++this.materialPoolUseCounter;
+                }
+            });
+
+            const inactive = [];
             this.materialPool.forEach((bucket, key) => {
-                const retained = bucket.filter(material => inUse.has(material));
                 bucket.forEach(material => {
-                    if (!inUse.has(material)) material?.dispose?.();
+                    if (!inUse.has(material)) {
+                        inactive.push({
+                            key,
+                            material,
+                            lastUsed: Number(material?.sa_pool_last_used) || 0
+                        });
+                    }
+                });
+            });
+
+            inactive.sort((left, right) => right.lastUsed - left.lastUsed);
+            const warmMaterials = new Set(
+                inactive
+                    .slice(0, Math.max(0, Number(this.materialPoolIdleLimit) || 0))
+                    .map(entry => entry.material)
+            );
+
+            this.materialPool.forEach((bucket, key) => {
+                const retained = bucket.filter(material => inUse.has(material) || warmMaterials.has(material));
+                bucket.forEach(material => {
+                    if (!inUse.has(material) && !warmMaterials.has(material)) {
+                        material?.dispose?.();
+                    }
                 });
                 if (retained.length) this.materialPool.set(key, retained);
                 else this.materialPool.delete(key);
@@ -14597,6 +16011,201 @@ ${lumaForgeLightflowHelpers}`
 
         getCubeMesh(cube) {
             return getShaderElementMesh(cube);
+        },
+
+        getActiveViewMode() {
+            if (typeof Project !== 'undefined' && Project && typeof Project.view_mode === 'string') {
+                return Project.view_mode;
+            }
+            if (typeof BarItems !== 'undefined' && typeof BarItems.view_mode?.value === 'string') {
+                return BarItems.view_mode.value;
+            }
+            return 'textured';
+        },
+
+        getViewModeMaterialPolicy(viewMode = this.getActiveViewMode()) {
+            if (viewMode === 'lightflow') return 'lightflow';
+            if (viewMode === 'textured') return 'classic';
+            return 'native';
+        },
+
+        restoreNativePreviewLights() {
+            const state = this.nativePreviewLightsState;
+            if (state?.group) state.group.visible = state.visible;
+            this.nativePreviewLightsState = null;
+        },
+
+        syncNativePreviewLights(viewMode = this.getActiveViewMode()) {
+            const nativeLights = window.lights || null;
+            if (viewMode !== 'lightflow' || !nativeLights) {
+                this.restoreNativePreviewLights();
+                return;
+            }
+
+            if (this.nativePreviewLightsState?.group !== nativeLights) {
+                this.restoreNativePreviewLights();
+            }
+            if (!this.nativePreviewLightsState) {
+                this.nativePreviewLightsState = {
+                    group: nativeLights,
+                    visible: nativeLights.visible
+                };
+            }
+
+            // Lightflow computes its direct lighting from the fixed virtual
+            // light uniforms. Blockbench's six editor lights only inflate
+            // Three r129 program keys here, so hide that group reversibly.
+            nativeLights.visible = false;
+        },
+
+        activateLightflowViewMode(_cause = 'shader_interaction') {
+            if (this.isUnloading || typeof Project === 'undefined' || !Project) return false;
+            if (this.getActiveViewMode() === 'lightflow') return false;
+
+            const viewMode = typeof BarItems !== 'undefined' ? BarItems.view_mode : null;
+            if (!viewMode?.options?.lightflow) return false;
+
+            if (typeof viewMode.set === 'function') viewMode.set('lightflow');
+            if (typeof viewMode.change === 'function') viewMode.change('lightflow');
+
+            return this.getActiveViewMode() === 'lightflow';
+        },
+
+        elementHasMaterialOverride(element) {
+            if (!element) return false;
+            if (element.sa_material_id || element.sa_material_instance_id) return true;
+            if (MaterialManager.hasGeometryAutoTileEnabled(element)) return true;
+            return Object.keys(MaterialManager.getCubeFaceMaterialInstanceOverrides(element)).length > 0;
+        },
+
+        projectHasMaterialOverrides() {
+            return getAllShaderElements().some(element => this.elementHasMaterialOverride(element));
+        },
+
+        shouldApplyShaderArchitectMaterials(viewMode = this.getActiveViewMode()) {
+            return this.getViewModeMaterialPolicy(viewMode) !== 'native';
+        },
+
+        shouldResolveMaterialOverrides(viewMode = this.getActiveViewMode()) {
+            return this.getViewModeMaterialPolicy(viewMode) === 'lightflow';
+        },
+
+        resolveViewModeMaterial(cube, viewMode = this.getActiveViewMode()) {
+            const policy = this.getViewModeMaterialPolicy(viewMode);
+            if (policy === 'native') return null;
+            if (policy === 'classic') return MaterialManager.materials['classic'] || null;
+            return MaterialManager.resolveCubeMaterial(cube, this.globalRenderMode)
+                || MaterialManager.materials['classic']
+                || null;
+        },
+
+        releaseMeshIntegration(cube, mesh = this.getCubeMesh(cube)) {
+            if (!mesh) return;
+            mesh.userData = mesh.userData || {};
+            const userData = mesh.userData;
+
+            const ownedRenderHook = userData.saPerDrawUniformSyncHandler;
+            if (
+                userData.saPerDrawUniformSync
+                && (!ownedRenderHook || mesh.onBeforeRender === ownedRenderHook)
+            ) {
+                mesh.onBeforeRender = userData.saPreviousOnBeforeRender || null;
+            }
+            delete userData.saPerDrawUniformSync;
+            delete userData.saPerDrawUniformSyncHandler;
+            delete userData.saPreviousOnBeforeRender;
+            delete userData.saCollapsedMaterialSlots;
+            delete userData.saOriginalMaterialSlotCount;
+            delete userData.saPlanarSurfaceResolved;
+
+            if (Object.prototype.hasOwnProperty.call(userData, 'saOriginalCastShadow')) {
+                mesh.castShadow = userData.saOriginalCastShadow;
+                delete userData.saOriginalCastShadow;
+            }
+            if (Object.prototype.hasOwnProperty.call(userData, 'saOriginalReceiveShadow')) {
+                mesh.receiveShadow = userData.saOriginalReceiveShadow;
+                delete userData.saOriginalReceiveShadow;
+            }
+
+            const ownedDepthMaterial = userData.saCustomDepthMaterial;
+            if (
+                mesh.customDepthMaterial
+                && (
+                    mesh.customDepthMaterial === ownedDepthMaterial
+                    || (!ownedDepthMaterial && mesh.customDepthMaterial.name === 'SA_AlphaDepthMaterial')
+                )
+            ) {
+                mesh.customDepthMaterial.dispose?.();
+                delete mesh.customDepthMaterial;
+            }
+            const ownedDistanceMaterial = userData.saCustomDistanceMaterial;
+            if (
+                mesh.customDistanceMaterial
+                && (
+                    mesh.customDistanceMaterial === ownedDistanceMaterial
+                    || (!ownedDistanceMaterial && mesh.customDistanceMaterial.name === 'SA_AlphaDistanceMaterial')
+                )
+            ) {
+                mesh.customDistanceMaterial.dispose?.();
+                delete mesh.customDistanceMaterial;
+            }
+            delete userData.saCustomDepthMaterial;
+            delete userData.saCustomDistanceMaterial;
+            delete userData.saShadowMaterialSignature;
+            delete userData.saShadowTextureOverflow;
+            if (userData.saShadowMaterialCache instanceof Map) {
+                userData.saShadowMaterialCache.forEach(entry => {
+                    entry?.depth?.dispose?.();
+                    entry?.distance?.dispose?.();
+                });
+                userData.saShadowMaterialCache.clear();
+            }
+            delete userData.saShadowMaterialCache;
+
+            const geometry = mesh.geometry;
+            if (geometry?.deleteAttribute) {
+                [
+                    'sa_shadow_map_index',
+                    'sa_shadow_opacity',
+                    'sa_shadow_alpha_test',
+                    'sa_shadow_stochastic'
+                ].forEach(attribute => {
+                    if (geometry.getAttribute?.(attribute)) geometry.deleteAttribute(attribute);
+                });
+            }
+            if (geometry?.userData?.saOriginalCubeUv) {
+                delete geometry.userData.saOriginalCubeUv;
+            }
+            if (geometry?.userData?.saOriginalCubeUvSignature !== undefined) {
+                delete geometry.userData.saOriginalCubeUvSignature;
+            }
+            if (cube && cube.shader_type !== undefined) delete cube.shader_type;
+        },
+
+        handleViewModeChange(viewMode = this.getActiveViewMode()) {
+            this.cancelPendingSceneUpdate();
+            this.cancelPendingLightUniformUpdate();
+            this.cancelPendingPreviewRender();
+            if (!this.globalRenderModeTransitionActive) {
+                this.cancelPendingShaderWarmup();
+            }
+            this.syncNativePreviewLights(viewMode);
+
+            getAllShaderElements().forEach(cube => {
+                this.releaseMeshIntegration(cube);
+            });
+            this.pruneMaterialPool();
+            this.invalidateLightUniformMaterialCache();
+            this.invalidateAnimationUniformTargetCache();
+            ScreenSpaceReflectionManager.invalidateMaterialCache();
+            AmbientOcclusionManager.invalidateSceneCache();
+            MinecraftPromotionalSilhouetteManager.invalidateGroups();
+
+            if (!this.isUnloading && this.shouldApplyShaderArchitectMaterials(viewMode)) {
+                this.updateAllCubes('change_view_mode', {
+                    scheduleWarmup: !this.globalRenderModeTransitionActive
+                });
+            }
         },
 
         getPerformanceStats() {
@@ -14623,6 +16232,10 @@ ${lumaForgeLightflowHelpers}`
             );
             const scenePasses = aoActive ? 3 : 1;
             const renderer = window.Preview?.selected?.renderer || window.main_preview?.renderer;
+            let pooledMaterials = 0;
+            this.materialPool.forEach(bucket => {
+                pooledMaterials += bucket.length;
+            });
 
             return {
                 elements: elements.length,
@@ -14634,7 +16247,24 @@ ${lumaForgeLightflowHelpers}`
                 aoActive,
                 estimatedSceneDrawsPerFrame: activeMaterialBatches * scenePasses,
                 rendererCallsLastFrame: renderer?.info?.render?.calls ?? null,
-                rendererTrianglesLastFrame: renderer?.info?.render?.triangles ?? null
+                rendererTrianglesLastFrame: renderer?.info?.render?.triangles ?? null,
+                rendererPrograms: Array.isArray(renderer?.info?.programs)
+                    ? renderer.info.programs.length
+                    : null,
+                pooledMaterials,
+                shaderSourceHashCache: this.shaderSourceHashCache.size,
+                fragmentShaderVariantCache: this.fragmentShaderVariantCache.size,
+                shaderHashCacheHits: this.shaderCompilationCacheStats.hashHits,
+                shaderHashCacheMisses: this.shaderCompilationCacheStats.hashMisses,
+                fragmentVariantCacheHits: this.shaderCompilationCacheStats.fragmentHits,
+                fragmentVariantCacheMisses: this.shaderCompilationCacheStats.fragmentMisses,
+                warmupQueue: this.shaderWarmupQueue.length,
+                warmupCompleted: this.shaderWarmupStats.completed,
+                warmupFailed: this.shaderWarmupStats.failed,
+                warmupSkipped: this.shaderWarmupStats.skipped,
+                warmupLastCause: this.shaderWarmupStats.lastCause,
+                warmupLastDurationMs: this.shaderWarmupStats.lastDurationMs,
+                warmupLastProgramDelta: this.shaderWarmupStats.lastProgramDelta
             };
         },
 
@@ -14769,6 +16399,30 @@ ${lumaForgeLightflowHelpers}`
             return material ? [material] : [];
         },
 
+        getNativeCubeUvAttributeSignature(element) {
+            if (
+                typeof Cube === 'undefined' ||
+                !(element instanceof Cube) ||
+                !element.faces
+            ) return null;
+
+            return MATERIAL_SLOT_FACE_ORDER.map(faceName => {
+                const face = element.faces[faceName];
+                if (!face) return `${faceName}:missing`;
+                const rotation = ((Number(face.rotation) || 0) % 360 + 360) % 360;
+                const uv = Array.isArray(face.uv)
+                    ? face.uv.map(value => Number(value) || 0).join(',')
+                    : '';
+                return `${faceName}:${rotation}:${uv}`;
+            }).join('|');
+        },
+
+        haveNativeCubeUvAttributesChanged(element) {
+            const signature = this.getNativeCubeUvAttributeSignature(element);
+            if (signature === null) return false;
+            return this.uvAttributeSignatures.get(element) !== signature;
+        },
+
         forEachMeshMaterial(mesh, callback) {
             this.getMaterialList(mesh?.material).forEach((mat, index) => {
                 if (mat) callback(mat, index);
@@ -14786,9 +16440,14 @@ ${lumaForgeLightflowHelpers}`
         beginProjectLifecycle(project) {
             this.projectRevision += 1;
             this.activeProject = project || null;
+            this.lastLightProgramEnvironmentKey = '';
+            this.uvAttributeSignatures = new WeakMap();
             this.cancelPendingSceneUpdate();
             this.cancelPendingLightUniformUpdate();
             this.cancelPendingPreviewRender();
+            this.cancelPendingShaderWarmup();
+            this.cancelPendingShaderWarmupRetry();
+            this.completeLightTopologyTransaction();
             this.invalidateLightUniformMaterialCache();
             this.animationUniformTargetCacheDirty = true;
         },
@@ -14809,6 +16468,17 @@ ${lumaForgeLightflowHelpers}`
         },
 
         requestSceneUpdate(cause = 'default', options = {}) {
+            if (this.lightTopologyTransactionActive) {
+                // A LightElement-only Undo can emit generic Canvas/material
+                // refresh events even though no render mesh changed. The
+                // dedicated light transaction will update uniforms and compile
+                // the final topology once, so discard those duplicate rebuilds.
+                return;
+            }
+            if (this.isUnloading || !this.shouldApplyShaderArchitectMaterials()) {
+                this.cancelPendingSceneUpdate();
+                return;
+            }
             if (!this.pendingSceneUpdateCauses) {
                 this.pendingSceneUpdateCauses = new Set();
             }
@@ -14952,6 +16622,34 @@ ${lumaForgeLightflowHelpers}`
             }
         },
 
+        beginLightTopologyTransaction(cause = 'light_topology') {
+            this.lightTopologyTransactionActive = true;
+            this.lightTopologyTransactionCause = cause;
+            this.discardQueuedPresetWarmups();
+            if (this.lightTopologyTransactionTimer !== null) {
+                clearTimeout(this.lightTopologyTransactionTimer);
+            }
+
+            // Undo dispatches both a generic project refresh and the dedicated
+            // LightElement refresh. Hold compilation until both have converged
+            // on the final THREE light topology, then compile that topology once.
+            this.lightTopologyTransactionTimer = setTimeout(() => {
+                if (!this.lightTopologyTransactionActive) return;
+                const fallbackCause = this.lightTopologyTransactionCause || cause;
+                this.completeLightTopologyTransaction();
+                this.requestLightUniformUpdate(`${fallbackCause}_settled`);
+            }, 350);
+        },
+
+        completeLightTopologyTransaction() {
+            if (this.lightTopologyTransactionTimer !== null) {
+                clearTimeout(this.lightTopologyTransactionTimer);
+            }
+            this.lightTopologyTransactionTimer = null;
+            this.lightTopologyTransactionActive = false;
+            this.lightTopologyTransactionCause = '';
+        },
+
         cancelPendingLightUniformUpdate() {
             if (
                 typeof this.pendingLightUniformFrame === 'number' &&
@@ -15041,6 +16739,1177 @@ ${lumaForgeLightflowHelpers}`
             this.pendingPreviewRenderRevision = null;
             this.pendingPreviewRenderLightOnly = false;
             this.currentPreviewRenderLightOnly = false;
+        },
+
+        getShaderWarmupPreview() {
+            const preview =
+                (window.Preview && Preview.selected) ||
+                window.main_preview ||
+                window.MediaPreview ||
+                null;
+            if (!preview?.renderer || !preview.camera) return null;
+            if (typeof Canvas === 'undefined' || !Canvas.scene) return null;
+            return preview;
+        },
+
+        getRendererWarmupKeys(renderer) {
+            let keys = this.shaderWarmupRendererKeys.get(renderer);
+            if (!keys) {
+                keys = new Set();
+                this.shaderWarmupRendererKeys.set(renderer, keys);
+            } else if (
+                keys.size &&
+                Array.isArray(renderer?.info?.programs) &&
+                renderer.info.programs.length === 0
+            ) {
+                // A restored WebGL context keeps the renderer object but loses
+                // its linked programs. Do not let stale warm-up bookkeeping
+                // suppress recompilation after that reset.
+                keys.clear();
+                this.shaderWarmupRendererRecords.get(renderer)?.clear?.();
+            }
+            return keys;
+        },
+
+        getRendererWarmupRecords(renderer) {
+            let records = this.shaderWarmupRendererRecords.get(renderer);
+            if (!records) {
+                records = new Map();
+                this.shaderWarmupRendererRecords.set(renderer, records);
+            }
+            return records;
+        },
+
+        collectRendererMaterialProgramKeys(renderer, materials = this.lastShaderWarmupMaterials) {
+            const programKeys = new Set();
+            if (!renderer?.properties || !materials) return programKeys;
+
+            materials.forEach(material => {
+                if (!material) return;
+                let properties = null;
+                try {
+                    properties = renderer.properties.get(material);
+                } catch (error) {
+                    return;
+                }
+                if (!(properties?.programs instanceof Map)) return;
+                properties.programs.forEach(program => {
+                    if (program?.cacheKey !== undefined) {
+                        programKeys.add(String(program.cacheKey));
+                    }
+                });
+            });
+            return programKeys;
+        },
+
+        rememberRendererWarmupKey(renderer, key, materials = this.lastShaderWarmupMaterials) {
+            if (!renderer || !key) return false;
+            const programKeys = this.collectRendererMaterialProgramKeys(renderer, materials);
+            if (!programKeys.size) return false;
+
+            const keys = this.getRendererWarmupKeys(renderer);
+            const records = this.getRendererWarmupRecords(renderer);
+            keys.add(key);
+            records.set(key, {
+                programKeys,
+                materials: new Set(Array.from(materials || []).filter(Boolean)),
+                lastUsed: ++this.shaderWarmupRecordUseCounter
+            });
+
+            const limit = Math.max(8, Number(this.shaderWarmupRecordLimit) || 64);
+            if (records.size > limit) {
+                const oldest = Array.from(records.entries())
+                    .sort((left, right) => left[1].lastUsed - right[1].lastUsed)
+                    .slice(0, records.size - limit);
+                oldest.forEach(([oldKey]) => {
+                    records.delete(oldKey);
+                    keys.delete(oldKey);
+                });
+            }
+            return true;
+        },
+
+        isRendererWarmupKeyValid(renderer, key) {
+            if (!renderer || !key) return false;
+            const keys = this.getRendererWarmupKeys(renderer);
+            if (!keys.has(key)) return false;
+
+            const records = this.getRendererWarmupRecords(renderer);
+            const record = records.get(key);
+            if (!record?.programKeys?.size || !Array.isArray(renderer.info?.programs)) {
+                keys.delete(key);
+                records.delete(key);
+                return false;
+            }
+
+            const liveProgramKeys = new Set(renderer.info.programs.map(program => String(program.cacheKey)));
+            const valid = Array.from(record.programKeys).every(programKey => liveProgramKeys.has(programKey));
+            if (!valid) {
+                keys.delete(key);
+                records.delete(key);
+                return false;
+            }
+
+            record.lastUsed = ++this.shaderWarmupRecordUseCounter;
+            return true;
+        },
+
+        getShaderWarmupEnvironmentKey(preview = this.getShaderWarmupPreview()) {
+            const scene = typeof Canvas !== 'undefined' ? Canvas.scene : null;
+            const renderer = preview?.renderer;
+            const camera = preview?.camera;
+            const lightCounts = {
+                directional: 0,
+                point: 0,
+                spot: 0,
+                rectArea: 0,
+                hemi: 0,
+                directionalShadow: 0,
+                pointShadow: 0,
+                spotShadow: 0
+            };
+
+            scene?.traverseVisible?.(object => {
+                if (!object?.isLight || (object.layers && camera?.layers && !object.layers.test(camera.layers))) {
+                    return;
+                }
+                if (object.isDirectionalLight) {
+                    lightCounts.directional += 1;
+                    if (object.castShadow) lightCounts.directionalShadow += 1;
+                } else if (object.isPointLight) {
+                    lightCounts.point += 1;
+                    if (object.castShadow) lightCounts.pointShadow += 1;
+                } else if (object.isSpotLight) {
+                    lightCounts.spot += 1;
+                    if (object.castShadow) lightCounts.spotShadow += 1;
+                } else if (object.isRectAreaLight) {
+                    lightCounts.rectArea += 1;
+                } else if (object.isHemisphereLight) {
+                    lightCounts.hemi += 1;
+                }
+            });
+
+            return [
+                lightCounts.directional,
+                lightCounts.point,
+                lightCounts.spot,
+                lightCounts.rectArea,
+                lightCounts.hemi,
+                lightCounts.directionalShadow,
+                lightCounts.pointShadow,
+                lightCounts.spotShadow,
+                renderer?.shadowMap?.enabled ? 1 : 0,
+                renderer?.shadowMap?.type ?? '',
+                renderer?.toneMapping ?? '',
+                renderer?.outputEncoding ?? '',
+                renderer?.physicallyCorrectLights ? 1 : 0,
+                renderer?.localClippingEnabled ? 1 : 0,
+                Array.isArray(renderer?.clippingPlanes) ? renderer.clippingPlanes.length : 0,
+                scene?.fog?.isFogExp2 ? 'fog_exp2' : (scene?.fog ? 'fog' : 'no_fog')
+            ].join(',');
+        },
+
+        sceneUsesThreeLightPrograms() {
+            return getAllShaderElements().some(element => {
+                const mesh = this.getCubeMesh(element);
+                return this.getMaterialList(mesh?.material).some(material => !!material?.lights);
+            });
+        },
+
+        getPresetWarmupEntries() {
+            const seen = new Set();
+            const entries = [];
+            GLOBAL_SHADER_PRESET_IDS.forEach(id => {
+                const material = MaterialManager.materials?.[id];
+                if (!material || material.isCustom || seen.has(material)) return;
+                seen.add(material);
+                entries.push({
+                    id,
+                    material,
+                    key: [
+                        'preset',
+                        id,
+                        this.hashMaterialShader(material.vertex),
+                        this.hashMaterialShader(material.fragment),
+                        material.enableShadows ? 1 : 0
+                    ].join(':')
+                });
+            });
+            return entries;
+        },
+
+        getGlobalRenderModeWarmupKey(renderMode, preview = this.getShaderWarmupPreview()) {
+            const material = MaterialManager.materials?.[renderMode] || null;
+            if (!material || !preview) return '';
+            return [
+                'global',
+                this.projectRevision,
+                renderMode,
+                this.hashMaterialShader(material.vertex),
+                this.hashMaterialShader(material.fragment),
+                this.getShaderWarmupEnvironmentKey(preview)
+            ].join(':');
+        },
+
+        getShaderWarmupDefinesKey(defines) {
+            if (!defines || typeof defines !== 'object') return '';
+            return Object.keys(defines)
+                .sort()
+                .map(key => `${key}=${String(defines[key])}`)
+                .join(';');
+        },
+
+        getShaderWarmupMaterialSignature(material) {
+            if (!material) return '';
+            let customProgramKey = '';
+            try {
+                customProgramKey = typeof material.customProgramCacheKey === 'function'
+                    ? String(material.customProgramCacheKey())
+                    : '';
+            } catch (error) {
+                warnShaderArchitectOnce('warmup-cache-key', '[Shader Architect] A material cache key failed during shader warm-up.', error);
+                customProgramKey = '';
+            }
+
+            const extensions = material.extensions || {};
+            return [
+                material.type || '',
+                material.sa_shader_id || '',
+                material.sa_source_render_mode || '',
+                this.hashMaterialShader(material.vertexShader || material.vertex),
+                this.hashMaterialShader(material.fragmentShader || material.fragment),
+                this.getShaderWarmupDefinesKey(material.defines),
+                customProgramKey,
+                material.glslVersion || '',
+                material.index0AttributeName || '',
+                material.lights ? 1 : 0,
+                material.fog ? 1 : 0,
+                material.clipping ? 1 : 0,
+                material.dithering ? 1 : 0,
+                material.vertexColors ? 1 : 0,
+                material.flatShading ? 1 : 0,
+                material.skinning ? 1 : 0,
+                material.morphTargets ? 1 : 0,
+                material.morphNormals ? 1 : 0,
+                material.premultipliedAlpha ? 1 : 0,
+                Number(material.alphaTest) > 0 ? 1 : 0,
+                material.side ?? '',
+                material.toneMapped === false ? 0 : 1,
+                extensions.derivatives ? 1 : 0,
+                extensions.fragDepth ? 1 : 0,
+                extensions.drawBuffers ? 1 : 0,
+                extensions.shaderTextureLOD ? 1 : 0
+            ].join(':');
+        },
+
+        getCurrentSceneWarmupKey(preview = this.getShaderWarmupPreview()) {
+            const materialSignatures = new Set();
+            getAllShaderElements().forEach(element => {
+                const mesh = this.getCubeMesh(element);
+                this.getMaterialList(mesh?.material).forEach(material => {
+                    const signature = this.getShaderWarmupMaterialSignature(material);
+                    if (signature) materialSignatures.add(signature);
+                });
+                [mesh?.customDepthMaterial, mesh?.customDistanceMaterial].forEach(material => {
+                    const signature = this.getShaderWarmupMaterialSignature(material);
+                    if (signature) materialSignatures.add(signature);
+                });
+            });
+
+            const signatureSource = Array.from(materialSignatures).sort().join('|');
+            const aoEnabled = AmbientOcclusionManager.settings.enabled &&
+                AmbientOcclusionManager.hasLightflowMaterial();
+            const promotionalEnabled = MinecraftPromotionalSilhouetteManager.collectGroups()?.size > 0;
+            return [
+                'scene',
+                this.getShaderWarmupEnvironmentKey(preview),
+                this.hashMaterialShader(signatureSource),
+                aoEnabled ? 1 : 0,
+                promotionalEnabled ? 1 : 0
+            ].join(':');
+        },
+
+        getCurrentLightTopologyWarmupKey(preview = this.getShaderWarmupPreview()) {
+            const materialSignatures = new Set();
+            getAllShaderElements().forEach(element => {
+                const mesh = this.getCubeMesh(element);
+                this.getMaterialList(mesh?.material).forEach(material => {
+                    if (!material?.lights) return;
+                    const signature = this.getShaderWarmupMaterialSignature(material);
+                    if (signature) materialSignatures.add(signature);
+                });
+            });
+            return [
+                'light_scene',
+                this.getShaderWarmupEnvironmentKey(preview),
+                this.hashMaterialShader(Array.from(materialSignatures).sort().join('|'))
+            ].join(':');
+        },
+
+        getRendererMaterialProgramCount(renderer, material) {
+            if (!renderer?.properties || !material) return 0;
+            let properties = null;
+            try {
+                properties = renderer.properties.get(material);
+            } catch (error) {
+                return 0;
+            }
+            const programs = properties?.programs;
+            return programs instanceof Map ? programs.size : 0;
+        },
+
+        clearShaderWarmupProgressCloseTimer() {
+            if (this.shaderWarmupProgressCloseTimer !== null) {
+                clearTimeout(this.shaderWarmupProgressCloseTimer);
+            }
+            this.shaderWarmupProgressCloseTimer = null;
+        },
+
+        ensureShaderWarmupProgressDialog() {
+            if (this.shaderWarmupProgressDialog || typeof Dialog === 'undefined') {
+                return this.shaderWarmupProgressDialog;
+            }
+
+            this.shaderWarmupProgressDialog = new Dialog({
+                id: 'sa_shader_warmup_dialog',
+                title: 'shader_architect.warmup.title',
+                width: 500,
+                draggable: false,
+                resizable: false,
+                darken: true,
+                cancel_on_click_outside: false,
+                buttons: [],
+                progress_bar: { progress: 0 },
+                onCancel() {
+                    // Shader compilation is synchronous in Three r129. Keep the
+                    // modal open so the user cannot mistake the pause for a
+                    // frozen or failed scene load.
+                    return false;
+                },
+                component: {
+                    data() {
+                        return {
+                            heading: '',
+                            description: '',
+                            once: '',
+                            counter: '',
+                            status: '',
+                            completed: 0,
+                            total: 1,
+                            ready: false,
+                            warning: false
+                        };
+                    },
+                    template: `
+                        <div class="sa-warmup-content" role="status" aria-live="polite">
+                            <div class="sa-warmup-intro">
+                                <div class="sa-warmup-icon" :class="{ ready, warning }" aria-hidden="true">
+                                    <i class="material-icons">{{ warning ? 'warning' : (ready ? 'check_circle' : 'progress_activity') }}</i>
+                                </div>
+                                <div>
+                                    <h3 class="sa-warmup-heading">{{ heading }}</h3>
+                                    <p class="sa-warmup-description">{{ description }}</p>
+                                </div>
+                            </div>
+                            <div class="sa-warmup-status-row">
+                                <span class="sa-warmup-status">{{ status }}</span>
+                                <span class="sa-warmup-count">{{ counter }}: {{ completed }} / {{ total }}</span>
+                            </div>
+                            <p class="sa-warmup-once">{{ once }}</p>
+                        </div>
+                    `
+                }
+            });
+
+            return this.shaderWarmupProgressDialog;
+        },
+
+        getShaderWarmupTaskStatus(task = this.shaderWarmupCurrentTask || this.shaderWarmupQueue[0]) {
+            if (!task) return tl('shader_architect.warmup.status.pending');
+            if (task.type === 'scene') {
+                return String(task.cause || '').includes('light')
+                    ? tl('shader_architect.warmup.status.light')
+                    : tl('shader_architect.warmup.status.scene');
+            }
+            if (task.type === 'global') return tl('shader_architect.warmup.status.global');
+            return tl('shader_architect.warmup.status.preset');
+        },
+
+        updateShaderWarmupProgressDialog(options = {}) {
+            const session = this.shaderWarmupProgressSession;
+            const dialog = this.shaderWarmupProgressDialog;
+            if (!session || !dialog?.content_vue) return;
+
+            const processed = Math.max(
+                0,
+                this.shaderWarmupStats.completed + this.shaderWarmupStats.failed - session.processedBaseline
+            );
+            const remaining = this.shaderWarmupQueue.length + (this.shaderWarmupCurrentTask ? 1 : 0);
+            session.total = Math.max(session.total, processed + remaining, 1);
+
+            const finished = options.finished === true;
+            const completed = finished ? session.total : Math.min(session.total, processed);
+            const warning = finished && this.shaderWarmupStats.failed > session.failedBaseline;
+            const progress = finished
+                ? 1
+                : Math.max(0, Math.min(1, completed / session.total));
+            const vue = dialog.content_vue;
+
+            vue.heading = tl('shader_architect.warmup.heading');
+            vue.description = tl('shader_architect.warmup.description');
+            vue.once = tl('shader_architect.warmup.once');
+            vue.counter = tl('shader_architect.warmup.counter');
+            vue.status = finished
+                ? tl(warning
+                    ? 'shader_architect.warmup.status.warning'
+                    : 'shader_architect.warmup.status.ready')
+                : this.getShaderWarmupTaskStatus();
+            vue.completed = completed;
+            vue.total = session.total;
+            vue.ready = finished && !warning;
+            vue.warning = warning;
+
+            dialog.progress_bar?.setProgress(progress);
+            const progressNode = dialog.progress_bar?.node;
+            if (progressNode) {
+                progressNode.setAttribute('role', 'progressbar');
+                progressNode.setAttribute('aria-valuemin', '0');
+                progressNode.setAttribute('aria-valuemax', '100');
+                progressNode.setAttribute('aria-valuenow', String(Math.round(progress * 100)));
+            }
+        },
+
+        beginOrExtendShaderWarmupProgress(cause, taskCounts = {}) {
+            const addedSceneTasks = Math.max(0, Number(taskCounts.scene) || 0);
+            const forceProgress = taskCounts.force === true;
+
+            if (this.shaderWarmupProgressSession) {
+                this.clearShaderWarmupProgressCloseTimer();
+                this.shaderWarmupProgressSession.total = Math.max(
+                    this.shaderWarmupProgressSession.total,
+                    this.shaderWarmupStats.completed + this.shaderWarmupStats.failed
+                    - this.shaderWarmupProgressSession.processedBaseline
+                    + this.shaderWarmupQueue.length
+                );
+                this.updateShaderWarmupProgressDialog();
+                return true;
+            }
+
+            const project = typeof Project !== 'undefined' ? Project : null;
+            const firstOverrideWarmup = !!(
+                addedSceneTasks > 0 &&
+                project &&
+                this.projectHasMaterialOverrides() &&
+                !this.shaderWarmupProgressProjects.has(project)
+            );
+            // Background preset warming must never open a modal on its own.
+            // Global transitions explicitly opt into feedback with `force`.
+            const shouldShow = forceProgress || firstOverrideWarmup;
+            if (!shouldShow) return false;
+
+            if (firstOverrideWarmup) {
+                this.shaderWarmupProgressProjects.add(project);
+            }
+
+            const dialog = this.ensureShaderWarmupProgressDialog();
+            if (!dialog) return false;
+
+            this.clearShaderWarmupProgressCloseTimer();
+            this.shaderWarmupProgressSession = {
+                cause: cause || 'shader_warmup',
+                processedBaseline: this.shaderWarmupStats.completed + this.shaderWarmupStats.failed,
+                failedBaseline: this.shaderWarmupStats.failed,
+                total: Math.max(1, this.shaderWarmupQueue.length)
+            };
+
+            if (!dialog.object?.parentElement) {
+                dialog.show();
+            }
+            this.updateShaderWarmupProgressDialog();
+            return true;
+        },
+
+        finishShaderWarmupProgress() {
+            const session = this.shaderWarmupProgressSession;
+            if (!session) return;
+
+            this.shaderWarmupCurrentTask = null;
+            this.updateShaderWarmupProgressDialog({ finished: true });
+            this.clearShaderWarmupProgressCloseTimer();
+            this.shaderWarmupProgressCloseTimer = setTimeout(() => {
+                this.shaderWarmupProgressCloseTimer = null;
+                if (
+                    this.shaderWarmupProgressSession !== session ||
+                    this.shaderWarmupQueue.length ||
+                    this.shaderWarmupCurrentTask
+                ) return;
+
+                if (this.shaderWarmupProgressDialog?.object?.parentElement) {
+                    this.shaderWarmupProgressDialog.hide();
+                }
+                this.shaderWarmupProgressSession = null;
+            }, 650);
+        },
+
+        resetShaderWarmupProgress(options = {}) {
+            this.clearShaderWarmupProgressCloseTimer();
+            this.shaderWarmupCurrentTask = null;
+            this.shaderWarmupProgressSession = null;
+
+            if (this.shaderWarmupProgressDialog?.object?.parentElement) {
+                this.shaderWarmupProgressDialog.hide();
+            }
+            if (options.dispose && this.shaderWarmupProgressDialog) {
+                this.shaderWarmupProgressDialog.delete?.();
+                this.shaderWarmupProgressDialog = null;
+                this.shaderWarmupProgressProjects = new WeakSet();
+            }
+        },
+
+        cancelPendingShaderWarmup(options = {}) {
+            if (this.pendingShaderWarmupHandle !== null) {
+                if (
+                    this.pendingShaderWarmupHandleType === 'idle' &&
+                    typeof cancelIdleCallback === 'function'
+                ) {
+                    cancelIdleCallback(this.pendingShaderWarmupHandle);
+                } else if (this.pendingShaderWarmupHandleType === 'timeout') {
+                    clearTimeout(this.pendingShaderWarmupHandle);
+                }
+            }
+            this.pendingShaderWarmupHandle = null;
+            this.pendingShaderWarmupHandleType = '';
+            if (options.clearQueue !== false) {
+                this.shaderWarmupQueue.length = 0;
+                this.shaderWarmupQueueKeys.clear();
+                this.pendingShaderWarmupRender = false;
+                if (!this.globalRenderModeTransitionActive) {
+                    this.pendingGlobalRenderMode = '';
+                }
+                this.resetShaderWarmupProgress();
+            }
+        },
+
+        discardQueuedPresetWarmups() {
+            let removed = 0;
+            this.shaderWarmupQueue = this.shaderWarmupQueue.filter(task => {
+                if (task.type !== 'preset') return true;
+                this.shaderWarmupQueueKeys.delete(task.queueKey);
+                removed += 1;
+                return false;
+            });
+            if (!removed) return 0;
+
+            // A light-count change makes queued preset variants for the old
+            // environment obsolete. Do not leave their old total visible or
+            // let the idle scheduler compile them after the active scene has
+            // already moved to another topology.
+            const pendingGlobalTransition = this.shaderWarmupQueue.some(task => task.type === 'global');
+            if (!this.shaderWarmupCurrentTask && !pendingGlobalTransition) {
+                this.resetShaderWarmupProgress();
+            } else {
+                this.updateShaderWarmupProgressDialog();
+            }
+            return removed;
+        },
+
+        cancelPendingShaderWarmupRetry() {
+            if (this.pendingShaderWarmupRetryTimer !== null) {
+                clearTimeout(this.pendingShaderWarmupRetryTimer);
+            }
+            this.pendingShaderWarmupRetryTimer = null;
+        },
+
+        disposeShaderWarmupResources() {
+            this.cancelPendingShaderWarmup();
+            this.cancelPendingShaderWarmupRetry();
+            this.resetShaderWarmupProgress({ dispose: true });
+            this.shaderWarmupShadowMaterials.forEach(material => material?.dispose?.());
+            this.shaderWarmupShadowMaterials.clear();
+            this.shaderWarmupRendererKeys = new WeakMap();
+            this.shaderWarmupRendererRecords = new WeakMap();
+            this.shaderWarmupRecordUseCounter = 0;
+            this.lastShaderWarmupMaterials = null;
+            this.clearShaderCompilationCaches();
+        },
+
+        retainShaderWarmupShadowMaterial(material) {
+            if (!material) return;
+            this.shaderWarmupShadowMaterials.add(material);
+            while (this.shaderWarmupShadowMaterials.size > 32) {
+                const oldest = this.shaderWarmupShadowMaterials.values().next().value;
+                this.shaderWarmupShadowMaterials.delete(oldest);
+                oldest?.dispose?.();
+            }
+        },
+
+        compileAuxiliaryPreviewPrograms(preview) {
+            const renderer = preview?.renderer;
+            if (!renderer || typeof renderer.compile !== 'function') return;
+
+            if (
+                AmbientOcclusionManager.settings.enabled &&
+                AmbientOcclusionManager.hasLightflowMaterial()
+            ) {
+                const aoState = AmbientOcclusionManager.states.get(preview) ||
+                    AmbientOcclusionManager.createState(preview);
+                if (aoState?.postScene && aoState.postCamera) {
+                    renderer.compile(aoState.postScene, aoState.postCamera);
+                }
+            }
+
+            const promotionalGroups = MinecraftPromotionalSilhouetteManager.collectGroups();
+            if (promotionalGroups?.size) {
+                const promoState = MinecraftPromotionalSilhouetteManager.getPreviewState(preview);
+                const promoCamera = MinecraftPromotionalSilhouetteManager.fullscreenCamera;
+                if (promoState && promoCamera) {
+                    renderer.compile(promoState.horizontalScene, promoCamera);
+                    renderer.compile(promoState.verticalScene, promoCamera);
+                    renderer.compile(promoState.overlayScene, promoCamera);
+                }
+            }
+        },
+
+        compileCurrentScenePrograms(preview = this.getShaderWarmupPreview()) {
+            this.lastShaderWarmupMaterials = null;
+            const renderer = preview?.renderer;
+            const scene = typeof Canvas !== 'undefined' ? Canvas.scene : null;
+            const camera = preview?.camera;
+            if (!renderer || !scene || !camera || typeof renderer.compile !== 'function') return false;
+            if (window.LightManagerStudioRenderSession) return false;
+
+            const sceneMaterials = new Set();
+            const shadowMaterials = new Set();
+            scene.traverseVisible?.(object => {
+                this.getMaterialList(object?.material).forEach(material => {
+                    if (material) sceneMaterials.add(material);
+                });
+                if (object?.customDepthMaterial) shadowMaterials.add(object.customDepthMaterial);
+                if (object?.customDistanceMaterial) shadowMaterials.add(object.customDistanceMaterial);
+            });
+            shadowMaterials.forEach(material => sceneMaterials.add(material));
+
+            let geometry = null;
+            let anchors = null;
+            try {
+                if (shadowMaterials.size) {
+                    const BoxGeometry = THREE.BoxGeometry || THREE.BoxBufferGeometry;
+                    geometry = new BoxGeometry(1, 1, 1);
+                    anchors = new THREE.Group();
+                    anchors.name = 'SA_ShaderWarmupAnchors';
+                    shadowMaterials.forEach(material => {
+                        const anchor = new THREE.Mesh(geometry, material);
+                        anchor.frustumCulled = false;
+                        anchors.add(anchor);
+                    });
+                    scene.add(anchors);
+                }
+
+                renderer.compile(scene, camera);
+                this.compileAuxiliaryPreviewPrograms(preview);
+                const completed = Array.from(sceneMaterials).every(material =>
+                    this.getRendererMaterialProgramCount(renderer, material) > 0
+                );
+                if (completed) {
+                    this.lastShaderWarmupMaterials = sceneMaterials;
+                    this.lastLightProgramEnvironmentKey = this.getShaderWarmupEnvironmentKey(preview);
+                    this.rememberRendererWarmupKey(
+                        renderer,
+                        this.getCurrentLightTopologyWarmupKey(preview),
+                        sceneMaterials
+                    );
+                    const globalKey = this.getGlobalRenderModeWarmupKey(
+                        this.globalRenderMode,
+                        preview
+                    );
+                    if (globalKey) this.rememberRendererWarmupKey(renderer, globalKey, sceneMaterials);
+                }
+                return completed;
+            } finally {
+                if (anchors?.parent) anchors.parent.remove(anchors);
+                geometry?.dispose?.();
+            }
+        },
+
+        compileCurrentSceneLightPrograms(preview = this.getShaderWarmupPreview()) {
+            // In Three r129 light counts also participate in the cache keys of
+            // line, sprite and depth materials. Compile the real scene instead
+            // of one representative ShaderMaterial so the first visible frame
+            // does not discover the remaining programs itself.
+            return this.compileCurrentScenePrograms(preview);
+        },
+
+        createPresetWarmupScene(preview = this.getShaderWarmupPreview()) {
+            const sourceScene = typeof Canvas !== 'undefined' ? Canvas.scene : null;
+            const camera = preview?.camera;
+            if (!sourceScene || typeof THREE.Scene !== 'function') return sourceScene;
+
+            const warmupScene = new THREE.Scene();
+            warmupScene.name = 'SA_PresetWarmupScene';
+            warmupScene.fog = sourceScene.fog || null;
+            if ('environment' in sourceScene) warmupScene.environment = sourceScene.environment || null;
+
+            let sourceLightCount = 0;
+            let clonedLightCount = 0;
+            sourceScene.traverseVisible?.(object => {
+                if (
+                    !object?.isLight ||
+                    (object.layers && camera?.layers && !object.layers.test(camera.layers))
+                ) return;
+
+                sourceLightCount += 1;
+                try {
+                    const light = object.clone(false);
+                    if (!light?.isLight) return;
+
+                    // Only the light class, visibility, layers and castShadow
+                    // affect the program variant. Preserve the world transform
+                    // as well so custom light hooks see the same state without
+                    // pulling the entire model hierarchy into renderer.compile.
+                    if (object.matrixWorld && light.matrix) {
+                        light.matrix.copy(object.matrixWorld);
+                        light.matrix.decompose(light.position, light.quaternion, light.scale);
+                    }
+                    light.visible = true;
+                    light.castShadow = !!object.castShadow;
+                    warmupScene.add(light);
+                    clonedLightCount += 1;
+                } catch (error) {
+                    warnShaderArchitectOnce('warmup-light-clone', '[Shader Architect] A third-party light could not be cloned; warm-up will use the live scene.', error);
+                }
+            });
+
+            if (clonedLightCount !== sourceLightCount) return sourceScene;
+            warmupScene.updateMatrixWorld?.(true);
+            return warmupScene;
+        },
+
+        compilePresetProgram(entry, preview = this.getShaderWarmupPreview()) {
+            const renderer = preview?.renderer;
+            const scene = typeof Canvas !== 'undefined' ? Canvas.scene : null;
+            const camera = preview?.camera;
+            if (!entry?.material || !renderer || !scene || !camera || typeof renderer.compile !== 'function') {
+                return false;
+            }
+            if (window.LightManagerStudioRenderSession) return false;
+
+            const BoxGeometry = THREE.BoxGeometry || THREE.BoxBufferGeometry;
+            const geometry = new BoxGeometry(1, 1, 1);
+            const sourceMaterial = new THREE.MeshBasicMaterial({
+                map: this.getFallbackTexture(),
+                transparent: true,
+                alphaTest: 0.01,
+                side: THREE.FrontSide
+            });
+            const mesh = new THREE.Mesh(geometry, sourceMaterial);
+            mesh.frustumCulled = false;
+            const warmupElement = {
+                uuid: `sa_warmup_${entry.id}`,
+                type: 'shader_warmup',
+                mesh
+            };
+            const group = new THREE.Group();
+            group.name = `SA_ShaderWarmup_${entry.id}`;
+            group.add(mesh);
+            const compilationScene = this.createPresetWarmupScene(preview) || scene;
+
+            try {
+                if (!this.applyToMesh(warmupElement, entry.material, {
+                    ignoreViewMode: true,
+                    warmup: true
+                })) {
+                    return false;
+                }
+
+                const compiledMaterials = new Set(this.getMaterialList(mesh.material));
+                [mesh.customDepthMaterial, mesh.customDistanceMaterial].forEach(material => {
+                    if (!material) return;
+                    compiledMaterials.add(material);
+                    this.retainShaderWarmupShadowMaterial(material);
+                    const anchor = new THREE.Mesh(geometry, material);
+                    anchor.frustumCulled = false;
+                    group.add(anchor);
+                });
+
+                compilationScene.add(group);
+                renderer.compile(compilationScene, camera);
+                const completed = Array.from(compiledMaterials).every(material =>
+                    this.getRendererMaterialProgramCount(renderer, material) > 0
+                );
+                if (completed) this.lastShaderWarmupMaterials = compiledMaterials;
+                return completed;
+            } finally {
+                if (group.parent) group.parent.remove(group);
+                sourceMaterial.dispose?.();
+                geometry.dispose?.();
+            }
+        },
+
+        compileGlobalRenderModeTransition(task, preview = this.getShaderWarmupPreview()) {
+            const nextRenderMode = task?.renderMode;
+            const material = MaterialManager.materials?.[nextRenderMode] || null;
+            if (!nextRenderMode || !material) {
+                if (this.pendingGlobalRenderMode === nextRenderMode) {
+                    this.pendingGlobalRenderMode = '';
+                }
+                return false;
+            }
+
+            this.globalRenderMode = nextRenderMode;
+            this.globalRenderModeTransitionActive = true;
+            try {
+                const activatedLightflow = nextRenderMode !== 'classic'
+                    && this.activateLightflowViewMode('global_mode_change');
+                this.syncNativePreviewLights(this.getActiveViewMode());
+                if (!activatedLightflow) {
+                    this.updateAllCubes('global_mode_change', { scheduleWarmup: false });
+                }
+
+                if (!this.shouldApplyShaderArchitectMaterials()) return true;
+                if (task.skipCompile) return true;
+                const compiled = this.compileCurrentScenePrograms(preview);
+                if (compiled && preview?.renderer) {
+                    this.rememberRendererWarmupKey(
+                        preview.renderer,
+                        this.getCurrentSceneWarmupKey(preview),
+                        this.lastShaderWarmupMaterials
+                    );
+                }
+                return compiled;
+            } finally {
+                this.globalRenderModeTransitionActive = false;
+                if (this.pendingGlobalRenderMode === nextRenderMode) {
+                    this.pendingGlobalRenderMode = '';
+                }
+            }
+        },
+
+        requestGlobalRenderModeChange(renderMode) {
+            const nextRenderMode = String(renderMode || '').trim();
+            const material = MaterialManager.materials?.[nextRenderMode] || null;
+            if (!nextRenderMode || !material || this.isUnloading) return false;
+            if (
+                nextRenderMode === this.globalRenderMode &&
+                !this.pendingGlobalRenderMode
+            ) return false;
+            if (nextRenderMode === this.pendingGlobalRenderMode) return true;
+
+            this.shaderWarmupQueue = this.shaderWarmupQueue.filter(task => {
+                if (task.type !== 'global') return true;
+                this.shaderWarmupQueueKeys.delete(task.queueKey);
+                return false;
+            });
+
+            const preview = this.getShaderWarmupPreview();
+            const globalWarmupKey = this.getGlobalRenderModeWarmupKey(nextRenderMode, preview) || [
+                'global',
+                this.projectRevision,
+                nextRenderMode,
+                this.hashMaterialShader(material.vertex),
+                this.hashMaterialShader(material.fragment),
+                'pending_environment'
+            ].join(':');
+            const alreadyCompiled = !!(
+                preview?.renderer &&
+                this.isRendererWarmupKeyValid(preview.renderer, globalWarmupKey)
+            );
+            const task = {
+                type: 'global',
+                renderMode: nextRenderMode,
+                key: globalWarmupKey,
+                queueKey: `global_mode_transition:${this.projectRevision}`,
+                cause: 'global_mode_change',
+                skipCompile: alreadyCompiled,
+                priority: 'urgent',
+                renderAfter: true
+            };
+
+            this.pendingGlobalRenderMode = nextRenderMode;
+            this.shaderWarmupQueue.unshift(task);
+            this.shaderWarmupQueueKeys.add(task.queueKey);
+            if (!alreadyCompiled) {
+                this.beginOrExtendShaderWarmupProgress(task.cause, { scene: 1, force: true });
+            }
+            this.scheduleNextShaderWarmup();
+            return true;
+        },
+
+        isShaderWarmupTaskUrgent(task) {
+            return !!task && task.priority !== 'background';
+        },
+
+        hasUrgentShaderWarmupTask() {
+            return this.shaderWarmupQueue.some(task => this.isShaderWarmupTaskUrgent(task));
+        },
+
+        shouldDeferPreviewRenderForShaderWarmup() {
+            if (this.isUnloading || window.LightManagerStudioRenderSession) return false;
+            return this.lightTopologyTransactionActive ||
+                this.isShaderWarmupTaskUrgent(this.shaderWarmupCurrentTask) ||
+                this.hasUrgentShaderWarmupTask();
+        },
+
+        scheduleNextShaderWarmup() {
+            const urgentPending = this.hasUrgentShaderWarmupTask();
+            if (this.pendingShaderWarmupHandle !== null) {
+                if (
+                    urgentPending &&
+                    this.pendingShaderWarmupHandleType === 'idle' &&
+                    typeof cancelIdleCallback === 'function'
+                ) {
+                    cancelIdleCallback(this.pendingShaderWarmupHandle);
+                    this.pendingShaderWarmupHandle = null;
+                    this.pendingShaderWarmupHandleType = '';
+                } else {
+                    return;
+                }
+            }
+            if (!this.shaderWarmupQueue.length) {
+                this.finishShaderWarmupProgress();
+                return;
+            }
+            const scheduledRevision = this.projectRevision;
+            const scheduledProject = this.activeProject;
+
+            const run = deadline => {
+                this.pendingShaderWarmupHandle = null;
+                this.pendingShaderWarmupHandleType = '';
+                if (
+                    this.isUnloading ||
+                    scheduledRevision !== this.projectRevision ||
+                    scheduledProject !== this.activeProject ||
+                    scheduledProject !== (window.Project || null)
+                ) {
+                    this.cancelPendingShaderWarmup();
+                    return;
+                }
+
+                const urgentIndex = this.shaderWarmupQueue.findIndex(candidate =>
+                    this.isShaderWarmupTaskUrgent(candidate)
+                );
+                const task = urgentIndex >= 0
+                    ? this.shaderWarmupQueue.splice(urgentIndex, 1)[0]
+                    : this.shaderWarmupQueue.shift();
+                if (!task) {
+                    this.finishShaderWarmupProgress();
+                    return;
+                }
+                this.shaderWarmupCurrentTask = task;
+                this.shaderWarmupQueueKeys.delete(task.queueKey);
+                this.updateShaderWarmupProgressDialog();
+                const preview = this.getShaderWarmupPreview();
+                if (!preview) {
+                    task.attempts = (task.attempts || 0) + 1;
+                    if (task.attempts < 6) {
+                        this.shaderWarmupQueue.unshift(task);
+                        this.shaderWarmupQueueKeys.add(task.queueKey);
+                    } else {
+                        this.shaderWarmupStats.failed += 1;
+                        this.shaderWarmupStats.lastCause = task.cause || task.type;
+                        this.shaderWarmupStats.lastDurationMs = 0;
+                        this.shaderWarmupStats.lastProgramDelta = 0;
+                    }
+                    this.shaderWarmupCurrentTask = null;
+                    this.updateShaderWarmupProgressDialog();
+                    this.scheduleNextShaderWarmup();
+                    return;
+                }
+
+                const mustRun = task.type === 'global' ||
+                    !this.isRendererWarmupKeyValid(preview.renderer, task.key);
+                if (mustRun) {
+                    const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+                    const programsBefore = Array.isArray(preview.renderer?.info?.programs)
+                        ? preview.renderer.info.programs.length
+                        : null;
+                    let completed = false;
+                    try {
+                        if (task.type === 'scene') {
+                            completed = task.lightTopologyOnly
+                                ? this.compileCurrentSceneLightPrograms(preview)
+                                : this.compileCurrentScenePrograms(preview);
+                        } else if (task.type === 'global') {
+                            completed = this.compileGlobalRenderModeTransition(task, preview);
+                        } else {
+                            completed = this.compilePresetProgram(task.entry, preview);
+                        }
+                    } catch (error) {
+                        completed = false;
+                        console.warn('[Shader Architect] Shader warm-up task failed.', error);
+                    }
+                    const finishedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+                    const programsAfter = Array.isArray(preview.renderer?.info?.programs)
+                        ? preview.renderer.info.programs.length
+                        : null;
+                    this.shaderWarmupStats.lastDurationMs = Math.max(0, finishedAt - startedAt);
+                    this.shaderWarmupStats.lastProgramDelta = programsBefore !== null && programsAfter !== null
+                        ? Math.max(0, programsAfter - programsBefore)
+                        : 0;
+                    this.shaderWarmupStats.lastCause = task.cause || task.type;
+                    if (completed) {
+                        if (!(task.type === 'global' && task.skipCompile)) {
+                            this.rememberRendererWarmupKey(
+                                preview.renderer,
+                                task.key,
+                                this.lastShaderWarmupMaterials
+                            );
+                        }
+                        this.shaderWarmupStats.completed += 1;
+                    } else {
+                        this.shaderWarmupStats.failed += 1;
+                    }
+                } else {
+                    this.shaderWarmupStats.skipped += 1;
+                    this.shaderWarmupStats.lastProgramDelta = 0;
+                }
+
+                const renderAfter = task.renderAfter || this.pendingShaderWarmupRender;
+                this.pendingShaderWarmupRender = false;
+                this.shaderWarmupCurrentTask = null;
+                this.updateShaderWarmupProgressDialog();
+
+                if (renderAfter) {
+                    this.requestPreviewRender({
+                        lightOnly: false,
+                        cause: task.cause || 'shader_warmup'
+                    });
+                }
+
+                this.scheduleNextShaderWarmup();
+            };
+
+            if (urgentPending) {
+                this.pendingShaderWarmupHandleType = 'timeout';
+                // Yield two frames so the progress panel is painted before the
+                // synchronous WebGL link step blocks Blockbench's UI thread.
+                this.pendingShaderWarmupHandle = setTimeout(() => run(null), 34);
+            } else if (typeof requestIdleCallback === 'function') {
+                this.pendingShaderWarmupHandleType = 'idle';
+                this.pendingShaderWarmupHandle = requestIdleCallback(run);
+            } else {
+                this.pendingShaderWarmupHandleType = 'timeout';
+                this.pendingShaderWarmupHandle = setTimeout(() => run(null), 64);
+            }
+        },
+
+        requestShaderWarmup(cause = 'scene_update', options = {}) {
+            const includeScene = options.includeScene !== false;
+            const includePresets = options.includePresets === true;
+            if (
+                this.isUnloading ||
+                (includeScene && !this.isSceneUpdateReady())
+            ) return false;
+            const preview = this.getShaderWarmupPreview();
+            if (!preview || window.LightManagerStudioRenderSession) return false;
+            const presetEnvironmentKey = this.getShaderWarmupEnvironmentKey(preview);
+            const addedTaskCounts = { scene: 0, preset: 0 };
+
+            if (options.lightTopologyOnly === true && !includePresets) {
+                this.discardQueuedPresetWarmups();
+            }
+
+            if (includeScene) {
+                const lightTopologyOnly = options.lightTopologyOnly === true;
+                const sceneKey = lightTopologyOnly
+                    ? this.getCurrentLightTopologyWarmupKey(preview)
+                    : this.getCurrentSceneWarmupKey(preview);
+                let matchingSceneQueued = false;
+                this.shaderWarmupQueue = this.shaderWarmupQueue.filter(task => {
+                    if (task.type !== 'scene') return true;
+                    if (task.key === sceneKey) {
+                        matchingSceneQueued = true;
+                        task.renderAfter = task.renderAfter || options.renderAfter === true;
+                        if (options.background !== true) task.priority = 'urgent';
+                        return true;
+                    }
+                    this.shaderWarmupQueueKeys.delete(task.queueKey);
+                    return false;
+                });
+                if (
+                    this.isRendererWarmupKeyValid(preview.renderer, sceneKey) ||
+                    matchingSceneQueued ||
+                    this.shaderWarmupQueueKeys.has(sceneKey)
+                ) {
+                    this.shaderWarmupStats.skipped += 1;
+                } else {
+                    this.shaderWarmupQueue.push({
+                        type: 'scene',
+                        key: sceneKey,
+                        queueKey: sceneKey,
+                        cause,
+                        lightTopologyOnly,
+                        renderAfter: options.renderAfter === true,
+                        priority: options.background === true ? 'background' : 'urgent'
+                    });
+                    this.shaderWarmupQueueKeys.add(sceneKey);
+                    addedTaskCounts.scene += 1;
+                }
+            }
+
+            if (includePresets) this.getPresetWarmupEntries().forEach(entry => {
+                // Preset programs belong to the renderer/WebGL context, not to
+                // an individual project. Keep keys stable across scenes with
+                // an equivalent light/render environment, but warm a new
+                // Three.js program variant when that environment changes.
+                const key = `${entry.key}:${presetEnvironmentKey}`;
+                const queueKey = key;
+                if (
+                    this.isRendererWarmupKeyValid(preview.renderer, key) ||
+                    this.shaderWarmupQueueKeys.has(queueKey)
+                ) {
+                    this.shaderWarmupStats.skipped += 1;
+                    return;
+                }
+                this.shaderWarmupQueue.push({
+                    type: 'preset',
+                    key,
+                    queueKey,
+                    entry,
+                    cause,
+                    priority: 'background'
+                });
+                this.shaderWarmupQueueKeys.add(queueKey);
+                addedTaskCounts.preset += 1;
+            });
+
+            if (addedTaskCounts.scene || addedTaskCounts.preset) {
+                this.beginOrExtendShaderWarmupProgress(cause, {
+                    ...addedTaskCounts,
+                    force: options.forceProgress === true
+                });
+            }
+            this.scheduleNextShaderWarmup();
+            return true;
+        },
+
+        requestShaderWarmupWhenReady(cause = 'scene_update', options = {}) {
+            if (this.requestShaderWarmup(cause, options)) {
+                this.cancelPendingShaderWarmupRetry();
+                return true;
+            }
+            if (this.isUnloading || this.pendingShaderWarmupRetryTimer !== null) return false;
+
+            const scheduledRevision = this.projectRevision;
+            const scheduledProject = this.activeProject;
+            const maxAttempts = Math.max(1, Number(options.maxAttempts) || 40);
+            let attempts = 0;
+            const retry = () => {
+                this.pendingShaderWarmupRetryTimer = null;
+                if (
+                    this.isUnloading ||
+                    scheduledRevision !== this.projectRevision ||
+                    scheduledProject !== this.activeProject ||
+                    scheduledProject !== (window.Project || null)
+                ) return;
+
+                if (this.requestShaderWarmup(cause, options)) return;
+                attempts += 1;
+                if (attempts >= maxAttempts) return;
+                this.pendingShaderWarmupRetryTimer = setTimeout(retry, 250);
+            };
+
+            this.pendingShaderWarmupRetryTimer = setTimeout(retry, 100);
+            return false;
         },
 
         configureTextureWrap(texture, uniformDef, options = {}) {
@@ -15320,7 +18189,7 @@ ${lumaForgeLightflowHelpers}`
         },
 
         getBlockbenchTextureSourceState(cube, faceName, sourceMaterial, fallbackTexture) {
-            const blockbenchTexture = getBlockbenchTextureForCube(cube, faceName, sourceMaterial);
+            const blockbenchTexture = getBlockbenchTextureForElement(cube, faceName, sourceMaterial);
             const layered = this.isBlockbenchLayeredTextureModeActive();
             const nativePBR = layered
                 ? null
@@ -15413,7 +18282,18 @@ ${lumaForgeLightflowHelpers}`
                 return fragmentShader;
             }
 
-            let result = fragmentShader;
+            const variantKey = [
+                sourceState.layered ? 1 : 0,
+                sourceState.renderMode === 'emissive' ? 1 : 0,
+                sourceState.nativePBR ? 1 : 0
+            ].join(':');
+            let variants = this.fragmentShaderVariantCache.get(fragmentShader);
+            if (variants?.has(variantKey)) {
+                this.shaderCompilationCacheStats.fragmentHits += 1;
+                return variants.get(variantKey);
+            }
+
+            let result = injectUnaffectedByLightFragment(fragmentShader);
             let prefix = '';
 
             if (sourceState.layered && !result.includes('saSampleBaseMap')) {
@@ -15463,7 +18343,18 @@ ${lumaForgeLightflowHelpers}`
                 }
             }
 
-            return prefix ? `${prefix}\n${result}` : result;
+            result = prefix ? `${prefix}\n${result}` : result;
+            this.shaderCompilationCacheStats.fragmentMisses += 1;
+            if (!variants) {
+                variants = new Map();
+                this.rememberShaderCompilationCacheValue(
+                    this.fragmentShaderVariantCache,
+                    fragmentShader,
+                    variants
+                );
+            }
+            variants.set(variantKey, result);
+            return result;
         },
 
         syncNativePBRUniforms(targetMaterial, sourceState, activeShader, fallbackTexture) {
@@ -15554,7 +18445,7 @@ ${lumaForgeLightflowHelpers}`
                 nativePBR.emissiveMap
             ].forEach(texture => {
                 if (texture && texture.isTexture) {
-                    this.configureTextureWrap(texture, mapRepeatDef, { forceUpdate: true });
+                    this.configureTextureWrap(texture, mapRepeatDef);
                 }
             });
         },
@@ -15603,6 +18494,94 @@ ${lumaForgeLightflowHelpers}`
             );
         },
 
+        isShaderAutoTileEnabled(shader) {
+            const renderShader = MaterialManager.getRenderMaterial(shader);
+            const value = renderShader?.uniforms?.AUTO_TILE?.value;
+            return value === true || Number(value) > 0;
+        },
+
+        addAutoTileAttribute(geometry, element, slotShaders = [], fallbackShader = null) {
+            if (!geometry?.isBufferGeometry) return null;
+            const position = geometry.getAttribute('position');
+            if (!position) return null;
+
+            const values = new Float32Array(position.count);
+            const isCanonicalCube = (
+                typeof Cube !== 'undefined' &&
+                element instanceof Cube &&
+                position.count === 24
+            );
+
+            if (isCanonicalCube) {
+                const hasNativeFaceSlots = slotShaders.length >= MATERIAL_SLOT_FACE_ORDER.length;
+                const elementAutoTile = !!element[ELEMENT_AUTO_TILE_PROP];
+                const faceAutoTileOverrides = MaterialManager.getCubeFaceAutoTileOverrides(element);
+                MATERIAL_SLOT_FACE_ORDER.forEach((faceName, faceIndex) => {
+                    const faceShader = hasNativeFaceSlots
+                        ? (slotShaders[faceIndex] || fallbackShader)
+                        : fallbackShader;
+                    const localAutoTile = Object.prototype.hasOwnProperty.call(faceAutoTileOverrides, faceName)
+                        ? faceAutoTileOverrides[faceName]
+                        : elementAutoTile;
+                    const enabled = (
+                        this.isShaderAutoTileEnabled(faceShader) ||
+                        localAutoTile
+                    );
+                    values.fill(enabled ? 1 : 0, faceIndex * 4, faceIndex * 4 + 4);
+                });
+            } else if (
+                typeof Mesh !== 'undefined' &&
+                element instanceof Mesh &&
+                element.faces
+            ) {
+                const faceAutoTileOverrides = MaterialManager.getMeshFaceAutoTileOverrides(element);
+                const elementAutoTile = !!element[ELEMENT_AUTO_TILE_PROP];
+                const groups = Array.isArray(geometry.groups) ? geometry.groups : [];
+                let positionOffset = 0;
+                let indexOffset = 0;
+                let groupIndex = 0;
+
+                Object.keys(element.faces).forEach(faceKey => {
+                    const face = element.faces[faceKey];
+                    if (!face || ![3, 4].includes(face.vertices.length)) return;
+
+                    while (
+                        groupIndex < groups.length &&
+                        indexOffset >= groups[groupIndex].start + groups[groupIndex].count
+                    ) {
+                        groupIndex++;
+                    }
+                    const group = groups[groupIndex];
+                    const materialIndex = (
+                        group &&
+                        indexOffset >= group.start &&
+                        indexOffset < group.start + group.count
+                    ) ? (group.materialIndex || 0) : 0;
+                    const faceShader = slotShaders[materialIndex] || fallbackShader || slotShaders[0];
+                    const localAutoTile = Object.prototype.hasOwnProperty.call(faceAutoTileOverrides, faceKey)
+                        ? faceAutoTileOverrides[faceKey]
+                        : elementAutoTile;
+                    const enabled = this.isShaderAutoTileEnabled(faceShader) || localAutoTile;
+                    const vertexCount = face.vertices.length;
+                    const triangleIndexCount = vertexCount === 4 ? 6 : 3;
+
+                    values.fill(enabled ? 1 : 0, positionOffset, positionOffset + vertexCount);
+                    positionOffset += vertexCount;
+                    indexOffset += triangleIndexCount;
+                });
+            } else {
+                const enabled = (
+                    this.isShaderAutoTileEnabled(fallbackShader || slotShaders[0]) ||
+                    MaterialManager.getElementAutoTile(element)
+                );
+                values.fill(enabled ? 1 : 0);
+            }
+
+            geometry.setAttribute('autoTile', new THREE.BufferAttribute(values, 1));
+            geometry.attributes.autoTile.needsUpdate = true;
+            return geometry.attributes.autoTile;
+        },
+
         // Inject custom shader attributes into the generated geometry.
         addUvAspectRatioAttribute(geometry, cube, smoothnessFactor = 0.5) {
             if (!geometry.isBufferGeometry) {
@@ -15622,17 +18601,65 @@ ${lumaForgeLightflowHelpers}`
             const vertexCount = posAttr.count;
             const normalizedFaceUvData = new Float32Array(vertexCount * 2);
             const canonicalCubeUv = [0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0];
+            const faceOrder = ['east', 'west', 'up', 'down', 'south', 'north'];
             const isCanonicalCube = (
                 typeof Cube !== 'undefined' && cube instanceof Cube && vertexCount === 24
             );
+            const sourceIndexAttr = geometry.getIndex();
+            const isMeshElement = (
+                typeof Mesh !== 'undefined' &&
+                cube instanceof Mesh &&
+                cube.faces
+            );
+            const meshFaceRanges = [];
+            if (isMeshElement) {
+                let indexStart = 0;
+                Object.keys(cube.faces).forEach(faceKey => {
+                    const face = cube.faces[faceKey];
+                    if (!face || ![3, 4].includes(face.vertices.length)) return;
+                    const indexCount = face.vertices.length === 4 ? 6 : 3;
+                    meshFaceRanges.push({
+                        faceKey,
+                        start: indexStart,
+                        count: indexCount
+                    });
+                    indexStart += indexCount;
+                });
+            }
+            const getFaceUvRotation = (faceIndex) => {
+                const rotation = Number(cube.faces?.[faceOrder[faceIndex]]?.rotation) || 0;
+                return ((rotation % 360) + 360) % 360;
+            };
 
             if (isCanonicalCube) {
                 normalizedFaceUvData.set(canonicalCubeUv);
+                // Match Blockbench's native per-face vertex permutation so all
+                // normalized-UV consumers follow 0/90/180/270 degree rotations.
+                faceOrder.forEach((_, faceIndex) => {
+                    let rotation = getFaceUvRotation(faceIndex);
+                    const offset = faceIndex * 8;
+                    const corners = [0, 1, 2, 3].map(vertex => [
+                        normalizedFaceUvData[offset + vertex * 2],
+                        normalizedFaceUvData[offset + vertex * 2 + 1]
+                    ]);
+                    while (rotation >= 90) {
+                        const first = corners[0];
+                        corners[0] = corners[2];
+                        corners[2] = corners[3];
+                        corners[3] = corners[1];
+                        corners[1] = first;
+                        rotation -= 90;
+                    }
+                    corners.forEach((uv, vertex) => {
+                        normalizedFaceUvData.set(uv, offset + vertex * 2);
+                    });
+                });
             } else if (originalUvAttr) {
-                const indexAttr = geometry.getIndex();
-                const ranges = geometry.groups && geometry.groups.length
-                    ? geometry.groups.map(group => ({ start: group.start, count: group.count }))
-                    : [{ start: 0, count: indexAttr ? indexAttr.count : vertexCount }];
+                const ranges = meshFaceRanges.length
+                    ? meshFaceRanges
+                    : (geometry.groups && geometry.groups.length
+                        ? geometry.groups.map(group => ({ start: group.start, count: group.count }))
+                        : [{ start: 0, count: sourceIndexAttr ? sourceIndexAttr.count : vertexCount }]);
 
                 ranges.forEach(range => {
                     const indices = new Set();
@@ -15640,9 +18667,9 @@ ${lumaForgeLightflowHelpers}`
                     let minV = Infinity;
                     let maxU = -Infinity;
                     let maxV = -Infinity;
-                    const end = Math.min(range.start + range.count, indexAttr ? indexAttr.count : vertexCount);
+                    const end = Math.min(range.start + range.count, sourceIndexAttr ? sourceIndexAttr.count : vertexCount);
                     for (let cursor = range.start; cursor < end; cursor++) {
-                        const vertexIndex = indexAttr ? indexAttr.getX(cursor) : cursor;
+                        const vertexIndex = sourceIndexAttr ? sourceIndexAttr.getX(cursor) : cursor;
                         if (vertexIndex < 0 || vertexIndex >= vertexCount) continue;
                         indices.add(vertexIndex);
                         const u = originalUvAttr.getX(vertexIndex);
@@ -15674,17 +18701,17 @@ ${lumaForgeLightflowHelpers}`
             const faceCount = index ? index.count / 3 : vertexCount / 3;
 
             if (!cube.affected_by_shadow || cube.affected_by_shadow.length !== vertexCount) {
-                const affected_by_shadow = new Float32Array(vertexCount);
+                const affectedByShadow = new Float32Array(vertexCount);
                 for (let i = 0; i < vertexCount; i++) {
-                    affected_by_shadow[i] = 1.0;
+                    affectedByShadow[i] = 1.0;
                 }
-                cube.affected_by_shadow = affected_by_shadow;
+                cube.affected_by_shadow = affectedByShadow;
             }
 
             geometry.setAttribute('affected_by_shadow', new THREE.BufferAttribute(cube.affected_by_shadow, 1));
             geometry.attributes.affected_by_shadow.needsUpdate = true;
 
-            // --- UV ASPECT RATIO CALCULATION ---
+            // Preserve face proportions for texture-aware shader effects.
             if (posAttr && uvAttr) {
                 const uvAspectRatios = new Float32Array(vertexCount);
 
@@ -15749,7 +18776,7 @@ ${lumaForgeLightflowHelpers}`
                 geometry.attributes.uvAspectRatio.needsUpdate = true;
             }
 
-            // --- FACE SIZE CALCULATION ---
+            // Compute per-face dimensions for scale-aware shader effects.
             if (posAttr) {
                 const faceSizes = new Float32Array(vertexCount * 2);
                 const globalFaceSizes = new Float32Array(vertexCount * 2);
@@ -15757,6 +18784,16 @@ ${lumaForgeLightflowHelpers}`
                 const posA = new THREE.Vector3();
                 const posB = new THREE.Vector3();
                 const posC = new THREE.Vector3();
+                const uvA = new THREE.Vector2();
+                const uvB = new THREE.Vector2();
+                const uvC = new THREE.Vector2();
+                const deltaPos1 = new THREE.Vector3();
+                const deltaPos2 = new THREE.Vector3();
+                const deltaUv1 = new THREE.Vector2();
+                const deltaUv2 = new THREE.Vector2();
+                const tangent = new THREE.Vector3();
+                const bitangent = new THREE.Vector3();
+                const scaledDirection = new THREE.Vector3();
 
                 const cubeMesh = this.getCubeMesh(cube);
                 if (cubeMesh && cubeMesh.isObject3D) {
@@ -15796,6 +18833,8 @@ ${lumaForgeLightflowHelpers}`
                     let sizeY = maxY - minY;
                     let scaleX = worldScale.x;
                     let scaleY = worldScale.y;
+                    let globalSizeX = null;
+                    let globalSizeY = null;
                     if (Math.abs(sizeX) < 1e-6) {
                         const minZ = Math.min(posA.z, posB.z, posC.z);
                         const maxZ = Math.max(posA.z, posB.z, posC.z);
@@ -15811,13 +18850,60 @@ ${lumaForgeLightflowHelpers}`
                         if (Math.abs(sizeY) < 1e-6) sizeY = 1;
                     }
 
+                    if (isCanonicalCube) {
+                        // Blockbench omits disabled/untextured faces from the
+                        // index buffer, so the triangle ordinal is not a stable
+                        // face index. Canonical cube vertices remain grouped in
+                        // blocks of four per native face.
+                        const faceIndex = Math.floor(idxA / 4);
+                        const rotation = getFaceUvRotation(faceIndex);
+                        // AUTO_TILE operates in UV space. Quarter turns exchange
+                        // the physical U/V axes, including their world scale.
+                        if (rotation === 90 || rotation === 270) {
+                            [sizeX, sizeY] = [sizeY, sizeX];
+                            [scaleX, scaleY] = [scaleY, scaleX];
+                        }
+                    } else if (isMeshElement && uvAttr) {
+                        uvA.fromBufferAttribute(uvAttr, idxA);
+                        uvB.fromBufferAttribute(uvAttr, idxB);
+                        uvC.fromBufferAttribute(uvAttr, idxC);
+                        deltaPos1.subVectors(posB, posA);
+                        deltaPos2.subVectors(posC, posA);
+                        deltaUv1.subVectors(uvB, uvA);
+                        deltaUv2.subVectors(uvC, uvA);
+                        const determinant = deltaUv1.x * deltaUv2.y - deltaUv1.y * deltaUv2.x;
+
+                        if (Math.abs(determinant) > 1e-6) {
+                            const inverseDeterminant = 1 / determinant;
+                            tangent.copy(deltaPos1)
+                                .multiplyScalar(deltaUv2.y)
+                                .addScaledVector(deltaPos2, -deltaUv1.y)
+                                .multiplyScalar(inverseDeterminant);
+                            bitangent.copy(deltaPos2)
+                                .multiplyScalar(deltaUv1.x)
+                                .addScaledVector(deltaPos1, -deltaUv2.x)
+                                .multiplyScalar(inverseDeterminant);
+
+                            const tangentLength = tangent.length();
+                            const bitangentLength = bitangent.length();
+                            if (tangentLength > 1e-6 && bitangentLength > 1e-6) {
+                                sizeX = tangentLength;
+                                sizeY = bitangentLength;
+                                globalSizeX = scaledDirection.copy(tangent).multiply(worldScale).length();
+                                globalSizeY = scaledDirection.copy(bitangent).multiply(worldScale).length();
+                            }
+                        }
+                    }
+                    if (globalSizeX === null) globalSizeX = sizeX * scaleX;
+                    if (globalSizeY === null) globalSizeY = sizeY * scaleY;
+
                     faceSizes[idxA * 2] = sizeX; faceSizes[idxA * 2 + 1] = sizeY;
                     faceSizes[idxB * 2] = sizeX; faceSizes[idxB * 2 + 1] = sizeY;
                     faceSizes[idxC * 2] = sizeX; faceSizes[idxC * 2 + 1] = sizeY;
 
-                    globalFaceSizes[idxA * 2] = sizeX * scaleX; globalFaceSizes[idxA * 2 + 1] = sizeY * scaleY;
-                    globalFaceSizes[idxB * 2] = sizeX * scaleX; globalFaceSizes[idxB * 2 + 1] = sizeY * scaleY;
-                    globalFaceSizes[idxC * 2] = sizeX * scaleX; globalFaceSizes[idxC * 2 + 1] = sizeY * scaleY;
+                    globalFaceSizes[idxA * 2] = globalSizeX; globalFaceSizes[idxA * 2 + 1] = globalSizeY;
+                    globalFaceSizes[idxB * 2] = globalSizeX; globalFaceSizes[idxB * 2 + 1] = globalSizeY;
+                    globalFaceSizes[idxC * 2] = globalSizeX; globalFaceSizes[idxC * 2 + 1] = globalSizeY;
                 }
                 geometry.setAttribute('faceSize', new THREE.BufferAttribute(faceSizes, 2));
                 geometry.attributes.faceSize.needsUpdate = true;
@@ -15825,11 +18911,10 @@ ${lumaForgeLightflowHelpers}`
                 geometry.setAttribute('globalFaceSize', new THREE.BufferAttribute(globalFaceSizes, 2));
                 geometry.attributes.globalFaceSize.needsUpdate = true;
 
-                // --- UV SIZE CALCULATION ---
+                // Compute UV dimensions for texture-space effects.
                 const uvAttrOriginal = geometry.getAttribute('uv');
                 if (uvAttrOriginal) {
                     const uvSizeArray = new Float32Array(vertexCount * 2);
-                    const faceOrder = ['east', 'west', 'up', 'down', 'south', 'north'];
                     if (isCanonicalCube && cube.faces) {
                         faceOrder.forEach((face, i) => {
                             const faceData = cube.faces[face];
@@ -15846,8 +18931,33 @@ ${lumaForgeLightflowHelpers}`
                                 uvSizeArray.set(ratio, i * 8 + vertex * 2);
                             }
                         });
+                    } else if (meshFaceRanges.length) {
+                        meshFaceRanges.forEach(range => {
+                            const indices = new Set();
+                            const end = Math.min(
+                                range.start + range.count,
+                                index ? index.count : vertexCount
+                            );
+                            for (let cursor = range.start; cursor < end; cursor++) {
+                                const vertexIndex = index ? index.getX(cursor) : cursor;
+                                if (vertexIndex >= 0 && vertexIndex < vertexCount) indices.add(vertexIndex);
+                            }
+                            if (!indices.size) return;
+
+                            const textureSize = getBlockbenchTextureSize(
+                                getBlockbenchTextureForElement(cube, range.faceKey)
+                            ) || new THREE.Vector2(16, 16);
+                            const uValues = Array.from(indices, vertexIndex => uvAttrOriginal.getX(vertexIndex));
+                            const vValues = Array.from(indices, vertexIndex => uvAttrOriginal.getY(vertexIndex));
+                            const texelWidth = Math.max(1e-6, Math.max(...uValues) - Math.min(...uValues)) * textureSize.x;
+                            const texelHeight = Math.max(1e-6, Math.max(...vValues) - Math.min(...vValues)) * textureSize.y;
+                            indices.forEach(vertexIndex => {
+                                uvSizeArray[vertexIndex * 2] = texelWidth / Math.max(1e-6, faceSizes[vertexIndex * 2]);
+                                uvSizeArray[vertexIndex * 2 + 1] = texelHeight / Math.max(1e-6, faceSizes[vertexIndex * 2 + 1]);
+                            });
+                        });
                     } else {
-                        const textureSize = getBlockbenchTextureSize(getBlockbenchTextureForCube(cube)) || new THREE.Vector2(16, 16);
+                        const textureSize = getBlockbenchTextureSize(getBlockbenchTextureForElement(cube)) || new THREE.Vector2(16, 16);
                         for (let triangle = 0; triangle < faceCount; triangle++) {
                             const indices = index
                                 ? [index.getX(triangle * 3), index.getX(triangle * 3 + 1), index.getX(triangle * 3 + 2)]
@@ -15868,7 +18978,7 @@ ${lumaForgeLightflowHelpers}`
                 }
             }
 
-            // --- SMOOTH NORMAL CALCULATION ---
+            // Build smooth normals without changing Blockbench geometry.
             if (posAttr) {
                 if (smoothnessFactor > 0 && !geometry.getAttribute('normal')) {
                     geometry.computeVertexNormals();
@@ -15938,6 +19048,11 @@ ${lumaForgeLightflowHelpers}`
                 geometry.attributes.smooth_normal.needsUpdate = true;
             }
 
+            const uvAttributeSignature = this.getNativeCubeUvAttributeSignature(cube);
+            if (uvAttributeSignature !== null) {
+                this.uvAttributeSignatures.set(cube, uvAttributeSignature);
+            }
+
             return geometry;
         },
 
@@ -15974,11 +19089,26 @@ ${lumaForgeLightflowHelpers}`
          * @param {Cube} cube
          * @param {FancyShaderMaterial} shader
          */
-        applyToMesh(cube, shader) {
+        applyToMesh(cube, shader, options = {}) {
+            const viewMode = this.getActiveViewMode();
+            if (!options.ignoreViewMode && !this.shouldApplyShaderArchitectMaterials(viewMode)) return false;
+            if (!options.ignoreViewMode && this.getViewModeMaterialPolicy(viewMode) === 'classic') {
+                shader = MaterialManager.materials['classic'];
+            }
             shader = MaterialManager.getRenderMaterial(shader);
             const mesh = this.getCubeMesh(cube);
-            if (!mesh || !mesh.material || !mesh.geometry || !shader) return;
+            if (!mesh || !mesh.material || !mesh.geometry || !shader) return false;
+            mesh.userData = mesh.userData || {};
+            if (!Object.prototype.hasOwnProperty.call(mesh.userData, 'saOriginalCastShadow')) {
+                mesh.userData.saOriginalCastShadow = mesh.castShadow;
+            }
+            if (!Object.prototype.hasOwnProperty.call(mesh.userData, 'saOriginalReceiveShadow')) {
+                mesh.userData.saOriginalReceiveShadow = mesh.receiveShadow;
+            }
             const isCubeElement = typeof Cube !== 'undefined' && cube instanceof Cube;
+            const isAffectedByLight = activeShader => (
+                activeShader?.uniforms?.AFFECTED_BY_LIGHT?.value !== false
+            );
 
             const wasMaterialArray = Array.isArray(mesh.material);
             const rememberedSlotCount = Math.max(
@@ -16113,19 +19243,56 @@ ${lumaForgeLightflowHelpers}`
             };
 
             const setupAlphaShadowMaterials = (mesh, texture, sourceMaterial, shader, sourceState = {}, allSourceStates = []) => {
-                const disposeExistingShadowMaterials = () => {
-                    if (mesh.customDepthMaterial && typeof mesh.customDepthMaterial.dispose === 'function') {
-                        mesh.customDepthMaterial.dispose();
+                mesh.userData = mesh.userData || {};
+                const getShadowMaterialCache = () => {
+                    if (!(mesh.userData.saShadowMaterialCache instanceof Map)) {
+                        mesh.userData.saShadowMaterialCache = new Map();
                     }
-                    if (mesh.customDistanceMaterial && typeof mesh.customDistanceMaterial.dispose === 'function') {
-                        mesh.customDistanceMaterial.dispose();
+                    return mesh.userData.saShadowMaterialCache;
+                };
+                const disposeShadowPair = pair => {
+                    pair?.depth?.dispose?.();
+                    pair?.distance?.dispose?.();
+                };
+                const detachExistingShadowMaterials = (options = {}) => {
+                    const depth = mesh.customDepthMaterial;
+                    const distance = mesh.customDistanceMaterial;
+                    const signature = depth?.userData?.saShadowProgramSignature ||
+                        distance?.userData?.saShadowProgramSignature ||
+                        mesh.userData.saShadowMaterialSignature;
+
+                    if (depth || distance) {
+                        if (options.cache !== false && depth && distance && signature) {
+                            const cache = getShadowMaterialCache();
+                            const previous = cache.get(signature);
+                            if (previous && (previous.depth !== depth || previous.distance !== distance)) {
+                                disposeShadowPair(previous);
+                            }
+                            cache.set(signature, {
+                                depth,
+                                distance,
+                                lastUsed: ++this.materialPoolUseCounter
+                            });
+                            while (cache.size > 8) {
+                                const oldest = Array.from(cache.entries())
+                                    .sort((left, right) => left[1].lastUsed - right[1].lastUsed)[0];
+                                cache.delete(oldest[0]);
+                                disposeShadowPair(oldest[1]);
+                            }
+                        } else {
+                            disposeShadowPair({ depth, distance });
+                        }
                     }
+
+                    delete mesh.customDepthMaterial;
+                    delete mesh.customDistanceMaterial;
+                    delete mesh.userData.saCustomDepthMaterial;
+                    delete mesh.userData.saCustomDistanceMaterial;
+                    delete mesh.userData.saShadowMaterialSignature;
                 };
 
                 if (!shader.enableShadows || !texture) {
-                    disposeExistingShadowMaterials();
-                    delete mesh.customDepthMaterial;
-                    delete mesh.customDistanceMaterial;
+                    detachExistingShadowMaterials({ cache: true });
                     return;
                 }
 
@@ -16187,9 +19354,6 @@ ${lumaForgeLightflowHelpers}`
                 mesh.userData = mesh.userData || {};
                 if (shadowTextureOverflow) mesh.userData.saShadowTextureOverflow = true;
                 else delete mesh.userData.saShadowTextureOverflow;
-                uniqueTextures.forEach(shadowTexture => {
-                    if (shadowTexture) shadowTexture.needsUpdate = true;
-                });
 
                 if (useMaterialSlots) {
                     const position = geometry.getAttribute('position');
@@ -16231,43 +19395,42 @@ ${lumaForgeLightflowHelpers}`
                     });
                 }
 
-                disposeExistingShadowMaterials();
-
-                mesh.customDepthMaterial = new THREE.MeshDepthMaterial({
-                    depthPacking: THREE.RGBADepthPacking,
-                    map: texture,
-                    opacity: 1,
-                    alphaTest,
+                const baseAlphaLiteral = Math.max(0, Math.min(1, sourceState.baseAlpha ?? 1)).toFixed(6);
+                const sourceAlphaTestLiteral = sourceAlphaTest.toFixed(6);
+                const shadowTextureCount = uniqueTextures.length;
+                const shadowProgramSignature = [
+                    'lightflow_alpha_shadow_v3',
+                    useMaterialSlots ? 1 : 0,
+                    shadowTextureCount,
+                    stochasticAlpha ? 1 : 0,
+                    useMaterialSlots ? 'slots' : baseAlphaLiteral,
+                    useMaterialSlots ? 'slots' : sourceAlphaTestLiteral,
+                    Number(alphaTest).toFixed(6),
                     side
-                });
-
-                mesh.customDepthMaterial.name = 'SA_AlphaDepthMaterial';
-                mesh.customDepthMaterial.needsUpdate = true;
-
-                mesh.customDistanceMaterial = new THREE.MeshDistanceMaterial({
-                    map: texture,
-                    opacity: 1,
-                    alphaTest,
-                    side
-                });
-
-                mesh.customDistanceMaterial.name = 'SA_AlphaDistanceMaterial';
-                mesh.customDistanceMaterial.needsUpdate = true;
+                ].join(':');
 
                 const patchAlphaShadow = material => {
                     material.onBeforeCompile = compiledShader => {
+                        const liveTextures = material.userData?.saShadowTextures || uniqueTextures;
                         let alphaFragment;
                         if (useMaterialSlots) {
-                            const extraSamplerDeclarations = uniqueTextures.slice(1).map((unused, index) => (
+                            const extraSamplerDeclarations = Array.from({ length: Math.max(0, shadowTextureCount - 1) }, (unused, index) => (
                                 `uniform sampler2D saShadowMap${index + 1};`
                             )).join('\n');
-                            const textureBranches = uniqueTextures.slice(1).map((unused, index) => (
+                            const textureBranches = Array.from({ length: Math.max(0, shadowTextureCount - 1) }, (unused, index) => (
                                 `if (vSaShadowMapIndex > ${index + 0.5} && vSaShadowMapIndex < ${index + 1.5}) texelColor = texture2D(saShadowMap${index + 1}, vUv);`
                             )).join('\n');
 
-                            uniqueTextures.slice(1).forEach((shadowTexture, index) => {
-                                compiledShader.uniforms[`saShadowMap${index + 1}`] = { value: shadowTexture };
-                            });
+                            material.userData.saShadowSamplerUniforms = Array.from(
+                                { length: Math.max(0, shadowTextureCount - 1) },
+                                (unused, index) => {
+                                    const uniform = {
+                                        value: liveTextures[index + 1] || liveTextures[0] || texture
+                                    };
+                                    compiledShader.uniforms[`saShadowMap${index + 1}`] = uniform;
+                                    return uniform;
+                                }
+                            );
                             compiledShader.vertexShader = compiledShader.vertexShader
                                 .replace(
                                     '#include <uv_pars_vertex>',
@@ -16317,12 +19480,12 @@ if (vSaShadowStochastic > 0.5) {
     discard;
 }`;
                         } else {
-                            const baseAlpha = Math.max(0, Math.min(1, sourceState.baseAlpha ?? 1)).toFixed(6);
-                            alphaFragment = `float saShadowAlpha = clamp(diffuseColor.a * ${baseAlpha}, 0.0, 1.0);
+                            material.userData.saShadowSamplerUniforms = [];
+                            alphaFragment = `float saShadowAlpha = clamp(diffuseColor.a * ${baseAlphaLiteral}, 0.0, 1.0);
 float saShadowNoise = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
 ${stochasticAlpha
                                     ? 'if (saShadowAlpha <= saShadowNoise) discard;'
-                                    : `if (saShadowAlpha < ${sourceAlphaTest.toFixed(6)}) discard;`}`;
+                                    : `if (saShadowAlpha < ${sourceAlphaTestLiteral}) discard;`}`;
                         }
 
                         compiledShader.fragmentShader = compiledShader.fragmentShader.replace(
@@ -16331,23 +19494,119 @@ ${stochasticAlpha
                         );
                     };
                     material.customProgramCacheKey = () => (
-                        `lightflow_alpha_shadow_v2:${useMaterialSlots ? uniqueTextures.length : 1}:${stochasticAlpha ? 1 : 0}`
+                        material.userData?.saShadowProgramSignature || shadowProgramSignature
                     );
-                    material.needsUpdate = true;
                 };
-                patchAlphaShadow(mesh.customDepthMaterial);
-                patchAlphaShadow(mesh.customDistanceMaterial);
+
+                const configureShadowMaterial = material => {
+                    material.map = texture;
+                    material.opacity = 1;
+                    material.alphaTest = alphaTest;
+                    material.side = side;
+                    material.userData = material.userData || {};
+                    material.userData.saShadowProgramSignature = shadowProgramSignature;
+                    material.userData.saShadowTextures = uniqueTextures.slice();
+                    (material.userData.saShadowSamplerUniforms || []).forEach((uniform, index) => {
+                        uniform.value = uniqueTextures[index + 1] || texture;
+                    });
+                };
+
+                const canReuseShadowMaterials = !!(
+                    mesh.customDepthMaterial &&
+                    mesh.customDistanceMaterial &&
+                    mesh.customDepthMaterial.userData?.saShadowProgramSignature === shadowProgramSignature &&
+                    mesh.customDistanceMaterial.userData?.saShadowProgramSignature === shadowProgramSignature
+                );
+
+                if (!canReuseShadowMaterials) {
+                    detachExistingShadowMaterials({ cache: true });
+                    const cache = getShadowMaterialCache();
+                    const cached = cache.get(shadowProgramSignature);
+                    if (cached?.depth && cached?.distance) {
+                        cache.delete(shadowProgramSignature);
+                        mesh.customDepthMaterial = cached.depth;
+                        mesh.customDistanceMaterial = cached.distance;
+                    } else {
+                        mesh.customDepthMaterial = new THREE.MeshDepthMaterial({
+                            depthPacking: THREE.RGBADepthPacking,
+                            map: texture,
+                            opacity: 1,
+                            alphaTest,
+                            side
+                        });
+                        mesh.customDepthMaterial.name = 'SA_AlphaDepthMaterial';
+
+                        mesh.customDistanceMaterial = new THREE.MeshDistanceMaterial({
+                            map: texture,
+                            opacity: 1,
+                            alphaTest,
+                            side
+                        });
+                        mesh.customDistanceMaterial.name = 'SA_AlphaDistanceMaterial';
+
+                        patchAlphaShadow(mesh.customDepthMaterial);
+                        patchAlphaShadow(mesh.customDistanceMaterial);
+                    }
+
+                    configureShadowMaterial(mesh.customDepthMaterial);
+                    configureShadowMaterial(mesh.customDistanceMaterial);
+                } else {
+                    configureShadowMaterial(mesh.customDepthMaterial);
+                    configureShadowMaterial(mesh.customDistanceMaterial);
+                }
+
+                mesh.userData = mesh.userData || {};
+                mesh.userData.saCustomDepthMaterial = mesh.customDepthMaterial;
+                mesh.userData.saCustomDistanceMaterial = mesh.customDistanceMaterial;
+                mesh.userData.saShadowMaterialSignature = shadowProgramSignature;
             };
 
-            const applyShaderUniformsToMaterial = (targetMaterial, sourceMaterial, resolvedMap, activeShader, sourceState = {}) => {
+            const applyShaderUniformsToMaterial = (
+                targetMaterial,
+                sourceMaterial,
+                resolvedMap,
+                activeShader,
+                sourceState = {},
+                preparedProgramState = null
+            ) => {
                 activeShader = MaterialManager.getRenderMaterial(activeShader) || shader;
 
-                targetMaterial.vertexShader = activeShader.vertex;
-                targetMaterial.fragmentShader = this.getFragmentShaderForTextureSource(
-                    activeShader.fragment,
-                    sourceState
+                const nextVertexShader = preparedProgramState?.vertexShader ?? activeShader.vertex;
+                const nextFragmentShader = preparedProgramState?.fragmentShader ??
+                    this.getFragmentShaderForTextureSource(activeShader.fragment, sourceState);
+                const nextLights = preparedProgramState?.lights ??
+                    (!!activeShader.enableShadows && isAffectedByLight(activeShader));
+                const nextTransparent = sourceState.transparent !== undefined
+                    ? sourceState.transparent
+                    : (sourceMaterial.transparent !== undefined ? sourceMaterial.transparent : true);
+                const nextAlphaTest = sourceState.alphaTest !== undefined
+                    ? sourceState.alphaTest
+                    : (sourceMaterial.alphaTest !== undefined ? sourceMaterial.alphaTest : 0.01);
+                const nextSide = sourceState.side !== undefined
+                    ? sourceState.side
+                    : (sourceMaterial.side !== undefined ? sourceMaterial.side : THREE.FrontSide);
+                const nextDepthTest = sourceState.depthTest !== undefined
+                    ? sourceState.depthTest
+                    : (sourceMaterial.depthTest !== undefined ? sourceMaterial.depthTest : true);
+                const nextDepthWrite = sourceState.depthWrite !== undefined
+                    ? sourceState.depthWrite
+                    : (sourceMaterial.depthWrite !== undefined ? sourceMaterial.depthWrite : true);
+                const nextBlending = sourceState.blending !== undefined
+                    ? sourceState.blending
+                    : (sourceMaterial.blending !== undefined ? sourceMaterial.blending : THREE.NormalBlending);
+                const programStateChanged = !!(
+                    targetMaterial.vertexShader !== nextVertexShader ||
+                    targetMaterial.fragmentShader !== nextFragmentShader ||
+                    !!targetMaterial.lights !== nextLights ||
+                    Number(targetMaterial.alphaTest) !== Number(nextAlphaTest) ||
+                    targetMaterial.side !== nextSide ||
+                    !!targetMaterial.map !== !!resolvedMap ||
+                    !targetMaterial.extensions?.derivatives
                 );
-                targetMaterial.lights = !!activeShader.enableShadows;
+
+                targetMaterial.vertexShader = nextVertexShader;
+                targetMaterial.fragmentShader = nextFragmentShader;
+                targetMaterial.lights = nextLights;
                 targetMaterial.sa_shader_id = activeShader.baseMaterialId || activeShader.id || activeShader.name || 'material';
                 targetMaterial.sa_source_face_name = sourceState.faceName || '';
                 targetMaterial.sa_source_render_mode = sourceState.renderMode || 'default';
@@ -16367,7 +19626,7 @@ ${stochasticAlpha
                 targetMaterial.uniforms = targetMaterial.uniforms || {};
                 this.cleanupStaleShaderArchitectUniforms(targetMaterial, activeShader);
 
-                if (activeShader.enableShadows && !targetMaterial.uniforms.directionalLights) {
+                if (nextLights && !targetMaterial.uniforms.directionalLights) {
                     targetMaterial.uniforms = THREE.UniformsUtils.merge([
                         THREE.UniformsLib['lights'],
                         targetMaterial.uniforms
@@ -16417,14 +19676,14 @@ ${stochasticAlpha
 
                 const mapDef = activeShader.uniforms.map;
                 if (resolvedMap && mapDef) {
-                    this.configureTextureWrap(resolvedMap, mapDef, { forceUpdate: true });
+                    this.configureTextureWrap(resolvedMap, mapDef);
                 }
 
                 targetMaterial.uniforms.map = targetMaterial.uniforms.map || { value: resolvedMap };
                 targetMaterial.uniforms.map.value = resolvedMap;
                 targetMaterial.map = resolvedMap;
                 if (targetMaterial.map && mapDef) {
-                    this.configureTextureWrap(targetMaterial.map, mapDef, { forceUpdate: true });
+                    this.configureTextureWrap(targetMaterial.map, mapDef);
                 }
                 this.applyBlockbenchTextureModeUniforms(
                     targetMaterial,
@@ -16444,37 +19703,14 @@ ${stochasticAlpha
                 this.bindSharedFrameUniforms(targetMaterial);
                 this.bindSharedLightUniforms(targetMaterial);
 
-                targetMaterial.transparent =
-                    sourceState.transparent !== undefined
-                        ? sourceState.transparent
-                        : (sourceMaterial.transparent !== undefined ? sourceMaterial.transparent : true);
+                targetMaterial.transparent = nextTransparent;
+                targetMaterial.alphaTest = nextAlphaTest;
+                targetMaterial.side = nextSide;
+                targetMaterial.depthTest = nextDepthTest;
+                targetMaterial.depthWrite = nextDepthWrite;
+                targetMaterial.blending = nextBlending;
 
-                targetMaterial.alphaTest =
-                    sourceState.alphaTest !== undefined
-                        ? sourceState.alphaTest
-                        : (sourceMaterial.alphaTest !== undefined ? sourceMaterial.alphaTest : 0.01);
-
-                targetMaterial.side =
-                    sourceState.side !== undefined
-                        ? sourceState.side
-                        : (sourceMaterial.side !== undefined ? sourceMaterial.side : THREE.FrontSide);
-
-                targetMaterial.depthTest =
-                    sourceState.depthTest !== undefined
-                        ? sourceState.depthTest
-                        : (sourceMaterial.depthTest !== undefined ? sourceMaterial.depthTest : true);
-
-                targetMaterial.depthWrite =
-                    sourceState.depthWrite !== undefined
-                        ? sourceState.depthWrite
-                        : (sourceMaterial.depthWrite !== undefined ? sourceMaterial.depthWrite : true);
-
-                targetMaterial.blending =
-                    sourceState.blending !== undefined
-                        ? sourceState.blending
-                        : (sourceMaterial.blending !== undefined ? sourceMaterial.blending : THREE.NormalBlending);
-
-                targetMaterial.needsUpdate = true;
+                if (programStateChanged) targetMaterial.needsUpdate = true;
                 targetMaterial.uniformsNeedUpdate = true;
             };
 
@@ -16492,7 +19728,7 @@ ${stochasticAlpha
                 if (slotShaders[materialIndex]) return slotShaders[materialIndex];
 
                 const faceName = isCubeElement ? MATERIAL_SLOT_FACE_ORDER[materialIndex] : null;
-                const slotShader = faceName
+                const slotShader = faceName && this.shouldResolveMaterialOverrides(viewMode)
                     ? MaterialManager.resolveCubeFaceMaterial(cube, faceName, shader)
                     : shader;
 
@@ -16540,6 +19776,7 @@ ${stochasticAlpha
                     activeShader.fragment,
                     sourceState
                 );
+                const activeShaderUsesLights = !!activeShader.enableShadows && isAffectedByLight(activeShader);
                 const shouldCreateSlotMaterial =
                     !sourceMaterial.is_sa_cloned ||
                     !!sourceMaterial.is_sa_pooled ||
@@ -16547,14 +19784,14 @@ ${stochasticAlpha
                     sourceMaterial.sa_shader_id !== targetShaderId ||
                     sourceMaterial.vertexShader !== targetVertexShader ||
                     sourceMaterial.fragmentShader !== targetFragmentShader ||
-                    !!sourceMaterial.lights !== !!activeShader.enableShadows;
+                    !!sourceMaterial.lights !== activeShaderUsesLights;
 
                 if (shouldCreateSlotMaterial) {
                     const existingUniforms = sourceMaterial.uniforms
                         ? THREE.UniformsUtils.clone(sourceMaterial.uniforms)
                         : {};
 
-                    const baseUniforms = activeShader.enableShadows
+                    const baseUniforms = activeShaderUsesLights
                         ? THREE.UniformsUtils.merge([THREE.UniformsLib['lights'], existingUniforms])
                         : THREE.UniformsUtils.clone(existingUniforms);
 
@@ -16564,7 +19801,7 @@ ${stochasticAlpha
                         uniforms: baseUniforms,
                         vertexShader: targetVertexShader,
                         fragmentShader: targetFragmentShader,
-                        lights: !!activeShader.enableShadows,
+                        lights: activeShaderUsesLights,
                         transparent: sourceState.transparent !== undefined ? sourceState.transparent : true,
                         alphaTest: sourceState.alphaTest !== undefined ? sourceState.alphaTest : 0.01,
                         side: sourceState.side !== undefined ? sourceState.side : THREE.FrontSide,
@@ -16585,7 +19822,18 @@ ${stochasticAlpha
                     targetMaterial.name = `SA_${activeShader.materialInstanceId || activeShader.id || activeShader.name || 'material'}_${materialIndex}`;
                 }
 
-                applyShaderUniformsToMaterial(targetMaterial, sourceMaterial, resolvedMap, activeShader, sourceState);
+                applyShaderUniformsToMaterial(
+                    targetMaterial,
+                    sourceMaterial,
+                    resolvedMap,
+                    activeShader,
+                    sourceState,
+                    {
+                        vertexShader: targetVertexShader,
+                        fragmentShader: targetFragmentShader,
+                        lights: activeShaderUsesLights
+                    }
+                );
 
                 return targetMaterial;
             });
@@ -16605,8 +19853,18 @@ ${stochasticAlpha
                 }
 
                 geometry.userData = geometry.userData || {};
-                if (!geometry.userData.saOriginalCubeUv || geometry.userData.saOriginalCubeUv.length !== uv.array.length) {
+                const nativeUvSignature = this.getNativeCubeUvAttributeSignature(cube);
+                const nativeUvLayoutChanged = (
+                    nativeUvSignature !== null &&
+                    geometry.userData.saOriginalCubeUvSignature !== nativeUvSignature
+                );
+                if (
+                    !geometry.userData.saOriginalCubeUv ||
+                    geometry.userData.saOriginalCubeUv.length !== uv.array.length ||
+                    nativeUvLayoutChanged
+                ) {
                     geometry.userData.saOriginalCubeUv = new Float32Array(uv.array);
+                    geometry.userData.saOriginalCubeUvSignature = nativeUvSignature;
                 } else {
                     uv.array.set(geometry.userData.saOriginalCubeUv);
                 }
@@ -16650,9 +19908,10 @@ ${stochasticAlpha
                     pair.forEach(slot => {
                         const material = newMaterialSlots[slot];
                         if (!material) return;
+                        const sideChanged = material.side !== THREE.FrontSide;
                         material.side = THREE.FrontSide;
                         material.shadowSide = THREE.DoubleSide;
-                        material.needsUpdate = true;
+                        if (sideChanged) material.needsUpdate = true;
                     });
                 });
 
@@ -16662,6 +19921,7 @@ ${stochasticAlpha
                 else delete mesh.userData.saPlanarSurfaceResolved;
             };
             resolvePlanarCubeSurface();
+            this.addAutoTileAttribute(mesh.geometry, cube, slotShaders, shader);
 
             let collapsedMaterialSlots = false;
             if (useMaterialArray && newMaterialSlots.length > 1 && newMaterialSlots[0]) {
@@ -16704,9 +19964,11 @@ ${stochasticAlpha
                 }
             });
 
-            const meshUsesShadows = slotShaders.some(slotShader => slotShader && slotShader.enableShadows);
-            mesh.castShadow = meshUsesShadows;
-            mesh.receiveShadow = meshUsesShadows;
+            const meshReceivesShadows = slotShaders.some(slotShader => (
+                slotShader && slotShader.enableShadows && isAffectedByLight(slotShader)
+            ));
+            mesh.castShadow = cube[ELEMENT_CAST_SHADOW_PROP] !== false;
+            mesh.receiveShadow = meshReceivesShadows;
 
             const firstSourceState = sourceStates.filter(Boolean).sort((left, right) => {
                 const leftWeight = (left.alphaProfile?.coverage ?? 1) * (left.alphaProfile?.meanAlpha ?? 1) * (left.baseAlpha ?? 1);
@@ -16731,16 +19993,32 @@ ${stochasticAlpha
                 firstSourceState,
                 collapsedMaterialSlots ? [firstSourceState] : sourceStates
             );
-            this.invalidateLightUniformMaterialCache();
-            this.invalidateAnimationUniformTargetCache();
-            ScreenSpaceReflectionManager.invalidateMaterialCache();
-            AmbientOcclusionManager.invalidateSceneCache();
+            if (!options.warmup) {
+                this.invalidateLightUniformMaterialCache();
+                this.invalidateAnimationUniformTargetCache();
+                ScreenSpaceReflectionManager.invalidateMaterialCache();
+                AmbientOcclusionManager.invalidateSceneCache();
+            }
+
+            /*
+             * Light Manager keeps renderer.shadowMap.autoUpdate disabled and
+             * renders maps only after an explicit invalidation. Rebinding a
+             * material also replaces the alpha-aware depth materials used by
+             * the shadow pass, so expose that mutation instead of waiting for
+             * an unrelated light transform to refresh the map.
+             */
+            if (!options.warmup) {
+                Blockbench.dispatchEvent('shader_material_applied', { cube, mesh });
+            }
+            return true;
         },
 
         updateAllCubes(cause = 'default', options = {}) {
             if (!options.keepPending) {
                 this.cancelPendingSceneUpdate();
             }
+            const viewMode = this.getActiveViewMode();
+            if (!this.shouldApplyShaderArchitectMaterials(viewMode)) return false;
 
             this.invalidateLightUniformMaterialCache();
             this.invalidateAnimationUniformTargetCache();
@@ -16748,10 +20026,7 @@ ${stochasticAlpha
             getAllShaderElements().forEach(cube => {
                 const mesh = this.getCubeMesh(cube);
                 if (mesh) {
-                    mesh.castShadow = true;
-                    mesh.receiveShadow = true;
-                    let shader = MaterialManager.resolveCubeMaterial(cube, this.globalRenderMode);
-                    if (!shader) shader = MaterialManager.materials['classic'];
+                    const shader = this.resolveViewModeMaterial(cube, viewMode);
 
                     // Pass the full cube so `applyToMesh` can read custom attributes.
                     this.applyToMesh(cube, shader);
@@ -16761,7 +20036,9 @@ ${stochasticAlpha
             this.pruneMaterialPool();
 
             this.updateWorldNormalMatrices();
-            this.updateLightUniforms();
+            this.updateLightUniforms(cause, {
+                render: !this.lightTopologyTransactionActive
+            });
             MinecraftPromotionalSilhouetteManager.invalidateGroups();
 
             //Dispatch Blockbench event to signal that shaders have been updated
@@ -16771,7 +20048,11 @@ ${stochasticAlpha
                 eventData.causes = options.causes;
             }
             Blockbench.dispatchEvent('shader_update_complete', eventData);
+            if (options.scheduleWarmup !== false && !this.lightTopologyTransactionActive) {
+                this.requestShaderWarmupWhenReady(cause, { includePresets: false });
+            }
 
+            return true;
         },
 
         getCubesFromOutlinerItems(items, result = new Set()) {
@@ -16809,9 +20090,11 @@ ${stochasticAlpha
             if (!options.keepPending) {
                 this.cancelPendingSceneUpdate();
             }
+            const viewMode = this.getActiveViewMode();
+            if (!this.shouldApplyShaderArchitectMaterials(viewMode)) return false;
 
             const targetCubes = Array.from(new Set((cubes || []).filter(Boolean)));
-            if (!targetCubes.length) return;
+            if (!targetCubes.length) return false;
 
             this.invalidateLightUniformMaterialCache();
             this.invalidateAnimationUniformTargetCache();
@@ -16820,11 +20103,7 @@ ${stochasticAlpha
                 const mesh = this.getCubeMesh(cube);
                 if (!mesh) return;
 
-                mesh.castShadow = true;
-                mesh.receiveShadow = true;
-
-                let shader = MaterialManager.resolveCubeMaterial(cube, this.globalRenderMode);
-                if (!shader) shader = MaterialManager.materials['classic'];
+                const shader = this.resolveViewModeMaterial(cube, viewMode);
 
                 this.applyToMesh(cube, shader);
             });
@@ -16836,7 +20115,9 @@ ${stochasticAlpha
                 .filter(target => target && targetSet.has(target.cube));
 
             this.updateWorldNormalMatrices(animationTargets);
-            this.updateLightUniforms();
+            this.updateLightUniforms(cause, {
+                render: !this.lightTopologyTransactionActive
+            });
             MinecraftPromotionalSilhouetteManager.invalidateGroups();
 
             const eventData = {
@@ -16848,9 +20129,15 @@ ${stochasticAlpha
                 eventData.causes = options.causes;
             }
             Blockbench.dispatchEvent('shader_update_complete', eventData);
+            if (options.scheduleWarmup !== false && !this.lightTopologyTransactionActive) {
+                this.requestShaderWarmupWhenReady(cause, { includePresets: false });
+            }
+            return true;
         },
 
         updateAllUniforms(cause = 'default') {
+            const viewMode = this.getActiveViewMode();
+            if (!this.shouldApplyShaderArchitectMaterials(viewMode)) return false;
             this.invalidateLightUniformMaterialCache();
             this.invalidateAnimationUniformTargetCache();
 
@@ -16864,18 +20151,19 @@ ${stochasticAlpha
                 const mesh = this.getCubeMesh(cube);
                 if (!mesh || !mesh.material) return;
 
-                let shader = MaterialManager.resolveCubeMaterial(cube, this.globalRenderMode);
-                if (!shader) shader = MaterialManager.materials['classic'];
+                let shader = this.resolveViewModeMaterial(cube, viewMode);
                 shader = MaterialManager.getRenderMaterial(shader);
                 if (!shader) return;
 
+                const autoTileSlotShaders = [];
                 this.forEachMeshMaterial(mesh, (mat, materialIndex) => {
                     if (mat && mat.is_sa_cloned && mat.uniforms) {
                         const faceName = MaterialManager.getMaterialSlotFaceName(materialIndex);
-                        const activeShader = faceName
+                        const activeShader = faceName && this.shouldResolveMaterialOverrides(viewMode)
                             ? MaterialManager.resolveCubeFaceMaterial(cube, faceName, shader)
                             : shader;
                         const renderShader = MaterialManager.getRenderMaterial(activeShader) || shader;
+                        autoTileSlotShaders[materialIndex] = renderShader;
 
                         this.cleanupStaleShaderArchitectUniforms(mat, renderShader);
 
@@ -16949,6 +20237,7 @@ ${stochasticAlpha
                         mat.uniformsNeedUpdate = true;
                     }
                 });
+                this.addAutoTileAttribute(mesh.geometry, cube, autoTileSlotShaders, shader);
             });
 
             Blockbench.dispatchEvent('shader_update_complete', {
@@ -16957,6 +20246,7 @@ ${stochasticAlpha
 
             MinecraftPromotionalSilhouetteManager.invalidateGroups();
             this.requestPreviewRender();
+            return true;
         },
 
         updateWorldNormalMatrices(targets = null) {
@@ -17088,6 +20378,15 @@ ${stochasticAlpha
         },
 
         updateLightUniforms(cause = 'light_update', options = {}) {
+            const settlesTopologyTransaction = this.lightTopologyTransactionActive && (
+                cause === 'light_element_update' ||
+                String(cause).endsWith('_settled')
+            );
+            if (settlesTopologyTransaction) {
+                this.completeLightTopologyTransaction();
+            } else if (this.lightTopologyTransactionActive) {
+                options = { ...options, render: false };
+            }
             this.cancelPendingLightUniformUpdate();
 
             const lights = (window.LightElement && Array.isArray(window.LightElement.all))
@@ -17441,14 +20740,40 @@ ${stochasticAlpha
             });
 
             if (options.render !== false) {
+                const preview = this.getShaderWarmupPreview();
+                const environmentKey = preview
+                    ? this.getShaderWarmupEnvironmentKey(preview)
+                    : '';
+                const topologyChanged = !!(
+                    environmentKey &&
+                    environmentKey !== this.lastLightProgramEnvironmentKey
+                );
+
+                if (topologyChanged && preview && this.sceneUsesThreeLightPrograms()) {
+                    this.discardQueuedPresetWarmups();
+                    const sceneKey = this.getCurrentLightTopologyWarmupKey(preview);
+                    const alreadyCompiled = this.isRendererWarmupKeyValid(
+                        preview.renderer,
+                        sceneKey
+                    );
+                    if (!alreadyCompiled) {
+                        const queued = this.requestShaderWarmup(cause, {
+                            includePresets: false,
+                            lightTopologyOnly: true,
+                            forceProgress: true,
+                            renderAfter: true
+                        });
+                        if (queued) return;
+                    }
+                }
+
+                if (environmentKey) this.lastLightProgramEnvironmentKey = environmentKey;
                 this.requestPreviewRender({ lightOnly: true, cause });
             }
         }
     };
 
-    // =========================================================================
-    // 5. MATERIAL STUDIO INTERFACE (Dialog & Vue)
-    // =========================================================================
+    // Material Studio
 
     let MaterialStudioDialog;
 
@@ -17782,6 +21107,7 @@ ${stochasticAlpha
                                     this.selectMaterial(newMat.id);
                                     Blockbench.showToastNotification({ text: tl('shader_architect.toast.imported'), expire: 1500 });
                                 } catch (e) {
+                                    console.warn('[Shader Architect] Custom material import failed.', e);
                                     Blockbench.showQuickMessage(tl('shader_architect.message.import_failed'));
                                 }
                             });
@@ -18284,7 +21610,13 @@ ${stochasticAlpha
                             range.setEnd(endNode, endOffset);
                             sel.removeAllRanges();
                             sel.addRange(range);
-                        } catch (e) { }
+                            this._selectionRestoreFailureReported = false;
+                        } catch (error) {
+                            if (!this._selectionRestoreFailureReported) {
+                                console.warn('[Shader Architect] Could not restore the editor selection.', error);
+                                this._selectionRestoreFailureReported = true;
+                            }
+                        }
                     },
                     syncEditorText(editorElement, value, selectionStart, selectionEnd) {
                         this.currentShaderCode = value;
@@ -18302,7 +21634,9 @@ ${stochasticAlpha
                     },
                     restoreEditorCaretAfterRender(editorElement, expectedText, expectedSelection, revision) {
                         this.$nextTick(() => {
-                            requestAnimationFrame(() => {
+                            if (this._caretRestoreFrame) cancelAnimationFrame(this._caretRestoreFrame);
+                            this._caretRestoreFrame = requestAnimationFrame(() => {
+                                this._caretRestoreFrame = null;
                                 if (revision !== this._editorInputRevision) return;
 
                                 const liveEditor = this.getEditorInputElement() || editorElement;
@@ -18532,7 +21866,7 @@ ${stochasticAlpha
                             gl_FragData: 'vec4[]', gl_FragDepth: 'float',
                             modelMatrix: 'mat4', modelViewMatrix: 'mat4', projectionMatrix: 'mat4', viewMatrix: 'mat4',
                             normalMatrix: 'mat3', cameraPosition: 'vec3', position: 'vec3', normal: 'vec3', uv: 'vec2',
-                            normalizedFaceUv: 'vec2', faceSize: 'vec2', globalFaceSize: 'vec2', uvSize: 'vec2',
+                            normalizedFaceUv: 'vec2', faceSize: 'vec2', globalFaceSize: 'vec2', uvSize: 'vec2', autoTile: 'float',
                             uTime: 'float', uAmbient: 'float', uAmbientColor: 'vec3', uLightColor: 'vec3',
                             uWorldNormalMatrix: 'mat3', max_light_number: 'int', map: 'sampler2D',
                             lightside: 'float', shade: 'float', emissive: 'vec3'
@@ -18707,7 +22041,7 @@ ${stochasticAlpha
                         const vars = [
                             'gl_Position', 'gl_PointSize', 'gl_FragColor', 'gl_FragCoord', 'gl_FrontFacing', 'gl_PointCoord', 'gl_VertexID', 'gl_InstanceID', 'gl_FragData', 'gl_FragDepth',
                             'modelMatrix', 'modelViewMatrix', 'projectionMatrix', 'viewMatrix', 'normalMatrix', 'cameraPosition', 'position', 'normal', 'uv',
-                            'normalizedFaceUv', 'faceSize', 'globalFaceSize', 'uvSize'
+                            'normalizedFaceUv', 'faceSize', 'globalFaceSize', 'uvSize', 'autoTile'
                         ];
 
                         if (types.includes(name)) return 'type';
@@ -18849,6 +22183,11 @@ ${stochasticAlpha
                     window.addEventListener('keydown', this._shortcutListener);
                 },
                 beforeDestroy() {
+                    this._editorInputRevision = (this._editorInputRevision || 0) + 1;
+                    if (this._caretRestoreFrame) {
+                        cancelAnimationFrame(this._caretRestoreFrame);
+                        this._caretRestoreFrame = null;
+                    }
                     if (this._shortcutListener) {
                         window.removeEventListener('keydown', this._shortcutListener);
                     }
@@ -19224,7 +22563,7 @@ ${stochasticAlpha
                         </div>
 
                         <!-- Right Sidebar: Properties and Active Uniforms Quick Tweaks -->
-                        <div class="sa-studio-sidebar sa-right" :class="{collapsed: !showRightSidebar}" style="padding: 16px 12px;">
+                        <div class="sa-studio-sidebar sa-right sa-quick-tweaks" :class="{collapsed: !showRightSidebar}">
                             <div v-if="activeMat">
                                 <h3 style="margin-top:0; border-bottom: 1px solid var(--color-border); padding-bottom:6px; display:flex; align-items:center; gap:6px;">
                                     <i class="material-icons" style="color:var(--color-accent)">tune</i>
@@ -19379,9 +22718,7 @@ ${stochasticAlpha
         });
     }
 
-    // =========================================================================
-    // 6. PLUGIN INITIALIZATION & MENUS
-    // =========================================================================
+    // Blockbench integration
     /**
      * Wraps an existing function to dispatch a Blockbench event before or after its execution.
      * The wrapped function perfectly preserves the original arguments, 'this' context, and return value.
@@ -19391,15 +22728,27 @@ ${stochasticAlpha
      * @param {Object} [options] - Configuration options.
      * @param {'before' | 'after'} [options.mode='before'] - When to dispatch the event relative to the function execution.
      * @param {Object} [options.eventData={}] - Additional data/arguments to pass to the Blockbench event.
+     * @param {Function|null} [options.prepareCall=null] - Optional synchronous preflight. It may return a cleanup callback.
+     * @param {string} [options.prepareCallId=''] - Stable identifier used to keep wrapped methods idempotent across reloads.
      * @returns {Function} The new wrapped function.
      */
     function wrapWithBlockbenchEvent(originalFunction, eventName, options = {}) {
-        const { mode = 'before', eventData = {} } = options;
+        const {
+            mode = 'before',
+            eventData = {},
+            prepareCall = null,
+            prepareCallId = ''
+        } = options;
 
         const targetFn = typeof originalFunction === 'function' ? originalFunction : () => { };
         const existingMeta = targetFn._shaderArchitectEventWrapper;
 
-        if (existingMeta && existingMeta.eventName === eventName && existingMeta.mode === mode) {
+        if (
+            existingMeta &&
+            existingMeta.eventName === eventName &&
+            existingMeta.mode === mode &&
+            (existingMeta.prepareCallId || '') === prepareCallId
+        ) {
             return targetFn;
         }
 
@@ -19409,7 +22758,16 @@ ${stochasticAlpha
                 Blockbench.dispatchEvent(eventName, eventData);
             }
 
-            const result = targetFn.apply(this, args);
+            let cleanup = null;
+            let result;
+            try {
+                if (typeof prepareCall === 'function') {
+                    cleanup = prepareCall.call(this, args);
+                }
+                result = targetFn.apply(this, args);
+            } finally {
+                if (typeof cleanup === 'function') cleanup();
+            }
 
             if (mode === 'after') {
                 Blockbench.dispatchEvent(eventName, eventData);
@@ -19423,6 +22781,7 @@ ${stochasticAlpha
                 value: {
                     eventName,
                     mode,
+                    prepareCallId,
                     originalFunction: existingMeta && existingMeta.originalFunction
                         ? existingMeta.originalFunction
                         : targetFn
@@ -19433,6 +22792,7 @@ ${stochasticAlpha
             wrapped._shaderArchitectEventWrapper = {
                 eventName,
                 mode,
+                prepareCallId,
                 originalFunction: existingMeta && existingMeta.originalFunction
                     ? existingMeta.originalFunction
                     : targetFn
@@ -19442,28 +22802,155 @@ ${stochasticAlpha
         return wrapped;
     }
 
+    function prepareNativeTextureGroupMaterialUpdate(textureGroup) {
+        if (!textureGroup || typeof textureGroup.getTextures !== 'function') return null;
+
+        let textures;
+        try {
+            textures = textureGroup.getTextures();
+        } catch (error) {
+            // Let the native method surface errors that are unrelated to malformed PBR inputs.
+            return null;
+        }
+        if (!Array.isArray(textures)) return null;
+
+        const hasCanvasContext = texture => !!(
+            texture &&
+            texture.canvas &&
+            typeof texture.canvas.getContext === 'function'
+        );
+        const hasOwnMap = (texture, requireClone = false) => {
+            try {
+                const map = texture && typeof texture.getOwnMaterial === 'function'
+                    ? texture.getOwnMaterial()?.map
+                    : null;
+                return !!map && (!requireClone || typeof map.clone === 'function');
+            } catch (error) {
+                return false;
+            }
+        };
+        const isActiveMerTexture = texture => !!(
+            texture &&
+            texture.img?.naturalWidth &&
+            texture.width
+        );
+
+        // Blockbench 5.1.x assumes every selected channel has all of its backing
+        // resources. Filter only invalid candidates for this one synchronous call;
+        // Shader Architect and the serialized project keep the original textures.
+        let safeTextures = textures.filter(texture => {
+            if (!texture) return false;
+            switch (texture.pbr_channel) {
+                case 'color':
+                case 'normal':
+                    return hasOwnMap(texture);
+                case 'height':
+                    return hasOwnMap(texture, true) && hasCanvasContext(texture);
+                case 'mer':
+                    return !isActiveMerTexture(texture) || hasCanvasContext(texture);
+                default:
+                    return true;
+            }
+        });
+
+        // Native emissive extraction dereferences color_tex.canvas. Prefer the
+        // first complete albedo; if none exists, omit active MER candidates so
+        // Blockbench safely falls back to the group's scalar MER configuration.
+        while (true) {
+            const merTexture = safeTextures.find(texture => texture.pbr_channel === 'mer');
+            if (!merTexture || !isActiveMerTexture(merTexture)) break;
+
+            const colorTexture = safeTextures.find(texture => texture.pbr_channel === 'color');
+            if (colorTexture && hasCanvasContext(colorTexture)) break;
+
+            safeTextures = safeTextures.filter(texture => (
+                colorTexture ? texture !== colorTexture : texture !== merTexture
+            ));
+        }
+
+        if (
+            safeTextures.length === textures.length &&
+            safeTextures.every((texture, index) => texture === textures[index])
+        ) {
+            return null;
+        }
+
+        const previousDescriptor = Object.getOwnPropertyDescriptor(textureGroup, 'getTextures');
+        const safeGetTextures = () => safeTextures;
+        try {
+            Object.defineProperty(textureGroup, 'getTextures', {
+                value: safeGetTextures,
+                configurable: true,
+                writable: true
+            });
+        } catch (error) {
+            // If the group cannot be patched temporarily, preserve native behavior.
+            return null;
+        }
+
+        return () => {
+            try {
+                const currentDescriptor = Object.getOwnPropertyDescriptor(textureGroup, 'getTextures');
+                if (!currentDescriptor || currentDescriptor.value !== safeGetTextures) return;
+                if (previousDescriptor) {
+                    Object.defineProperty(textureGroup, 'getTextures', previousDescriptor);
+                } else {
+                    delete textureGroup.getTextures;
+                }
+            } catch (error) {
+                console.warn('[Shader Architect] Failed to restore TextureGroup.getTextures.', error);
+            }
+        };
+    }
+
     let deletables = [];
     let styleEl;
+    const publishedWindowBindings = new Map();
 
     let renderModeSelector;
 
-    let material_properties;
-    let material_instance_manager;
+    let materialPropertiesPanel;
+    let materialInstanceManagerPanel;
     let activeMaterialInstanceManagerId = '';
     let materialPropertiesShowAdvanced = false;
     let materialPropertiesUniformGroupsOpen = {};
     let activeMaterialOverridePreset = 'trailer_hero';
     let activeMaterialOverrideScope = 'element';
 
-    let create_material_instance;
-    let delete_material_instance;
+    let createMaterialInstanceAction;
+    let deleteMaterialInstanceAction;
 
     function disposeTrackedResources() {
         const resources = deletables.slice();
         deletables.length = 0;
-        resources.forEach(item => {
-            if (item && typeof item.delete === 'function') item.delete();
+        resources.reverse().forEach(item => {
+            if (!item || typeof item.delete !== 'function') return;
+            try {
+                item.delete();
+            } catch (error) {
+                console.warn('[Shader Architect] Failed to release a registered resource.', error);
+            }
         });
+    }
+
+    function publishWindowBinding(name, value) {
+        if (!publishedWindowBindings.has(name)) {
+            publishedWindowBindings.set(name, {
+                previousValue: window[name],
+                ownedValue: value
+            });
+        } else {
+            publishedWindowBindings.get(name).ownedValue = value;
+        }
+        window[name] = value;
+        return value;
+    }
+
+    function restorePublishedWindowBindings() {
+        Array.from(publishedWindowBindings.entries()).reverse().forEach(([name, binding]) => {
+            restoreWindowBinding(name, binding.previousValue, binding.ownedValue);
+        });
+        publishedWindowBindings.clear();
     }
 
     function restoreWindowBinding(name, previousValue, ownedValue) {
@@ -19496,6 +22983,18 @@ ${stochasticAlpha
     function hydrateShaderArchitectProject(context = {}) {
         const project = context.project || null;
         ShaderEngine.beginProjectLifecycle(project);
+        ShaderEngine.syncNativePreviewLights(ShaderEngine.getActiveViewMode());
+        if (
+            project &&
+            !project[PROJECT_AMBIENT_OCCLUSION_PROP] &&
+            typeof context.model?.[PROJECT_AMBIENT_OCCLUSION_PROP] === 'string'
+        ) {
+            project[PROJECT_AMBIENT_OCCLUSION_PROP] = context.model[PROJECT_AMBIENT_OCCLUSION_PROP];
+        }
+        AmbientOcclusionManager.loadProjectSettings(project, {
+            refresh: !context.deferred,
+            cause: context.reason || 'ssao_project_hydrate'
+        });
         if (context.deferred) return;
         if (!project) return;
         if (typeof context.isCurrent === 'function' && !context.isCurrent()) return;
@@ -19518,7 +23017,10 @@ ${stochasticAlpha
                 'sa_material_id',
                 'sa_material_instance_id',
                 CUBE_MATERIAL_INSTANCES_FALLBACK_PROP,
-                FACE_MATERIAL_INSTANCES_PROP
+                FACE_MATERIAL_INSTANCES_PROP,
+                ELEMENT_AUTO_TILE_PROP,
+                FACE_AUTO_TILE_PROP,
+                MESH_FACE_AUTO_TILE_PROP
             ];
             getAllShaderElements().forEach(element => {
                 const raw = rawByUuid.get(element?.uuid);
@@ -19537,7 +23039,11 @@ ${stochasticAlpha
         project.parsed = true;
         MaterialManager.syncMaterialInstancesFromProject(project);
         invalidateTextureAlphaProfiles();
-        ShaderEngine.requestSceneUpdate('project_update');
+        const activatedLightflow = ShaderEngine.projectHasMaterialOverrides()
+            && ShaderEngine.activateLightflowViewMode('project_material_overrides');
+        if (!activatedLightflow) {
+            ShaderEngine.requestSceneUpdate('project_update');
+        }
     }
 
     function registerNativeMethodEvent(owner, methodName, eventName, options = {}) {
@@ -19559,19 +23065,166 @@ ${stochasticAlpha
         });
     }
 
+    function registerAutoTileTransformAction(actionId, captureState, applyState) {
+        const action = typeof BarItems !== 'undefined' ? BarItems[actionId] : null;
+        if (!action || typeof action.click !== 'function') return;
+
+        const originalClick = action.click;
+        const wrappedClick = function (...args) {
+            let state = null;
+            try {
+                state = captureState();
+            } catch (error) {
+                warnShaderArchitectOnce(
+                    `capture-${actionId}-auto-tile`,
+                    `[Shader Architect] Failed to capture Auto Tile state before ${actionId}.`,
+                    error
+                );
+            }
+            if (!state || typeof Undo === 'undefined' || typeof Undo.finishEdit !== 'function') {
+                return originalClick.apply(this, args);
+            }
+
+            const originalFinishEdit = Undo.finishEdit;
+            let applied = false;
+            const finishEditWithAutoTile = function (...finishArgs) {
+                if (!applied) {
+                    applied = true;
+                    try {
+                        applyState(state);
+                    } catch (error) {
+                        warnShaderArchitectOnce(
+                            `apply-${actionId}-auto-tile`,
+                            `[Shader Architect] Failed to preserve Auto Tile state during ${actionId}.`,
+                            error
+                        );
+                    }
+                }
+                return originalFinishEdit.apply(this, finishArgs);
+            };
+
+            Undo.finishEdit = finishEditWithAutoTile;
+            try {
+                return originalClick.apply(this, args);
+            } finally {
+                if (Undo.finishEdit === finishEditWithAutoTile) {
+                    Undo.finishEdit = originalFinishEdit;
+                }
+            }
+        };
+
+        action.click = wrappedClick;
+        deletables.push({
+            delete: () => {
+                if (action.click === wrappedClick) action.click = originalClick;
+            }
+        });
+    }
+
+    function registerAutoTileTransformActions() {
+        registerAutoTileTransformAction(
+            'convert_to_mesh',
+            () => {
+                if (typeof Cube === 'undefined' || typeof Mesh === 'undefined' || !Cube.selected?.length) return null;
+                const existingMeshIds = new Set((Mesh.all || []).map(mesh => mesh.uuid));
+                const sources = Cube.selected.map(cube => {
+                    const siblings = Array.isArray(cube.parent?.children)
+                        ? cube.parent.children
+                        : (typeof Outliner !== 'undefined' && Array.isArray(Outliner.root) ? Outliner.root : null);
+                    const faceStates = MATERIAL_SLOT_FACE_ORDER
+                        .filter(faceName => cube.faces?.[faceName] && cube.faces[faceName].texture !== null)
+                        .map(faceName => MaterialManager.getElementAutoTile(cube, faceName));
+
+                    return {
+                        name: cube.name,
+                        origin: Array.isArray(cube.origin) ? cube.origin.slice() : null,
+                        siblings,
+                        siblingIndex: siblings ? siblings.indexOf(cube) : -1,
+                        elementAutoTile: !!cube[ELEMENT_AUTO_TILE_PROP],
+                        faceStates
+                    };
+                });
+                return { existingMeshIds, sources };
+            },
+            state => {
+                const newMeshes = (Mesh.all || []).filter(mesh => !state.existingMeshIds.has(mesh.uuid));
+                const usedMeshes = new Set();
+
+                state.sources.forEach(source => {
+                    let mesh = source.siblings && source.siblingIndex >= 0
+                        ? source.siblings[source.siblingIndex]
+                        : null;
+                    if (!(mesh instanceof Mesh) || state.existingMeshIds.has(mesh.uuid)) {
+                        mesh = newMeshes.find(candidate => (
+                            !usedMeshes.has(candidate) &&
+                            candidate.name === source.name &&
+                            (!source.origin || candidate.origin?.every((value, index) => value === source.origin[index]))
+                        ));
+                    }
+                    if (!(mesh instanceof Mesh)) return;
+                    usedMeshes.add(mesh);
+
+                    mesh[ELEMENT_AUTO_TILE_PROP] = source.elementAutoTile;
+                    const overrides = {};
+                    Object.keys(mesh.faces || {}).forEach((faceKey, index) => {
+                        const enabled = source.faceStates[index];
+                        if (typeof enabled === 'boolean' && enabled !== source.elementAutoTile) {
+                            overrides[faceKey] = enabled;
+                        }
+                    });
+                    MaterialManager.setMeshFaceAutoTileOverrides(mesh, overrides, { markDirty: false });
+                });
+            }
+        );
+
+        registerAutoTileTransformAction(
+            'merge_meshes',
+            () => {
+                if (typeof Mesh === 'undefined' || !Mesh.selected || Mesh.selected.length < 2) return null;
+                const meshes = Mesh.selected.slice();
+                const original = meshes[0];
+                const faceStates = [];
+                meshes.forEach(mesh => {
+                    Object.keys(mesh.faces || {}).forEach(faceKey => {
+                        faceStates.push(MaterialManager.getElementAutoTile(mesh, faceKey));
+                    });
+                });
+                return {
+                    original,
+                    elementAutoTile: !!original[ELEMENT_AUTO_TILE_PROP],
+                    faceStates
+                };
+            },
+            state => {
+                if (!(state.original instanceof Mesh)) return;
+
+                state.original[ELEMENT_AUTO_TILE_PROP] = state.elementAutoTile;
+                const overrides = {};
+                Object.keys(state.original.faces || {}).forEach((faceKey, index) => {
+                    const enabled = state.faceStates[index];
+                    if (typeof enabled === 'boolean' && enabled !== state.elementAutoTile) {
+                        overrides[faceKey] = enabled;
+                    }
+                });
+                MaterialManager.setMeshFaceAutoTileOverrides(state.original, overrides, { markDirty: false });
+            }
+        );
+    }
+
 
     Plugin.register('shader_architect', {
         title: 'Shader Architect',
         icon: 'architecture',
         author: 'MidFord327',
         description: 'Build advanced Blockbench materials with real-time Lightflow presets, editable GLSL, material instances, and deep Light Manager integration. Requires Light Manager for lights and shadows.',
-        tags: ['Lightflow', 'Shaders', 'Materials', 'Rendering', 'GLSL', 'Lighting'],
-        version: '2.9.0',
+        tags: ['Lightflow', 'Shaders', 'Materials'],
+        version: '2.9.1',
         min_version: '4.9.0',
         variant: 'both',
         dependencies: ['light_manager'],
 
         onload: function () {
+            ShaderEngine.isUnloading = false;
 
             if (!window.LIGHT_MANAGER_LOADED || !window.LightManagerUI || typeof window.applyIndestructibleFormGroups !== 'function') {
                 Blockbench.showToastNotification({
@@ -19582,30 +23235,89 @@ ${stochasticAlpha
                 return;
             }
 
-            window.ShaderEngine = ShaderEngine;
-            window.LightflowPerformance = () => ShaderEngine.getPerformanceStats();
-            window.MaterialManager = MaterialManager;
-            window.FancyShaderMaterial = FancyShaderMaterial;
-            window.FancyShaderMaterialInstance = FancyShaderMaterialInstance;
-            window.ScreenSpaceReflectionManager = ScreenSpaceReflectionManager;
-            window.LightflowAmbientOcclusion = AmbientOcclusionManager;
-            window.MinecraftPromotionalSilhouetteManager = MinecraftPromotionalSilhouetteManager;
+            publishWindowBinding('ShaderEngine', ShaderEngine);
+            publishWindowBinding('LightflowPerformance', () => ShaderEngine.getPerformanceStats());
+            publishWindowBinding('MaterialManager', MaterialManager);
+            publishWindowBinding('FancyShaderMaterial', FancyShaderMaterial);
+            publishWindowBinding('FancyShaderMaterialInstance', FancyShaderMaterialInstance);
+            publishWindowBinding('ScreenSpaceReflectionManager', ScreenSpaceReflectionManager);
+            publishWindowBinding('LightflowAmbientOcclusion', AmbientOcclusionManager);
+            publishWindowBinding('MinecraftPromotionalSilhouetteManager', MinecraftPromotionalSilhouetteManager);
             bindShaderArchitectLightCallbacks();
             const saProjectInstancesProp = MaterialManager.registerProjectMaterialInstanceProperty();
             if (saProjectInstancesProp) deletables.push(saProjectInstancesProp);
+            const saAmbientOcclusionProp = AmbientOcclusionManager.registerProjectSettingsProperty();
+            if (saAmbientOcclusionProp) deletables.push(saAmbientOcclusionProp);
             const saMaterialInstanceUndoHooks = MaterialManager.registerMaterialInstanceUndoHooks();
             if (saMaterialInstanceUndoHooks) deletables.push(saMaterialInstanceUndoHooks);
+            const elementShadowHistory = new Map();
+            const rememberElementShadowState = elements => {
+                (elements || []).forEach(element => {
+                    if (element?.uuid) {
+                        elementShadowHistory.set(element.uuid, element[ELEMENT_CAST_SHADOW_PROP] !== false);
+                    }
+                });
+            };
+            const refreshChangedElementShadows = cause => {
+                const elements = getAllShaderElements();
+                const changed = elements.filter(element => (
+                    element?.uuid &&
+                    elementShadowHistory.has(element.uuid) &&
+                    elementShadowHistory.get(element.uuid) !== (element[ELEMENT_CAST_SHADOW_PROP] !== false)
+                ));
+                elementShadowHistory.clear();
+                rememberElementShadowState(elements);
+                if (changed.length) {
+                    ShaderEngine.updateCubes(changed, cause, { scheduleWarmup: false });
+                }
+            };
+
             // Persist element-level assignments across every renderable Blockbench type.
             getShaderElementTypes().forEach(ElementType => {
                 deletables.push(new Property(ElementType, 'string', 'sa_material_id', { default: '', exposed: true }));
                 deletables.push(new Property(ElementType, 'string', 'sa_material_instance_id', { default: '', exposed: true }));
                 deletables.push(new Property(ElementType, 'string', CUBE_MATERIAL_INSTANCES_FALLBACK_PROP, { default: '', exposed: false }));
+                deletables.push(new Property(ElementType, 'boolean', ELEMENT_AUTO_TILE_PROP, { default: false, exposed: false }));
+                deletables.push(new Property(ElementType, 'boolean', ELEMENT_CAST_SHADOW_PROP, {
+                    default: true,
+                    exposed: false,
+                    inputs: {
+                        element_panel: {
+                            input: {
+                                label: 'shader_architect.element.cast_shadow',
+                                description: 'shader_architect.element.cast_shadow.desc',
+                                type: 'checkbox'
+                            },
+                            onChange(value, elements) {
+                                ShaderEngine.updateCubes(elements, 'set_element_cast_shadow', { scheduleWarmup: false });
+                                rememberElementShadowState(elements);
+                            }
+                        }
+                    }
+                }));
             });
+            getAllShaderElements().forEach(element => {
+                if (element[ELEMENT_CAST_SHADOW_PROP] === undefined) {
+                    element[ELEMENT_CAST_SHADOW_PROP] = true;
+                }
+            });
+            rememberElementShadowState(getAllShaderElements());
+            const refreshElementShadowHistory = Blockbench.on('undo', () => {
+                refreshChangedElementShadows('undo_element_cast_shadow');
+            });
+            const reapplyElementShadowHistory = Blockbench.on('redo', () => {
+                refreshChangedElementShadows('redo_element_cast_shadow');
+            });
+            deletables.push(refreshElementShadowHistory, reapplyElementShadowHistory);
             // Face overrides are a Cube-only concept. Mesh groups keep their native material slots.
             let saFaceMatInstancesProp = new Property(Cube, 'string', FACE_MATERIAL_INSTANCES_PROP, { default: '', exposed: false });
             deletables.push(saFaceMatInstancesProp);
+            deletables.push(new Property(Cube, 'string', FACE_AUTO_TILE_PROP, { default: '', exposed: false }));
+            if (typeof Mesh !== 'undefined') {
+                deletables.push(new Property(Mesh, 'string', MESH_FACE_AUTO_TILE_PROP, { default: '', exposed: false }));
+            }
+            registerAutoTileTransformActions();
 
-            // Load Styles
             styleEl = document.createElement('style');
             styleEl.id = PLUGIN_STYLE_ID;
             styleEl.innerHTML = pluginStyle;
@@ -19666,17 +23378,14 @@ ${stochasticAlpha
             initMaterialStudio();
             deletables.push(MaterialStudioDialog);
 
-            // Start Animation loop for `uTime`
             ShaderEngine.startAnimationLoop();
 
-            // Menu: Material Studio
             let openStudioAction = new Action('sa_open_studio', {
                 name: tl('shader_architect.menu.material_studio'),
                 description: tl('shader_architect.menu.material_studio.desc'),
                 icon: 'brush',
                 category: 'view',
                 click() {
-                    // Update external Vue with fresh data
                     MaterialStudioDialog.show();
                     if (MaterialStudioDialog.content_vue && MaterialStudioDialog.content_vue.materials) {
                         for (let id in MaterialManager.materials) {
@@ -19720,12 +23429,17 @@ ${stochasticAlpha
                             target_mat: { label: 'Assign Material:', type: 'select', options: mats, value: 'sa_' + ShaderEngine.globalRenderMode }
                         },
                         onConfirm(formData) {
-                            getSelectedElementSet().forEach(element => {
+                            const selectedElements = Array.from(getSelectedElementSet());
+                            selectedElements.forEach(element => {
                                 element.sa_material_id = formData.target_mat.replace('sa_', '');
                                 element.sa_material_instance_id = '';
                             });
 
-                            ShaderEngine.updateCubes(Array.from(getSelectedElementSet()), 'apply_material');
+                            const activatedLightflow = selectedElements.length > 0
+                                && ShaderEngine.activateLightflowViewMode('apply_material');
+                            if (!activatedLightflow) {
+                                ShaderEngine.updateCubes(selectedElements, 'apply_material');
+                            }
                             this.hide();
                         }
                     }).show();
@@ -19768,8 +23482,8 @@ ${stochasticAlpha
                 icon_mode: true,
                 options: getGlobalMaterialMenuOptions(),
                 onChange() {
-                    ShaderEngine.globalRenderMode = this.value.replace('sa_', '');
-                    ShaderEngine.updateAllCubes('global_mode_change');
+                    const nextRenderMode = this.value.replace('sa_', '');
+                    ShaderEngine.requestGlobalRenderModeChange(nextRenderMode);
                 }
             });
 
@@ -19787,6 +23501,114 @@ ${stochasticAlpha
             let mainPreview = Preview.all.find(p => p.id === 'main');
             if (mainPreview && mainPreview.node.childNodes[1]) {
                 mainPreview.node.childNodes[1].appendChild(renderModeSelector.getNode());
+            }
+            if (BarItems.view_mode) {
+                const viewMode = BarItems.view_mode;
+                const hadOptionsProperty = Object.prototype.hasOwnProperty.call(viewMode, 'options');
+                const previousOptions = viewMode.options;
+                const hadValuesProperty = Object.prototype.hasOwnProperty.call(viewMode, 'values');
+                const previousValues = viewMode.values;
+                const previousViewModeValue = viewMode.value;
+
+                if (!viewMode.options) {
+                    viewMode.options = {};
+                }
+                if (!Array.isArray(viewMode.values)) {
+                    viewMode.values = [];
+                }
+                const installedOptions = viewMode.options;
+                const installedValues = viewMode.values;
+                const hadLightflowOption = Object.prototype.hasOwnProperty.call(installedOptions, 'lightflow');
+                const previousLightflowOption = installedOptions.lightflow;
+                let injectedLightflowOption = null;
+                let addedLightflowValue = false;
+                if (!viewMode.options.lightflow) {
+                    injectedLightflowOption = { name: true, icon: 'photo_camera_back' };
+                    viewMode.options.lightflow = injectedLightflowOption;
+                }
+                if (!viewMode.values.includes('lightflow')) {
+                    viewMode.values.push('lightflow');
+                    addedLightflowValue = true;
+                }
+
+                const viewModeNode = viewMode.nodes?.[0];
+                const prototypeOption = viewModeNode?.lastChild;
+                const optionContainer = prototypeOption?.parentNode;
+                let lightflowSelectOption = null;
+                if (prototypeOption && optionContainer) {
+                    lightflowSelectOption = prototypeOption.cloneNode(true);
+                    lightflowSelectOption.setAttribute('key', 'lightflow');
+                    optionContainer.insertBefore(lightflowSelectOption, prototypeOption.nextSibling);
+                    const iconNode = lightflowSelectOption.querySelector('i') || lightflowSelectOption.childNodes[0];
+                    if (iconNode) {
+                        iconNode.textContent = 'photo_camera_back';
+                    }
+                    lightflowSelectOption.addEventListener('click', () => {
+                        if (typeof viewMode.set === 'function') {
+                            viewMode.set('lightflow');
+                        }
+                        if (typeof viewMode.change === 'function') {
+                            viewMode.change('lightflow');
+                        }
+                    });
+                }
+
+                deletables.push({
+                    delete: () => {
+                        if (viewMode.value === 'lightflow') {
+                            const fallbackValue = installedValues.includes(previousViewModeValue)
+                                && previousViewModeValue !== 'lightflow'
+                                ? previousViewModeValue
+                                : (installedValues.includes('textured')
+                                    ? 'textured'
+                                    : installedValues.find(value => value !== 'lightflow'));
+                            if (fallbackValue !== undefined) {
+                                if (typeof viewMode.set === 'function') viewMode.set(fallbackValue);
+                                if (typeof viewMode.change === 'function') viewMode.change(fallbackValue);
+                            }
+                        }
+
+                        if (lightflowSelectOption?.parentNode) {
+                            lightflowSelectOption.parentNode.removeChild(lightflowSelectOption);
+                        }
+
+                        const ownsInjectedOption = injectedLightflowOption
+                            && viewMode.options === installedOptions
+                            && installedOptions.lightflow === injectedLightflowOption;
+                        if (ownsInjectedOption) {
+                            if (hadLightflowOption) installedOptions.lightflow = previousLightflowOption;
+                            else delete installedOptions.lightflow;
+                        }
+
+                        const lightflowOptionWasRemoved = viewMode.options === installedOptions
+                            && !installedOptions.lightflow;
+                        if (
+                            viewMode.values === installedValues
+                            && addedLightflowValue
+                            && (ownsInjectedOption || lightflowOptionWasRemoved)
+                        ) {
+                            const lightflowIndex = installedValues.indexOf('lightflow');
+                            if (lightflowIndex !== -1) installedValues.splice(lightflowIndex, 1);
+                        }
+
+                        if (
+                            viewMode.options === installedOptions
+                            && installedOptions !== previousOptions
+                            && Object.keys(installedOptions).length === 0
+                        ) {
+                            if (hadOptionsProperty) viewMode.options = previousOptions;
+                            else delete viewMode.options;
+                        }
+                        if (
+                            viewMode.values === installedValues
+                            && installedValues !== previousValues
+                            && installedValues.length === 0
+                        ) {
+                            if (hadValuesProperty) viewMode.values = previousValues;
+                            else delete viewMode.values;
+                        }
+                    }
+                });
             }
             deletables.push({
                 delete: () => {
@@ -19841,30 +23663,118 @@ ${stochasticAlpha
 
             const openWorldAmbientOcclusionSettings = () => {
                 const ao = AmbientOcclusionManager.settings;
-                new Dialog('sa_ambient_occlusion_settings', {
+                const defaults = DEFAULT_AMBIENT_OCCLUSION_SETTINGS;
+                let aoDialog = null;
+                const resetDialogValues = () => {
+                    const controls = aoDialog?.form?.form_data;
+                    if (!controls) return;
+                    controls.quality?.setValue?.(String(defaults.renderScale));
+                    controls.samples?.setValue?.(defaults.samples);
+                    controls.strength?.setValue?.(defaults.strength);
+                    controls.radius?.setValue?.(defaults.radius);
+                    controls.bias?.setValue?.(defaults.bias);
+                    controls.power?.setValue?.(defaults.power);
+                    aoDialog.form.update();
+                };
+                aoDialog = new Dialog('sa_ambient_occlusion_settings', {
                     title: 'shader_architect.world.ao',
+                    width: 520,
                     form: {
-                        quality: {
-                            label: 'Quality', type: 'select', value: String(ao.renderScale),
-                            options: { '0.5': 'Performance (50%)', '0.75': 'Balanced (75%)', '1': 'High (native resolution)' }
+                        quality_header: {
+                            type: 'bar_display', icon: 'speed',
+                            value: tl('shader_architect.world.ao.group.quality'),
+                            paragraph: false, expand: true, color: 'var(--color-text)'
                         },
-                        samples: { label: 'Samples', type: 'number', value: ao.samples, min: 4, max: 24, step: 1, description: 'Higher values reduce noise and improve contact detail.' },
-                        strength: { label: 'Strength', type: 'range', value: ao.strength, min: 0, max: 2, step: 0.01 },
-                        radius: { label: 'Radius', type: 'range', value: ao.radius, min: 0.05, max: 4, step: 0.01 },
-                        bias: { label: 'Bias', type: 'range', value: ao.bias, min: 0, max: 0.2, step: 0.001 },
-                        power: { label: 'Contrast', type: 'range', value: ao.power, min: 0.25, max: 4, step: 0.05 }
+                        quality: {
+                            label: 'shader_architect.world.ao.quality', type: 'compact_select',
+                            icon: 'high_quality', value: String(ao.renderScale),
+                            show_value_text: true, expand: true,
+                            options: {
+                                '0.5': {
+                                    name: tl('shader_architect.world.ao.quality.performance'),
+                                    icon: 'speed',
+                                    color: worldMarker(6, 'pastel', '#7BFFA3')
+                                },
+                                '0.75': {
+                                    name: tl('shader_architect.world.ao.quality.balanced'),
+                                    icon: 'balance',
+                                    color: worldMarker(1, 'pastel', '#FFF899')
+                                },
+                                '1': {
+                                    name: tl('shader_architect.world.ao.quality.high'),
+                                    icon: 'high_quality',
+                                    color: worldMarker(4, 'pastel', '#C5A6E8')
+                                }
+                            }
+                        },
+                        samples: {
+                            label: 'shader_architect.world.ao.samples', type: 'combo_slider',
+                            icon: 'grain', color: worldMarker(4, 'pastel', '#C5A6E8'),
+                            value: ao.samples, resettable: true, reset_value: defaults.samples,
+                            min: 4, max: 32, step: 1,
+                            description: 'shader_architect.world.ao.samples.desc'
+                        },
+                        appearance_header: {
+                            type: 'bar_display', icon: 'contrast',
+                            value: tl('shader_architect.world.ao.group.appearance'),
+                            paragraph: false, expand: true, color: 'var(--color-text)'
+                        },
+                        strength: {
+                            label: 'shader_architect.world.ao.strength', type: 'combo_slider',
+                            icon: 'opacity', color: worldMarker(4, 'pastel', '#C5A6E8'),
+                            value: ao.strength, resettable: true, reset_value: defaults.strength,
+                            min: 0, max: 2, step: 0.01,
+                            description: 'shader_architect.world.ao.strength.desc'
+                        },
+                        radius: {
+                            label: 'shader_architect.world.ao.radius', type: 'combo_slider',
+                            icon: 'radio_button_unchecked', color: worldMarker(0, 'pastel', '#A2EBFF'),
+                            value: ao.radius, resettable: true, reset_value: defaults.radius,
+                            min: 0.05, max: 4, step: 0.01,
+                            description: 'shader_architect.world.ao.radius.desc'
+                        },
+                        power: {
+                            label: 'shader_architect.world.ao.power', type: 'combo_slider',
+                            icon: 'contrast', color: worldMarker(8, 'pastel', '#FFA5D5'),
+                            value: ao.power, resettable: true, reset_value: defaults.power,
+                            min: 0.25, max: 4, step: 0.05,
+                            description: 'shader_architect.world.ao.power.desc'
+                        },
+                        precision_header: {
+                            type: 'bar_display', icon: 'center_focus_strong',
+                            value: tl('shader_architect.world.ao.group.precision'),
+                            paragraph: false, expand: true, color: 'var(--color-text)'
+                        },
+                        bias: {
+                            label: 'shader_architect.world.ao.bias', type: 'combo_slider',
+                            icon: 'center_focus_strong', color: worldMarker(2, 'pastel', '#F1BB75'),
+                            value: ao.bias, resettable: true, reset_value: defaults.bias,
+                            min: 0, max: 0.2, step: 0.001,
+                            description: 'shader_architect.world.ao.bias.desc'
+                        },
+                        reset_defaults: {
+                            type: 'action_button', label: 'shader_architect.world.ao.reset',
+                            description: 'shader_architect.world.ao.reset.desc',
+                            icon: 'restart_alt', color: worldMarker(3, 'pastel', '#FF9B97'),
+                            click: resetDialogValues
+                        },
                     },
                     onConfirm(result) {
-                        ao.renderScale = Number(result.quality) || 1;
-                        ao.samples = Math.max(4, Math.min(24, Math.round(Number(result.samples) || 20)));
-                        ao.strength = Math.max(0, Math.min(2, Number(result.strength) || 0));
-                        ao.radius = Math.max(0.05, Math.min(4, Number(result.radius) || 0.05));
-                        ao.bias = Math.max(0, Math.min(0.2, Number(result.bias) || 0));
-                        ao.power = Math.max(0.25, Math.min(4, Number(result.power) || 1));
-                        AmbientOcclusionManager.patchAllPreviews();
-                        ShaderEngine.requestPreviewRender({ cause: 'ssao_settings' });
+                        AmbientOcclusionManager.applySettings({
+                            ...ao,
+                            renderScale: Number(result.quality),
+                            samples: result.samples,
+                            strength: result.strength,
+                            radius: result.radius,
+                            bias: result.bias,
+                            power: result.power
+                        }, {
+                            persist: true,
+                            cause: 'ssao_settings'
+                        });
                     }
-                }).show();
+                });
+                aoDialog.show();
             };
 
             const createWorldPanelForm = () => ({
@@ -19875,14 +23785,16 @@ ${stochasticAlpha
                 world_shading: {
                     type: 'action_toggle', value: !!getWorldSettingValue('shading', true),
                     description: 'shader_architect.world.shading', icon_on: 'wb_sunny', icon_off: 'wb_sunny',
-                    bg_on: worldMarker(1, 'standard', '#F4D714'), color_on: 'var(--color-ui)',
-                    color_off: 'var(--color-subtle_text)'
+                    bg_on: worldMarker(1, 'standard', '#fbda01'), color_on: 'var(--color-ui)',
+                    color_off: 'var(--color-subtle_text)',
+                    animate: false
                 },
                 world_ssao: {
                     type: 'action_toggle', value: !!AmbientOcclusionManager.settings.enabled,
                     description: 'shader_architect.world.ao', icon_on: 'grain', icon_off: 'grain',
-                    bg_on: worldMarker(4, 'standard', '#B55AF8'), color_on: 'var(--color-ui)',
-                    color_off: 'var(--color-subtle_text)'
+                    bg_on: worldMarker(4, 'standard', '#9301fb'), color_on: 'var(--color-ui)',
+                    color_off: 'var(--color-subtle_text)',
+                    animate: false
                 },
                 world_ssao_settings: {
                     type: 'action_button', icon: 'tune', description: 'shader_architect.world.ao_settings',
@@ -19892,19 +23804,27 @@ ${stochasticAlpha
                     type: 'action_toggle', value: !!getWorldSettingValue('grids', true),
                     description: 'shader_architect.world.grids', icon_on: 'grid_3x3', icon_off: 'grid_3x3_off',
                     bg_on: worldMarker(0, 'standard', '#58C0FF'), color_on: 'var(--color-ui)',
-                    color_off: 'var(--color-subtle_text)'
+                    color_off: 'var(--color-subtle_text)',
+                    animate: false
                 },
                 world_ground: {
                     type: 'action_toggle', value: !!getWorldSettingValue('ground_plane', true),
                     description: 'shader_architect.world.ground', icon_on: 'layers', icon_off: 'layers_clear',
                     bg_on: worldMarker(6, 'standard', '#00CE71'), color_on: 'var(--color-ui)',
-                    color_off: 'var(--color-subtle_text)'
+                    color_off: 'var(--color-subtle_text)',
+                    animate: false
                 },
                 world_brightness: {
                     type: 'combo_slider', label: 'shader_architect.world.brightness', icon: 'brightness_6',
                     description: 'shader_architect.world.brightness.desc', color: worldMarker(1, 'pastel', '#FFF899'),
                     value: Number(getWorldSettingValue('brightness', 50)) || 0,
                     resettable: true, reset_value: 50, min: 0, max: 100, step: 1
+                },
+                project_fov: {
+                    type: 'combo_slider', label: 'shader_architect.world.fov', icon: 'zoom_out_map',
+                    description: 'shader_architect.world.fov.desc', color: worldMarker(1, 'pastel', '#FFF899'),
+                    value: Number(getWorldSettingValue('fov', 70)) || 70,
+                    resettable: true, reset_value: Number(getWorldSettingValue('fov', 70)), min: 1, max: 179, step: 1
                 }
             });
 
@@ -19915,6 +23835,7 @@ ${stochasticAlpha
                 syncingWorldPanel = true;
                 try {
                     controls.world_brightness?.setValue?.(Number(getWorldSettingValue('brightness', 50)) || 0);
+                    controls.project_fov?.setValue?.(Number(getWorldSettingValue('fov', 70)) || 70);
                     controls.world_shading?.setValue?.(!!getWorldSettingValue('shading', true));
                     controls.world_ssao?.setValue?.(!!AmbientOcclusionManager.settings.enabled);
                     controls.world_grids?.setValue?.(!!getWorldSettingValue('grids', true));
@@ -19928,23 +23849,22 @@ ${stochasticAlpha
             globalRendererPropertiesPanel = new Panel('global_renderer_properties', {
                 name: 'panel.global_renderer_properties',
                 icon: 'public',
-                growable: true,
-                resizable: true,
                 condition: { modes: ['render'] },
+                min_height: 120,
+                growable: false,
+                resizable: true,
+                fixed_height: true,
                 default_position: {
-                    slot: 'left_bar', float_position: [1322, 57], float_size: [314, 120], height: 120,
-                    folded: false, fixed_height: false, attached_to: '', attached_index: 0, sidebar_index: 0
-                },
-                mode_positions: {
-                    render: {
-                        slot: 'left_bar', float_position: [1322, 57], float_size: [314, 120], height: 120,
-                        folded: false, fixed_height: false, attached_to: '', attached_index: 0, sidebar_index: 0
-                    }
+                    slot: 'left_bar',
+                    float_position: [1322, 57],
+                    float_size: [314, 400],
+                    height: 250,
+                    sidebar_index: 0
                 },
                 form: createWorldPanelForm()
             });
 
-            globalRendererPropertiesPanel.form.on('change', ({ result, changed_keys }) => {
+            const globalRendererPropertiesListener = globalRendererPropertiesPanel.form.on('change', ({ result, changed_keys }) => {
                 if (syncingWorldPanel) return;
                 const keys = Array.isArray(changed_keys) && changed_keys.length ? changed_keys : Object.keys(result || {});
                 let shadingChanged = false;
@@ -19952,6 +23872,9 @@ ${stochasticAlpha
                 if (keys.includes('world_brightness')) {
                     setWorldSettingValue('brightness', Number(result.world_brightness) || 0);
                     shadingChanged = true;
+                }
+                if (keys.includes('project_fov')) {
+                    setWorldSettingValue('fov', Number(result.project_fov) || 70);
                 }
                 if (keys.includes('world_shading')) {
                     setWorldSettingValue('shading', !!result.world_shading);
@@ -19966,9 +23889,13 @@ ${stochasticAlpha
                     previewChanged = true;
                 }
                 if (keys.includes('world_ssao')) {
-                    AmbientOcclusionManager.settings.enabled = !!result.world_ssao;
-                    AmbientOcclusionManager.patchAllPreviews();
-                    previewChanged = true;
+                    AmbientOcclusionManager.applySettings({
+                        ...AmbientOcclusionManager.settings,
+                        enabled: !!result.world_ssao
+                    }, {
+                        persist: true,
+                        cause: 'world_panel_ssao'
+                    });
                 }
                 if (shadingChanged) refreshWorldRenderSettings('world_panel_change');
                 else if (previewChanged) ShaderEngine.requestPreviewRender({ cause: 'world_panel_change' });
@@ -19987,8 +23914,15 @@ ${stochasticAlpha
             ]);
             const worldPanelStyles = window.LightManagerUI.addCompactPanelStyles('global_renderer_properties');
             const worldSettingsListener = Blockbench.on('update_scene_shading', syncWorldPanel);
+            const ambientOcclusionSettingsListener = Blockbench.on('shader_architect_ambient_occlusion_changed', syncWorldPanel);
             syncWorldPanel();
-            deletables.push(globalRendererPropertiesPanel, worldPanelStyles, worldSettingsListener);
+            deletables.push(
+                globalRendererPropertiesPanel,
+                worldPanelStyles,
+                worldSettingsListener,
+                ambientOcclusionSettingsListener,
+                globalRendererPropertiesListener
+            );
 
             const getSelectedCubes = () => getSelectedShaderElements();
             const getSelectedCube = () => {
@@ -20013,6 +23947,21 @@ ${stochasticAlpha
                 return activeMaterialOverrideScope;
             };
             const isFaceMaterialScope = scope => !!scope && scope !== ELEMENT_MATERIAL_SCOPE;
+            const getCubeGeometryAutoTile = (cube, scope = ELEMENT_MATERIAL_SCOPE) => {
+                if (!cube) return false;
+                return isFaceMaterialScope(scope)
+                    ? MaterialManager.getElementAutoTile(cube, scope)
+                    : MaterialManager.getElementAutoTile(cube);
+            };
+            const getSelectedGeometryAutoTileState = (scope = getActiveMaterialScope()) => {
+                const cubes = getSelectedCubes();
+                if (!cubes.length) return { value: false, mixed: false };
+                const values = cubes.map(cube => getCubeGeometryAutoTile(cube, scope));
+                return {
+                    value: values.every(Boolean),
+                    mixed: values.some(value => value !== values[0])
+                };
+            };
             const getCubeMaterialInstanceId = (cube, scope = ELEMENT_MATERIAL_SCOPE) => {
                 if (!cube) return '';
                 const activeScope = scope === ELEMENT_MATERIAL_SCOPE
@@ -20149,7 +24098,11 @@ ${stochasticAlpha
                         }
                     });
                 });
-                ShaderEngine.updateCubes(cubes, 'update_instance');
+                const activatedLightflow = nextInstanceId !== 'global'
+                    && ShaderEngine.activateLightflowViewMode('assign_material_instance');
+                if (!activatedLightflow) {
+                    ShaderEngine.updateCubes(cubes, 'update_instance');
+                }
                 return true;
             };
 
@@ -20171,6 +24124,20 @@ ${stochasticAlpha
                     background: 'var(--color-back)', divider_color: 'var(--color-border)',
                     options: getMaterialOverrideScopeOptions()
                 },
+                _sa_geometry_auto_tile: {
+                    type: 'custom_checkbox',
+                    label: tl('shader_architect.material_panel.geometry_auto_tile') + ':',
+                    value: getSelectedGeometryAutoTileState().value,
+                    icon_size: '24px',
+                    layout: 'space_between',
+                    icon_on: 'grid_on',
+                    icon_off: 'grid_off',
+                    icon_color_on: 'var(--color-axis-y)',
+                    icon_color_off: 'var(--color-subtle_text)',
+                    title: tl('shader_architect.material_panel.geometry_auto_tile.desc'),
+                    description: tl('shader_architect.material_panel.geometry_auto_tile.desc'),
+                    padding_right: '32px'
+                },
                 _sa_instance: {
                     type: 'compact_select', label: 'shader_architect.material_panel.instance', hide_label: true,
                     description: 'shader_architect.material_panel.instance.desc', background: 'transparent',
@@ -20190,14 +24157,14 @@ ${stochasticAlpha
                     type: 'action_button', icon: 'masked_transitions_add',
                     description: 'shader_architect.material_panel.create_instance',
                     color: window.LightManagerUI.markerColor(6, 'pastel', '#7BFFA3'),
-                    click: () => triggerMaterialPanelAction(create_material_instance)
+                    click: () => triggerMaterialPanelAction(createMaterialInstanceAction)
                 },
                 _sa_delete_instance: {
                     type: 'action_button', icon: 'delete',
                     description: 'shader_architect.material_panel.delete_instance',
                     color: window.LightManagerUI.markerColor(3, 'pastel', '#FF9B97'),
                     show_condition: () => cubeHasMaterialInstance(getActiveMaterialScope()),
-                    click: () => triggerMaterialPanelAction(delete_material_instance)
+                    click: () => triggerMaterialPanelAction(deleteMaterialInstanceAction)
                 }
             });
 
@@ -20206,7 +24173,7 @@ ${stochasticAlpha
 
                 const cubes = getSelectedCubes();
                 if (cubes.length === 0) {
-                    material_properties.form.form_config = {
+                    materialPropertiesPanel.form.form_config = {
                         no_cube_selected: {
                             type: 'bar_display',
                             value: tl('shader_architect.material_panel.no_selected'),
@@ -20216,7 +24183,7 @@ ${stochasticAlpha
                             color: 'var(--color-text)'
                         }
                     };
-                    material_properties.form.buildForm();
+                    materialPropertiesPanel.form.buildForm();
                     return;
                 }
 
@@ -20232,19 +24199,19 @@ ${stochasticAlpha
                 const isMultiple = areMultipleSelected();
                 const sameMaterialInstance = allSelectedHaveSameMaterialInstance(activeScope);
 
-                let material_instances_options = {};
+                const materialInstanceOptions = {};
 
                 if (isMultiple && !sameMaterialInstance) {
                     // Multiple cubes with different material instances: add the mixed option first.
-                    material_instances_options['__mixed__'] = { name: 'shader_architect.material_panel.mixed_instances', icon: 'bubble_chart' };
+                    materialInstanceOptions.__mixed__ = { name: 'shader_architect.material_panel.mixed_instances', icon: 'bubble_chart' };
                 }
 
-                material_instances_options['global'] = isFaceScope
+                materialInstanceOptions.global = isFaceScope
                     ? { name: 'shader_architect.material_panel.element_material', icon: 'view_in_ar' }
                     : { name: 'shader_architect.material_panel.global_material', icon: 'globe' };
                 for (let id in MaterialManager.instances) {
                     let inst = MaterialManager.instances[id];
-                    material_instances_options[id] = {
+                    materialInstanceOptions[id] = {
                         name: inst.name,
                         icon: inst.icon,
                         color: MaterialManager.getMaterialInstanceIconColorCSS(inst.iconColor) || undefined
@@ -20252,28 +24219,28 @@ ${stochasticAlpha
                 }
 
                 if (isMultiple && !sameMaterialInstance) {
-                    material_properties.form.form_config = Object.assign(
+                    materialPropertiesPanel.form.form_config = Object.assign(
                         {},
-                        createMaterialOverrideHeader(material_instances_options, '__mixed__', contextText),
+                        createMaterialOverrideHeader(materialInstanceOptions, '__mixed__', contextText),
                         {
-                        multiple_instances: {
-                            type: 'bar_display',
-                            value: tl('shader_architect.material_panel.multiple_instances'),
-                            icon: 'deployed_code_alert',
-                            paragraph: false,
-                            expand: true,
-                            color: 'var(--color-text)'
-                        }
+                            multiple_instances: {
+                                type: 'bar_display',
+                                value: tl('shader_architect.material_panel.multiple_instances'),
+                                icon: 'deployed_code_alert',
+                                paragraph: false,
+                                expand: true,
+                                color: 'var(--color-text)'
+                            }
                         }
                     );
-                    material_properties.form.buildForm();
+                    materialPropertiesPanel.form.buildForm();
                 } else {
                     // Single cube, or multiple cubes that share the same material instance.
                     const firstCube = cubes[0];
                     const instanceId = getCubeMaterialInstanceId(firstCube, activeScope);
                     const selectedInstance = instanceId ? MaterialManager.instances[instanceId] : null;
                     const overrideHeader = createMaterialOverrideHeader(
-                        material_instances_options,
+                        materialInstanceOptions,
                         instanceId || 'global',
                         contextText,
                         selectedInstance
@@ -20283,16 +24250,13 @@ ${stochasticAlpha
                         const instance = selectedInstance;
                         MaterialManager.revalidateMaterialInstance(instance, { save: false });
 
-                        const presetOptions = {};
-                        Object.entries(MATERIAL_OVERRIDE_PRESETS).forEach(([presetId, preset], index) => {
-                            presetOptions[presetId] = {
-                                name: preset.label,
-                                icon: 'auto_awesome',
-                                color: window.LightManagerUI.markerColor((index + 4) % 10, 'pastel', '#C5A6E8')
-                            };
-                        });
+                        const presetOptions = MaterialManager.getMaterialOverridePresetOptions(instance);
+                        const compatiblePresetIds = Object.keys(presetOptions);
+                        if (!compatiblePresetIds.includes(activeMaterialOverridePreset)) {
+                            activeMaterialOverridePreset = compatiblePresetIds[0] || '';
+                        }
 
-                        let form_config = Object.assign({}, overrideHeader, {
+                        const formConfig = Object.assign({}, overrideHeader, {
                             _sa_override_preset: {
                                 type: 'compact_select',
                                 label: 'shader_architect.material_panel.quick_presets',
@@ -20308,7 +24272,16 @@ ${stochasticAlpha
                                 description: 'shader_architect.material_panel.apply_preset',
                                 color: window.LightManagerUI.markerColor(4, 'pastel', '#C5A6E8'),
                                 click() {
-                                    if (MaterialManager.applyMaterialOverridePreset(instance, activeMaterialOverridePreset)) {
+                                    if (!MaterialManager.isMaterialOverridePresetCompatible(instance, activeMaterialOverridePreset)) {
+                                        Blockbench.showQuickMessage(tl('shader_architect.message.preset_incompatible'), 2400);
+                                        return;
+                                    }
+                                    const applied = runMaterialInstanceUndo(
+                                        'shader_architect.material_panel.undo.apply_preset',
+                                        [],
+                                        () => MaterialManager.applyMaterialOverridePreset(instance, activeMaterialOverridePreset)
+                                    );
+                                    if (applied) {
                                         Blockbench.showQuickMessage(tl('shader_architect.message.preset_applied'), 1800);
                                         updateMaterialInstancePanel();
                                     }
@@ -20381,7 +24354,7 @@ ${stochasticAlpha
                                 })
                                 .forEach(group => {
                                     const isOpen = isMaterialUniformGroupOpen(group.id, group.definition);
-                                    form_config[group.groupKey] = {
+                                    formConfig[group.groupKey] = {
                                         type: 'custom_checkbox',
                                         label: group.definition.label,
                                         value: isOpen,
@@ -20397,7 +24370,7 @@ ${stochasticAlpha
                                     };
 
                                     group.entries.forEach(entry => {
-                                        form_config[entry.formKey] = entry.controlConfig;
+                                        formConfig[entry.formKey] = entry.controlConfig;
                                     });
                                 });
                         };
@@ -20483,10 +24456,10 @@ ${stochasticAlpha
                                         value: uni.value,
                                         icon_size: '24px',
                                         layout: 'space_between',
-                                        icon_on: 'check_circle',
-                                        icon_off: 'progress_activity',
-                                        icon_color_on: 'var(--color-axis-y)',
-                                        icon_color_off: 'var(--color-axis-x)',
+                                        icon_on: 'check_box',
+                                        icon_off: 'check_box_outline_blank',
+                                        icon_color_on: 'var(--color-accent)',
+                                        icon_color_off: 'var(--color-subtle_text)',
                                         title: resolvedDesc || undefined,
                                         description: resolvedDesc || undefined,
                                         padding_right: '32px'
@@ -20499,10 +24472,10 @@ ${stochasticAlpha
                                         value: !!uni.repeat,
                                         icon_size: '24px',
                                         layout: 'space_between',
-                                        icon_on: 'check_circle',
-                                        icon_off: 'progress_activity',
-                                        icon_color_on: 'var(--color-axis-y)',
-                                        icon_color_off: 'var(--color-axis-x)',
+                                        icon_on: 'check_box',
+                                        icon_off: 'check_box_outline_blank',
+                                        icon_color_on: 'var(--color-accent)',
+                                        icon_color_off: 'var(--color-subtle_text)',
                                         title: resolvedDesc || undefined,
                                         description: resolvedDesc || undefined,
                                         padding_right: '32px'
@@ -20519,7 +24492,7 @@ ${stochasticAlpha
                                 }
                                 else if (uni.type === 'vec2') {
                                     const val = uni.value || new THREE.Vector2(0, 0);
-                                    const base_val = baseMat.uniforms[uniName] ? baseMat.uniforms[uniName].value : new THREE.Vector2(0, 0);
+                                    const baseValue = baseMat.uniforms[uniName] ? baseMat.uniforms[uniName].value : new THREE.Vector2(0, 0);
                                     addGroupedUniformControl(uniName, {
                                         type: 'custom_vector',
                                         label: resolvedLabel + ':',
@@ -20528,12 +24501,12 @@ ${stochasticAlpha
                                         description: resolvedDesc || undefined,
                                         ranges: baseMat.uniforms[uniName] && baseMat.uniforms[uniName].channels ? baseMat.uniforms[uniName].channels : undefined,
                                         resettable: true,
-                                        default: [base_val.x !== undefined ? parseFloat(base_val.x) || 0 : 0, base_val.y !== undefined ? parseFloat(base_val.y) || 0 : 0]
+                                        default: [baseValue.x !== undefined ? parseFloat(baseValue.x) || 0 : 0, baseValue.y !== undefined ? parseFloat(baseValue.y) || 0 : 0]
                                     }, uniName, uni);
                                 }
                                 else if (uni.type === 'vec3') {
                                     const val = uni.value || new THREE.Vector3(0, 0, 0);
-                                    const base_val = baseMat.uniforms[uniName] ? baseMat.uniforms[uniName].value : new THREE.Vector3(0, 0, 0);
+                                    const baseValue = baseMat.uniforms[uniName] ? baseMat.uniforms[uniName].value : new THREE.Vector3(0, 0, 0);
                                     addGroupedUniformControl(uniName, {
                                         type: 'custom_vector',
                                         label: resolvedLabel + ':',
@@ -20542,12 +24515,12 @@ ${stochasticAlpha
                                         description: resolvedDesc || undefined,
                                         ranges: baseMat.uniforms[uniName] && baseMat.uniforms[uniName].channels ? baseMat.uniforms[uniName].channels : undefined,
                                         resettable: true,
-                                        default: [base_val.x !== undefined ? parseFloat(base_val.x) || 0 : 0, base_val.y !== undefined ? parseFloat(base_val.y) || 0 : 0, base_val.z !== undefined ? parseFloat(base_val.z) || 0 : 0]
+                                        default: [baseValue.x !== undefined ? parseFloat(baseValue.x) || 0 : 0, baseValue.y !== undefined ? parseFloat(baseValue.y) || 0 : 0, baseValue.z !== undefined ? parseFloat(baseValue.z) || 0 : 0]
                                     }, uniName, uni);
                                 }
                                 else if (uni.type === 'vec4') {
                                     const val = uni.value || new THREE.Vector4(0, 0, 0, 1);
-                                    const base_val = baseMat.uniforms[uniName] ? baseMat.uniforms[uniName].value : new THREE.Vector4(0, 0, 0, 1);
+                                    const baseValue = baseMat.uniforms[uniName] ? baseMat.uniforms[uniName].value : new THREE.Vector4(0, 0, 0, 1);
                                     addGroupedUniformControl(uniName, {
                                         type: 'custom_vector',
                                         label: resolvedLabel + ':',
@@ -20562,10 +24535,10 @@ ${stochasticAlpha
                                         ranges: baseMat.uniforms[uniName] && baseMat.uniforms[uniName].channels ? baseMat.uniforms[uniName].channels : undefined,
                                         resettable: true,
                                         default: [
-                                            base_val.x !== undefined ? parseFloat(base_val.x) || 0 : 0,
-                                            base_val.y !== undefined ? parseFloat(base_val.y) || 0 : 0,
-                                            base_val.z !== undefined ? parseFloat(base_val.z) || 0 : 0,
-                                            base_val.w !== undefined ? parseFloat(base_val.w) || 0 : 0
+                                            baseValue.x !== undefined ? parseFloat(baseValue.x) || 0 : 0,
+                                            baseValue.y !== undefined ? parseFloat(baseValue.y) || 0 : 0,
+                                            baseValue.z !== undefined ? parseFloat(baseValue.z) || 0 : 0,
+                                            baseValue.w !== undefined ? parseFloat(baseValue.w) || 0 : 0
                                         ]
                                     }, uniName, uni);
                                 }
@@ -20573,11 +24546,11 @@ ${stochasticAlpha
                         }
 
                         flushGroupedUniformControls();
-                        material_properties.form.form_config = form_config;
-                        material_properties.form.buildForm();
+                        materialPropertiesPanel.form.form_config = formConfig;
+                        materialPropertiesPanel.form.buildForm();
                     }
                     else {
-                        material_properties.form.form_config = Object.assign({}, overrideHeader, {
+                        materialPropertiesPanel.form.form_config = Object.assign({}, overrideHeader, {
                             no_instance: {
                                 type: 'bar_display',
                                 value: tl(isFaceScope ? 'shader_architect.material_panel.no_face_instance' : 'shader_architect.material_panel.no_instance'),
@@ -20587,12 +24560,12 @@ ${stochasticAlpha
                                 color: 'var(--color-text)'
                             }
                         });
-                        material_properties.form.buildForm();
+                        materialPropertiesPanel.form.buildForm();
                     }
                 }
             };
 
-            create_material_instance = new Action('sa_create_material_instance', {
+            createMaterialInstanceAction = new Action('sa_create_material_instance', {
                 name: 'shader_architect.material_panel.create_instance',
                 description: 'shader_architect.material_panel.create_instance.desc',
                 icon: 'masked_transitions_add',
@@ -20735,7 +24708,10 @@ ${stochasticAlpha
                                 }
                             });
                             Blockbench.dispatchEvent('shader_architect_material_instances_changed', { cause: 'create_instance_assigned' });
-                            ShaderEngine.updateCubes(cubes, 'create_material_instance');
+                            const activatedLightflow = ShaderEngine.activateLightflowViewMode('create_material_instance');
+                            if (!activatedLightflow) {
+                                ShaderEngine.updateCubes(cubes, 'create_material_instance');
+                            }
                             updateMaterialInstancePanel();
                             dialog.hide();
                         }
@@ -20744,7 +24720,7 @@ ${stochasticAlpha
                 }
             });
 
-            delete_material_instance = new Action('sa_delete_material_instance', {
+            deleteMaterialInstanceAction = new Action('sa_delete_material_instance', {
                 name: 'shader_architect.material_panel.delete_instance',
                 description: 'shader_architect.material_panel.delete_instance.desc',
                 icon: 'delete',
@@ -20765,7 +24741,7 @@ ${stochasticAlpha
                 }
             });
 
-            deletables.push(create_material_instance, delete_material_instance);
+            deletables.push(createMaterialInstanceAction, deleteMaterialInstanceAction);
 
             const getEventCause = (event) => event && typeof event === 'object' ? event.cause : event;
             const isProjectSwitching = () => !window.Project || !Project.parsed || Blockbench.hasFlag('switching_project');
@@ -20819,14 +24795,95 @@ ${stochasticAlpha
                 return activeMaterialInstanceManagerId;
             };
 
+            const saveManagedMaterialInstances = () => {
+                const saved = MaterialManager.saveMaterialInstances({ cause: 'save_instance_from_manager' });
+                if (saved) {
+                    Blockbench.showQuickMessage(tl('shader_architect.message.instance_saved'), 1800);
+                } else if (!MaterialManager.isBBModelProject()) {
+                    Blockbench.showQuickMessage(tl('shader_architect.message.instance_not_persistent'), 4200);
+                } else {
+                    Blockbench.showQuickMessage(tl('shader_architect.message.instance_save_failed'), 3200);
+                }
+                return saved;
+            };
+
+            const exportManagedMaterialInstance = () => {
+                const instanceId = getActiveMaterialInstanceManagerId();
+                const instance = instanceId ? MaterialManager.instances[instanceId] : null;
+                if (!instance) return;
+
+                const content = MaterialManager.exportMaterialInstancePreset(instance);
+                if (!content) return;
+                Blockbench.export({
+                    type: 'Shader Architect Material Override',
+                    extensions: [MATERIAL_INSTANCE_FILE_EXTENSION],
+                    name: instance.name || 'Material Override',
+                    content
+                });
+            };
+
+            const importManagedMaterialInstances = () => {
+                Blockbench.import({
+                    type: 'Shader Architect Material Override',
+                    extensions: [MATERIAL_INSTANCE_FILE_EXTENSION],
+                    multiple: true
+                }, files => {
+                    const importableFiles = (files || []).filter(file => {
+                        try {
+                            return !!MaterialManager.extractMaterialInstanceImportData(file.content);
+                        } catch (error) {
+                            return false;
+                        }
+                    });
+                    if (importableFiles.length === 0) {
+                        Blockbench.showQuickMessage(tl('shader_architect.message.instance_import_failed'), 3200);
+                        return;
+                    }
+
+                    const imported = runMaterialInstanceUndo(
+                        'shader_architect.material_panel.undo.import_instance',
+                        [],
+                        () => {
+                            const instances = importableFiles
+                                .map(file => MaterialManager.importMaterialInstance(file.content, {
+                                    save: false,
+                                    cause: 'import_instance_from_manager'
+                                }))
+                                .filter(Boolean);
+                            if (instances.length) {
+                                MaterialManager.saveMaterialInstances({
+                                    cause: 'import_instance_from_manager',
+                                    dispatch: false
+                                });
+                            }
+                            return instances;
+                        }
+                    );
+
+                    if (!imported.length) {
+                        Blockbench.showQuickMessage(tl('shader_architect.message.instance_import_failed'), 3200);
+                        return;
+                    }
+                    activeMaterialInstanceManagerId = imported[imported.length - 1].id;
+                    Blockbench.dispatchEvent('shader_architect_material_instances_changed', {
+                        cause: 'import_instance_from_manager'
+                    });
+                    Blockbench.showQuickMessage(tl(
+                        imported.length === 1
+                            ? 'shader_architect.message.instance_imported'
+                            : 'shader_architect.message.instances_imported'
+                    ), 2200);
+                });
+            };
+
             const buildMaterialInstanceManagerForm = () => {
-                if (!material_instance_manager || !material_instance_manager.form) return;
+                if (!materialInstanceManagerPanel || !materialInstanceManagerPanel.form) return;
 
                 const activeId = getActiveMaterialInstanceManagerId();
                 const instance = activeId ? MaterialManager.instances[activeId] : null;
 
                 if (!instance) {
-                    material_instance_manager.form.form_config = {
+                    materialInstanceManagerPanel.form.form_config = {
                         no_instances: {
                             type: 'bar_display',
                             value: tl('shader_architect.material_panel.no_instances'),
@@ -20834,14 +24891,54 @@ ${stochasticAlpha
                             paragraph: false,
                             expand: true,
                             color: 'var(--color-text)'
+                        },
+                        manager_import_instance: {
+                            type: 'action_button',
+                            label: 'shader_architect.material_panel.import_instance',
+                            icon: 'file_open',
+                            description: 'shader_architect.material_panel.import_instance.desc',
+                            color: window.LightManagerUI.markerColor(5, 'pastel', '#8CC8F7'),
+                            click: importManagedMaterialInstances
                         }
                     };
-                    material_instance_manager.form.buildForm();
+                    materialInstanceManagerPanel.form.buildForm();
                     return;
                 }
 
                 const baseMat = MaterialManager.materials[instance.baseMaterialId] || MaterialManager.materials['classic'];
-                material_instance_manager.form.form_config = {
+                materialInstanceManagerPanel.form.form_config = {
+                    manager_details_label: {
+                        type: 'bar_display',
+                        value: tl('shader_architect.material_panel.instance_details'),
+                        icon: instance.icon || (baseMat && baseMat.icon) || 'texture',
+                        paragraph: false,
+                        expand: true,
+                        color: MaterialManager.getMaterialInstanceIconColorCSS(instance.iconColor) || 'var(--color-text)'
+                    },
+                    manager_base_material_label: {
+                        type: 'bar_display',
+                        icon: 'code_blocks',
+                        paragraph: false,
+                        expand: false,
+                        color: 'var(--color-subtle_text)',
+                        description: tl('shader_architect.material_panel.base_material')
+                    },
+                    manager_base_material: {
+                        type: 'compact_select',
+                        //label: 'shader_architect.material_panel.base_material',
+                        value: 'sa_' + (instance.baseMaterialId || 'classic'),
+                        options: getGlobalMaterialMenuOptions(),
+                        description: 'shader_architect.material_panel.base_material.desc',
+                        background: 'transparent'
+                    },
+                    manager_instance_icon_color: {
+                        type: 'compact_select',
+                        //label: 'shader_architect.material_panel.instance_icon_color',
+                        options: MaterialManager.getMaterialInstanceMarkerColorOptions(),
+                        value: MaterialManager.normalizeMaterialInstanceColor(instance.iconColor),
+                        description: 'shader_architect.material_panel.instance_icon_color.desc',
+                        background: 'transparent'
+                    },
                     manager_instance_id: {
                         type: 'compact_select',
                         label: 'shader_architect.material_panel.select_instance',
@@ -20851,87 +24948,51 @@ ${stochasticAlpha
                         description: 'shader_architect.material_panel.select_instance.desc',
                         background: 'transparent'
                     },
-                    manager_details_label: {
-                        type: 'bar_display',
-                        value: tl('shader_architect.material_panel.instance_details'),
-                        icon: instance.icon || (baseMat && baseMat.icon) || 'texture',
-                        paragraph: false,
-                        expand: true,
-                        color: MaterialManager.getMaterialInstanceIconColorCSS(instance.iconColor) || 'var(--color-text)'
-                    },
                     manager_instance_name: {
-                        type: 'text',
-                        label: 'shader_architect.material_panel.instance_name',
+                        type: 'compact_text',
+                        //label: 'shader_architect.material_panel.instance_name',
                         value: instance.name || '',
                         placeholder: tl('shader_architect.material_panel.instance_name')
                     },
-                    manager_base_material: {
-                        type: 'compact_select',
-                        label: 'shader_architect.material_panel.base_material',
-                        value: 'sa_' + (instance.baseMaterialId || 'classic'),
-                        options: getGlobalMaterialMenuOptions(),
-                        description: 'shader_architect.material_panel.base_material.desc',
-                        background: 'transparent'
-                    },
                     manager_instance_icon: {
-                        type: 'text',
+                        type: 'compact_text',
                         label: 'shader_architect.material_panel.instance_icon',
                         value: instance.icon || (baseMat && baseMat.icon) || 'texture',
                         placeholder: 'texture',
                         description: 'shader_architect.material_panel.instance_icon.desc'
                     },
-                    manager_instance_icon_color: {
-                        type: 'select',
-                        label: 'shader_architect.material_panel.instance_icon_color',
-                        options: MaterialManager.getMaterialInstanceMarkerColorOptions(),
-                        value: MaterialManager.normalizeMaterialInstanceColor(instance.iconColor),
-                        description: 'shader_architect.material_panel.instance_icon_color.desc'
+                    manager_save_instance: {
+                        type: 'action_button',
+                        icon: 'save',
+                        description: 'shader_architect.material_panel.save_instance.desc',
+                        color: window.LightManagerUI.markerColor(6, 'pastel', '#9BE7AA'),
+                        click: saveManagedMaterialInstances
+                    },
+                    manager_export_instance: {
+                        type: 'action_button',
+                        icon: 'file_save',
+                        description: 'shader_architect.material_panel.export_instance.desc',
+                        color: window.LightManagerUI.markerColor(4, 'pastel', '#C5A6E8'),
+                        click: exportManagedMaterialInstance
+                    },
+                    manager_import_instance: {
+                        type: 'action_button',
+                        icon: 'file_open',
+                        description: 'shader_architect.material_panel.import_instance.desc',
+                        color: window.LightManagerUI.markerColor(5, 'pastel', '#8CC8F7'),
+                        click: importManagedMaterialInstances
                     }
                 };
-                material_instance_manager.form.buildForm();
+                materialInstanceManagerPanel.form.buildForm();
             };
 
-            material_instance_manager = new Panel('material_instance_manager', {
+            materialInstanceManagerPanel = new Panel('material_instance_manager', {
                 name: 'shader_architect.material_panel.instances_title',
                 icon: 'category',
-                growable: true,
-                resizable: true,
                 condition: { modes: ['render'] },
                 default_position: {
-                    slot: "left_bar",
-                    float_position: [
-                        1322,
-                        57
-                    ],
-                    float_size: [
-                        314,
-                        260
-                    ],
-                    height: 260,
-                    folded: false,
-                    fixed_height: false,
                     attached_to: "global_renderer_properties",
-                    attached_index: 1,
-                    sidebar_index: 1
-                },
-                mode_positions: {
-                    render: {
-                        slot: "left_bar",
-                        float_position: [
-                            1322,
-                            57
-                        ],
-                        float_size: [
-                            314,
-                            260
-                        ],
-                        height: 260,
-                        folded: false,
-                        fixed_height: false,
-                        attached_to: "global_renderer_properties",
-                        attached_index: 1,
-                        sidebar_index: 1
-                    }
+                    attached_index: 2
                 },
                 form: {
                     no_instances: {
@@ -20945,15 +25006,38 @@ ${stochasticAlpha
                 }
             });
 
-            window.applyIndestructibleFormGroups(material_instance_manager.form, [
+            window.applyIndestructibleFormGroups(materialInstanceManagerPanel.form, [
                 {
-                    elements: ['manager_details_label', '+', 'manager_instance_id'], gap: '2px',
+                    elements: ['manager_details_label', '+', '_', '+', 'manager_base_material_label', 'manager_base_material'], gap: '2px',
                     divider_color: 'var(--color-grid)',
-                    flex: { manager_details_label: '1 1 auto', manager_instance_id: '0 0 auto' }
+                    flex: {
+                        manager_details_label: '1 1 auto',
+                        manager_base_material_label: '0 0 auto',
+                        manager_base_material: '0 0 auto'
+                    }
+                },
+                {
+                    elements: ['manager_instance_icon_color', 'manager_instance_id', 'manager_instance_name'], gap: '2px',
+                    divider_color: 'var(--color-grid)',
+                    flex: {
+                        manager_instance_icon_color: '0 0 auto',
+                        manager_instance_id: '0 0 auto',
+                        manager_instance_name: '1 1 auto'
+                    }
+                },
+                {
+                    elements: ['manager_instance_icon', 'manager_save_instance', 'manager_export_instance', 'manager_import_instance'], gap: '2px',
+                    divider_color: 'var(--color-grid)',
+                    flex: {
+                        manager_instance_icon: '1 1 auto',
+                        manager_save_instance: '0 0 auto',
+                        manager_export_instance: '0 0 auto',
+                        manager_import_instance: '0 0 auto'
+                    }
                 }
             ]);
 
-            material_instance_manager.form.on('change', ({ result, changed_keys }) => {
+            const materialInstanceManagerFormListener = materialInstanceManagerPanel.form.on('change', ({ result, changed_keys }) => {
                 if (isProjectSwitching()) return;
 
                 const keys = Array.isArray(changed_keys) && changed_keys.length
@@ -21044,7 +25128,7 @@ ${stochasticAlpha
             });
 
             buildMaterialInstanceManagerForm();
-            deletables.push(material_instance_manager);
+            deletables.push(materialInstanceManagerPanel, materialInstanceManagerFormListener);
 
             let materialInstanceManagerListener = Blockbench.on('shader_architect_material_instances_changed', (event) => {
                 if (isProjectSwitching()) return;
@@ -21054,7 +25138,7 @@ ${stochasticAlpha
             });
             deletables.push(materialInstanceManagerListener);
 
-            material_properties = new Panel('material_properties', {
+            materialPropertiesPanel = new Panel('material_properties', {
                 name: 'shader_architect.material_panel.overrides_title',
                 icon: 'motion_mode',
                 growable: true,
@@ -21073,28 +25157,7 @@ ${stochasticAlpha
                     height: 420,
                     folded: false,
                     fixed_height: false,
-                    attached_to: "",
-                    attached_index: 0,
                     sidebar_index: 1
-                },
-                mode_positions: {
-                    render: {
-                        slot: "left_bar",
-                        float_position: [
-                            1322,
-                            57
-                        ],
-                        float_size: [
-                            314,
-                            420
-                        ],
-                        height: 420,
-                        folded: false,
-                        fixed_height: false,
-                        attached_to: "",
-                        attached_index: 0,
-                        sidebar_index: 1
-                    }
                 },
                 form: {
                     no_cube_selected: {
@@ -21108,7 +25171,7 @@ ${stochasticAlpha
                 }
             });
 
-            window.applyIndestructibleFormGroups(material_properties.form, [
+            window.applyIndestructibleFormGroups(materialPropertiesPanel.form, [
                 {
                     elements: ['_sa_instance', '_sa_override_context', '_sa_instance_name', '_sa_create_instance', '_sa_delete_instance'], gap: '2px',
                     flex: {
@@ -21122,7 +25185,7 @@ ${stochasticAlpha
                 }
             ]);
 
-            material_properties.form.on('change', ({ result, changed_keys }) => {
+            const materialPropertiesFormListener = materialPropertiesPanel.form.on('change', ({ result, changed_keys }) => {
                 if (isProjectSwitching()) return;
                 const keysToProcess = Array.isArray(changed_keys) && changed_keys.length
                     ? changed_keys
@@ -21139,6 +25202,46 @@ ${stochasticAlpha
                         : (MaterialManager.normalizeCubeFaceName(requestedScope) || ELEMENT_MATERIAL_SCOPE);
                     if (normalizedScope !== currentScope) {
                         activeMaterialOverrideScope = normalizedScope;
+                        updateMaterialInstancePanel();
+                        return;
+                    }
+                }
+
+                if (keysToProcess.includes('_sa_geometry_auto_tile')) {
+                    const cubes = getSelectedCubes();
+                    const activeScope = getActiveMaterialScope();
+                    const requestedValue = !!(result && result._sa_geometry_auto_tile);
+                    const needsChange = cubes.some(cube => (
+                        getCubeGeometryAutoTile(cube, activeScope) !== requestedValue
+                    ));
+
+                    if (cubes.length && needsChange) {
+                        runMaterialInstanceUndo(
+                            'shader_architect.material_panel.undo.set_geometry_auto_tile',
+                            cubes,
+                            () => {
+                                cubes.forEach(cube => {
+                                    if (isFaceMaterialScope(activeScope)) {
+                                        MaterialManager.setCubeFaceAutoTile(
+                                            cube,
+                                            activeScope,
+                                            requestedValue,
+                                            { apply: false }
+                                        );
+                                    } else {
+                                        MaterialManager.setElementAutoTile(cube, requestedValue, {
+                                            apply: false,
+                                            clearFaceOverrides: true
+                                        });
+                                    }
+                                });
+                            }
+                        );
+                        const activatedLightflow = requestedValue &&
+                            ShaderEngine.activateLightflowViewMode('set_geometry_auto_tile');
+                        if (!activatedLightflow) {
+                            ShaderEngine.updateCubes(cubes, 'set_geometry_auto_tile');
+                        }
                         updateMaterialInstancePanel();
                         return;
                     }
@@ -21191,10 +25294,15 @@ ${stochasticAlpha
                 }
 
                 let uniformChanged = false;
+                let autoTileUniformChanged = false;
+                let lightingModeChanged = false;
 
                 for (let key of keysToProcess) {
                     if (key === '_sa_override_preset') {
-                        if (result && MATERIAL_OVERRIDE_PRESETS[result[key]]) {
+                        if (
+                            result &&
+                            MaterialManager.isMaterialOverridePresetCompatible(instance, result[key])
+                        ) {
                             activeMaterialOverridePreset = result[key];
                         }
                         continue;
@@ -21202,7 +25310,7 @@ ${stochasticAlpha
                         continue;
                     } else if (key === advancedToggleKey) {
                         continue;
-                    } else if (['_sa_material_header', '_sa_scope', '_sa_instance', '_sa_override_context', '_sa_instance_name', '_sa_create_instance', '_sa_delete_instance'].includes(key)) {
+                    } else if (['_sa_material_header', '_sa_scope', '_sa_geometry_auto_tile', '_sa_instance', '_sa_override_context', '_sa_instance_name', '_sa_create_instance', '_sa_delete_instance'].includes(key)) {
                         continue;
                     } else if (MaterialManager.isUniformGroupFormKey(key)) {
                         const groupId = MaterialManager.getUniformGroupIdFromFormKey(key);
@@ -21264,11 +25372,21 @@ ${stochasticAlpha
                         }
 
                         uniformChanged = true;
+                        if (key === 'AUTO_TILE') autoTileUniformChanged = true;
+                        if (key === 'AFFECTED_BY_LIGHT') lightingModeChanged = true;
                     }
                 }
                 if (uniformChanged) {
                     MaterialManager.saveMaterialInstances({ cause: 'update_form' });
-                    ShaderEngine.updateAllUniforms('update_form');
+                    if (autoTileUniformChanged || lightingModeChanged) {
+                        ShaderEngine.updateAllCubes(
+                            autoTileUniformChanged
+                                ? 'update_auto_tile_uniform'
+                                : 'update_affected_by_light_uniform'
+                        );
+                    } else {
+                        ShaderEngine.updateAllUniforms('update_form');
+                    }
                 }
                 if (advancedModeChanged) updateMaterialInstancePanel();
             });
@@ -21339,10 +25457,15 @@ ${stochasticAlpha
             const materialOverridesCompactStyle = window.LightManagerUI.addCompactPanelStyles('material_properties');
             deletables.push(materialPanelStyle, materialInstancesCompactStyle, materialOverridesCompactStyle);
 
-            deletables.push(material_properties);
+            deletables.push(materialPropertiesPanel, materialPropertiesFormListener);
 
             // MARK: Native event hooks
             const registerNativeListeners = () => {
+                const changeViewModeEvent = Blockbench.on('change_view_mode', ({ view_mode } = {}) => {
+                    ShaderEngine.handleViewModeChange(view_mode || ShaderEngine.getActiveViewMode());
+                });
+                deletables.push(changeViewModeEvent);
+
                 registerNativeMethodEvent(Texture.prototype, 'updateMaterial', 'texture_update_material', { mode: 'after' });
                 let textureUpdateMaterialEvent = Blockbench.on('texture_update_material', () => {
                     if (!Project.parsed) return;
@@ -21353,7 +25476,13 @@ ${stochasticAlpha
                 deletables.push(textureUpdateMaterialEvent);
 
                 if (typeof TextureGroup !== 'undefined' && TextureGroup.prototype && TextureGroup.prototype.updateMaterial) {
-                    registerNativeMethodEvent(TextureGroup.prototype, 'updateMaterial', 'texture_group_update_material', { mode: 'after' });
+                    registerNativeMethodEvent(TextureGroup.prototype, 'updateMaterial', 'texture_group_update_material', {
+                        mode: 'after',
+                        prepareCall: function () {
+                            return prepareNativeTextureGroupMaterialUpdate(this);
+                        },
+                        prepareCallId: 'texture_group_pbr_guard_v1'
+                    });
                     let textureGroupUpdateMaterialEvent = Blockbench.on('texture_group_update_material', () => {
                         if (!Project.parsed) return;
                         if (Blockbench.hasFlag('switching_project')) return;
@@ -21404,11 +25533,17 @@ ${stochasticAlpha
                     ['update_uv', 'update_faces', 'update_geometry'].forEach(eventName => {
                         const previewEvent = controller.on(eventName, (event) => {
                             if (!Project.parsed || Blockbench.hasFlag('switching_project')) return;
-                            if (eventName === 'update_uv' && window.TextureAnimator && window.TextureAnimator.isPlaying) {
+                            const changedElement = event?.element || event?.object || event?.cube || null;
+                            const animatedFrameOnly = (
+                                eventName === 'update_uv' &&
+                                window.TextureAnimator &&
+                                window.TextureAnimator.isPlaying &&
+                                !ShaderEngine.haveNativeCubeUvAttributesChanged(changedElement)
+                            );
+                            if (animatedFrameOnly) {
                                 ShaderEngine.requestPreviewRender({ cause: 'texture_animation_frame' });
                                 return;
                             }
-                            const changedElement = event?.element || event?.object || event?.cube || null;
                             const changedElements = changedElement
                                 ? [changedElement]
                                 : getSelectedShaderElements();
@@ -21430,9 +25565,10 @@ ${stochasticAlpha
                     if (!Project.parsed) return;
                     if (Blockbench.hasFlag('switching_project')) return;
                     if (event.object && ShaderEngine.getCubeMesh(event.object)) {
-                        let shader = MaterialManager.resolveCubeMaterial(event.object, ShaderEngine.globalRenderMode);
-                        ShaderEngine.applyToMesh(event.object, shader || MaterialManager.materials['classic']);
-                        ShaderEngine.updateLightUniforms();
+                        const shader = ShaderEngine.resolveViewModeMaterial(event.object);
+                        if (ShaderEngine.applyToMesh(event.object, shader)) {
+                            ShaderEngine.updateLightUniforms();
+                        }
                     }
                 };
                 ['add_cube', 'add_mesh', 'add_texture_mesh'].forEach(eventName => {
@@ -21469,26 +25605,27 @@ ${stochasticAlpha
                     deletables.push(loadProjectEvent, selectProjectEvent);
                 }
 
-                let updateSelectionEvent = Blockbench.on('update_selection', () => {
-                    if (!Project.parsed) return;
-                    if (Blockbench.hasFlag('switching_project')) return;
-                    /*
-                     * Selection changes only touch Blockbench's highlight
-                     * attribute; shader source, textures and material overrides
-                     * are unchanged. Rebuilding every selected Cube here made
-                     * box-selecting hundreds of elements unnecessarily clone,
-                     * compare and dispose thousands of materials.
-                     */
-                });
-
-                deletables.push(updateSelectionEvent);
             };
             registerNativeListeners();
         },
 
         onunload() {
+            ShaderEngine.isUnloading = true;
+            ShaderEngine.restoreNativePreviewLights();
             ShaderEngine.beginProjectLifecycle(null);
             ShaderEngine.stopAnimationLoop();
+            if (
+                typeof Project !== 'undefined'
+                && Project
+                && typeof Canvas !== 'undefined'
+                && typeof Canvas.updateAllFaces === 'function'
+            ) {
+                Canvas.updateAllFaces();
+            }
+            getAllShaderElements().forEach(cube => {
+                ShaderEngine.releaseMeshIntegration(cube);
+            });
+            ShaderEngine.disposeShaderWarmupResources();
             ShaderEngine.disposeMaterialPool();
             MinecraftPromotionalSilhouetteManager.dispose();
             AmbientOcclusionManager.dispose();
@@ -21506,7 +25643,6 @@ ${stochasticAlpha
                 styleEl.parentElement.removeChild(styleEl);
             }
 
-            // Remove outliner actions if they exist
             ['outliner_cube', 'outliner_mesh', 'outliner_texture_mesh'].forEach(menuId => {
                 const menu = Menu.menus[menuId];
                 if (!menu) return;
@@ -21517,56 +25653,15 @@ ${stochasticAlpha
             });
 
             disposeTrackedResources();
-
-            getAllShaderElements().forEach(cube => {
-                const mesh = ShaderEngine.getCubeMesh(cube);
-                if (mesh?.userData?.saPerDrawUniformSync) {
-                    mesh.onBeforeRender = mesh.userData.saPreviousOnBeforeRender || null;
-                    delete mesh.userData.saPerDrawUniformSync;
-                    delete mesh.userData.saPreviousOnBeforeRender;
-                    delete mesh.userData.saCollapsedMaterialSlots;
-                    delete mesh.userData.saOriginalMaterialSlotCount;
-                }
-                if (mesh && mesh.material) {
-                    ShaderEngine.getMaterialList(mesh.material).forEach(mat => {
-                        mat.vertexShader = undefined;
-                        mat.fragmentShader = undefined;
-                        mat.needsUpdate = true;
-                    });
-                }
-                if (mesh && mesh.customDepthMaterial) {
-                    mesh.customDepthMaterial.dispose?.();
-                    delete mesh.customDepthMaterial;
-                }
-                if (mesh && mesh.customDistanceMaterial) {
-                    mesh.customDistanceMaterial.dispose?.();
-                    delete mesh.customDistanceMaterial;
-                }
-                const originalUv = mesh?.geometry?.userData?.saOriginalCubeUv;
-                const uv = mesh?.geometry?.getAttribute?.('uv');
-                if (originalUv && uv && originalUv.length === uv.array.length) {
-                    uv.array.set(originalUv);
-                    uv.needsUpdate = true;
-                    delete mesh.geometry.userData.saOriginalCubeUv;
-                }
-            });
             invalidateTextureAlphaProfiles();
-
-            if (window.ShaderEngine === ShaderEngine) delete window.ShaderEngine;
-            if (window.LightflowPerformance) delete window.LightflowPerformance;
-            if (window.MaterialManager === MaterialManager) delete window.MaterialManager;
-            if (window.FancyShaderMaterial === FancyShaderMaterial) delete window.FancyShaderMaterial;
-            if (window.FancyShaderMaterialInstance === FancyShaderMaterialInstance) delete window.FancyShaderMaterialInstance;
-            if (window.ScreenSpaceReflectionManager === ScreenSpaceReflectionManager) delete window.ScreenSpaceReflectionManager;
-            if (window.LightflowAmbientOcclusion === AmbientOcclusionManager) delete window.LightflowAmbientOcclusion;
-            if (window.MinecraftPromotionalSilhouetteManager === MinecraftPromotionalSilhouetteManager) delete window.MinecraftPromotionalSilhouetteManager;
+            restorePublishedWindowBindings();
 
             styleEl = undefined;
             renderModeSelector = undefined;
-            material_instance_manager = undefined;
-            material_properties = undefined;
-            create_material_instance = undefined;
-            delete_material_instance = undefined;
+            materialInstanceManagerPanel = undefined;
+            materialPropertiesPanel = undefined;
+            createMaterialInstanceAction = undefined;
+            deleteMaterialInstanceAction = undefined;
             activeMaterialOverrideScope = 'element';
         }
     });

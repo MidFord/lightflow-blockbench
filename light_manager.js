@@ -6,6 +6,44 @@
  * @property {number} [quality=1.0] - Image quality for lossy formats (0.0 to 1.0).
  */
 
+const lightManagerOwnedWindowBindings = new Map();
+const lightManagerScheduledTaskCancellations = new Set();
+const lightManagerReportedWarnings = new Set();
+let ownedThreeLightsGroup = null;
+
+function warnLightManagerOnce(key, message, error) {
+    if (lightManagerReportedWarnings.has(key)) return;
+    lightManagerReportedWarnings.add(key);
+    console.warn(message, error);
+}
+
+function trackLightManagerWindowBinding(name) {
+    lightManagerOwnedWindowBindings.set(name, window[name]);
+}
+
+function clearOwnedLightManagerWindowBindings() {
+    Array.from(lightManagerOwnedWindowBindings.entries()).reverse().forEach(([name, ownedValue]) => {
+        if (window[name] === ownedValue) delete window[name];
+    });
+    lightManagerOwnedWindowBindings.clear();
+}
+
+function scheduleLightManagerTimeout(callback, delay = 0) {
+    let cancellation;
+    const timer = setTimeout(() => {
+        lightManagerScheduledTaskCancellations.delete(cancellation);
+        callback();
+    }, delay);
+    cancellation = () => clearTimeout(timer);
+    lightManagerScheduledTaskCancellations.add(cancellation);
+    return timer;
+}
+
+function cancelScheduledLightManagerTasks() {
+    Array.from(lightManagerScheduledTaskCancellations).forEach(cancel => cancel());
+    lightManagerScheduledTaskCancellations.clear();
+}
+
 /**
  * Converts a font icon ligature or code into a Base64 encoded PNG/WebP.
  * @param {string} iconName - The name/ligature of the icon (e.g., 'settings').
@@ -20,14 +58,12 @@ async function generateIconBase64(iconName, size, {
     format = 'image/png',
     quality = 1.0
 } = {}) {
-    // 1. Validation & Font Loading
     try {
         await document.fonts.load(`${size}px "${fontFamily}"`);
     } catch (error) {
-        throw new Error(`Failed to load font family: ${fontFamily}`);
+        throw new Error(`Failed to load font family "${fontFamily}": ${error?.message || error}`);
     }
 
-    // 2. Canvas Setup
     const canvas = document.createElement('canvas');
     canvas.width = size;
     canvas.height = size;
@@ -37,17 +73,13 @@ async function generateIconBase64(iconName, size, {
         throw new Error('Canvas 2D context is not supported.');
     }
 
-    // 3. Rendering Logic
-    ctx.clearRect(0, 0, size, size); // Ensure background is fully transparent
+    ctx.clearRect(0, 0, size, size);
     ctx.fillStyle = color;
     ctx.font = `${size}px "${fontFamily}"`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
 
-    // Draw icon at the center of the canvas
     ctx.fillText(iconName, size / 2, size / 2);
-
-    // 4. Export
     return canvas.toDataURL(format, quality);
 }
 
@@ -82,6 +114,7 @@ function createLightflowLifecycleRuntime() {
                 ? autoParseJSON(content, false)
                 : JSON.parse(content);
         } catch (error) {
+            console.warn('[Lightflow Lifecycle] Could not parse the project model.', error);
             return null;
         }
     };
@@ -119,6 +152,7 @@ function createLightflowLifecycleRuntime() {
                 });
                 if (result === false) finish(null);
             } catch (error) {
+                console.warn('[Lightflow Lifecycle] Could not read the project model.', error);
                 finish(null);
             }
         });
@@ -386,7 +420,7 @@ function deleteLightManagerRegistryItem(registry, id) {
         try {
             item.delete();
         } catch (error) {
-            // Ignore stale registry cleanup failures during plugin reload.
+            console.warn(`[Light Manager] Failed to remove stale registry item "${id}".`, error);
         }
     }
 
@@ -422,7 +456,7 @@ function removeLightManagerLegacyStoredToolbarLayouts() {
             });
             if (changed) localStorage.setItem('toolbars', JSON.stringify(storedToolbars));
         } catch (error) {
-            // Ignore invalid toolbar storage; the live registries are still cleaned.
+            console.warn('[Light Manager] Stored toolbar data is invalid; live registries were still cleaned.', error);
         }
     }
 }
@@ -430,7 +464,9 @@ function removeLightManagerLegacyStoredToolbarLayouts() {
 const LIGHT_MANAGER_SHADOW_STATE = {
     dirty: true,
     sceneDirty: true,
-    shadowSignature: null,
+    allLightsDirty: true,
+    dirtyLightUuids: new Set(),
+    shadowSignatures: null,
     dirtyRenderers: new Set(),
     configuredRenderers: new Set(),
     previousRendererShadowSettings: new WeakMap()
@@ -464,8 +500,91 @@ const LIGHT_MANAGER_DEFAULT_UPDATE_OPTIONS = {
     gizmos: true,
     studio: false,
     elements: null,
-    cleanup: true
+    cleanup: true,
+    preserveTopology: true
 };
+
+const LIGHT_MANAGER_RETIRED_LIGHT_STATE = {
+    entries: [],
+    maxEntries: 8
+};
+
+/*
+ * LightElement is the persisted/UI-facing model. Changes converge through
+ * update_light_element_callback, which synchronizes the owned THREE lights,
+ * invalidates shadows, refreshes gizmos, and finally notifies Shader Architect.
+ */
+
+function disposeLightManagerThreeLightObject(light) {
+    if (!light) return;
+    if (light.parent) light.parent.remove(light);
+    if (light.target?.parent) light.target.parent.remove(light.target);
+    if (light.shadow?.map) {
+        light.shadow.map.dispose?.();
+        light.shadow.map = null;
+    }
+    light.dispose?.();
+}
+
+function disposeRetiredLightManagerLights() {
+    LIGHT_MANAGER_RETIRED_LIGHT_STATE.entries.splice(0).forEach(entry => {
+        disposeLightManagerThreeLightObject(entry.light);
+    });
+}
+
+function retireLightManagerThreeLight(light) {
+    if (!light || light.userData?.lightflowEnvironmentVirtual) return false;
+    if (LIGHT_MANAGER_RETIRED_LIGHT_STATE.entries.some(entry => entry.light === light)) return true;
+
+    light.userData = light.userData || {};
+    light.userData.lightManagerRetired = true;
+    light.visible = true;
+    light.intensity = 0;
+
+    const shadowAutoUpdate = light.shadow?.autoUpdate;
+    if (light.shadow) {
+        light.shadow.autoUpdate = false;
+        light.shadow.needsUpdate = false;
+        // The shader topology depends on castShadow, not on retaining a large
+        // GPU target. Release the map while the zero-intensity slot is parked.
+        if (light.shadow.map) {
+            light.shadow.map.dispose?.();
+            light.shadow.map = null;
+        }
+    }
+
+    LIGHT_MANAGER_RETIRED_LIGHT_STATE.entries.push({
+        light,
+        constructor: light.constructor,
+        shadowAutoUpdate
+    });
+
+    while (
+        LIGHT_MANAGER_RETIRED_LIGHT_STATE.entries.length >
+        LIGHT_MANAGER_RETIRED_LIGHT_STATE.maxEntries
+    ) {
+        const evicted = LIGHT_MANAGER_RETIRED_LIGHT_STATE.entries.shift();
+        disposeLightManagerThreeLightObject(evicted?.light);
+    }
+    return true;
+}
+
+function acquireRetiredLightManagerThreeLight(LightConstructor) {
+    const index = LIGHT_MANAGER_RETIRED_LIGHT_STATE.entries.findIndex(entry =>
+        entry.light && entry.constructor === LightConstructor
+    );
+    if (index < 0) return null;
+
+    const [entry] = LIGHT_MANAGER_RETIRED_LIGHT_STATE.entries.splice(index, 1);
+    const light = entry.light;
+    if (light.userData) delete light.userData.lightManagerRetired;
+    light.visible = true;
+    if (light.shadow) {
+        light.shadow.autoUpdate = entry.shadowAutoUpdate ?? false;
+        light.shadow.needsUpdate = true;
+    }
+    return light;
+}
 
 function translateLightManager(key, fallback) {
     if (typeof tl !== 'function') return fallback || key;
@@ -486,7 +605,9 @@ function formatLightManagerCount(count, singularKey, pluralKey) {
 function resetLightManagerShadowState() {
     LIGHT_MANAGER_SHADOW_STATE.dirty = true;
     LIGHT_MANAGER_SHADOW_STATE.sceneDirty = true;
-    LIGHT_MANAGER_SHADOW_STATE.shadowSignature = null;
+    LIGHT_MANAGER_SHADOW_STATE.allLightsDirty = true;
+    LIGHT_MANAGER_SHADOW_STATE.dirtyLightUuids.clear();
+    LIGHT_MANAGER_SHADOW_STATE.shadowSignatures = null;
     LIGHT_MANAGER_SHADOW_STATE.dirtyRenderers = new Set();
     LIGHT_MANAGER_SHADOW_STATE.configuredRenderers = new Set();
     LIGHT_MANAGER_SHADOW_STATE.previousRendererShadowSettings = new WeakMap();
@@ -497,6 +618,15 @@ function markLightManagerShadowsDirty(options = {}) {
     LIGHT_MANAGER_SHADOW_STATE.dirty = true;
     LIGHT_MANAGER_SHADOW_STATE.dirtyRenderers.clear();
     if (options.scene) LIGHT_MANAGER_SHADOW_STATE.sceneDirty = true;
+    const elements = Array.isArray(options.elements)
+        ? options.elements.filter(element => element?.uuid)
+        : (options.element?.uuid ? [options.element] : []);
+    if (elements.length && options.all !== true) {
+        elements.forEach(element => LIGHT_MANAGER_SHADOW_STATE.dirtyLightUuids.add(element.uuid));
+    } else {
+        LIGHT_MANAGER_SHADOW_STATE.allLightsDirty = true;
+        LIGHT_MANAGER_SHADOW_STATE.dirtyLightUuids.clear();
+    }
 }
 
 function lightManagerHasActiveShadowLights() {
@@ -553,10 +683,10 @@ function lightManagerShadowVector(values = []) {
     ].join(',');
 }
 
-function getLightManagerShadowSignature() {
+function getLightManagerShadowSignatures() {
     const elements = window.LightElement && Array.isArray(LightElement.all) ? LightElement.all : [];
-    return elements
-        .map(element => {
+    const signatures = new Map();
+    elements.forEach(element => {
             if (!element) return null;
 
             const mesh = element.mesh;
@@ -580,7 +710,7 @@ function getLightManagerShadowSignature() {
                 }
             }
 
-            return [
+            signatures.set(element.uuid, [
                 element.uuid || element.name || '',
                 element.visibility !== false ? 1 : 0,
                 element.has_shadow !== false ? 1 : 0,
@@ -603,11 +733,9 @@ function getLightManagerShadowSignature() {
                 lightManagerShadowValue(element.shadow_near),
                 lightManagerShadowValue(element.shadow_far),
                 lightManagerShadowValue(element.shadow_bounds)
-            ].join('|');
-        })
-        .filter(Boolean)
-        .sort()
-        .join(';');
+            ].join('|'));
+        });
+    return signatures;
 }
 
 function rememberLightManagerRendererShadowSettings(renderer) {
@@ -711,6 +839,7 @@ function lightManagerSafeGet(key, fallback) {
         const value = localStorage.getItem(key);
         return value === null ? fallback : value;
     } catch (error) {
+        warnLightManagerOnce('storage-read', '[Light Manager] Local storage is unavailable; defaults will be used.', error);
         return fallback;
     }
 }
@@ -719,7 +848,7 @@ function lightManagerSafeSet(key, value) {
     try {
         localStorage.setItem(key, value);
     } catch (error) {
-        // Storage can be unavailable in restricted contexts; the plugin should still work.
+        warnLightManagerOnce('storage-write', '[Light Manager] Local storage is unavailable; settings will not persist.', error);
     }
 }
 
@@ -764,8 +893,8 @@ const LightManagerUtils = {
     shadowNormalBiasContext(source, overrides = {}) {
         const config = (source && typeof source === 'object') ? source : { shadow_resolution: source };
         const context = { ...config, ...overrides };
-        const shadow_near = this.num(context.shadow_near, 0.1, 0, 99999);
-        const shadow_far = Math.max(shadow_near + 0.001, this.num(context.shadow_far, 200, 0.001, 100000));
+        const shadowNear = this.num(context.shadow_near, 0.1, 0, 99999);
+        const shadowFar = Math.max(shadowNear + 0.001, this.num(context.shadow_far, 200, 0.001, 100000));
 
         return {
             light_type: this.lightType(context.light_type),
@@ -773,8 +902,8 @@ const LightManagerUtils = {
             shadow_bounds: this.num(context.shadow_bounds, 35, 0.001, 100000),
             distance: this.num(context.distance, 0, 0, 100000),
             angle: this.num(context.angle, 45, 0.1, 89.9),
-            shadow_near,
-            shadow_far
+            shadow_near: shadowNear,
+            shadow_far: shadowFar
         };
     },
 
@@ -978,38 +1107,38 @@ const LightManagerUtils = {
     },
 
     sanitizeConfig(config = {}) {
-        const light_type = this.lightType(config.light_type);
-        const shadow_near = this.num(config.shadow_near, 0.1, 0, 99999);
-        const shadow_far = Math.max(shadow_near + 0.001, this.num(config.shadow_far, 200, 0.001, 100000));
+        const lightType = this.lightType(config.light_type);
+        const shadowNear = this.num(config.shadow_near, 0.1, 0, 99999);
+        const shadowFar = Math.max(shadowNear + 0.001, this.num(config.shadow_far, 200, 0.001, 100000));
 
-        const shadow_resolution = this.shadowResolution(config.shadow_resolution);
-        const studio_shadow_resolution = this.studioShadowResolution(config.studio_shadow_resolution);
-        const shadow_bounds = this.num(config.shadow_bounds, 35, 0.001, 100000);
+        const shadowResolution = this.shadowResolution(config.shadow_resolution);
+        const studioShadowResolution = this.studioShadowResolution(config.studio_shadow_resolution);
+        const shadowBounds = this.num(config.shadow_bounds, 35, 0.001, 100000);
         const shadowContext = {
             ...config,
-            light_type,
-            shadow_resolution,
-            shadow_near,
-            shadow_far,
-            shadow_bounds
+            light_type: lightType,
+            shadow_resolution: shadowResolution,
+            shadow_near: shadowNear,
+            shadow_far: shadowFar,
+            shadow_bounds: shadowBounds
         };
 
         return {
-            light_type,
+            light_type: lightType,
             color: this.colorArray(config.color),
             intensity: this.num(config.intensity, 1, 0, 100000),
             distance: this.num(config.distance, 0, 0, 100000),
             angle: this.num(config.angle, 45, 0.1, 89.9),
             penumbra: this.num(config.penumbra, 0, 0, 1),
             has_shadow: this.bool(config.has_shadow, true),
-            shadow_resolution,
-            studio_shadow_resolution,
+            shadow_resolution: shadowResolution,
+            studio_shadow_resolution: studioShadowResolution,
             shadow_bias: this.num(config.shadow_bias, DEFAULT_SHADOW_BIAS, -1, 1),
             shadow_normal_bias: this.shadowNormalBias(config.shadow_normal_bias, shadowContext),
             shadow_softness: this.shadowSoftness(config.shadow_softness),
-            shadow_near,
-            shadow_far,
-            shadow_bounds
+            shadow_near: shadowNear,
+            shadow_far: shadowFar,
+            shadow_bounds: shadowBounds
         };
     },
 
@@ -1134,6 +1263,21 @@ function prepareLightManagerDirtyRenderers() {
     });
 }
 
+function getLightManagerMeshShadowPolicy(element, object) {
+    const userData = object?.userData || {};
+    const suppressAllShadows = (
+        element?.type === 'lightflow_volume' ||
+        userData.lightflowNoShadow === true
+    );
+    return {
+        cast: !suppressAllShadows &&
+            element?.sa_cast_shadow !== false &&
+            userData.lightflowNoCastShadow !== true,
+        receive: !suppressAllShadows &&
+            userData.lightflowNoReceiveShadow !== true
+    };
+}
+
 function configureLightManagerSceneShadowMeshes(force = false) {
     if (!force && !LIGHT_MANAGER_SHADOW_STATE.sceneDirty) return false;
     if (!lightManagerHasActiveShadowLights()) return false;
@@ -1151,27 +1295,16 @@ function configureLightManagerSceneShadowMeshes(force = false) {
         const mesh = element.mesh;
         if (!mesh || typeof mesh.traverse !== 'function') return;
 
-        const suppressElementShadows = element.type === 'lightflow_volume';
         mesh.traverse(object => {
             if (!object || object.isLight || object.isCamera) return;
             if (object.isMesh) {
-                if (suppressElementShadows || object.userData?.lightflowNoShadow) {
-                    if (object.castShadow !== false) {
-                        object.castShadow = false;
-                        changed = true;
-                    }
-                    if (object.receiveShadow !== false) {
-                        object.receiveShadow = false;
-                        changed = true;
-                    }
-                    return;
-                }
-                if (object.castShadow !== true) {
-                    object.castShadow = true;
+                const policy = getLightManagerMeshShadowPolicy(element, object);
+                if (object.castShadow !== policy.cast) {
+                    object.castShadow = policy.cast;
                     changed = true;
                 }
-                if (object.receiveShadow !== true) {
-                    object.receiveShadow = true;
+                if (object.receiveShadow !== policy.receive) {
+                    object.receiveShadow = policy.receive;
                     changed = true;
                 }
             }
@@ -1630,13 +1763,26 @@ function syncLightManagerThreeLightShadowFlags(options = {}) {
         const light = window.three_lights && window.three_lights[element.uuid];
         if (!light) return;
 
-        const desiredVisible = element.visibility !== false;
-        const desiredCastShadow = element.has_shadow !== false;
+        light.userData = light.userData || {};
+        const requestedCastShadow = element.has_shadow !== false;
+        if (requestedCastShadow) light.userData.lightManagerRetainShadowSlot = true;
+        const desiredVisible = true;
+        const desiredCastShadow = requestedCastShadow ||
+            light.userData.lightManagerRetainShadowSlot === true;
+        const activeIntensity = Number(light.userData.lightManagerActiveIntensity);
+        const desiredIntensity = element.visibility === false
+            ? 0
+            : (Number.isFinite(activeIntensity) ? activeIntensity : light.intensity);
         const before = {
             visible: light.visible !== false,
             castShadow: light.castShadow === true
         };
         let repaired = false;
+
+        if (Number.isFinite(desiredIntensity) && light.intensity !== desiredIntensity) {
+            light.intensity = desiredIntensity;
+            repaired = true;
+        }
 
         if (light.visible !== desiredVisible) {
             light.visible = desiredVisible;
@@ -1645,10 +1791,15 @@ function syncLightManagerThreeLightShadowFlags(options = {}) {
 
         if (light.castShadow !== desiredCastShadow) {
             light.castShadow = desiredCastShadow;
-            if (light.shadow) {
+            if (light.shadow && requestedCastShadow) {
                 light.shadow.needsUpdate = true;
             }
             repaired = true;
+        }
+
+        if (light.shadow && !requestedCastShadow && desiredCastShadow) {
+            light.shadow.autoUpdate = false;
+            light.shadow.needsUpdate = false;
         }
 
         /*
@@ -1742,6 +1893,15 @@ function syncLightManagerSingleShadowSettings(light, element, options = {}) {
     const camera = shadow.camera;
     let changed = false;
     let cameraChanged = false;
+
+    // Three r129 only honors shadow.needsUpdate per light when that shadow's
+    // own autoUpdate flag is disabled. Renderer.shadowMap.autoUpdate=false by
+    // itself still redraws every shadow light whenever the global map is dirty.
+    if (shadow.autoUpdate !== false) {
+        shadow.autoUpdate = false;
+        shadow.needsUpdate = true;
+        changed = true;
+    }
 
     const activeResolution = LightManagerUtils.getRenderShadowResolution(
         element,
@@ -1861,8 +2021,33 @@ function invalidateLightManagerShadowMaps(options = {}) {
     if (!lightManagerHasActiveShadowLights()) {
         LIGHT_MANAGER_SHADOW_STATE.dirty = false;
         LIGHT_MANAGER_SHADOW_STATE.dirtyRenderers.clear();
+        LIGHT_MANAGER_SHADOW_STATE.allLightsDirty = false;
+        LIGHT_MANAGER_SHADOW_STATE.dirtyLightUuids.clear();
         return false;
     }
+
+    const invalidateDirtyLights = () => {
+        const invalidateAll = force || LIGHT_MANAGER_SHADOW_STATE.allLightsDirty;
+        const elementsByUuid = new Map(
+            (window.LightElement && Array.isArray(LightElement.all) ? LightElement.all : [])
+                .filter(element => element?.uuid)
+                .map(element => [element.uuid, element])
+        );
+        Object.keys(window.three_lights || {}).forEach(uuid => {
+            if (!invalidateAll && !LIGHT_MANAGER_SHADOW_STATE.dirtyLightUuids.has(uuid)) return;
+            const light = window.three_lights[uuid];
+            const element = elementsByUuid.get(uuid);
+            if (light?.shadow && element && (
+                element.visibility === false ||
+                element.has_shadow === false
+            )) {
+                light.shadow.autoUpdate = false;
+                light.shadow.needsUpdate = false;
+                return;
+            }
+            if (light?.shadow) light.shadow.needsUpdate = true;
+        });
+    };
 
     if (preview?.renderer?.shadowMap) {
         prepareLightManagerDirtyRenderers();
@@ -1870,25 +2055,17 @@ function invalidateLightManagerShadowMaps(options = {}) {
             return false;
         }
 
-        Object.keys(window.three_lights || {}).forEach(uuid => {
-            const light = window.three_lights[uuid];
-            if (light && light.shadow) {
-                light.shadow.needsUpdate = true;
-            }
-        });
+        invalidateDirtyLights();
 
         preview.renderer.shadowMap.needsUpdate = true;
         LIGHT_MANAGER_SHADOW_STATE.dirtyRenderers.delete(preview.renderer);
         if (LIGHT_MANAGER_SHADOW_STATE.dirtyRenderers.size === 0) {
             LIGHT_MANAGER_SHADOW_STATE.dirty = false;
+            LIGHT_MANAGER_SHADOW_STATE.allLightsDirty = false;
+            LIGHT_MANAGER_SHADOW_STATE.dirtyLightUuids.clear();
         }
     } else {
-        Object.keys(window.three_lights || {}).forEach(uuid => {
-            const light = window.three_lights[uuid];
-            if (light && light.shadow) {
-                light.shadow.needsUpdate = true;
-            }
-        });
+        invalidateDirtyLights();
 
         forEachLightManagerPreview(candidate => {
             if (candidate?.renderer?.shadowMap) {
@@ -1897,19 +2074,47 @@ function invalidateLightManagerShadowMaps(options = {}) {
         });
         LIGHT_MANAGER_SHADOW_STATE.dirtyRenderers.clear();
         LIGHT_MANAGER_SHADOW_STATE.dirty = false;
+        LIGHT_MANAGER_SHADOW_STATE.allLightsDirty = false;
+        LIGHT_MANAGER_SHADOW_STATE.dirtyLightUuids.clear();
     }
 
     return true;
 }
 
-function syncLightManagerShadowSignature() {
-    const nextSignature = getLightManagerShadowSignature();
-    if (LIGHT_MANAGER_SHADOW_STATE.shadowSignature !== nextSignature) {
-        LIGHT_MANAGER_SHADOW_STATE.shadowSignature = nextSignature;
+function syncLightManagerShadowSignature(options = {}) {
+    const nextSignatures = getLightManagerShadowSignatures();
+    const previousSignatures = LIGHT_MANAGER_SHADOW_STATE.shadowSignatures;
+    LIGHT_MANAGER_SHADOW_STATE.shadowSignatures = nextSignatures;
+
+    if (!(previousSignatures instanceof Map)) {
         markLightManagerShadowsDirty();
         return true;
     }
-    return false;
+
+    const changedElements = [];
+    const elementsByUuid = new Map(
+        (window.LightElement && Array.isArray(LightElement.all) ? LightElement.all : [])
+            .filter(element => element?.uuid)
+            .map(element => [element.uuid, element])
+    );
+    nextSignatures.forEach((signature, uuid) => {
+        if (previousSignatures.get(uuid) !== signature) {
+            const element = elementsByUuid.get(uuid);
+            if (element) changedElements.push(element);
+        }
+    });
+    const removedLight = Array.from(previousSignatures.keys()).some(uuid => !nextSignatures.has(uuid));
+    if (!changedElements.length && !removedLight) return false;
+
+    // Light topology changes do not alter the shadow image of every surviving
+    // light. New/edited lights need their own map once; removed lights need no
+    // redraw at all. Scene edits still invalidate every shadow caster below.
+    if (options.scene) {
+        markLightManagerShadowsDirty({ scene: true });
+    } else if (changedElements.length) {
+        markLightManagerShadowsDirty({ elements: changedElements });
+    }
+    return true;
 }
 
 function getLightManagerThreeLightConstructor(element) {
@@ -1931,6 +2136,21 @@ function lightManagerNeedsThreeLightSync() {
         const light = window.three_lights[element.uuid];
         const LightConstructor = getLightManagerThreeLightConstructor(element);
         return !light || (LightConstructor && light.constructor !== LightConstructor);
+    });
+}
+
+function lightManagerUpdateChangesTopology(options = {}) {
+    if (lightManagerNeedsThreeLightSync()) return true;
+    if (!options.cleanup || !window.three_lights) return false;
+
+    const activeUuids = new Set(
+        (window.LightElement && Array.isArray(LightElement.all) ? LightElement.all : [])
+            .filter(element => element?.uuid)
+            .map(element => element.uuid)
+    );
+    return Object.keys(window.three_lights).some(uuid => {
+        const light = window.three_lights[uuid];
+        return !light?.userData?.lightflowEnvironmentVirtual && !activeUuids.has(uuid);
     });
 }
 
@@ -2134,7 +2354,8 @@ function normalizeLightManagerUpdateOptions(options = {}) {
         gizmos: options.gizmos !== false,
         studio: !!(options.studio || options.studioRender),
         elements: requestedElements,
-        cleanup: options.cleanup !== false && !requestedElements
+        cleanup: options.cleanup !== false && !requestedElements,
+        preserveTopology: options.preserveTopology !== false
     };
 }
 
@@ -2151,7 +2372,8 @@ function mergeLightManagerUpdateOptions(previous, next) {
         gizmos: previous.gizmos || next.gizmos,
         studio: previous.studio || next.studio,
         elements,
-        cleanup: previous.cleanup || next.cleanup || elements === null
+        cleanup: previous.cleanup || next.cleanup || elements === null,
+        preserveTopology: previous.preserveTopology && next.preserveTopology
     };
 }
 
@@ -2250,7 +2472,9 @@ window.LightManagerAreaGizmos = {
     getRange(element, fallback = 8) {
         const distance = this.num(element.distance, 0);
         if (distance > 0) return distance;
-        if (element.has_shadow !== false) return Math.max(0.001, this.num(element.shadow_far, fallback));
+        // A zero distance means an infinite light. Shadow clipping is a render
+        // concern, not a useful on-canvas size: using shadow_far here can turn
+        // a helper into a viewport-sized wall of lines.
         return fallback;
     },
 
@@ -2259,11 +2483,11 @@ window.LightManagerAreaGizmos = {
         const angle = THREE.MathUtils.degToRad(this.clamp(this.num(element.angle, 45), 0.1, 89.9));
         const radius = Math.tan(angle) * range;
         const vertices = [];
-        const segments = 64;
+        const segments = 48;
 
         this.pushCircle(vertices, radius, -range, 'xy', segments);
 
-        const spokes = 8;
+        const spokes = 4;
         for (let i = 0; i < spokes; i++) {
             const theta = (i / spokes) * Math.PI * 2;
             const x = Math.cos(theta) * radius;
@@ -2284,9 +2508,9 @@ window.LightManagerAreaGizmos = {
     buildPointVertices(element) {
         const radius = Math.max(0.001, this.getRange(element, Math.max(4, Math.sqrt(this.num(element.render_intensity ?? element.intensity, 1)) * 4)));
         const vertices = [];
-        this.pushCircle(vertices, radius, 0, 'xy', 64);
-        this.pushCircle(vertices, radius, 0, 'xz', 64);
-        this.pushCircle(vertices, radius, 0, 'yz', 64);
+        this.pushCircle(vertices, radius, 0, 'xy', 48);
+        this.pushCircle(vertices, radius, 0, 'xz', 48);
+        this.pushCircle(vertices, radius, 0, 'yz', 48);
         return vertices;
     },
 
@@ -2331,7 +2555,9 @@ window.LightManagerAreaGizmos = {
             color: 0xffffff,
             transparent: true,
             opacity: 0.28,
-            depthTest: false,
+            // Draw after opaque scene geometry, but still let its depth buffer
+            // occlude the directional shadow-bounds frustum normally.
+            depthTest: true,
             depthWrite: false
         });
 
@@ -2364,7 +2590,7 @@ window.LightManagerAreaGizmos = {
 
         const color = this.getColor01(element);
         helper.material.color.setRGB(color[0], color[1], color[2]);
-        helper.material.opacity = element.selected ? 0.72 : 0.26;
+        helper.material.opacity = element.selected ? 0.5 : 0.16;
         helper.material.needsUpdate = true;
 
         const signature = this.getSignature(element);
@@ -2459,9 +2685,9 @@ window.LightManagerViewportControls = {
     colors: {
         aim: '#58C0FF',
         range: '#00CE71',
-        cone: '#F4D714',
+        cone: '#fbda01',
         penumbra: '#F96BC5',
-        bounds: '#B55AF8',
+        bounds: '#9301fb',
         near: '#EC9218',
         far: '#FA565D',
         moving: '#AFFF62'
@@ -2598,12 +2824,12 @@ window.LightManagerViewportControls = {
         return material;
     },
 
-    createLineMaterial(color, opacity = 0.5) {
+    createLineMaterial(color, opacity = 0.5, depthTest = false) {
         const material = new THREE.LineBasicMaterial({
             color,
             transparent: true,
             opacity,
-            depthTest: false,
+            depthTest,
             depthWrite: false
         });
         this.materials.push(material);
@@ -2624,7 +2850,7 @@ window.LightManagerViewportControls = {
         root.raycast = () => { };
         root.renderOrder = 1002;
 
-        const lineMaterial = this.createLineMaterial(0xffffff, 0.42);
+        const lineMaterial = this.createLineMaterial(0xffffff, 0.28, true);
         const guideLine = new THREE.LineSegments(new THREE.BufferGeometry(), lineMaterial);
         guideLine.name = `light_manager_control_guides_${element.uuid}`;
         guideLine.raycast = () => { };
@@ -2678,7 +2904,6 @@ window.LightManagerViewportControls = {
     getRange(element, fallback = 8) {
         const distance = this.num(element.distance, 0);
         if (distance > 0) return distance;
-        if (element.has_shadow !== false) return Math.max(0.001, this.num(element.shadow_far, fallback));
         return fallback;
     },
 
@@ -3072,6 +3297,46 @@ window.LightManagerViewportControls = {
         return world;
     },
 
+    getFreeMoveGridSize(event) {
+        const overrides = typeof Pressing !== 'undefined' ? Pressing.overrides : window.Pressing?.overrides;
+        const shift = !!(event?.shiftKey || overrides?.shift);
+        const ctrl = !!(
+            event?.ctrlOrCmd
+            || event?.ctrlKey
+            || event?.metaKey
+            || overrides?.ctrl
+        );
+        if (typeof canvasGridSize === 'function') {
+            const nativeSize = canvasGridSize(shift, ctrl);
+            if (Number.isFinite(nativeSize) && nativeSize > 0) return nativeSize;
+        }
+
+        const settingId = ctrl && shift
+            ? 'ctrl_shift_size'
+            : ctrl
+                ? 'ctrl_size'
+                : shift
+                    ? 'shift_size'
+                    : 'edit_size';
+        const fallbackResolution = settingId === 'edit_size' ? 16 : settingId === 'shift_size' ? 64 : settingId === 'ctrl_size' ? 160 : 640;
+        const nativeSettings = typeof settings !== 'undefined' ? settings : window.settings;
+        const configuredResolution = Number(nativeSettings?.[settingId]?.value);
+        const resolution = THREE.MathUtils.clamp(
+            Number.isFinite(configuredResolution) ? configuredResolution : fallbackResolution,
+            1,
+            settingId === 'edit_size' ? 512 : 4096
+        );
+        return 16 / resolution;
+    },
+
+    snapFreeMoveDelta(delta, event) {
+        const gridSize = this.getFreeMoveGridSize(event);
+        delta.x = Math.round(delta.x / gridSize) * gridSize;
+        delta.y = Math.round(delta.y / gridSize) * gridSize;
+        delta.z = Math.round(delta.z / gridSize) * gridSize;
+        return delta;
+    },
+
     beginFreeMoveDrag(event, preview) {
         const elements = this.getMovableSelection();
         if (!elements.length || !preview) {
@@ -3110,6 +3375,7 @@ window.LightManagerViewportControls = {
             const axis = this.axisVectors[drag.axis];
             delta = axis.clone().multiplyScalar(delta.dot(axis));
         }
+        this.snapFreeMoveDelta(delta, event);
         drag.elements.forEach(entry => this.applyWorldDelta(entry, delta));
         this.refreshMovedElements(drag.elements.map(entry => entry.element));
         this.updateMoveIndicator(drag.startPoint, drag.startPoint.clone().add(delta), drag.axis);
@@ -3641,10 +3907,10 @@ function runLightManagerElementUpdate(options = LIGHT_MANAGER_DEFAULT_UPDATE_OPT
         configureLightManagerSceneShadowMeshes();
     }
 
-    // Ensure the main group exists in the scene
     if (!window.three_lights_group) {
         window.three_lights_group = new THREE.Group();
-        window.three_lights_group.name = "light_manager_group";
+        window.three_lights_group.name = 'light_manager_group';
+        ownedThreeLightsGroup = window.three_lights_group;
         window.scene.add(window.three_lights_group);
     }
 
@@ -3674,14 +3940,19 @@ function runLightManagerElementUpdate(options = LIGHT_MANAGER_DEFAULT_UPDATE_OPT
             // Recreate if type changed or it doesn't exist
             if (!light || light.constructor !== LightConstructor) {
                 if (light) {
-                    window.three_lights_group.remove(light);
-                    if (light.target) window.three_lights_group.remove(light.target);
-                    if (light.dispose) light.dispose();
+                    if (updateOptions.preserveTopology) {
+                        retireLightManagerThreeLight(light);
+                    } else {
+                        disposeLightManagerThreeLightObject(light);
+                    }
                 }
 
                 const safeColor = LightManagerUtils.colorArray(element.color);
                 const colorHex = new THREE.Color(safeColor[0] / 255, safeColor[1] / 255, safeColor[2] / 255).getHex();
-                light = new LightConstructor(colorHex, element.intensity);
+                light = updateOptions.preserveTopology
+                    ? acquireRetiredLightManagerThreeLight(LightConstructor)
+                    : null;
+                if (!light) light = new LightConstructor(colorHex, element.intensity);
 
                 // Shadow initialization is now handled dynamically in the sync phase below
 
@@ -3695,16 +3966,37 @@ function runLightManagerElementUpdate(options = LIGHT_MANAGER_DEFAULT_UPDATE_OPT
             // Sync properties
             const safeColor = LightManagerUtils.colorArray(element.render_color || element.color);
             light.color.setRGB(safeColor[0] / 255, safeColor[1] / 255, safeColor[2] / 255);
-            light.intensity = LightManagerUtils.num(element.render_intensity ?? element.intensity, element.intensity, 0, 100000);
-            light.visible = element.visibility;
-            light.castShadow = element.has_shadow !== false;
+            const activeIntensity = LightManagerUtils.num(
+                element.render_intensity ?? element.intensity,
+                element.intensity,
+                0,
+                100000
+            );
+            light.userData = light.userData || {};
+            light.userData.lightManagerElementUuid = element.uuid;
+            light.userData.lightManagerActiveIntensity = activeIntensity;
+            light.intensity = element.visibility === false ? 0 : activeIntensity;
+            light.visible = true;
+
+            const requestedCastShadow = element.has_shadow !== false;
+            if (requestedCastShadow) light.userData.lightManagerRetainShadowSlot = true;
+            light.castShadow = requestedCastShadow ||
+                light.userData.lightManagerRetainShadowSlot === true;
+            if (light.shadow) {
+                if (requestedCastShadow) {
+                    light.shadow.needsUpdate = true;
+                } else if (light.castShadow) {
+                    light.shadow.autoUpdate = false;
+                    light.shadow.needsUpdate = false;
+                }
+            }
 
             // Sync dynamic shadow properties
             if (updateOptions.shadows && light.shadow) {
                 const targetResolution = LightManagerUtils.getRenderShadowResolution(element, updateOptions);
                 const resize = resizeLightManagerShadowMap(light, targetResolution);
                 if (resize.changed) {
-                    markLightManagerShadowsDirty();
+                    markLightManagerShadowsDirty({ elements: [element] });
                     logLightManagerShadowDebug('resolution-change', null, updateOptions, {
                         source: 'element-update',
                         resolutionChanges: [{
@@ -3717,7 +4009,11 @@ function runLightManagerElementUpdate(options = LIGHT_MANAGER_DEFAULT_UPDATE_OPT
                 }
 
                 if (syncLightManagerSingleShadowSettings(light, element, updateOptions)) {
-                    markLightManagerShadowsDirty();
+                    markLightManagerShadowsDirty({ elements: [element] });
+                }
+                if (!requestedCastShadow && light.castShadow) {
+                    light.shadow.autoUpdate = false;
+                    light.shadow.needsUpdate = false;
                 }
             }
 
@@ -3759,9 +4055,11 @@ function runLightManagerElementUpdate(options = LIGHT_MANAGER_DEFAULT_UPDATE_OPT
             if (light?.userData?.lightflowEnvironmentVirtual) continue;
             if (!activeUuids.has(uuid)) {
                 if (light) {
-                    window.three_lights_group.remove(light);
-                    if (light.target) window.three_lights_group.remove(light.target);
-                    if (light.dispose) light.dispose();
+                    if (updateOptions.preserveTopology) {
+                        retireLightManagerThreeLight(light);
+                    } else {
+                        disposeLightManagerThreeLightObject(light);
+                    }
                 }
                 delete window.three_lights[uuid];
             }
@@ -3774,7 +4072,7 @@ function runLightManagerElementUpdate(options = LIGHT_MANAGER_DEFAULT_UPDATE_OPT
     }
 
     if (updateOptions.shadows) {
-        syncLightManagerShadowSignature();
+        syncLightManagerShadowSignature(updateOptions);
         invalidateLightManagerShadowMaps();
     }
 
@@ -3812,6 +4110,10 @@ function flushLightManagerElementUpdate() {
 
 window.update_light_element_callback = (options = {}) => {
     const updateOptions = normalizeLightManagerUpdateOptions(options);
+
+    if (lightManagerUpdateChangesTopology(updateOptions)) {
+        window.ShaderEngine?.beginLightTopologyTransaction?.('light_structure_update');
+    }
 
     if (options && options.immediate) {
         cancelLightManagerElementUpdate();
@@ -3879,1032 +4181,50 @@ function kelvinToTinyColor(kelvin) {
 }
 
 /**
- * Returns a stylized hexadecimal foreground color with sufficient contrast
- * against the given background.
+ * Converts a CSS variable to a tinycolor instance.
  *
- * Unlike a basic contrast correction that only darkens or lightens a color,
- * this function works in the perceptual OKLCH color space:
- *
- * - Preserves the original hue and visual identity.
- * - Deepens and enriches pastel colors on light backgrounds.
- * - Slightly reduces chroma when lightening colors on dark backgrounds,
- *   preventing overly bright or neon-looking results.
- * - Leaves the original color unchanged when it already has enough contrast.
- * - Automatically maps out-of-gamut colors back into displayable sRGB.
- *
- * Supported CSS color formats include:
- *
- * - CSS variables: "var(--color-accent)"
- * - Hexadecimal: "#9ecbff", "#fff"
- * - Named colors: "white", "red", "royalblue"
- * - RGB: "rgb(120 180 255)"
- * - HSL: "hsl(210 100% 75%)"
- * - OKLCH and other browser-supported CSS color formats
- *
- * This function requires a browser environment because CSS variables and
- * browser-supported color syntaxes are resolved through the DOM.
- *
- * @param {string} color
- * The foreground CSS color.
- *
- * @param {string} background
- * The CSS background color.
- *
- * @param {object} [options]
- * Optional contrast and styling settings.
- *
- * @param {number} [options.minContrast=4.5]
- * Minimum WCAG contrast ratio.
- *
- * Common values:
- * - 3.0 for large text, icons, borders, and large UI elements.
- * - 4.5 for normal text and general interface content.
- * - 7.0 for enhanced accessibility.
- *
- * @param {number} [options.styleStrength=0.85]
- * Controls how strongly the function stylizes insufficient-contrast colors.
- *
- * Range:
- * - 0: Mostly preserves the original chroma.
- * - 0.5: Moderate chroma adjustment.
- * - 1: Stronger pastel-to-rich-color transformation.
- *
- * @param {Element} [options.contextElement=document.documentElement]
- * Element used to resolve CSS custom properties.
- *
- * @returns {string}
- * An opaque hexadecimal color in "#RRGGBB" format.
- *
- * @throws {TypeError}
- * If the provided colors or context element are invalid.
- *
- * @throws {RangeError}
- * If minContrast or styleStrength are outside their supported ranges.
- *
- * @example
- * const foreground = getStylizedContrastingColor(
- *     "var(--color-accent)",
- *     "var(--color-bg)"
- * );
- *
- * @example
- * const accessiblePastel = getStylizedContrastingColor(
- *     "#B9DEFF",
- *     "white",
- *     {
- *         minContrast: 4.5,
- *         styleStrength: 0.9,
- *     }
- * );
+ * @param {string} cssVariable - The CSS variable (e.g., "var(--primary)" or "--primary").
+ * @param {HTMLElement} [element=document.documentElement] - The DOM element to evaluate the variable against. Defaults to the :root element.
+ * @returns {tinycolor.Instance} A tinycolor object representing the resolved color.
  */
-function getStylizedContrastingColor(
-    color,
-    background,
-    {
-        minContrast = 4.5,
-        styleStrength = 0.85,
-        contextElement = document.documentElement,
-    } = {}
-) {
-    if (
-        !Number.isFinite(minContrast) ||
-        minContrast < 1 ||
-        minContrast > 21
-    ) {
-        throw new RangeError("minContrast must be between 1 and 21.");
+function getTinyColorFromCssVar(cssVariable, element = document.documentElement) {
+    if (typeof window === "undefined" || !window.getComputedStyle) {
+        console.warn("getTinyColorFromCssVar: DOM is not available (SSR environment).");
+        return tinycolor(null);
     }
 
-    if (
-        !Number.isFinite(styleStrength) ||
-        styleStrength < 0 ||
-        styleStrength > 1
-    ) {
-        throw new RangeError("styleStrength must be between 0 and 1.");
+    const varName = cssVariable.trim().startsWith("var(")
+        ? cssVariable.slice(4, -1).trim()
+        : cssVariable.trim();
+
+    if (!varName.startsWith("--")) {
+        return tinycolor(cssVariable);
     }
 
-    const backgroundRgba = resolveCssColor(
-        background,
-        contextElement
-    );
+    const computedStyles = window.getComputedStyle(element);
+    const colorValue = computedStyles.getPropertyValue(varName).trim();
 
-    const opaqueBackground = compositeOverWhite(backgroundRgba);
-
-    const foregroundRgba = resolveCssColor(
-        color,
-        contextElement
-    );
-
-    const opaqueForeground = compositeColors(
-        foregroundRgba,
-        opaqueBackground
-    );
-
-    const originalContrast = contrastRatio(
-        opaqueForeground,
-        opaqueBackground
-    );
-
-    if (originalContrast >= minContrast) {
-        return rgbToHex(opaqueForeground);
+    if (!colorValue) {
+        console.warn(`getTinyColorFromCssVar: CSS variable "${varName}" is not defined on the provided element.`);
+        return tinycolor(null);
     }
 
-    const originalOklch = rgbToOklch(opaqueForeground);
-    const backgroundLuminance = relativeLuminance(opaqueBackground);
-
-    /*
-     * Light backgrounds normally need a deeper foreground.
-     * Dark backgrounds normally need a lighter foreground.
-     */
-    const preferredDirection =
-        backgroundLuminance >= 0.42
-            ? "darker"
-            : "lighter";
-
-    const idealChroma = getIdealStyledChroma(
-        originalOklch.c,
-        preferredDirection,
-        styleStrength
-    );
-
-    const chromaTargets = createChromaTargets(
-        originalOklch.c,
-        idealChroma,
-        preferredDirection,
-        styleStrength
-    );
-
-    const candidates = chromaTargets
-        .map((targetChroma) =>
-            findAccessibleCandidate({
-                originalOklch,
-                targetChroma,
-                background: opaqueBackground,
-                minContrast,
-                direction: preferredDirection,
-            })
-        )
-        .filter(Boolean);
-
-    /*
-     * Extremely high requested contrast ratios may not be achievable in the
-     * preferred direction. In that case, test the opposite direction too.
-     */
-    if (candidates.length === 0) {
-        const oppositeDirection =
-            preferredDirection === "darker"
-                ? "lighter"
-                : "darker";
-
-        const oppositeIdealChroma = getIdealStyledChroma(
-            originalOklch.c,
-            oppositeDirection,
-            styleStrength * 0.5
-        );
-
-        const oppositeTargets = createChromaTargets(
-            originalOklch.c,
-            oppositeIdealChroma,
-            oppositeDirection,
-            styleStrength * 0.5
-        );
-
-        for (const targetChroma of oppositeTargets) {
-            const candidate = findAccessibleCandidate({
-                originalOklch,
-                targetChroma,
-                background: opaqueBackground,
-                minContrast,
-                direction: oppositeDirection,
-            });
-
-            if (candidate) {
-                candidate.directionPenalty = 0.075;
-                candidates.push(candidate);
-            }
-        }
-    }
-
-    if (candidates.length === 0) {
-        return getMaximumContrastColor(opaqueBackground);
-    }
-
-    for (const candidate of candidates) {
-        candidate.score = scoreCandidate({
-            candidate,
-            originalOklch,
-            idealChroma,
-            minContrast,
-            styleStrength,
-        });
-    }
-
-    candidates.sort((a, b) => a.score - b.score);
-
-    return rgbToHex(candidates[0].rgb);
+    return tinycolor(colorValue);
 }
 
-/**
- * Calculates the desirable chroma for the styled result.
- *
- * On light backgrounds, pastel colors are enriched before being darkened.
- * On dark backgrounds, chroma is reduced slightly when the color must be
- * lightened, which prevents neon-like results.
- *
- * @param {number} originalChroma
- * @param {"darker" | "lighter"} direction
- * @param {number} styleStrength
- * @returns {number}
- */
-function getIdealStyledChroma(
-    originalChroma,
-    direction,
-    styleStrength
-) {
-    /*
-     * Keep neutral colors neutral. A gray should not suddenly receive hue.
-     */
-    if (originalChroma < 0.012) {
-        return originalChroma;
-    }
-
-    if (direction === "darker") {
-        /*
-         * Pastel colors usually have low or medium chroma combined with high
-         * lightness. Increasing chroma while reducing lightness creates a
-         * richer representative shade instead of a dull darkened pastel.
-         */
-        const pastelFactor = clamp(
-            1 - originalChroma / 0.2,
-            0,
-            1
-        );
-
-        const chromaIncrease =
-            (0.025 + pastelFactor * 0.065) *
-            styleStrength;
-
-        return clamp(
-            originalChroma + chromaIncrease,
-            0,
-            0.24
-        );
-    }
-
-    /*
-     * When lightening a color, excessive chroma may create a glowing or neon
-     * appearance. A small chroma reduction usually looks more comfortable.
-     */
-    return clamp(
-        originalChroma * (1 - 0.16 * styleStrength),
-        0,
-        0.24
-    );
-}
-
-/**
- * Creates multiple chroma possibilities so the algorithm can select the
- * result that best balances identity, contrast, and visual styling.
- *
- * @param {number} originalChroma
- * @param {number} idealChroma
- * @param {"darker" | "lighter"} direction
- * @param {number} styleStrength
- * @returns {number[]}
- */
-function createChromaTargets(
-    originalChroma,
-    idealChroma,
-    direction,
-    styleStrength
-) {
-    if (originalChroma < 0.012) {
-        return [originalChroma];
-    }
-
-    const targets =
-        direction === "darker"
-            ? [
-                  originalChroma,
-                  lerp(
-                      originalChroma,
-                      idealChroma,
-                      0.35
-                  ),
-                  lerp(
-                      originalChroma,
-                      idealChroma,
-                      0.7
-                  ),
-                  idealChroma,
-                  idealChroma *
-                      (1 + 0.08 * styleStrength),
-                  originalChroma * 0.9,
-              ]
-            : [
-                  originalChroma,
-                  lerp(
-                      originalChroma,
-                      idealChroma,
-                      0.5
-                  ),
-                  idealChroma,
-                  idealChroma * 0.88,
-              ];
-
-    return [...new Set(
-        targets.map((value) =>
-            Number(clamp(value, 0, 0.25).toFixed(6))
-        )
-    )];
-}
-
-/**
- * Finds the smallest lightness adjustment that reaches the requested
- * contrast ratio for a specific chroma.
- *
- * @param {object} parameters
- * @param {{l: number, c: number, h: number}} parameters.originalOklch
- * @param {number} parameters.targetChroma
- * @param {{r: number, g: number, b: number}} parameters.background
- * @param {number} parameters.minContrast
- * @param {"darker" | "lighter"} parameters.direction
- * @returns {{
- *     rgb: {r: number, g: number, b: number, a: number},
- *     oklch: {l: number, c: number, h: number},
- *     contrast: number,
- *     directionPenalty: number
- * } | null}
- */
-function findAccessibleCandidate({
-    originalOklch,
-    targetChroma,
-    background,
-    minContrast,
-    direction,
-}) {
-    const extremeLightness =
-        direction === "darker" ? 0 : 1;
-
-    const extremeCandidate = oklchToDisplayRgb({
-        l: extremeLightness,
-        c: targetChroma,
-        h: originalOklch.h,
-    });
-
-    const extremeContrast = contrastRatio(
-        extremeCandidate.rgb,
-        background
-    );
-
-    if (extremeContrast < minContrast) {
-        return null;
-    }
-
-    let inaccessibleLightness = originalOklch.l;
-    let accessibleLightness = extremeLightness;
-    let bestCandidate = extremeCandidate;
-
-    for (let iteration = 0; iteration < 32; iteration += 1) {
-        const currentLightness =
-            (inaccessibleLightness + accessibleLightness) / 2;
-
-        const candidate = oklchToDisplayRgb({
-            l: currentLightness,
-            c: targetChroma,
-            h: originalOklch.h,
-        });
-
-        const candidateContrast = contrastRatio(
-            candidate.rgb,
-            background
-        );
-
-        if (candidateContrast >= minContrast) {
-            accessibleLightness = currentLightness;
-            bestCandidate = candidate;
-        } else {
-            inaccessibleLightness = currentLightness;
-        }
-    }
-
-    const finalContrast = contrastRatio(
-        bestCandidate.rgb,
-        background
-    );
-
-    return {
-        rgb: bestCandidate.rgb,
-        oklch: {
-            l: accessibleLightness,
-            c: bestCandidate.chroma,
-            h: originalOklch.h,
-        },
-        contrast: finalContrast,
-        directionPenalty: 0,
-    };
-}
-
-/**
- * Scores a candidate according to perceptual identity, desired styling,
- * contrast overshoot, and direction preference.
- *
- * Lower scores are better.
- *
- * @param {object} parameters
- * @param {{
- *     oklch: {l: number, c: number, h: number},
- *     contrast: number,
- *     directionPenalty: number
- * }} parameters.candidate
- * @param {{l: number, c: number, h: number}} parameters.originalOklch
- * @param {number} parameters.idealChroma
- * @param {number} parameters.minContrast
- * @param {number} parameters.styleStrength
- * @returns {number}
- */
-function scoreCandidate({
-    candidate,
-    originalOklch,
-    idealChroma,
-    minContrast,
-    styleStrength,
-}) {
-    const identityDistance = perceptualOklchDistance(
-        candidate.oklch,
-        originalOklch
-    );
-
-    const styledChromaDifference = Math.abs(
-        candidate.oklch.c - idealChroma
-    );
-
-    /*
-     * A tiny overshoot penalty favors colors close to the requested contrast
-     * instead of unnecessarily approaching pure black or white.
-     */
-    const contrastOvershoot = Math.max(
-        0,
-        candidate.contrast - minContrast
-    );
-
-    return (
-        identityDistance +
-        styledChromaDifference *
-            (0.75 + styleStrength * 0.85) +
-        contrastOvershoot * 0.0025 +
-        candidate.directionPenalty
-    );
-}
-
-/**
- * Calculates an approximate perceptual distance between two OKLCH colors.
- *
- * Hue is compared through OKLab Cartesian coordinates to avoid problems
- * around the 0° and 360° hue boundary.
- *
- * @param {{l: number, c: number, h: number}} colorA
- * @param {{l: number, c: number, h: number}} colorB
- * @returns {number}
- */
-function perceptualOklchDistance(colorA, colorB) {
-    const labA = oklchToOklab(colorA);
-    const labB = oklchToOklab(colorB);
-
-    const deltaL = labA.l - labB.l;
-    const deltaA = labA.a - labB.a;
-    const deltaB = labA.b - labB.b;
-
-    return Math.sqrt(
-        deltaL * deltaL * 1.2 +
-        deltaA * deltaA * 0.72 +
-        deltaB * deltaB * 0.72
-    );
-}
-
-/**
- * Converts OKLCH coordinates into OKLab coordinates.
- *
- * @param {{l: number, c: number, h: number}} oklch
- * @returns {{l: number, a: number, b: number}}
- */
-function oklchToOklab({ l, c, h }) {
-    const hueRadians = (h * Math.PI) / 180;
-
-    return {
-        l,
-        a: c * Math.cos(hueRadians),
-        b: c * Math.sin(hueRadians),
-    };
-}
-
-/**
- * Converts an OKLCH color into displayable sRGB.
- *
- * If the color is outside the sRGB gamut, chroma is reduced while preserving
- * the requested lightness and hue.
- *
- * @param {{l: number, c: number, h: number}} oklch
- * @returns {{
- *     rgb: {r: number, g: number, b: number, a: number},
- *     chroma: number
- * }}
- */
-function oklchToDisplayRgb(oklch) {
-    const initialRgb = oklchToRgb(oklch);
-
-    if (isRgbInGamut(initialRgb)) {
-        return {
-            rgb: normalizeRgb(initialRgb),
-            chroma: oklch.c,
-        };
-    }
-
-    let minimumChroma = 0;
-    let maximumChroma = oklch.c;
-    let bestChroma = 0;
-
-    let bestRgb = oklchToRgb({
-        ...oklch,
-        c: 0,
-    });
-
-    for (let iteration = 0; iteration < 26; iteration += 1) {
-        const currentChroma =
-            (minimumChroma + maximumChroma) / 2;
-
-        const candidateRgb = oklchToRgb({
-            ...oklch,
-            c: currentChroma,
-        });
-
-        if (isRgbInGamut(candidateRgb)) {
-            minimumChroma = currentChroma;
-            bestChroma = currentChroma;
-            bestRgb = candidateRgb;
-        } else {
-            maximumChroma = currentChroma;
-        }
-    }
-
-    return {
-        rgb: normalizeRgb(bestRgb),
-        chroma: bestChroma,
-    };
-}
-
-/**
- * Resolves any browser-supported CSS color into RGBA values.
- *
- * CSS custom properties are resolved relative to contextElement. The browser
- * itself parses the resulting color through a one-pixel canvas, allowing the
- * function to support modern formats such as HSL, OKLCH, and color().
- *
- * @param {string} cssColor
- * @param {Element} contextElement
- * @returns {{r: number, g: number, b: number, a: number}}
- */
-function resolveCssColor(cssColor, contextElement) {
-    if (
-        typeof cssColor !== "string" ||
-        cssColor.trim() === ""
-    ) {
-        throw new TypeError(
-            "CSS colors must be non-empty strings."
-        );
-    }
-
-    if (
-        !contextElement ||
-        typeof contextElement.appendChild !== "function" ||
-        !contextElement.ownerDocument
-    ) {
-        throw new TypeError(
-            "contextElement must be a valid DOM Element."
-        );
-    }
-
-    const documentReference =
-        contextElement.ownerDocument;
-
-    const probe =
-        documentReference.createElement("span");
-
-    probe.style.cssText = [
-        "all: initial",
-        "position: fixed",
-        "left: -99999px",
-        "top: -99999px",
-        "display: block",
-        "visibility: hidden",
-        "pointer-events: none",
-    ].join(";");
-
-    probe.style.color = cssColor;
-
-    if (
-        !probe.style.color &&
-        !cssColor.includes("var(")
-    ) {
-        throw new Error(
-            `Invalid CSS color: "${cssColor}".`
-        );
-    }
-
-    contextElement.appendChild(probe);
-
-    let computedColor;
-
-    try {
-        computedColor =
-            documentReference.defaultView
-                ?.getComputedStyle(probe)
-                .color ?? "";
-    } finally {
-        probe.remove();
-    }
-
-    if (!computedColor) {
-        throw new Error(
-            `Could not resolve CSS color: "${cssColor}".`
-        );
-    }
-
-    const canvas =
-        documentReference.createElement("canvas");
-
-    canvas.width = 1;
-    canvas.height = 1;
-
-    const context = canvas.getContext("2d", {
-        willReadFrequently: true,
-    });
-
-    if (!context) {
-        throw new Error(
-            "Could not create a canvas rendering context."
-        );
-    }
-
-    context.clearRect(0, 0, 1, 1);
-    context.fillStyle = "rgba(0, 0, 0, 0)";
-    context.fillStyle = computedColor;
-    context.fillRect(0, 0, 1, 1);
-
-    const [r, g, b, alpha] =
-        context.getImageData(0, 0, 1, 1).data;
-
-    return {
-        r,
-        g,
-        b,
-        a: alpha / 255,
-    };
-}
-
-/**
- * Calculates the WCAG contrast ratio between two opaque RGB colors.
- *
- * @param {{r: number, g: number, b: number}} colorA
- * @param {{r: number, g: number, b: number}} colorB
- * @returns {number}
- */
-function contrastRatio(colorA, colorB) {
-    const luminanceA = relativeLuminance(colorA);
-    const luminanceB = relativeLuminance(colorB);
-
-    const lighter = Math.max(
-        luminanceA,
-        luminanceB
-    );
-
-    const darker = Math.min(
-        luminanceA,
-        luminanceB
-    );
-
-    return (lighter + 0.05) / (darker + 0.05);
-}
-
-/**
- * Calculates the WCAG relative luminance of an sRGB color.
- *
- * @param {{r: number, g: number, b: number}} rgb
- * @returns {number}
- */
-function relativeLuminance({ r, g, b }) {
-    const [linearR, linearG, linearB] = [
-        r,
-        g,
-        b,
-    ].map((component) => {
-        const srgb = clamp(
-            component / 255,
-            0,
-            1
-        );
-
-        return srgb <= 0.04045
-            ? srgb / 12.92
-            : ((srgb + 0.055) / 1.055) ** 2.4;
-    });
-
-    return (
-        0.2126 * linearR +
-        0.7152 * linearG +
-        0.0722 * linearB
-    );
-}
-
-/**
- * Converts an sRGB color into OKLCH.
- *
- * @param {{r: number, g: number, b: number}} rgb
- * @returns {{l: number, c: number, h: number}}
- */
-function rgbToOklch({ r, g, b }) {
-    const linearR = srgbToLinear(r / 255);
-    const linearG = srgbToLinear(g / 255);
-    const linearB = srgbToLinear(b / 255);
-
-    const l =
-        0.4122214708 * linearR +
-        0.5363325363 * linearG +
-        0.0514459929 * linearB;
-
-    const m =
-        0.2119034982 * linearR +
-        0.6806995451 * linearG +
-        0.1073969566 * linearB;
-
-    const s =
-        0.0883024619 * linearR +
-        0.2817188376 * linearG +
-        0.6299787005 * linearB;
-
-    const lRoot = Math.cbrt(l);
-    const mRoot = Math.cbrt(m);
-    const sRoot = Math.cbrt(s);
-
-    const lightness =
-        0.2104542553 * lRoot +
-        0.793617785 * mRoot -
-        0.0040720468 * sRoot;
-
-    const a =
-        1.9779984951 * lRoot -
-        2.428592205 * mRoot +
-        0.4505937099 * sRoot;
-
-    const bValue =
-        0.0259040371 * lRoot +
-        0.7827717662 * mRoot -
-        0.808675766 * sRoot;
-
-    const chroma = Math.sqrt(
-        a * a + bValue * bValue
-    );
-
-    const hue =
-        chroma < 1e-7
-            ? 0
-            : (
-                  Math.atan2(bValue, a) *
-                  180
-              ) / Math.PI;
-
-    return {
-        l: clamp(lightness, 0, 1),
-        c: Math.max(0, chroma),
-        h: hue < 0 ? hue + 360 : hue,
-    };
-}
-
-/**
- * Converts OKLCH into potentially out-of-gamut sRGB values.
- *
- * @param {{l: number, c: number, h: number}} oklch
- * @returns {{r: number, g: number, b: number, a: number}}
- */
-function oklchToRgb({ l, c, h }) {
-    const hueRadians = (h * Math.PI) / 180;
-
-    const a = c * Math.cos(hueRadians);
-    const b = c * Math.sin(hueRadians);
-
-    const lRoot =
-        l +
-        0.3963377774 * a +
-        0.2158037573 * b;
-
-    const mRoot =
-        l -
-        0.1055613458 * a -
-        0.0638541728 * b;
-
-    const sRoot =
-        l -
-        0.0894841775 * a -
-        1.291485548 * b;
-
-    const lLinear = lRoot ** 3;
-    const mLinear = mRoot ** 3;
-    const sLinear = sRoot ** 3;
-
-    const linearR =
-        4.0767416621 * lLinear -
-        3.3077115913 * mLinear +
-        0.2309699292 * sLinear;
-
-    const linearG =
-        -1.2684380046 * lLinear +
-        2.6097574011 * mLinear -
-        0.3413193965 * sLinear;
-
-    const linearB =
-        -0.0041960863 * lLinear -
-        0.7034186147 * mLinear +
-        1.707614701 * sLinear;
-
-    return {
-        r: linearToSrgb(linearR) * 255,
-        g: linearToSrgb(linearG) * 255,
-        b: linearToSrgb(linearB) * 255,
-        a: 1,
-    };
-}
-
-/**
- * Composites an RGBA foreground over an opaque background.
- *
- * @param {{r: number, g: number, b: number, a: number}} foreground
- * @param {{r: number, g: number, b: number, a: number}} background
- * @returns {{r: number, g: number, b: number, a: number}}
- */
-function compositeColors(foreground, background) {
-    const alpha = clamp(foreground.a, 0, 1);
-
-    return {
-        r:
-            foreground.r * alpha +
-            background.r * (1 - alpha),
-
-        g:
-            foreground.g * alpha +
-            background.g * (1 - alpha),
-
-        b:
-            foreground.b * alpha +
-            background.b * (1 - alpha),
-
-        a: 1,
-    };
-}
-
-/**
- * Composites a potentially transparent background over white.
- *
- * @param {{r: number, g: number, b: number, a: number}} color
- * @returns {{r: number, g: number, b: number, a: number}}
- */
-function compositeOverWhite(color) {
-    return compositeColors(color, {
-        r: 255,
-        g: 255,
-        b: 255,
-        a: 1,
-    });
-}
-
-/**
- * Returns either black or white, depending on which produces more contrast.
- *
- * @param {{r: number, g: number, b: number}} background
- * @returns {"#000000" | "#FFFFFF"}
- */
-function getMaximumContrastColor(background) {
-    const black = {
-        r: 0,
-        g: 0,
-        b: 0,
-    };
-
-    const white = {
-        r: 255,
-        g: 255,
-        b: 255,
-    };
-
-    return contrastRatio(black, background) >=
-        contrastRatio(white, background)
-        ? "#000000"
-        : "#FFFFFF";
-}
-
-/**
- * Converts an RGB color into an uppercase hexadecimal string.
- *
- * @param {{r: number, g: number, b: number}} rgb
- * @returns {string}
- */
-function rgbToHex({ r, g, b }) {
-    const toHex = (component) =>
-        Math.round(clamp(component, 0, 255))
-            .toString(16)
-            .padStart(2, "0")
-            .toUpperCase();
-
-    return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
-}
-
-/**
- * Converts an sRGB channel into linear-light RGB.
- *
- * @param {number} value
- * @returns {number}
- */
-function srgbToLinear(value) {
-    return value <= 0.04045
-        ? value / 12.92
-        : ((value + 0.055) / 1.055) ** 2.4;
-}
-
-/**
- * Converts a linear-light RGB channel into sRGB.
- *
- * @param {number} value
- * @returns {number}
- */
-function linearToSrgb(value) {
-    return value <= 0.0031308
-        ? 12.92 * value
-        : 1.055 *
-              Math.pow(value, 1 / 2.4) -
-              0.055;
-}
-
-/**
- * Determines whether all RGB channels are inside the sRGB gamut.
- *
- * @param {{r: number, g: number, b: number}} rgb
- * @returns {boolean}
- */
-function isRgbInGamut({ r, g, b }) {
-    const epsilon = 1e-5;
-
-    return (
-        r >= -epsilon &&
-        r <= 255 + epsilon &&
-        g >= -epsilon &&
-        g <= 255 + epsilon &&
-        b >= -epsilon &&
-        b <= 255 + epsilon
-    );
-}
-
-/**
- * Clamps RGB channels and returns an opaque color.
- *
- * @param {{r: number, g: number, b: number}} rgb
- * @returns {{r: number, g: number, b: number, a: number}}
- */
-function normalizeRgb({ r, g, b }) {
-    return {
-        r: clamp(r, 0, 255),
-        g: clamp(g, 0, 255),
-        b: clamp(b, 0, 255),
-        a: 1,
-    };
-}
-
-/**
- * Linearly interpolates between two values.
- *
- * @param {number} start
- * @param {number} end
- * @param {number} amount
- * @returns {number}
- */
-function lerp(start, end, amount) {
-    return start + (end - start) * amount;
-}
-
-/**
- * Restricts a number to the provided range.
- *
- * @param {number} value
- * @param {number} minimum
- * @param {number} maximum
- * @returns {number}
- */
-function clamp(value, minimum, maximum) {
-    return Math.min(
-        maximum,
-        Math.max(minimum, value)
-    );
-}
-
-// Dictionary to store Base64 textures for each light type
-let light_icons_b64 = {};
+const lightIconSources = {};
+
+[
+    'generateIconBase64',
+    'LightManagerMarkShadowsDirty',
+    'LightManagerDebugShadows',
+    'LightManagerSyncLights',
+    'LightManagerPrepareRender',
+    'LightManagerAreaGizmos',
+    'LightManagerViewportControls',
+    'LightManagerFitTool',
+    'update_light_element_callback'
+].forEach(trackLightManagerWindowBinding);
 
 /**
  * @name Light Manager
@@ -4912,8 +4232,10 @@ let light_icons_b64 = {};
  * @description Adds animatable point, spot, and directional lights to the Blockbench outliner.
  */
 
-function initialize_light_plugin() {
+function initializeLightManagerPlugin() {
     Language.addTranslations('en', {
+        'mode.render': 'Render',
+        'mode.render.desc': 'Render the scene with lights and shadows.',
         'dialog.preview_options.show_light_area_gizmos': 'Show Light Area Gizmos',
         'panel.light_properties': 'LIGHT',
         'property.light_settings': 'Light Settings',
@@ -4952,6 +4274,7 @@ function initialize_light_plugin() {
         'property.shadow_biases': 'Shadow Tuning',
         'property.shadow_biases.desc': 'Adjust shadow depth to reduce artifacts.',
         'property.shadow_resolution': 'Resolution',
+        'property.shadow_resolution.desc': 'Shadow map resolution. Higher values produce sharper shadows but may reduce performance.',
         'property.studio_shadow_resolution': 'Studio Shadow',
         'property.studio_shadow_resolution.desc': 'Shadow size used only while Studio Render captures. Same keeps the viewport resolution.',
         'property.shadow_softness': 'Softness',
@@ -4977,14 +4300,14 @@ function initialize_light_plugin() {
         'light_manager.tool.edit_gizmos': 'Light Edit Gizmos',
         'light_manager.tool.edit_gizmos.desc': 'Drag viewport handles for aim, range, cone angle, penumbra, shadow clip, and shadow bounds.',
         'light_manager.action.free_move': 'Free Move From View',
-        'light_manager.action.free_move.desc': 'Move the selected elements on a camera-facing plane. Assign a shortcut such as G only if it does not conflict with your keymap.',
+        'light_manager.action.free_move.desc': 'Move the selected elements on a camera-facing plane using Blockbench snapping. Shift, Ctrl/Cmd, or both use their configured snapping resolutions.',
         'light_manager.action.edit_properties': 'Light Properties...',
         'light_manager.action.edit_properties.desc': 'Edit the selected light values, presets, and shadow settings.',
         'light_manager.message.select_lights_first': 'Select one or more lights first.',
         'light_manager.message.select_targets_first': 'Select at least one target object or group.',
         'light_manager.message.select_targets_too': 'Select target objects or groups too.',
         'light_manager.message.free_move_none': 'Select a movable element first.',
-        'light_manager.message.free_move_wait': 'Move: drag in a viewport. Press X/Y/Z while dragging to constrain the axis.',
+        'light_manager.message.free_move_wait': 'Move: drag in a viewport. Shift and Ctrl/Cmd change snapping; X/Y/Z constrain the axis.',
         'light_manager.message.free_move_axis': 'Move axis: {axis}',
         'light_manager.message.free_move_axis_free': 'Move axis: free',
         'light_manager.message.fit_complete': 'Fitted {lights} to {targets}.',
@@ -5061,6 +4384,8 @@ function initialize_light_plugin() {
     });
 
     Language.addTranslations('es', {
+        'mode.render': 'Renderizar',
+        'mode.render.desc': 'Renderiza la escena con luces y sombras.',
         'dialog.preview_options.show_light_area_gizmos': 'Mostrar gizmos de area de luz',
         'panel.light_properties': 'LUZ',
         'property.light_settings': 'Ajustes de luz',
@@ -5099,6 +4424,7 @@ function initialize_light_plugin() {
         'property.shadow_biases': 'Ajustes de sombra',
         'property.shadow_biases.desc': 'Ajusta la profundidad de sombra para reducir artefactos.',
         'property.shadow_resolution': 'Resolucion',
+        'property.shadow_resolution.desc': 'Resolucion del mapa de sombras. Valores mas altos producen sombras mas nítidas pero pueden reducir el rendimiento.',
         'property.studio_shadow_resolution': 'Sombra Studio',
         'property.studio_shadow_resolution.desc': 'Tamano de sombra usado solo durante capturas de Studio Render. Igual conserva la resolucion del preview.',
         'property.shadow_softness': 'Suavidad',
@@ -5124,14 +4450,14 @@ function initialize_light_plugin() {
         'light_manager.tool.edit_gizmos': 'Gizmos de edicion de luz',
         'light_manager.tool.edit_gizmos.desc': 'Arrastra handles en el viewport para apuntar, rango, angulo del cono, penumbra, recorte y area de sombra.',
         'light_manager.action.free_move': 'Mover libre desde vista',
-        'light_manager.action.free_move.desc': 'Mueve los elementos seleccionados en un plano frente a la camara. Asigna un atajo como G solo si no entra en conflicto con tu mapa de teclas.',
+        'light_manager.action.free_move.desc': 'Mueve los elementos seleccionados en un plano frente a la camara con el ajuste de Blockbench. Shift, Ctrl/Cmd o ambos usan sus resoluciones configuradas.',
         'light_manager.action.edit_properties': 'Propiedades de luz...',
         'light_manager.action.edit_properties.desc': 'Edita valores, presets y ajustes de sombra de las luces seleccionadas.',
         'light_manager.message.select_lights_first': 'Selecciona una o mas luces primero.',
         'light_manager.message.select_targets_first': 'Selecciona al menos un objeto o grupo objetivo.',
         'light_manager.message.select_targets_too': 'Selecciona tambien objetos o grupos objetivo.',
         'light_manager.message.free_move_none': 'Selecciona primero un elemento movible.',
-        'light_manager.message.free_move_wait': 'Mover: arrastra en un viewport. Presiona X/Y/Z mientras arrastras para limitar el eje.',
+        'light_manager.message.free_move_wait': 'Mover: arrastra en un viewport. Shift y Ctrl/Cmd cambian el ajuste; X/Y/Z limitan el eje.',
         'light_manager.message.free_move_axis': 'Eje de movimiento: {axis}',
         'light_manager.message.free_move_axis_free': 'Eje de movimiento: libre',
         'light_manager.message.fit_complete': 'Se ajusto {lights} a {targets}.',
@@ -5212,7 +4538,10 @@ function initialize_light_plugin() {
     let lightManagerUIApi = null;
     let lightTextures = {}; // THREE.Texture instances will be loaded here
     let originalAnimatorPreview = null;
+    let patchedAnimatorPreview = null;
     let lightflowLifecycle = null;
+    let lightPreviewController = null;
+    const activeDocumentInteractionCleanups = new Set();
 
     const animationSign = Blockbench.isNewerThan('4.99') ? 1 : -1;
 
@@ -5227,34 +4556,73 @@ function initialize_light_plugin() {
         if (originalAnimatorPreview) return;
 
         originalAnimatorPreview = Animator.preview;
-        Animator.preview = function lightManagerAnimatorPreviewPatch() {
+        patchedAnimatorPreview = function lightManagerAnimatorPreviewPatch() {
             const result = originalAnimatorPreview.apply(this, arguments);
             markLightManagerAnimationFrameShadowsDirty();
             return result;
         };
+        Animator.preview = patchedAnimatorPreview;
     }
 
     function restoreLightManagerAnimatorPreview() {
-        if (originalAnimatorPreview && window.Animator && Animator.preview !== originalAnimatorPreview) {
+        if (originalAnimatorPreview && window.Animator && Animator.preview === patchedAnimatorPreview) {
             Animator.preview = originalAnimatorPreview;
         }
         originalAnimatorPreview = null;
+        patchedAnimatorPreview = null;
     }
 
     function disposeLightManagerResources() {
         const resources = deletables.slice();
         deletables.length = 0;
-        resources.forEach(item => {
-            if (item && typeof item.delete === 'function') item.delete();
+        resources.reverse().forEach(item => {
+            if (!item || typeof item.delete !== 'function') return;
+            try {
+                item.delete();
+            } catch (error) {
+                console.warn('[Light Manager] Failed to release a registered resource.', error);
+            }
         });
     }
 
+    function trackDocumentInteraction(cleanup) {
+        const release = () => {
+            if (!activeDocumentInteractionCleanups.delete(release)) return;
+            cleanup();
+        };
+        activeDocumentInteractionCleanups.add(release);
+        return release;
+    }
+
+    function disposeDocumentInteractions() {
+        Array.from(activeDocumentInteractionCleanups).forEach(release => release());
+    }
+
     function disposeThreeLight(light) {
-        if (!light) return;
-        if (light.parent) light.parent.remove(light);
-        if (light.target && light.target.parent) light.target.parent.remove(light.target);
-        if (light.shadow && light.shadow.map) light.shadow.map.dispose();
-        if (typeof light.dispose === 'function') light.dispose();
+        disposeLightManagerThreeLightObject(light);
+    }
+
+    function disposeLightElementPreviewResources(ElementType) {
+        if (!ElementType || !Array.isArray(ElementType.all)) return;
+        ElementType.all.forEach(element => {
+            const mesh = element?.mesh;
+            if (!mesh) return;
+            const geometries = new Set();
+            const materials = new Set();
+            mesh.traverse?.(object => {
+                if (object.geometry) geometries.add(object.geometry);
+                const objectMaterials = Array.isArray(object.material)
+                    ? object.material
+                    : (object.material ? [object.material] : []);
+                objectMaterials.forEach(material => materials.add(material));
+            });
+            geometries.forEach(geometry => geometry?.dispose?.());
+            materials.forEach(material => material?.dispose?.());
+            mesh.parent?.remove?.(mesh);
+            if (window.Project?.nodes_3d?.[element.uuid] === mesh) {
+                delete Project.nodes_3d[element.uuid];
+            }
+        });
     }
 
     /**
@@ -5383,10 +4751,10 @@ function initialize_light_plugin() {
             });
         };
 
-        // 1. Apply immediately (for initial creation)
+        // Apply the initial group state before the form becomes interactive.
         groupElements();
 
-        // 2. MAGIC: Intercept the original buildForm method
+        // Reapply grouping after Blockbench rebuilds the form.
         let originalBuildForm = form.buildForm;
         form.buildForm = function (...args) {
             // Let Blockbench build the entire form natively first
@@ -5438,13 +4806,14 @@ function initialize_light_plugin() {
         icon: 'light_mode',
         author: 'MidFord327',
         description: 'Add production-ready point, spot, and directional lights to Blockbench with viewport gizmos, animation support, shadows, and Studio Render controls. Provides the Lightflow lighting foundation for Shader Architect and Studio Render.',
-        tags: ['Lightflow', 'Lighting', 'Shadows', 'Animation', 'Rendering', 'Studio'],
+        tags: ['Lightflow', 'Lighting', 'Shadows'],
         version: '1.7.0',
         min_version: '4.9.0',
         variant: 'both',
 
         onload() {
             disposeLightManagerResources();
+            disposeRetiredLightManagerLights();
             cleanupLightManagerRegistries();
             removeLightManagerLegacyStoredToolbarLayouts();
             restoreLightManagerRendererShadowSettings();
@@ -5555,6 +4924,7 @@ function initialize_light_plugin() {
                     try {
                         return !!Condition(condition, result);
                     } catch (error) {
+                        warnLightManagerOnce('form-condition', '[Light Manager] A form condition failed; its fallback state will be used.', error);
                         return fallback;
                     }
                 };
@@ -5629,7 +4999,7 @@ function initialize_light_plugin() {
                         try {
                             element.colorpicker.jq.spectrum(disabled ? 'disable' : 'enable');
                         } catch (error) {
-                            // Pointer events and native input state remain as the safe fallback.
+                            warnLightManagerOnce('spectrum-state', '[Light Manager] Spectrum state sync failed; native input state remains active.', error);
                         }
                     }
 
@@ -5706,6 +5076,11 @@ function initialize_light_plugin() {
                     if (!this.settings.allow_higher) numberInputOptions.max = this.settings.max;
 
                     let numberInput = Interface.createElement('input', numberInputOptions);
+                    const accessibleName = data.label
+                        ? (typeof tl !== 'undefined' ? tl(data.label) : data.label)
+                        : (data.description ? (typeof tl !== 'undefined' ? tl(data.description) : data.description) : 'Value');
+                    rangeInput.setAttribute('aria-label', accessibleName);
+                    numberInput.setAttribute('aria-label', `${accessibleName} value`);
                     this.rangeInput = rangeInput;
                     this.numberInput = numberInput;
 
@@ -5740,7 +5115,7 @@ function initialize_light_plugin() {
                         }, typeof tl !== 'undefined' ? tl(data.label) : data.label);
                         containerChildren.push(labelElement);
 
-                        // Añadir icono de ayuda con la descripción
+                        // Add a help icon for the description.
                         if (data.description) {
                             let infoIcon = Interface.createElement('i', {
                                 class: 'fa fa-question dialog_form_description',
@@ -5808,10 +5183,10 @@ function initialize_light_plugin() {
                     $inputs.on('input', function (event) {
                         let val = parseFloat($(event.target).val());
                         if (isNaN(val)) return;
-                        let is_number_input = event.target === $number[0];
-                        scope.change(val, event.originalEvent, is_number_input);
+                        const isNumberInput = event.target === $number[0];
+                        scope.change(val, event.originalEvent, isNumberInput);
                         if (scope.onDrag && (scope.isDragging || event.target === $range[0])) {
-                            scope.onDrag(val, event.originalEvent, is_number_input);
+                            scope.onDrag(val, event.originalEvent, isNumberInput);
                         }
                     });
 
@@ -6061,7 +5436,7 @@ function initialize_light_plugin() {
                     this.value = key;
                     let opt = this.options[key];
 
-                    // Tooltip includes the widget name, current option y la descripción si existe.
+                    // Include the widget name, current option, and description when available.
                     let baseName = this.name ? this.name + ': ' : '';
                     let optName = opt.name || key;
                     let desc = this.description ? '\n' + (typeof tl !== 'undefined' ? tl(this.description) : this.description) : '';
@@ -6176,36 +5551,36 @@ function initialize_light_plugin() {
 
                     // Optional icon.
                     if (this.icon_name) {
-                        let icon_node = Blockbench.getIconNode(this.icon_name);
-                        icon_node.style.fontSize = '1.1em';
-                        this.node.append(icon_node);
+                        const iconNode = Blockbench.getIconNode(this.icon_name);
+                        iconNode.style.fontSize = '1.1em';
+                        this.node.append(iconNode);
                     }
 
                     // Optional label.
                     if (this.label) {
-                        let label_node = document.createElement('span');
-                        label_node.className = 'bar_display_label';
-                        label_node.style.fontWeight = 'bold';
-                        label_node.style.opacity = '0.85';
-                        label_node.innerText = this.label;
-                        this.node.append(label_node);
+                        const labelNode = document.createElement('span');
+                        labelNode.className = 'bar_display_label';
+                        labelNode.style.fontWeight = 'bold';
+                        labelNode.style.opacity = '0.85';
+                        labelNode.innerText = this.label;
+                        this.node.append(labelNode);
                     }
 
                     // Text container.
-                    let text_node = document.createElement('span');
-                    text_node.className = 'bar_display_content';
+                    const textNode = document.createElement('span');
+                    textNode.className = 'bar_display_content';
                     if (this.expand) {
-                        text_node.style.flex = '1 1 0';
-                        text_node.style.minWidth = '0';
+                        textNode.style.flex = '1 1 0';
+                        textNode.style.minWidth = '0';
                     }
-                    text_node.style.textAlign = this.text_alignment;
+                    textNode.style.textAlign = this.text_alignment;
                     if (this.is_paragraph) {
-                        text_node.style.whiteSpace = 'pre-wrap';
-                        text_node.style.lineHeight = '1.4';
-                        text_node.style.maxWidth = '250px';
+                        textNode.style.whiteSpace = 'pre-wrap';
+                        textNode.style.lineHeight = '1.4';
+                        textNode.style.maxWidth = '250px';
                     }
-                    text_node.textContent = String(this.text ?? '');
-                    this.node.append(text_node);
+                    textNode.textContent = String(this.text ?? '');
+                    this.node.append(textNode);
                 }
 
                 /**
@@ -6263,10 +5638,10 @@ function initialize_light_plugin() {
                  */
                 update() {
                     // Evaluate the native Blockbench display condition.
-                    let condition_met = Condition(this.condition);
+                    const conditionMet = Condition(this.condition);
                     this.nodes.forEach(node => {
                         // Keep flex display so the toolbar layout remains stable.
-                        node.style.display = condition_met ? 'flex' : 'none';
+                        node.style.display = conditionMet ? 'flex' : 'none';
                     });
 
                     // Run the optional custom update callback.
@@ -6348,16 +5723,16 @@ function initialize_light_plugin() {
                 buildDOM() {
                     this.node.innerHTML = ''; // Clear previous
 
-                    // 1. Add Icon if defined
+                    // Add the optional leading icon.
                     if (this.icon_name) {
-                        let icon_node = Blockbench.getIconNode(this.icon_name);
-                        icon_node.style.fontSize = '1em';
-                        icon_node.style.marginRight = '4px';
-                        icon_node.style.color = this.color || 'var(--color-text)';
-                        this.node.append(icon_node);
+                        const iconNode = Blockbench.getIconNode(this.icon_name);
+                        iconNode.style.fontSize = '1em';
+                        iconNode.style.marginRight = '4px';
+                        iconNode.style.color = this.color || 'var(--color-text)';
+                        this.node.append(iconNode);
                     }
 
-                    // 2. Add standard Input element
+                    // Add the standard input element.
                     this.input_node = document.createElement('input');
                     this.input_node.type = 'text';
                     this.input_node.value = this.value;
@@ -6464,8 +5839,8 @@ function initialize_light_plugin() {
                  */
                 update() {
                     // Evaluate the native Blockbench condition to show/hide
-                    let condition_met = Condition(this.condition);
-                    this.node.style.display = condition_met ? 'flex' : 'none';
+                    const conditionMet = Condition(this.condition);
+                    this.node.style.display = conditionMet ? 'flex' : 'none';
 
                     // Keep input synchronized if value was modified externally
                     if (this.input_node.value !== this.value) {
@@ -6480,7 +5855,7 @@ function initialize_light_plugin() {
             window.TextInputWidget = TextInputWidget;
 
 
-            // 1. Estilos CSS ultra-optimizados para encajar en el ancho fijo del Spectrum
+            // Compact CSS tuned for Spectrum's fixed width.
             const advancedColorPickerStyles = Blockbench.addCSS(`
     .advanced_color_ui {
         display: flex;
@@ -6545,7 +5920,7 @@ function initialize_light_plugin() {
             deletables.push(advancedColorPickerStyles);
 
 
-            // 2. MARK: Widget AdvancedColorPicker
+            // MARK: Advanced color picker widget
             class AdvancedColorPicker extends Widget {
                 constructor(id, data) {
                     if (typeof id === 'object') {
@@ -6766,7 +6141,7 @@ function initialize_light_plugin() {
             window.AdvancedColorPicker = AdvancedColorPicker;
 
 
-            // 3. MARK: FormElement AdvancedColor
+            // MARK: Advanced color form element
             FormElement.types.advanced_color = class FormElementAdvancedColor extends FormElement {
 
                 get uses_wide_inputs() { return false; }
@@ -6890,7 +6265,7 @@ function initialize_light_plugin() {
                         reset_value: data.reset_value !== undefined ? data.reset_value : this.value
                     };
 
-                    // --- 1. BUILD THE INTERNAL SLIDER UI ---
+                    // Build the internal slider UI.
                     let rangeInput = Interface.createElement('input', {
                         type: 'range',
                         value: this.value,
@@ -6901,8 +6276,8 @@ function initialize_light_plugin() {
                         style: `margin: 0;flex: 1 1 auto;width: 100%;min-width: 30px;transition: opacity 0.2s, filter 0.2s;${data.color ? '--color-thumb: ' + data.color + ';' : ''}`
                     });
 
-                    // Usamos type="text" con inputmode, como lo hace Blockbench para evitar que
-                    // los botones nativos del navegador estorben visualmente al ícono "<>".
+                    // Match Blockbench's text input with inputmode so native browser
+                    // spinner buttons do not interfere visually with the "<>" icon.
                     let numberInputOptions = {
                         type: 'text',
                         inputmode: this.settings.min >= 0 ? 'decimal' : '',
@@ -6913,6 +6288,11 @@ function initialize_light_plugin() {
                     };
 
                     let numberInput = Interface.createElement('input', numberInputOptions);
+                    const accessibleName = data.label
+                        ? (typeof tl !== 'undefined' ? tl(data.label) : data.label)
+                        : (data.description ? (typeof tl !== 'undefined' ? tl(data.description) : data.description) : 'Value');
+                    rangeInput.setAttribute('aria-label', accessibleName);
+                    numberInput.setAttribute('aria-label', `${accessibleName} value`);
                     this.rangeInput = rangeInput;
                     this.numberInput = numberInput;
 
@@ -6968,12 +6348,20 @@ function initialize_light_plugin() {
                             title: 'Reset',
                             style: `font-size: 18px;cursor: pointer;display: none;margin-left: 2px;color: var(--color-subtle_text);display: flex;align-items: center;`
                         }, 'replay');
+                        this.resetBtn.tabIndex = 0;
+                        this.resetBtn.setAttribute('role', 'button');
+                        this.resetBtn.setAttribute('aria-label', `Reset ${accessibleName}`);
 
                         this.resetBtn.onclick = (e) => {
                             if (this.is_disabled) return;
                             if (this.onBefore) this.onBefore(e);
                             this.setValue(this.settings.reset_value, true);
                             if (this.onAfter) this.onAfter(e);
+                        };
+                        this.resetBtn.onkeydown = e => {
+                            if (e.key !== 'Enter' && e.key !== ' ') return;
+                            e.preventDefault();
+                            this.resetBtn.onclick(e);
                         };
                         containerChildren.push(this.resetBtn);
                     }
@@ -6985,7 +6373,7 @@ function initialize_light_plugin() {
                     }, containerChildren);
 
 
-                    // --- 2. MODE CONFIGURATION ---
+                    // Configure the selected interaction mode.
                     if (this.is_compact) {
                         bar.classList.add('full_width_dialog_bar');
                         bar.style.padding = '0';
@@ -6994,22 +6382,27 @@ function initialize_light_plugin() {
                         this.node = document.createElement('div');
                         this.node.className = 'tool widget compact_dropdown_select';
                         this.node.style = `display: flex; align-items: center; cursor: pointer; padding: 2px 6px; background: ${data.background || 'var(--color-button)'}; border-radius: 2px; height: 30px; box-sizing: border-box; flex-shrink: 0;`;
+                        this.node.tabIndex = 0;
+                        this.node.setAttribute('role', 'button');
+                        this.node.setAttribute('aria-haspopup', 'dialog');
+                        this.node.setAttribute('aria-expanded', 'false');
+                        this.node.setAttribute('aria-label', accessibleName);
 
-                        let icon_wrapper = document.createElement('div');
-                        icon_wrapper.className = 'main_icon_wrapper';
-                        icon_wrapper.style = 'display: flex; align-items: center; margin-right: 4px;';
+                        const iconWrapper = document.createElement('div');
+                        iconWrapper.className = 'main_icon_wrapper';
+                        iconWrapper.style = 'display: flex; align-items: center; margin-right: 4px;';
 
-                        let main_icon = Blockbench.getIconNode(data.icon || 'settings');
+                        const mainIcon = Blockbench.getIconNode(data.icon || 'settings');
                         if (data.icon_color) {
-                            main_icon.style.color = data.icon_color;
+                            mainIcon.style.color = data.icon_color;
                         }
-                        icon_wrapper.append(main_icon);
+                        iconWrapper.append(mainIcon);
 
-                        let arrow_node = document.createElement('i');
-                        arrow_node.className = 'fas fa-caret-down dropdown_arrow';
-                        arrow_node.style = 'font-size: 12px; color: var(--color-text); display: flex; align-items: center;';
+                        const arrowNode = document.createElement('i');
+                        arrowNode.className = 'fas fa-caret-down dropdown_arrow';
+                        arrowNode.style = 'font-size: 12px; color: var(--color-text); display: flex; align-items: center;';
 
-                        this.node.append(icon_wrapper, arrow_node);
+                        this.node.append(iconWrapper, arrowNode);
                         bar.append(this.node);
 
                         this.popup_panel = document.createElement('div');
@@ -7038,12 +6431,13 @@ function initialize_light_plugin() {
                             this.popup_panel.style.display = 'none';
                             if (this.popup_panel.parentNode) this.popup_panel.parentNode.removeChild(this.popup_panel);
                             this._isOpen = false;
-
-                            document.removeEventListener('mousedown', this.closePopup);
-                            document.removeEventListener('keydown', this.closePopup);
+                            this.node.setAttribute('aria-expanded', 'false');
+                            this.releasePopupDocumentListeners?.();
+                            this.releasePopupDocumentListeners = null;
                         };
 
                         this.node.addEventListener('mousedown', (e) => {
+                            if (this.is_disabled) return;
                             if (this._isOpen) {
                                 this.closePopup({ type: 'mousedown', target: document.body });
                                 return;
@@ -7063,11 +6457,25 @@ function initialize_light_plugin() {
                             this.popup_panel.style.left = leftPos + 'px';
 
                             this._isOpen = true;
+                            this.node.setAttribute('aria-expanded', 'true');
 
-                            setTimeout(() => {
+                            scheduleLightManagerTimeout(() => {
+                                if (!this._isOpen) return;
                                 document.addEventListener('mousedown', this.closePopup);
                                 document.addEventListener('keydown', this.closePopup);
+                                this.releasePopupDocumentListeners = trackDocumentInteraction(() => {
+                                    document.removeEventListener('mousedown', this.closePopup);
+                                    document.removeEventListener('keydown', this.closePopup);
+                                    if (this.popup_panel.parentNode) this.popup_panel.parentNode.removeChild(this.popup_panel);
+                                    this._isOpen = false;
+                                    this.node.setAttribute('aria-expanded', 'false');
+                                });
                             }, 10);
+                        });
+                        this.node.addEventListener('keydown', e => {
+                            if (this.is_disabled || (e.key !== 'Enter' && e.key !== ' ')) return;
+                            e.preventDefault();
+                            this.node.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
                         });
 
                     } else {
@@ -7078,20 +6486,20 @@ function initialize_light_plugin() {
                         bar.append(this.node);
                     }
 
-                    // --- 3. INTERNAL SLIDER EVENTS ---
+                    // Bind the internal slider events.
                     let scope = this;
                     let $inputs = $(this.slider_node).find('input');
                     let $range = $(this.slider_node).find('input[type="range"]');
                     let $number = $(this.slider_node).find('input[type="text"]');
 
-                    // Lógica de arrastre para el mini-slider del input ("<>")
+                    // Drag behavior for the input's mini slider ("<>").
                     if (typeof addEventListeners !== 'undefined') {
                         addEventListeners(numSliderIcon, 'mousedown touchstart', e1 => {
                             if (scope.is_disabled) return;
                             if (typeof convertTouchEvent !== 'undefined') convertTouchEvent(e1);
 
-                            let last_difference = 0;
-                            let start_value = parseFloat(scope.numberInput.value) || 0;
+                            let lastDifference = 0;
+                            const startValue = parseFloat(scope.numberInput.value) || 0;
 
                             if (scope.onBefore) scope.onBefore(e1);
                             scope.isDragging = true;
@@ -7100,8 +6508,8 @@ function initialize_light_plugin() {
                                 if (typeof convertTouchEvent !== 'undefined') convertTouchEvent(e2);
                                 let difference = Math.trunc((e2.clientX - e1.clientX) / 10) * (scope.settings.step || 1);
 
-                                if (difference !== last_difference) {
-                                    let newValue = start_value + difference;
+                                if (difference !== lastDifference) {
+                                    let newValue = startValue + difference;
 
                                     if (!scope.settings.allow_lower && newValue < scope.settings.min) newValue = scope.settings.min;
                                     if (!scope.settings.allow_higher && newValue > scope.settings.max) newValue = scope.settings.max;
@@ -7114,7 +6522,7 @@ function initialize_light_plugin() {
 
                                     scope.setValue(newValue, true, false);
                                     if (scope.onDrag) scope.onDrag(newValue, e2, true);
-                                    last_difference = difference;
+                                    lastDifference = difference;
                                 }
                             };
 
@@ -7133,18 +6541,18 @@ function initialize_light_plugin() {
                         });
                     }
 
-                    // Dispara la actualización continua sin onBefore/onAfter
+                    // Trigger continuous updates without onBefore/onAfter.
                     $inputs.on('input', function (event) {
                         let val = parseFloat($(event.target).val());
                         if (isNaN(val)) return;
-                        let is_number_input = event.target === $number[0];
-                        scope.setValue(val, true, is_number_input);
+                        const isNumberInput = event.target === $number[0];
+                        scope.setValue(val, true, isNumberInput);
                         if (scope.onDrag && (scope.isDragging || event.target === $range[0])) {
-                            scope.onDrag(val, event.originalEvent, is_number_input);
+                            scope.onDrag(val, event.originalEvent, isNumberInput);
                         }
                     });
 
-                    // Eventos onBefore (Mismo comportamiento que un Widget)
+                    // Trigger onBefore with the same behavior as a Widget.
                     $range.on('mousedown touchstart', function (event) {
                         scope.isDragging = true;
                         if (scope.onBefore) scope.onBefore(event.originalEvent);
@@ -7154,7 +6562,7 @@ function initialize_light_plugin() {
                         if (scope.onBefore) scope.onBefore(event.originalEvent);
                     });
 
-                    // Eventos onAfter (Cuando se termina de modificar)
+                    // Trigger onAfter when editing finishes.
                     $range.on('mouseup touchend', function () {
                         scope.isDragging = false;
                         scope.updateResetButton();
@@ -7166,7 +6574,7 @@ function initialize_light_plugin() {
                         if (scope.onAfter) scope.onAfter(event.originalEvent);
                     });
 
-                    // Manejo especial del Number Input
+                    // Special handling for the number input.
                     $number.on('blur', function (event) {
                         let val = parseFloat($(this).val());
                         if (isNaN(val)) {
@@ -7251,7 +6659,7 @@ function initialize_light_plugin() {
                         this.node.title = `${baseName}${this.value}${desc}`;
                     }
 
-                    if (dispatch) this.change(); // Dispara el update global de Blockbench
+                    if (dispatch) this.change(); // Trigger Blockbench's global update.
                 }
 
                 getDefault() {
@@ -7282,7 +6690,11 @@ function initialize_light_plugin() {
                     // Button DOM mirrors the original widget.
                     this.node = document.createElement('div');
                     this.node.className = 'tool widget compact_dropdown_select';
-                    this.node.style = `display: flex; align-items: center; cursor: pointer; padding: 2px 6px; background: ${data.background ? data.background : 'var(--color-button)'}; border-radius: 2px; height: 30px; box-sizing: border-box; flex-shrink: 0;`;
+                    this.node.style = `display: flex; align-items: center; cursor: pointer; padding: 2px 6px; background: ${data.background ? data.background : 'var(--color-button)'}; border-radius: 2px; height: 30px; box-sizing: border-box; flex: ${data.expand ? '1 1 auto' : '0 0 auto'}; min-width: 0;`;
+                    this.node.tabIndex = 0;
+                    this.node.setAttribute('role', 'button');
+                    this.node.setAttribute('aria-haspopup', 'menu');
+                    this.node.setAttribute('aria-expanded', 'false');
 
                     this.icon_wrapper = document.createElement('div');
                     this.icon_wrapper.className = 'main_icon_wrapper';
@@ -7290,9 +6702,14 @@ function initialize_light_plugin() {
 
                     this.arrow_node = document.createElement('i');
                     this.arrow_node.className = 'fas fa-caret-down dropdown_arrow';
-                    this.arrow_node.style = 'font-size: 12px; color: var(--color-text); display: flex; align-items: center;';
+                    this.arrow_node.style = 'font-size: 12px; color: var(--color-text); display: flex; align-items: center; margin-left: auto;';
 
-                    this.node.append(this.icon_wrapper, this.arrow_node);
+                    this.value_label = document.createElement('span');
+                    this.value_label.className = 'compact_dropdown_value';
+                    this.value_label.style = 'font-size: 13px; color: var(--color-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1 1 auto;';
+                    this.value_label.hidden = !data.show_value_text;
+
+                    this.node.append(this.icon_wrapper, this.value_label, this.arrow_node);
 
                     // Group with the label when present without splitting the row in half.
                     let outerContainer = document.createElement('div');
@@ -7318,10 +6735,21 @@ function initialize_light_plugin() {
 
                     // Events.
                     this.node.addEventListener('click', (event) => {
+                        if (this.is_disabled) return;
                         this.open(event);
                     });
 
+                    this.node.addEventListener('keydown', event => {
+                        if (this.is_disabled) return;
+                        if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            this.open(event);
+                        }
+                    });
+
                     $(this.node).on('wheel', event => {
+                        if (this.is_disabled || document.activeElement !== this.node) return;
+                        event.preventDefault();
                         let e = event.originalEvent;
                         let index = this.values.indexOf(this.value);
                         index += e.deltaY < 0 ? -1 : 1;
@@ -7335,6 +6763,7 @@ function initialize_light_plugin() {
                 }
 
                 open(event) {
+                    if (this.is_disabled) return;
                     if (Menu.closed_in_this_click == this.id) return;
                     let scope = this;
                     let items = [];
@@ -7343,11 +6772,14 @@ function initialize_light_plugin() {
                         let opt = this.options_dict[key];
                         if (opt) {
                             items.push({
+                                id: key,
                                 name: opt.name || key,
                                 icon: opt.icon,
-                                color: undefined,//opt.color ? getStylizedContrastingColor(opt.color, 'var(--color-bright_ui)', {minContrast: 2.5}) : undefined,
+                                color: undefined,
                                 condition: opt.condition,
+                                marked: key === this.value,
                                 click: (e) => {
+                                    scope.node.setAttribute('aria-expanded', 'false');
                                     scope.setValue(key);
                                     scope.change();
                                 }
@@ -7360,7 +6792,70 @@ function initialize_light_plugin() {
                         menu.node.classList.add('compact_dropdown_menu');
                         menu.node.style['min-width'] = this.node.clientWidth + 'px';
                     }
+
                     menu.open(this.node);
+                    this.node.setAttribute('aria-expanded', 'true');
+
+                    // Inject custom hover and selection styles
+                    let styleBlock = document.createElement('style');
+                    let cssRules = '';
+
+                    for (let key in this.options_dict) {
+                        let opt = this.options_dict[key];
+
+                        if (opt && opt.color) {
+                            let safeKey = key.replace(/"/g, '\\"');
+                            let li = menu.node.querySelector(`li[menu_item="${safeKey}"]`);
+
+                            if (li) {
+                                let customClass = 'custom_hover_' + key.replace(/[^a-zA-Z0-9]/g, '_');
+                                li.classList.add(customClass);
+
+                                cssRules += `
+                                    
+                                    .${customClass} {
+                                        /*color: ${opt.color} !important;
+                                        
+                                        -webkit-text-stroke: 1px color-mix(in oklab, ${opt.color} 80%, var(--color-accent_text)) !important;*/
+                                        
+                                       background: linear-gradient(90deg, ${opt.color} 0px, var(--color-bright_ui) 32px);
+                                    }
+
+                                    /*.${customClass}:hover i,
+                                    .${customClass}.focused i,
+                                    .${customClass}.marked i {
+                                        color: color-mix(in oklab, ${opt.color} 60%, var(--color-accent_text)) !important;
+                                    }*/
+
+                                    
+                                    .${customClass}:hover,
+                                    .${customClass}.focused {
+                                        /*background-color: color-mix(in oklab, ${opt.color} 25%, var(--color-bright_ui)) !important;*/
+                                        background: linear-gradient(90deg, ${opt.color} 0px, var(--color-bright_ui) 50%);
+                                        color: var(--color-accent_text) !important;
+                                    }
+
+                                    .${customClass}.marked {
+                                        /*background-color: ${opt.color} !important;*/
+                                        background: linear-gradient(90deg, ${opt.color} 0px, var(--color-bright_ui) 100%);
+                                        color: var(--color-accent_text) !important;
+                                    }
+
+                                    
+                                    /*.${customClass}:hover *,
+                                    .${customClass}.focused *,
+                                    .${customClass}.marked * {
+                                        background: linear-gradient(90deg, ${opt.color} 0px, var(--color-bright_ui) 32px);
+                                    }*/
+                                `;
+                            }
+                        }
+                    }
+
+                    if (cssRules !== '') {
+                        styleBlock.innerHTML = cssRules;
+                        menu.node.appendChild(styleBlock);
+                    }
                 }
 
                 updateVisuals() {
@@ -7371,6 +6866,8 @@ function initialize_light_plugin() {
                     let optName = opt.name || this.value;
                     let desc = (this.options.description /*&& !this.options.label*/) ? '\n' + (typeof tl !== 'undefined' ? tl(this.options.description) : this.options.description) : '';
                     this.node.title = `${baseName}${optName}${desc}`;
+                    this.node.setAttribute('aria-label', `${baseName}${optName}`);
+                    this.value_label.textContent = optName;
 
                     this.icon_wrapper.innerHTML = '';
                     let iconElement = Blockbench.getIconNode(opt.icon || 'help');
@@ -7629,22 +7126,22 @@ function initialize_light_plugin() {
                     this.node.innerHTML = '';
 
                     if (this.icon_name) {
-                        let icon_node = Blockbench.getIconNode(this.icon_name);
-                        icon_node.style.fontSize = '1.1em';
-                        icon_node.style.display = 'flex';
-                        icon_node.style.alignItems = 'center';
-                        this.node.append(icon_node);
+                        const iconNode = Blockbench.getIconNode(this.icon_name);
+                        iconNode.style.fontSize = '1.1em';
+                        iconNode.style.display = 'flex';
+                        iconNode.style.alignItems = 'center';
+                        this.node.append(iconNode);
                     }
 
                     if (this.inline_label) {
-                        let label_node = document.createElement('span');
-                        label_node.className = 'bar_display_label';
-                        label_node.style.fontWeight = 'bold';
-                        label_node.style.opacity = '0.85';
-                        label_node.style.display = 'flex';
-                        label_node.style.alignItems = 'center';
-                        label_node.innerText = typeof tl !== 'undefined' ? tl(this.inline_label) : this.inline_label;
-                        this.node.append(label_node);
+                        const labelNode = document.createElement('span');
+                        labelNode.className = 'bar_display_label';
+                        labelNode.style.fontWeight = 'bold';
+                        labelNode.style.opacity = '0.85';
+                        labelNode.style.display = 'flex';
+                        labelNode.style.alignItems = 'center';
+                        labelNode.innerText = typeof tl !== 'undefined' ? tl(this.inline_label) : this.inline_label;
+                        this.node.append(labelNode);
 
                         if (this.description) {
                             let infoIcon = document.createElement('i');
@@ -7715,7 +7212,7 @@ function initialize_light_plugin() {
                     let data = this.options;
                     this.value = data.value !== undefined ? !!data.value : (data.default !== undefined ? !!data.default : false);
 
-                    // --- Customization Settings ---
+                    // Customization settings.
                     this.icon_on = data.icon_on || 'check_box';
                     this.icon_off = data.icon_off || 'check_box_outline_blank';
                     this.icon_color_on = data.icon_color_on || 'var(--color-text)';
@@ -7724,24 +7221,25 @@ function initialize_light_plugin() {
                     this.layout = data.layout || 'icon_left'; // Options: 'icon_left', 'icon_right', 'space_between'
                     this.icon_size = data.icon_size || '18px';
 
-                    // Dynamic Padding Compilation
-                    let padding_value = data.padding !== undefined ? data.padding : '0 4px';
+                    let paddingValue = data.padding !== undefined ? data.padding : '0 4px';
                     if (data.padding_left !== undefined || data.padding_right !== undefined || data.padding_top !== undefined || data.padding_bottom !== undefined) {
                         let top = data.padding_top || '0';
                         let right = data.padding_right || '0';
                         let bottom = data.padding_bottom || '0';
                         let left = data.padding_left || '0';
-                        padding_value = `${top} ${right} ${bottom} ${left}`;
+                        paddingValue = `${top} ${right} ${bottom} ${left}`;
                     }
 
                     // Main Interactive Container
                     this.node = document.createElement('div');
                     this.node.className = 'tool widget custom_checkbox';
+                    this.node.tabIndex = 0;
+                    this.node.setAttribute('role', 'checkbox');
                     Object.assign(this.node.style, {
                         display: 'flex',
                         alignItems: 'center',
                         height: '30px',
-                        padding: padding_value,
+                        padding: paddingValue,
                         boxSizing: 'border-box',
                         width: '100%',
                         cursor: 'pointer',
@@ -7752,8 +7250,11 @@ function initialize_light_plugin() {
                     if (data.description) {
                         this.node.title = typeof tl !== 'undefined' ? tl(data.description) : data.description;
                     }
+                    if (data.label) {
+                        this.node.setAttribute('aria-label', typeof tl !== 'undefined' ? tl(data.label) : data.label);
+                    }
 
-                    // --- Create Icon Wrapper & Node ---
+                    // Create the icon and label nodes.
                     this.icon_wrapper = document.createElement('div');
                     Object.assign(this.icon_wrapper.style, {
                         display: 'flex',
@@ -7778,7 +7279,6 @@ function initialize_light_plugin() {
 
                     this.icon_wrapper.append(this.icon_node);
 
-                    // Create Label Node
                     this.label_node = document.createElement('span');
                     Object.assign(this.label_node.style, {
                         fontSize: '13px',
@@ -7793,7 +7293,7 @@ function initialize_light_plugin() {
                         this.label_node.innerText = typeof tl !== 'undefined' ? tl(data.label) : data.label;
                     }
 
-                    // --- Layout Configuration ---
+                    // Apply the requested layout.
                     if (this.layout === 'icon_left') {
                         this.node.style.justifyContent = 'flex-start';
                         this.node.style.gap = '8px';
@@ -7813,7 +7313,15 @@ function initialize_light_plugin() {
 
                     // Click Event Listener
                     this.node.addEventListener('click', () => {
+                        if (this.is_disabled) return;
                         this.setValue(!this.value);
+                    });
+                    this.node.addEventListener('keydown', event => {
+                        if (this.is_disabled) return;
+                        if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            this.setValue(!this.value);
+                        }
                     });
 
                     // Apply initial visual state
@@ -7821,30 +7329,30 @@ function initialize_light_plugin() {
                 }
 
                 updateVisuals(animate = true) {
-                    let current_icon = this.value ? this.icon_on : this.icon_off;
-                    let current_color = this.value ? this.icon_color_on : this.icon_color_off;
+                    const currentIcon = this.value ? this.icon_on : this.icon_off;
+                    const currentColor = this.value ? this.icon_color_on : this.icon_color_off;
+                    this.node.setAttribute('aria-checked', this.value ? 'true' : 'false');
 
                     // Reset classes
                     this.icon_node.className = '';
                     this.icon_node.innerText = '';
 
                     // Detect FontAwesome vs Material Icons
-                    let isFa = /^(fa-|fas |fab |far )/.test(current_icon);
+                    const isFa = /^(fa-|fas |fab |far )/.test(currentIcon);
 
                     if (isFa) {
-                        this.icon_node.className = `fa ${current_icon}`;
+                        this.icon_node.className = `fa ${currentIcon}`;
                     } else {
                         this.icon_node.className = 'material-icons';
-                        this.icon_node.innerText = current_icon;
+                        this.icon_node.innerText = currentIcon;
                     }
 
-                    // Apply dynamic color
-                    this.icon_node.style.color = current_color;
+                    this.icon_node.style.color = currentColor;
 
                     // Trigger scale "pop" animation
                     if (animate) {
                         this.icon_node.style.transform = 'scale(0.7)';
-                        setTimeout(() => {
+                        scheduleLightManagerTimeout(() => {
                             this.icon_node.style.transform = 'scale(1)';
                         }, 50); // Slight delay allows the browser to register the transform change
                     } else {
@@ -7903,9 +7411,8 @@ function initialize_light_plugin() {
                     this.icon_size = data.icon_size || '18px';
                     this.button_size = data.button_size || '30px';
 
-                    // --- Wrapper del Label ---
-                    let has_label = !!data.label;
-                    if (has_label) {
+                    const hasLabel = !!data.label;
+                    if (hasLabel) {
                         bar.style.width = '100%';
                         bar.style.justifyContent = 'space-between';
 
@@ -7930,9 +7437,10 @@ function initialize_light_plugin() {
                         bar.style.justifyContent = 'flex-start';
                     }
 
-                    // --- Botón Toggle ---
                     this.toggle_btn = document.createElement('div');
                     this.toggle_btn.className = 'tool widget action_toggle_btn';
+                    this.toggle_btn.tabIndex = 0;
+                    this.toggle_btn.setAttribute('role', 'switch');
                     Object.assign(this.toggle_btn.style, {
                         display: 'flex',
                         alignItems: 'center',
@@ -7943,17 +7451,16 @@ function initialize_light_plugin() {
                         cursor: 'pointer',
                         flexShrink: '0',
                         margin: '0',
-                        position: 'relative', // Importante para que el tooltip se posicione bien
+                        position: 'relative', // Keep the tooltip positioned against this control.
                         transition: this.animate_click ? 'background 0.2s ease, color 0.2s ease' : 'none'
                     });
 
-                    // --- Tooltip Nativo de Blockbench ---
-                    let tooltip_text = data.title || data.description || data.label;
-                    if (tooltip_text) {
-                        this.toggle_btn.title = typeof tl !== 'undefined' ? tl(tooltip_text) : tooltip_text;
+                    const tooltipText = data.title || data.description || data.label;
+                    if (tooltipText) {
+                        this.toggle_btn.title = typeof tl !== 'undefined' ? tl(tooltipText) : tooltipText;
+                        this.toggle_btn.setAttribute('aria-label', typeof tl !== 'undefined' ? tl(tooltipText) : tooltipText);
                     }
 
-                    // --- Icono ---
                     this.icon_node = document.createElement('i');
                     Object.assign(this.icon_node.style, {
                         fontSize: this.icon_size,
@@ -7967,34 +7474,43 @@ function initialize_light_plugin() {
                     bar.append(this.toggle_btn);
 
                     this.toggle_btn.addEventListener('click', () => {
+                        if (this.is_disabled) return;
                         this.setValue(!this.value);
+                    });
+                    this.toggle_btn.addEventListener('keydown', event => {
+                        if (this.is_disabled) return;
+                        if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            this.setValue(!this.value);
+                        }
                     });
 
                     this.updateVisuals(false);
                 }
 
-                updateVisuals(trigger_anim = true) {
-                    let current_icon = this.value ? this.icon_on : this.icon_off;
-                    let current_bg = this.value ? this.bg_on : this.bg_off;
-                    let current_color = this.value ? this.color_on : this.color_off;
+                updateVisuals(triggerAnimation = true) {
+                    const currentIcon = this.value ? this.icon_on : this.icon_off;
+                    const currentBackground = this.value ? this.bg_on : this.bg_off;
+                    const currentColor = this.value ? this.color_on : this.color_off;
+                    this.toggle_btn.setAttribute('aria-checked', this.value ? 'true' : 'false');
 
-                    this.toggle_btn.style.background = current_bg;
-                    this.icon_node.style.color = current_color;
+                    this.toggle_btn.style.background = currentBackground;
+                    this.icon_node.style.color = currentColor;
 
                     this.icon_node.className = '';
                     this.icon_node.innerText = '';
 
-                    let isFa = /^(fa-|fas |fab |far )/.test(current_icon);
+                    const isFa = /^(fa-|fas |fab |far )/.test(currentIcon);
                     if (isFa) {
-                        this.icon_node.className = `fa ${current_icon}`;
+                        this.icon_node.className = `fa ${currentIcon}`;
                     } else {
                         this.icon_node.className = 'material-icons';
-                        this.icon_node.innerText = current_icon;
+                        this.icon_node.innerText = currentIcon;
                     }
 
-                    if (this.animate_click && trigger_anim) {
+                    if (this.animate_click && triggerAnimation) {
                         this.icon_node.style.transform = 'scale(0.6)';
-                        setTimeout(() => {
+                        scheduleLightManagerTimeout(() => {
                             this.icon_node.style.transform = 'scale(1)';
                         }, 50);
                     } else {
@@ -8025,56 +7541,119 @@ function initialize_light_plugin() {
                 build(bar) {
                     this.bar = bar;
                     bar.classList.add('full_width_dialog_bar');
+
+                    // Match the toggle's base bar styles.
                     bar.style.padding = '0';
                     bar.style.margin = '0';
                     bar.style.background = 'transparent';
+                    bar.style.display = 'flex';
+                    bar.style.alignItems = 'center';
+                    bar.style.gap = '8px';
 
                     const data = this.options;
-                    const label = data.label ? (typeof tl === 'function' ? tl(data.label) : data.label) : '';
-                    const description = data.description || data.title || data.label || '';
-                    const translatedDescription = description && typeof tl === 'function' ? tl(description) : description;
+                    this.animate_click = data.animate !== false;
+                    this.button_size = data.button_size || '30px';
+                    this.icon_size = data.icon_size || '18px'; // Match the toggle's 18 px icon size.
 
-                    this.node = document.createElement('button');
-                    this.node.type = 'button';
+                    const hasLabel = !!data.label;
+                    if (hasLabel) {
+                        bar.style.width = '100%';
+                        bar.style.justifyContent = 'space-between';
+
+                        let labelWrapper = document.createElement('div');
+                        labelWrapper.style = 'display: flex; align-items: center; gap: 4px; flex: 1 1 auto; min-width: 0;';
+
+                        let labelElement = document.createElement('span');
+                        labelElement.style = 'font-size: 13px; color: var(--color-subtle_text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;';
+                        labelElement.innerText = typeof tl !== 'undefined' ? tl(data.label) : data.label;
+                        labelWrapper.append(labelElement);
+
+                        if (data.description) {
+                            let infoIcon = document.createElement('i');
+                            infoIcon.className = 'fa fa-question dialog_form_description';
+                            infoIcon.style = 'font-size: 14px; cursor: help; margin: 0; color: var(--color-subtle_text);';
+                            infoIcon.title = typeof tl !== 'undefined' ? tl(data.description) : data.description;
+                            labelWrapper.append(infoIcon);
+                        }
+                        bar.append(labelWrapper);
+                    } else {
+                        bar.style.width = 'auto';
+                        bar.style.justifyContent = 'flex-start';
+                    }
+
+                    // Use a div to avoid native button shadows.
+                    this.node = document.createElement('div');
                     this.node.className = 'tool widget light_manager_action_button';
-                    this.node.title = translatedDescription || label;
-                    this.node.setAttribute('aria-label', label || translatedDescription || data.icon || 'Action');
+                    this.node.tabIndex = 0;
+                    this.node.setAttribute('role', 'button');
+
+                    const tooltipText = data.title || data.description || data.label;
+                    if (tooltipText) {
+                        this.node.title = typeof tl !== 'undefined' ? tl(tooltipText) : tooltipText;
+                        this.node.setAttribute('aria-label', typeof tl !== 'undefined' ? tl(tooltipText) : tooltipText);
+                    }
+
                     Object.assign(this.node.style, {
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'center',
-                        gap: label ? '6px' : '0',
-                        minWidth: data.button_size || '30px',
-                        width: label ? 'auto' : (data.button_size || '30px'),
-                        height: data.button_size || '30px',
-                        padding: label ? '0 8px' : '0',
+                        gap: data.text ? '6px' : '0', // Set data.text to display text inside the button.
+                        minWidth: this.button_size,
+                        width: data.text ? 'auto' : this.button_size,
+                        height: this.button_size,
+                        padding: data.text ? '0 8px' : '0',
                         margin: '0',
-                        border: '0',
+                        border: 'none',
+                        outline: 'none',
                         borderRadius: '2px',
                         boxSizing: 'border-box',
                         background: data.background || 'transparent',
                         color: data.color || 'var(--color-text)',
                         cursor: 'pointer',
-                        flexShrink: '0'
+                        flexShrink: '0',
+                        position: 'relative',
+                        transition: this.animate_click ? 'background 0.2s ease, color 0.2s ease' : 'none'
                     });
 
                     const icon = Blockbench.getIconNode(data.icon || 'tune');
-                    icon.style.fontSize = data.icon_size || '20px';
-                    icon.style.color = data.icon_color || data.color || 'var(--color-text)';
+                    Object.assign(icon.style, {
+                        fontSize: this.icon_size,
+                        color: data.icon_color || data.color || 'var(--color-text)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        transition: this.animate_click ? 'transform 0.15s cubic-bezier(0.2, 1.5, 0.4, 1)' : 'none'
+                    });
                     this.node.append(icon);
 
-                    if (label) {
-                        const labelNode = document.createElement('span');
-                        labelNode.textContent = label;
-                        labelNode.style.whiteSpace = 'nowrap';
-                        this.node.append(labelNode);
+                    if (data.text) {
+                        const textNode = document.createElement('span');
+                        textNode.textContent = typeof tl !== 'undefined' ? tl(data.text) : data.text;
+                        textNode.style.whiteSpace = 'nowrap';
+                        this.node.append(textNode);
                     }
 
                     const trigger = event => {
                         if (this.is_disabled) return;
+
+                        // Trigger the click animation.
+                        if (this.animate_click) {
+                            icon.style.transform = 'scale(0.6)';
+                            scheduleLightManagerTimeout(() => {
+                                icon.style.transform = 'scale(1)';
+                            }, 50);
+                        }
+
                         if (typeof data.click === 'function') data.click(event, this);
                     };
+
                     this.node.addEventListener('click', trigger);
+                    this.node.addEventListener('keydown', event => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            trigger(event);
+                        }
+                    });
                     bar.append(this.node);
                 }
 
@@ -8116,6 +7695,23 @@ function initialize_light_plugin() {
                         this.value[i] = parseFloat(this.value[i]) || 0;
                     }
 
+                    let molangParseFailureReported = false;
+                    const parseNumericInput = (text, currentValue) => {
+                        const numericValue = parseFloat(text);
+                        if (!Number.isNaN(numericValue)) return numericValue;
+                        if (typeof NumSlider === 'undefined' || !NumSlider.MolangParser) return 0;
+
+                        try {
+                            return NumSlider.MolangParser.parse(text, { val: currentValue, n: 0 });
+                        } catch (error) {
+                            if (!molangParseFailureReported) {
+                                console.warn('[Light Manager] Could not parse a vector input as Molang.', error);
+                                molangParseFailureReported = true;
+                            }
+                            return 0;
+                        }
+                    };
+
                     const axes = [
                         { name: 'X', key: 'x', color: 'x', css: 'var(--color-axis-x)' },
                         { name: 'Y', key: 'y', color: 'y', css: 'var(--color-axis-y)' },
@@ -8123,7 +7719,7 @@ function initialize_light_plugin() {
                         { name: 'W', key: 'w', color: 'w', css: 'var(--color-axis-w, var(--color-text))' }
                     ];
 
-                    let has_any_range = false;
+                    let hasAnyRange = false;
                     for (let i = 0; i < this.dimensions; i++) {
                         let axis = axes[i] || { key: String(i) };
                         let cConfig = (data.ranges && data.ranges[axis.key]) ? data.ranges[axis.key] : {};
@@ -8132,7 +7728,7 @@ function initialize_light_plugin() {
                         let maxCheck = cConfig.max !== undefined ? cConfig.max : (Array.isArray(data.max) ? data.max[i] : data.max);
 
                         if (minCheck !== undefined && maxCheck !== undefined) {
-                            has_any_range = true;
+                            hasAnyRange = true;
                             break;
                         }
                     }
@@ -8193,7 +7789,7 @@ function initialize_light_plugin() {
 
                     // Input container.
                     this.inputs_container = document.createElement('div');
-                    this.inputs_container.style = has_any_range
+                    this.inputs_container.style = hasAnyRange
                         ? 'display: flex; flex-direction: column; gap: 4px; width: 100%;'
                         : 'display: flex; flex-direction: row; gap: 4px; width: 100%;';
 
@@ -8213,11 +7809,11 @@ function initialize_light_plugin() {
                         let allowLower = cConfig.allow_lower !== undefined ? cConfig.allow_lower : (Array.isArray(data.allow_lower) ? data.allow_lower[i] : !!data.allow_lower);
                         let allowHigher = cConfig.allow_higher !== undefined ? cConfig.allow_higher : (cConfig.allow_greater !== undefined ? cConfig.allow_greater : (Array.isArray(data.allow_higher) ? data.allow_higher[i] : !!data.allow_higher));
 
-                        let is_range = minVal !== undefined && maxVal !== undefined;
+                        const isRange = minVal !== undefined && maxVal !== undefined;
 
                         // Row wrapper, used only when the vector has at least one slider.
                         let rowContainer = null;
-                        if (has_any_range) {
+                        if (hasAnyRange) {
                             rowContainer = document.createElement('div');
                             rowContainer.style = 'display: flex; flex-direction: row; align-items: center; height: 30px; width: 100%; box-sizing: border-box;';
 
@@ -8227,7 +7823,7 @@ function initialize_light_plugin() {
                             rowContainer.append(axisLabel);
                         }
 
-                        if (is_range) {
+                        if (isRange) {
                             // Combo-slider style mode.
                             let sliderInitVal = val;
                             if (!allowLower && sliderInitVal < minVal) sliderInitVal = minVal;
@@ -8380,14 +7976,7 @@ function initialize_light_plugin() {
                                                     });
                                                     this.setValue(vec);
                                                 } else {
-                                                    let num = parseFloat(text);
-                                                    if (isNaN(num)) {
-                                                        try {
-                                                            if (typeof NumSlider !== 'undefined' && NumSlider.MolangParser) {
-                                                                num = NumSlider.MolangParser.parse(text, { val: parseFloat(this.value[i]) || 0, n: 0 });
-                                                            } else { num = 0; }
-                                                        } catch (err) { num = 0; }
-                                                    }
+                                                    const num = parseNumericInput(text, parseFloat(this.value[i]) || 0);
                                                     let newValue = this.value.slice();
                                                     newValue[i] = num;
                                                     this.setValue(newValue);
@@ -8400,8 +7989,8 @@ function initialize_light_plugin() {
                                             name: 'menu.slider.round_value',
                                             icon: 'percent',
                                             click: () => {
-                                                let old_val = parseFloat(this.value[i]) || 0;
-                                                let rounded = Math.round(old_val);
+                                                const oldValue = parseFloat(this.value[i]) || 0;
+                                                const rounded = Math.round(oldValue);
                                                 let newValue = this.value.slice();
                                                 newValue[i] = rounded;
                                                 this.setValue(newValue);
@@ -8430,8 +8019,8 @@ function initialize_light_plugin() {
                             numSliderNode.className = 'tool wide widget nslide_tool';
 
                             if (axis.color) {
-                                let css_color = 'uvwxyz'.includes(axis.color.toString()) ? `var(--color-axis-${axis.color})` : axis.color;
-                                numSliderNode.style.setProperty('--corner-color', css_color);
+                                const cssColor = 'uvwxyz'.includes(axis.color.toString()) ? `var(--color-axis-${axis.color})` : axis.color;
+                                numSliderNode.style.setProperty('--corner-color', cssColor);
                                 numSliderNode.classList.add('is_colored');
                             }
 
@@ -8441,8 +8030,8 @@ function initialize_light_plugin() {
                             nslideInner.innerText = typeof trimFloatNumber !== 'undefined' ? trimFloatNumber(parseFloat(val) || 0) : val;
                             numSliderNode.append(nslideInner);
 
-                            let jq_outer = $(numSliderNode);
-                            let jq_inner = $(nslideInner);
+                            const $outer = $(numSliderNode);
+                            const $inner = $(nslideInner);
 
                             let defaultVal = data.default ? (Array.isArray(data.default) ? data.default[i] : data.default) : 0;
                             let sensitivity = 30;
@@ -8469,27 +8058,22 @@ function initialize_light_plugin() {
                                 if (this.updateResetButtonVisibility) this.updateResetButtonVisibility();
                             };
 
-                            let last_value = val;
+                            let lastValue = val;
 
-                            jq_inner.on('mousedown touchstart', async (event) => {
-                                if (jq_inner.hasClass('editing')) return;
-                                last_value = parseFloat(this.value[i]) || 0;
+                            $inner.on('mousedown touchstart', async (event) => {
+                                if ($inner.hasClass('editing')) return;
+                                lastValue = parseFloat(this.value[i]) || 0;
 
-                                let drag_event = await new Promise((resolve) => {
+                                const dragEvent = await new Promise((resolve) => {
+                                    let releaseDragProbe;
                                     function move(e2) {
                                         if (!e2.clientX || Math.abs(e2.clientX - event.clientX) > 2) {
-                                            document.removeEventListener('mousemove', move);
-                                            document.removeEventListener('touchmove', move);
-                                            document.removeEventListener('mouseup', stop);
-                                            document.removeEventListener('touchend', stop);
+                                            releaseDragProbe();
                                             resolve(e2);
                                         }
                                     }
                                     function stop(e2) {
-                                        document.removeEventListener('mousemove', move);
-                                        document.removeEventListener('touchmove', move);
-                                        document.removeEventListener('mouseup', stop);
-                                        document.removeEventListener('touchend', stop);
+                                        releaseDragProbe();
                                         if (event.target == e2.target) startInput();
                                         resolve(false);
                                     }
@@ -8497,72 +8081,82 @@ function initialize_light_plugin() {
                                     document.addEventListener('touchmove', move);
                                     document.addEventListener('mouseup', stop);
                                     document.addEventListener('touchend', stop);
+                                    releaseDragProbe = trackDocumentInteraction(() => {
+                                        document.removeEventListener('mousemove', move);
+                                        document.removeEventListener('touchmove', move);
+                                        document.removeEventListener('mouseup', stop);
+                                        document.removeEventListener('touchend', stop);
+                                        resolve(false);
+                                    });
                                 });
 
-                                if (!drag_event) return;
+                                if (!dragEvent) return;
 
-                                if (typeof convertTouchEvent !== 'undefined') convertTouchEvent(drag_event);
-                                let clientX = drag_event.clientX;
+                                if (typeof convertTouchEvent !== 'undefined') convertTouchEvent(dragEvent);
+                                let clientX = dragEvent.clientX;
                                 let pre = 0;
-                                let sliding_start_pos = clientX;
-                                let move_calls = 0;
+                                const slidingStartPosition = clientX;
+                                let moveCalls = 0;
 
-                                if (!('touches' in drag_event)) jq_inner.get(0).requestPointerLock();
+                                if (!('touches' in dragEvent)) $inner.get(0).requestPointerLock();
 
                                 let move = (e) => {
                                     if (typeof convertTouchEvent !== 'undefined') convertTouchEvent(e);
-                                    if (drag_event && 'touches' in drag_event) {
+                                    if (dragEvent && 'touches' in dragEvent) {
                                         clientX = e.clientX;
                                     } else {
-                                        let limit = move_calls <= 2 ? 1 : 160;
+                                        const limit = moveCalls <= 2 ? 1 : 160;
                                         clientX += Math.clamp(e.movementX, -limit, limit);
                                     }
 
-                                    let offset = Math.round((clientX - sliding_start_pos) / sensitivity);
+                                    let offset = Math.round((clientX - slidingStartPosition) / sensitivity);
                                     let difference = (offset - pre) * getInterval(e);
                                     pre = offset;
 
                                     if (difference) {
-                                        let old_val = parseFloat(this.value[i]) || 0;
-                                        updateCustomSliderValue(old_val + difference);
+                                        const oldValue = parseFloat(this.value[i]) || 0;
+                                        updateCustomSliderValue(oldValue + difference);
 
-                                        let new_val = parseFloat(this.value[i]) || 0;
-                                        let display_offset = typeof trimFloatNumber !== 'undefined' ? trimFloatNumber(new_val - last_value) : (new_val - last_value);
+                                        const newValue = parseFloat(this.value[i]) || 0;
+                                        const displayOffset = typeof trimFloatNumber !== 'undefined' ? trimFloatNumber(newValue - lastValue) : (newValue - lastValue);
                                         if (typeof Blockbench !== 'undefined' && !Blockbench.isMobile) {
-                                            Blockbench.setStatusBarText(display_offset);
+                                            Blockbench.setStatusBarText(displayOffset);
                                         }
                                     }
-                                    move_calls++;
+                                    moveCalls++;
                                 };
 
-                                let stop = (e) => {
-                                    document.removeEventListener('mousemove', move);
-                                    document.removeEventListener('touchmove', move);
-                                    document.removeEventListener('mouseup', stop);
-                                    document.removeEventListener('touchend', stop);
-                                    document.exitPointerLock();
-                                    if (typeof Blockbench !== 'undefined') Blockbench.setStatusBarText();
+                                let releaseSliderDrag;
+                                let stop = () => {
+                                    releaseSliderDrag();
                                 };
-
                                 document.addEventListener('mousemove', move);
                                 document.addEventListener('touchmove', move);
                                 document.addEventListener('mouseup', stop);
                                 document.addEventListener('touchend', stop);
+                                releaseSliderDrag = trackDocumentInteraction(() => {
+                                    document.removeEventListener('mousemove', move);
+                                    document.removeEventListener('touchmove', move);
+                                    document.removeEventListener('mouseup', stop);
+                                    document.removeEventListener('touchend', stop);
+                                    if (document.pointerLockElement) document.exitPointerLock();
+                                    if (typeof Blockbench !== 'undefined') Blockbench.setStatusBarText();
+                                });
                             });
 
                             let startInput = () => {
-                                jq_inner.find('.nslide_arrow').remove();
-                                jq_inner.attr('contenteditable', 'true');
-                                jq_inner.addClass('editing');
-                                jq_inner.focus();
+                                $inner.find('.nslide_arrow').remove();
+                                $inner.attr('contenteditable', 'true');
+                                $inner.addClass('editing');
+                                $inner.focus();
                                 document.execCommand('selectAll');
                             };
 
                             let stopInput = () => {
-                                if (!jq_inner.hasClass('editing')) return;
-                                let text = jq_inner.text();
+                                if (!$inner.hasClass('editing')) return;
+                                let text = $inner.text();
 
-                                if (last_value.toString() !== text) {
+                                if (lastValue.toString() !== text) {
                                     if (text.split(/\s+/g).length === this.dimensions) {
                                         let components = text.split(/\s+/g);
                                         components.forEach((inputStr, axisIndex) => {
@@ -8587,23 +8181,16 @@ function initialize_light_plugin() {
                                         this.change();
                                     } else {
                                         text = text.replace(/,(?=\d+$)/, '.');
-                                        let num = parseFloat(text);
-                                        if (isNaN(num)) {
-                                            try {
-                                                if (typeof NumSlider !== 'undefined' && NumSlider.MolangParser) {
-                                                    num = NumSlider.MolangParser.parse(text, { val: parseFloat(this.value[i]) || 0, n: 0 });
-                                                } else { num = 0; }
-                                            } catch (err) { num = 0; }
-                                        }
+                                        const num = parseNumericInput(text, parseFloat(this.value[i]) || 0);
                                         updateCustomSliderValue(num);
                                     }
                                 }
-                                jq_inner.removeClass('editing');
-                                jq_inner.attr('contenteditable', 'false');
+                                $inner.removeClass('editing');
+                                $inner.attr('contenteditable', 'false');
                                 nslideInner.innerText = typeof trimFloatNumber !== 'undefined' ? trimFloatNumber(parseFloat(this.value[i]) || 0) : this.value[i];
                             };
 
-                            jq_inner
+                            $inner
                                 .on('keypress', function (e) {
                                     if (e.keyCode === 10 || e.keyCode === 13) {
                                         e.preventDefault();
@@ -8611,19 +8198,19 @@ function initialize_light_plugin() {
                                     }
                                 })
                                 .on('keyup', (e) => {
-                                    if (e.keyCode !== 10 && e.keyCode !== 13) { last_value = parseFloat(this.value[i]) || 0; }
+                                    if (e.keyCode !== 10 && e.keyCode !== 13) { lastValue = parseFloat(this.value[i]) || 0; }
                                     if (e.keyCode === 27) {
-                                        if (!jq_inner.hasClass('editing')) return;
+                                        if (!$inner.hasClass('editing')) return;
                                         e.preventDefault();
-                                        jq_inner.removeClass('editing');
-                                        jq_inner.attr('contenteditable', 'false');
+                                        $inner.removeClass('editing');
+                                        $inner.attr('contenteditable', 'false');
                                         nslideInner.innerText = typeof trimFloatNumber !== 'undefined' ? trimFloatNumber(parseFloat(this.value[i]) || 0) : this.value[i];
                                     }
                                 })
                                 .on('focusout', function () { stopInput(); })
                                 .on('dblclick', function (event) {
                                     if (event.target != this) return;
-                                    jq_inner.text(defaultVal.toString());
+                                    $inner.text(defaultVal.toString());
                                     stopInput();
                                 })
                                 .on('contextmenu', (event) => {
@@ -8663,14 +8250,7 @@ function initialize_light_plugin() {
                                                         });
                                                         this.setValue(vec);
                                                     } else {
-                                                        let num = parseFloat(text);
-                                                        if (isNaN(num)) {
-                                                            try {
-                                                                if (typeof NumSlider !== 'undefined' && NumSlider.MolangParser) {
-                                                                    num = NumSlider.MolangParser.parse(text, { val: parseFloat(this.value[i]) || 0, n: 0 });
-                                                                } else { num = 0; }
-                                                            } catch (err) { num = 0; }
-                                                        }
+                                                        const num = parseNumericInput(text, parseFloat(this.value[i]) || 0);
                                                         updateCustomSliderValue(num);
                                                     }
                                                 }
@@ -8681,8 +8261,8 @@ function initialize_light_plugin() {
                                                 name: 'menu.slider.round_value',
                                                 icon: 'percent',
                                                 click: () => {
-                                                    let old_val = parseFloat(this.value[i]) || 0;
-                                                    updateCustomSliderValue(Math.round(old_val));
+                                                    const oldValue = parseFloat(this.value[i]) || 0;
+                                                    updateCustomSliderValue(Math.round(oldValue));
                                                 }
                                             },
                                             {
@@ -8699,29 +8279,29 @@ function initialize_light_plugin() {
                                     }
                                 });
 
-                            jq_outer
+                            $outer
                                 .on('mouseenter', () => {
-                                    jq_outer.append(
+                                    $outer.append(
                                         '<div class="nslide_arrow na_left" ><i class="material-icons">navigate_before</i></div>' +
                                         '<div class="nslide_arrow na_right"><i class="material-icons">navigate_next</i></div>'
                                     );
                                     let n = Math.clamp(numSliderNode.clientWidth / 2 - 22, 6, 1000);
-                                    jq_outer.find('.nslide_arrow.na_left').click((e) => {
-                                        let old_val = parseFloat(this.value[i]) || 0;
-                                        updateCustomSliderValue(old_val - getInterval(e));
+                                    $outer.find('.nslide_arrow.na_left').click((e) => {
+                                        const oldValue = parseFloat(this.value[i]) || 0;
+                                        updateCustomSliderValue(oldValue - getInterval(e));
                                     }).css('margin-left', (-n - 22) + 'px');
 
-                                    jq_outer.find('.nslide_arrow.na_right').click((e) => {
-                                        let old_val = parseFloat(this.value[i]) || 0;
-                                        updateCustomSliderValue(old_val + getInterval(e));
+                                    $outer.find('.nslide_arrow.na_right').click((e) => {
+                                        const oldValue = parseFloat(this.value[i]) || 0;
+                                        updateCustomSliderValue(oldValue + getInterval(e));
                                     }).css('margin-left', (n) + 'px');
                                 })
                                 .on('mouseleave', () => {
-                                    jq_outer.find('.nslide_arrow').remove();
+                                    $outer.find('.nslide_arrow').remove();
                                 });
 
                             if (rowContainer) {
-                                numSliderNode.style.height = '24px'; // Emparejarlo visualmente con el numero input en la fila
+                                numSliderNode.style.height = '24px'; // Visually match the row's number input.
                                 numSliderNode.style.flex = '1 1 auto';
                                 rowContainer.append(numSliderNode);
                                 this.inputs_container.append(rowContainer);
@@ -8807,7 +8387,11 @@ function initialize_light_plugin() {
             window.LightManagerUI = lightManagerUIApi;
 
             const compactWidgetStyles = Blockbench.addCSS(
-                `.compact_dropdown_select {
+                `.select_menu li.marked > span {
+                    text-decoration: underline;
+                }
+
+                .compact_dropdown_select {
                     display: flex !important;
                     align-items: center;
                     justify-content: center;
@@ -8907,8 +8491,12 @@ function initialize_light_plugin() {
                     lightTextures[key] = texture;
                 });
             };
-            installLightIconTextures(light_icons_b64);
+            installLightIconTextures(lightIconSources);
             window.LightManagerRefreshIconTextures = installLightIconTextures;
+
+            // Safe until the panel factory below replaces it. Keeping this in
+            // the element scope lets select/unselect refresh immediately.
+            let refreshLightPropertiesPanel = () => {};
 
             class LightElement extends OutlinerElement {
                 constructor(data, uuid) {
@@ -8968,6 +8556,7 @@ function initialize_light_plugin() {
                     this.render_rotation = this.rotation;
                     super.select(event, isOutlinerClick);
                     window.LightManagerViewportControls?.updateAll();
+                    refreshLightPropertiesPanel();
                     if (Animator.open && Animation.selected) {
                         let animator = Animation.selected.getBoneAnimator(this);
                         if (animator) animator.select(true);
@@ -8978,6 +8567,7 @@ function initialize_light_plugin() {
                 unselect(...args) {
                     super.unselect(...args);
                     window.LightManagerViewportControls?.updateAll();
+                    refreshLightPropertiesPanel();
                     if (Animator.open && Timeline.selected_animator && Timeline.selected_animator.element === this) {
                         Timeline.selected_animator.selected = false;
                     }
@@ -9016,37 +8606,36 @@ function initialize_light_plugin() {
                 Outliner.buttons.visibility,
             ];
 
-            // Base properties
-            new Property(LightElement, 'string', 'name', { default: 'light' });
-            new Property(LightElement, 'string', 'light_type', { default: 'point' }); // New
-            new Property(LightElement, 'vector', 'position');
-            new Property(LightElement, 'vector', 'rotation'); // New
-            new Property(LightElement, 'vector', 'render_rotation', { default: [0, 0, 0] });
-            new Property(LightElement, 'vector', 'color', { default: [255, 255, 255] });
-            new Property(LightElement, 'vector', 'render_color', { default: [255, 255, 255] });
-            new Property(LightElement, 'number', 'intensity', { default: 1, min: 0 });
-            new Property(LightElement, 'number', 'render_intensity', { default: 1, min: 0 });
-            new Property(LightElement, 'number', 'temperature', { default: 6500, min: 2700, max: 6500 });
-
-            // New unique configuration options
-            new Property(LightElement, 'number', 'distance', { default: 0, min: 0 });
-            new Property(LightElement, 'number', 'angle', { default: 45, min: 0, max: 90 });
-            new Property(LightElement, 'number', 'penumbra', { default: 0, min: 0, max: 1 });
-
-            new Property(LightElement, 'boolean', 'visibility', { default: true });
-            new Property(LightElement, 'boolean', 'has_shadow', { default: true });
-            new Property(LightElement, 'number', 'shadow_resolution', { default: 1024 });
-            new Property(LightElement, 'number', 'studio_shadow_resolution', { default: 0 });
-            new Property(LightElement, 'number', 'shadow_bias', { default: DEFAULT_SHADOW_BIAS });
-            new Property(LightElement, 'number', 'shadow_normal_bias', { default: DEFAULT_SHADOW_NORMAL_BIAS, description: 'property.shadow_normal_bias.desc' });
-            new Property(LightElement, 'number', 'shadow_softness', { default: DEFAULT_SHADOW_SOFTNESS, min: 0, description: 'property.shadow_softness.desc' });
-            new Property(LightElement, 'number', 'shadow_near', { default: 0.1, min: 0 });
-            new Property(LightElement, 'number', 'shadow_far', { default: 200, min: 0 });
-            new Property(LightElement, 'number', 'shadow_bounds', { default: 35, min: 0 });
+            const lightElementProperties = [
+                new Property(LightElement, 'string', 'name', { default: 'light' }),
+                new Property(LightElement, 'string', 'light_type', { default: 'point' }),
+                new Property(LightElement, 'vector', 'position'),
+                new Property(LightElement, 'vector', 'rotation'),
+                new Property(LightElement, 'vector', 'render_rotation', { default: [0, 0, 0] }),
+                new Property(LightElement, 'vector', 'color', { default: [255, 255, 255] }),
+                new Property(LightElement, 'vector', 'render_color', { default: [255, 255, 255] }),
+                new Property(LightElement, 'number', 'intensity', { default: 1, min: 0 }),
+                new Property(LightElement, 'number', 'render_intensity', { default: 1, min: 0 }),
+                new Property(LightElement, 'number', 'temperature', { default: 6500, min: 2700, max: 6500 }),
+                new Property(LightElement, 'number', 'distance', { default: 0, min: 0 }),
+                new Property(LightElement, 'number', 'angle', { default: 45, min: 0, max: 90 }),
+                new Property(LightElement, 'number', 'penumbra', { default: 0, min: 0, max: 1 }),
+                new Property(LightElement, 'boolean', 'visibility', { default: true }),
+                new Property(LightElement, 'boolean', 'has_shadow', { default: true }),
+                new Property(LightElement, 'number', 'shadow_resolution', { default: 1024 }),
+                new Property(LightElement, 'number', 'studio_shadow_resolution', { default: 0 }),
+                new Property(LightElement, 'number', 'shadow_bias', { default: DEFAULT_SHADOW_BIAS }),
+                new Property(LightElement, 'number', 'shadow_normal_bias', { default: DEFAULT_SHADOW_NORMAL_BIAS, description: 'property.shadow_normal_bias.desc' }),
+                new Property(LightElement, 'number', 'shadow_softness', { default: DEFAULT_SHADOW_SOFTNESS, min: 0, description: 'property.shadow_softness.desc' }),
+                new Property(LightElement, 'number', 'shadow_near', { default: 0.1, min: 0 }),
+                new Property(LightElement, 'number', 'shadow_far', { default: 200, min: 0 }),
+                new Property(LightElement, 'number', 'shadow_bounds', { default: 35, min: 0 })
+            ];
+            deletables.push(...lightElementProperties);
 
             OutlinerElement.registerType(LightElement, 'light');
 
-            new NodePreviewController(LightElement, {
+            lightPreviewController = new NodePreviewController(LightElement, {
                 setup(element) {
                     let mesh = new THREE.Object3D();
                     Project.nodes_3d[element.uuid] = mesh;
@@ -9056,10 +8645,8 @@ function initialize_light_plugin() {
                     mesh.isElement = true;
                     mesh.visible = element.visibility;
 
-                    // Maintain correct rotation order
                     mesh.rotation.order = Format.euler_order || 'ZYX';
 
-                    // Sprite visual configuration
                     let initialTexture = lightTextures[element.light_type] || lightTextures.point;
                     let material = new THREE.SpriteMaterial({
                         map: initialTexture,
@@ -9085,51 +8672,49 @@ function initialize_light_plugin() {
                         this.sprite.raycast(raycaster, intersects);
                     };
 
-                    // ==========================================
-                    // DIRECTIONAL GIZMO SYSTEM
-                    // ==========================================
+                    // Directional and spot-light orientation guides share one material.
                     let gizmo = new THREE.Object3D();
-                    let gizmo_mat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 });
+                    let gizmoMaterial = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 });
 
-                    let arrow_geo = new THREE.BufferGeometry();
-                    let arrow_verts = new Float32Array([
+                    let arrowGeometry = new THREE.BufferGeometry();
+                    let arrowVertices = new Float32Array([
                         0, 0, 0, 0, 0, -8,
                         0, 0, -8, -1.5, 0, -6.5,
                         0, 0, -8, 1.5, 0, -6.5,
                         0, 0, -8, 0, -1.5, -6.5,
                         0, 0, -8, 0, 1.5, -6.5
                     ]);
-                    arrow_geo.setAttribute('position', new THREE.BufferAttribute(arrow_verts, 3));
-                    let arrow = new THREE.LineSegments(arrow_geo, gizmo_mat);
+                    arrowGeometry.setAttribute('position', new THREE.BufferAttribute(arrowVertices, 3));
+                    let arrow = new THREE.LineSegments(arrowGeometry, gizmoMaterial);
                     arrow.raycast = () => { };
                     gizmo.add(arrow);
                     gizmo.arrow = arrow;
 
-                    let ring_geo = new THREE.BufferGeometry();
-                    let ring_verts = [];
+                    let ringGeometry = new THREE.BufferGeometry();
+                    let ringVertices = [];
                     let segments = 32;
                     for (let i = 0; i <= segments; i++) {
                         let theta = (i / segments) * Math.PI * 2;
-                        ring_verts.push(Math.cos(theta), Math.sin(theta), -1);
+                        ringVertices.push(Math.cos(theta), Math.sin(theta), -1);
                     }
-                    ring_geo.setAttribute('position', new THREE.Float32BufferAttribute(ring_verts, 3));
-                    let ring = new THREE.Line(ring_geo, gizmo_mat);
+                    ringGeometry.setAttribute('position', new THREE.Float32BufferAttribute(ringVertices, 3));
+                    let ring = new THREE.Line(ringGeometry, gizmoMaterial);
                     ring.raycast = () => { };
                     gizmo.add(ring);
                     gizmo.ring = ring;
 
-                    let spot_lines_geo = new THREE.BufferGeometry();
-                    let spot_lines_verts = new Float32Array([
+                    let spotLinesGeometry = new THREE.BufferGeometry();
+                    let spotLineVertices = new Float32Array([
                         0, 0, 0, 1, 0, -1,
                         0, 0, 0, -1, 0, -1,
                         0, 0, 0, 0, 1, -1,
                         0, 0, 0, 0, -1, -1
                     ]);
-                    spot_lines_geo.setAttribute('position', new THREE.BufferAttribute(spot_lines_verts, 3));
-                    let spot_lines = new THREE.LineSegments(spot_lines_geo, gizmo_mat);
-                    spot_lines.raycast = () => { };
-                    gizmo.add(spot_lines);
-                    gizmo.spot_lines = spot_lines;
+                    spotLinesGeometry.setAttribute('position', new THREE.BufferAttribute(spotLineVertices, 3));
+                    let spotLines = new THREE.LineSegments(spotLinesGeometry, gizmoMaterial);
+                    spotLines.raycast = () => { };
+                    gizmo.add(spotLines);
+                    gizmo.spot_lines = spotLines;
 
                     mesh.add(gizmo);
                     mesh.gizmo = gizmo;
@@ -9186,9 +8771,9 @@ function initialize_light_plugin() {
                             mesh.gizmo.spot_lines.visible = true;
 
                             let dist = 8;
-                            let safe_angle = LightManagerUtils.num(element.angle, 45, 0.1, 89.9);
-                            let angle_rad = THREE.MathUtils.degToRad(safe_angle);
-                            let radius = dist * Math.tan(angle_rad);
+                            let safeAngle = LightManagerUtils.num(element.angle, 45, 0.1, 89.9);
+                            let angleRadians = THREE.MathUtils.degToRad(safeAngle);
+                            let radius = dist * Math.tan(angleRadians);
 
                             mesh.gizmo.ring.scale.set(radius, radius, dist);
                             mesh.gizmo.spot_lines.scale.set(radius, radius, dist);
@@ -9199,8 +8784,15 @@ function initialize_light_plugin() {
                         }
                     }
 
-                    let base_scale = Math.max(0.1, Math.sqrt(LightManagerUtils.num(element.render_intensity ?? element.intensity, 1, 0, 100000)));
-                    mesh.scale.setScalar(element.selected ? base_scale * 1.2 : base_scale);
+                    let baseScale = Math.max(0.1, Math.sqrt(LightManagerUtils.num(element.render_intensity ?? element.intensity, 1, 0, 100000)));
+                    const meshScale = element.selected ? baseScale * 1.2 : baseScale;
+                    mesh.scale.setScalar(meshScale);
+
+                    // Intensity may enlarge the light icon, but it must not also
+                    // inflate its world-space direction/cone guide. Counter-scale
+                    // the child gizmo so its eight-unit editing footprint stays
+                    // stable and predictable at every intensity.
+                    if (mesh.gizmo) mesh.gizmo.scale.setScalar(1 / meshScale);
 
                     mesh.sprite.material.depthTest = !element.selected;
                     mesh.renderOrder = element.selected ? 100 : 0;
@@ -9225,6 +8817,7 @@ function initialize_light_plugin() {
                     cancelLightManagerElementUpdate();
                     if (deferred) return;
                     if (project && !isCurrent()) return;
+                    disposeRetiredLightManagerLights();
                     if (project) {
                         lightflowLifecycle.restoreCustomElements(model, 'light', LightElement);
                     }
@@ -9239,57 +8832,72 @@ function initialize_light_plugin() {
                         shadows: true,
                         scene: true,
                         gizmos: !!project,
-                        cleanup: true
+                        cleanup: true,
+                        preserveTopology: false
                     });
                 }
             );
             if (lightProjectHydrator) deletables.push(lightProjectHydrator);
 
-            // -------------------------------------------------------------
-            // TIMELINE OVERRIDES
-            // -------------------------------------------------------------
-            let old_y_condition = KeyframeDataPoint.properties.y.condition;
-            let old_z_condition = KeyframeDataPoint.properties.z.condition;
-            let old_x_default = KeyframeDataPoint.properties.x.default;
-            let old_y_default = KeyframeDataPoint.properties.y.default;
-            let old_z_default = KeyframeDataPoint.properties.z.default;
+            // Timeline channel adapters
+            const originalYCondition = KeyframeDataPoint.properties.y.condition;
+            const originalZCondition = KeyframeDataPoint.properties.z.condition;
+            const originalXDefault = KeyframeDataPoint.properties.x.default;
+            const originalYDefault = KeyframeDataPoint.properties.y.default;
+            const originalZDefault = KeyframeDataPoint.properties.z.default;
 
-            KeyframeDataPoint.properties.y.condition = (point) => {
+            const lightManagerYCondition = point => {
                 if (point.keyframe.channel === 'intensity') return false;
-                return typeof old_y_condition === 'function' ? old_y_condition(point) : true;
+                return typeof originalYCondition === 'function' ? originalYCondition(point) : true;
             };
-            KeyframeDataPoint.properties.z.condition = (point) => {
+            const lightManagerZCondition = point => {
                 if (point.keyframe.channel === 'intensity') return false;
-                return typeof old_z_condition === 'function' ? old_z_condition(point) : true;
+                return typeof originalZCondition === 'function' ? originalZCondition(point) : true;
             };
 
-            KeyframeDataPoint.properties.x.default = (point) => {
+            const lightManagerXDefault = point => {
                 let el = point.keyframe.animator.element;
                 if (point.keyframe.channel === 'intensity') return el?.intensity ?? 1;
                 if (point.keyframe.channel === 'color') return el?.color[0] ?? 255;
                 if (point.keyframe.channel === 'rotation') return el?.rotation[0] ?? 0;
-                return typeof old_x_default === 'function' ? old_x_default(point) : (old_x_default || 0);
+                return typeof originalXDefault === 'function' ? originalXDefault(point) : (originalXDefault || 0);
             };
-            KeyframeDataPoint.properties.y.default = (point) => {
+            const lightManagerYDefault = point => {
                 let el = point.keyframe.animator.element;
                 if (point.keyframe.channel === 'color') return el?.color[1] ?? 255;
                 if (point.keyframe.channel === 'rotation') return el?.rotation[1] ?? 0;
-                return typeof old_y_default === 'function' ? old_y_default(point) : (old_y_default || 0);
+                return typeof originalYDefault === 'function' ? originalYDefault(point) : (originalYDefault || 0);
             };
-            KeyframeDataPoint.properties.z.default = (point) => {
+            const lightManagerZDefault = point => {
                 let el = point.keyframe.animator.element;
                 if (point.keyframe.channel === 'color') return el?.color[2] ?? 255;
                 if (point.keyframe.channel === 'rotation') return el?.rotation[2] ?? 0;
-                return typeof old_z_default === 'function' ? old_z_default(point) : (old_z_default || 0);
+                return typeof originalZDefault === 'function' ? originalZDefault(point) : (originalZDefault || 0);
             };
+
+            KeyframeDataPoint.properties.y.condition = lightManagerYCondition;
+            KeyframeDataPoint.properties.z.condition = lightManagerZCondition;
+            KeyframeDataPoint.properties.x.default = lightManagerXDefault;
+            KeyframeDataPoint.properties.y.default = lightManagerYDefault;
+            KeyframeDataPoint.properties.z.default = lightManagerZDefault;
 
             deletables.push({
                 delete: () => {
-                    KeyframeDataPoint.properties.y.condition = old_y_condition;
-                    KeyframeDataPoint.properties.z.condition = old_z_condition;
-                    KeyframeDataPoint.properties.x.default = old_x_default;
-                    KeyframeDataPoint.properties.y.default = old_y_default;
-                    KeyframeDataPoint.properties.z.default = old_z_default;
+                    if (KeyframeDataPoint.properties.y.condition === lightManagerYCondition) {
+                        KeyframeDataPoint.properties.y.condition = originalYCondition;
+                    }
+                    if (KeyframeDataPoint.properties.z.condition === lightManagerZCondition) {
+                        KeyframeDataPoint.properties.z.condition = originalZCondition;
+                    }
+                    if (KeyframeDataPoint.properties.x.default === lightManagerXDefault) {
+                        KeyframeDataPoint.properties.x.default = originalXDefault;
+                    }
+                    if (KeyframeDataPoint.properties.y.default === lightManagerYDefault) {
+                        KeyframeDataPoint.properties.y.default = originalYDefault;
+                    }
+                    if (KeyframeDataPoint.properties.z.default === lightManagerZDefault) {
+                        KeyframeDataPoint.properties.z.default = originalZDefault;
+                    }
                 }
             });
 
@@ -9457,7 +9065,13 @@ function initialize_light_plugin() {
 
                 Undo.finishEdit(undoLabel, { outliner: true, elements: [light], selection: true });
                 Blockbench.dispatchEvent('add_light', { object: light });
-                window.update_light_element_callback?.();
+                window.update_light_element_callback?.({
+                    shadows: true,
+                    scene: false,
+                    gizmos: true,
+                    elements: [light],
+                    cleanup: false
+                });
 
                 return light;
             };
@@ -9473,7 +9087,7 @@ function initialize_light_plugin() {
                 }
             });
             deletables.push(addLightAction);
-            Interface.Panels.outliner.menu.addAction(addLightAction, '3');
+            BarItems.add_element.side_menu.addAction(addLightAction, '3');
             MenuBar.menus.edit.addAction(addLightAction, '9');
 
             let addSpotLightAction = new Action('add_spot_light', {
@@ -9487,7 +9101,7 @@ function initialize_light_plugin() {
                 }
             });
             deletables.push(addSpotLightAction);
-            Interface.Panels.outliner.menu.addAction(addSpotLightAction, '3');
+            BarItems.add_element.side_menu.addAction(addSpotLightAction, '3');
             MenuBar.menus.edit.addAction(addSpotLightAction, '9');
 
             let addDirectionalLightAction = new Action('add_directional_light', {
@@ -9501,7 +9115,7 @@ function initialize_light_plugin() {
                 }
             });
             deletables.push(addDirectionalLightAction);
-            Interface.Panels.outliner.menu.addAction(addDirectionalLightAction, '3');
+            BarItems.add_element.side_menu.addAction(addDirectionalLightAction, '3');
             MenuBar.menus.edit.addAction(addDirectionalLightAction, '9');
 
             let lightManagerEditTool = new Tool('light_manager_edit_tool', {
@@ -9728,6 +9342,8 @@ function initialize_light_plugin() {
             let lightPropertiesPanel;
 
             const getSelectedLight = () => LightElement.selected.length === 1 ? LightElement.selected[0] : null;
+
+            const selectedLightCondition = () => !!getSelectedLight();
             const spotLightCondition = () => {
                 const light = getSelectedLight();
                 return !!light && light.light_type === 'spot';
@@ -9948,71 +9564,65 @@ function initialize_light_plugin() {
             };
 
             let renderWorkspaceMode = new Mode('render', {
-                name: 'Lightflow Render',
+                name: tl('mode.render'),
                 icon: 'photo_camera_back',
                 category: 'navigate',
                 condition: () => Project,
                 onSelect() {
-
+                    if (
+                        Modes.previous_id === 'animate' &&
+                        window.Animator &&
+                        typeof Animator.preview === 'function'
+                    ) {
+                        Animator.preview();
+                    }
                 }
             });
             deletables.push(renderWorkspaceMode);
 
-            Panels.outliner.condition.modes.push('render');
+            if (!Panels.outliner.condition.modes.includes('render')) {
+                Panels.outliner.condition.modes.push('render');
+            }
 
-            lightPropertiesPanel = new Panel('light_properties', {
-                icon: 'lightbulb',
-                growable: true,
-                resizable: true,
-                condition: { modes: ['edit', 'render'], method: () => (LightElement.selected.length > 0) },
-                display_condition: () => (LightElement.selected.length === 1),
-                default_position: {
-                    slot: 'right_bar',
-                    float_position: [0, 0],
-                    float_size: [314, 200],
-                    height: 200,
-                    attached_to: 'transform',
-                    attached_index: 1,
-                    sidebar_index: 2,
-                },
-                mode_positions: {
-                    edit: {
-                        slot: 'right_bar',
-                        float_position: [0, 0],
-                        float_size: [314, 200],
-                        height: 200,
-                        attached_to: 'transform',
-                        attached_index: 1,
-                        sidebar_index: 2,
-                    },
-                    render: {
-                        slot: "left_bar",
-                        float_position: [
-                            1322,
-                            57
-                        ],
-                        float_size: [
-                            314,
-                            200
-                        ],
-                        height: 200,
-                        folded: false,
-                        fixed_height: false,
-                        attached_to: "material_properties",
-                        sidebar_index: 1
-                    }
-                },
-                form: {
+            if (!Panels.outliner.default_configuration.mode_positions) {
+                Panels.outliner.default_configuration.mode_positions = {};
+            }
+            Panels.outliner.default_configuration.mode_positions.render = {
+                slot: 'right_bar',
+                sidebar_index: 2,
+                height: 400
+            };
+
+            // Keep the panel shell alive in Render mode, but build its contents from
+            // the current selection. This mirrors Atmosphere's panel contract and
+            // prevents controls for a previously selected light from going stale.
+            const panelForm = (light) => {
+                if (!light) {
+                    return {
+                        no_light: {
+                            type: 'bar_display',
+                            value: translateLightManager('light_manager.message.select_lights_first'),
+                            icon: 'lightbulb',
+                            paragraph: false,
+                            expand: true,
+                            color: 'var(--color-text)'
+                        }
+                    };
+                }
+
+                return {
                     light_properties_label: {
                         type: 'bar_display',
                         value: tl('property.light_settings'),
                         icon: 'light',
                         paragraph: false,
                         expand: true,
-                        color: 'var(--color-text)'
+                        color: 'var(--color-text)',
+                        show_condition: () => { return selectedLightCondition(); }
                     },
                     light_type: {
                         type: 'compact_select',
+                        value: light.light_type,
                         description: tl('property.light_type'),
                         background: 'transparent',
                         icon_mode: true,
@@ -10020,14 +9630,16 @@ function initialize_light_plugin() {
                             point: { name: tl('property.light_type.point'), icon: 'lightbulb' },
                             directional: { name: tl('property.light_type.directional'), icon: 'light_mode' },
                             spot: { name: tl('property.light_type.spot'), icon: 'highlight' }
-                        }
+                        },
+                        show_condition: () => { return selectedLightCondition(); }
                     },
                     light_color: {
                         type: 'advanced_color',
-                        value: tinycolor('ffffff'),
+                        value: tinycolor(LightManagerUtils.colorHex(light.color)),
                         title: tl('property.light_color'),
                         description: tl('property.light_color'),
-                        alpha: false
+                        alpha: false,
+                        show_condition: () => { return selectedLightCondition(); }
                     },
                     light_temperature: {
                         type: 'combo_slider',
@@ -10038,7 +9650,7 @@ function initialize_light_plugin() {
                         color: 'var(--color-warning)',
                         compact: true,
                         popup_width: '340px',
-                        value: 6500,
+                        value: light.temperature || 6500,
                         resettable: true,
                         reset_value: 6500,
                         min: 2700,
@@ -10048,7 +9660,8 @@ function initialize_light_plugin() {
                         onAfter: () => finishLightEdit(translateLightManager('light_manager.undo.change_temperature')),
                         onDrag: (value, event, isNumberInput) => {
                             lightPropertiesPanel.form.form_data.light_color.setValue(kelvinToTinyColor(value));
-                        }
+                        },
+                        show_condition: () => { return selectedLightCondition(); }
                     },
                     cast_shadows: {
                         type: 'action_toggle',
@@ -10061,10 +9674,12 @@ function initialize_light_plugin() {
                         bg_off: 'transparent',
                         color_on: 'var(--color-ui)',    // White icon when locked
                         color_off: 'var(--color-subtle_text)', // Dimmed icon when unlocked
-                        value: false
+                        value: light.has_shadow !== false,
+                        show_condition: () => { return selectedLightCondition(); }
                     },
                     shadow_resolution: {
                         type: 'compact_select',
+                        value: String(LightManagerUtils.shadowResolution(light.shadow_resolution)),
                         label: tl('property.shadow_resolution'),
                         hide_label: true,
                         description: tl('property.shadow_resolution.desc'),
@@ -10081,10 +9696,12 @@ function initialize_light_plugin() {
                         },
                         disable: false,
                         disable_condition: () => { return !shadowLightCondition(); },
-                        disable_desc: tl('property.cast_shadows_off.desc')
+                        disable_desc: tl('property.cast_shadows_off.desc'),
+                        show_condition: () => { return selectedLightCondition(); }
                     },
                     studio_shadow_resolution: {
                         type: 'compact_select',
+                        value: String(LightManagerUtils.studioShadowResolution(light.studio_shadow_resolution)),
                         label: tl('property.studio_shadow_resolution'),
                         hide_label: true,
                         description: tl('property.studio_shadow_resolution.desc'),
@@ -10102,14 +9719,15 @@ function initialize_light_plugin() {
                         },
                         disable: false,
                         disable_condition: () => { return !shadowLightCondition(); },
-                        disable_desc: tl('property.cast_shadows_off.desc')
+                        disable_desc: tl('property.cast_shadows_off.desc'),
+                        show_condition: () => { return selectedLightCondition(); }
                     },
                     light_intensity: {
                         type: 'combo_slider',
                         label: tl('property.light_intensity'),
                         description: tl('property.light_intensity.desc'),
                         color: 'var(--color-axis-w)',
-                        value: 1.0,
+                        value: light.intensity,
                         resettable: true,
                         reset_value: 1.0,
                         min: 0.0,
@@ -10117,7 +9735,8 @@ function initialize_light_plugin() {
                         step: 0.1,
                         allow_higher: true,
                         onBefore: () => beginLightEdit(translateLightManager('light_manager.undo.change_intensity')),
-                        onAfter: () => finishLightEdit(translateLightManager('light_manager.undo.change_intensity'))
+                        onAfter: () => finishLightEdit(translateLightManager('light_manager.undo.change_intensity')),
+                        show_condition: () => { return selectedLightCondition(); }
                     },
 
                     light_area_label: {
@@ -10126,7 +9745,8 @@ function initialize_light_plugin() {
                         paragraph: false,
                         expand: false,
                         color: 'var(--color-subtle_text)',
-                        description: tl('property.light_settings')
+                        description: tl('property.light_settings'),
+                        show_condition: () => { return selectedLightCondition(); }
                     },
 
                     light_distance: {
@@ -10139,7 +9759,7 @@ function initialize_light_plugin() {
                         icon_color: markerColors ? (markerColors.length >= 7 ? markerColors[7].pastel : '#BDFFA6') : '#BDFFA6',
                         compact: true,
                         popup_width: '340px',
-                        value: 0.0,
+                        value: light.distance,
                         resettable: true,
                         reset_value: 0.0,
                         min: 0.0,
@@ -10147,7 +9767,8 @@ function initialize_light_plugin() {
                         step: 0.01,
                         allow_higher: true,
                         onBefore: () => beginLightEdit(translateLightManager('light_manager.undo.change_distance')),
-                        onAfter: () => finishLightEdit(translateLightManager('light_manager.undo.change_distance'))
+                        onAfter: () => finishLightEdit(translateLightManager('light_manager.undo.change_distance')),
+                        show_condition: () => { return selectedLightCondition(); }
                     },
 
                     light_cone_settings_label: {
@@ -10156,7 +9777,8 @@ function initialize_light_plugin() {
                         paragraph: false,
                         expand: false,
                         color: 'var(--color-subtle_text)',
-                        description: tl('property.light_cone_settings')
+                        description: tl('property.light_cone_settings'),
+                        show_condition: () => { return selectedLightCondition(); }
                     },
 
                     light_cone_angle: {
@@ -10169,7 +9791,7 @@ function initialize_light_plugin() {
                         icon_color: markerColors ? (markerColors.length >= 1 ? markerColors[1].pastel : '#FFF899') : '#FFF899',
                         compact: true,
                         popup_width: '340px',
-                        value: 45.0,
+                        value: light.angle,
                         resettable: true,
                         reset_value: 45.0,
                         min: 0.1,
@@ -10179,7 +9801,8 @@ function initialize_light_plugin() {
                         disable_condition: () => { return !spotLightCondition(); },
                         disable_desc: tl('property.light_spot_settings.disabled.desc'),
                         onBefore: () => beginLightEdit(translateLightManager('light_manager.undo.change_cone_angle')),
-                        onAfter: () => finishLightEdit(translateLightManager('light_manager.undo.change_cone_angle'))
+                        onAfter: () => finishLightEdit(translateLightManager('light_manager.undo.change_cone_angle')),
+                        show_condition: () => { return selectedLightCondition(); }
                     },
 
                     light_cone_penumbra: {
@@ -10192,7 +9815,7 @@ function initialize_light_plugin() {
                         icon_color: markerColors ? (markerColors.length >= 0 ? markerColors[0].pastel : '#A2EBFF') : '#A2EBFF',
                         compact: true,
                         popup_width: '340px',
-                        value: 0.0,
+                        value: light.penumbra,
                         resettable: true,
                         reset_value: 0.0,
                         min: 0.0,
@@ -10202,7 +9825,8 @@ function initialize_light_plugin() {
                         disable_condition: () => { return !spotLightCondition(); },
                         disable_desc: tl('property.light_spot_settings.disabled.desc'),
                         onBefore: () => beginLightEdit(translateLightManager('light_manager.undo.change_penumbra')),
-                        onAfter: () => finishLightEdit(translateLightManager('light_manager.undo.change_penumbra'))
+                        onAfter: () => finishLightEdit(translateLightManager('light_manager.undo.change_penumbra')),
+                        show_condition: () => { return selectedLightCondition(); }
                     },
 
 
@@ -10215,7 +9839,8 @@ function initialize_light_plugin() {
                         color: 'var(--color-text)',
                         disable: false,
                         disable_condition: () => { return !shadowLightCondition(); },
-                        disable_desc: tl('property.cast_shadows_off.desc')
+                        disable_desc: tl('property.cast_shadows_off.desc'),
+                        show_condition: () => { return selectedLightCondition(); }
                     },
 
                     shadow_tuning: {
@@ -10223,7 +9848,8 @@ function initialize_light_plugin() {
                         icon: 'settings_motion_mode',
                         paragraph: false,
                         expand: false,
-                        color: 'var(--color-subtle_text)'
+                        color: 'var(--color-subtle_text)',
+                        show_condition: () => { return selectedLightCondition(); }
                     },
                     shadow_softness: {
                         type: 'combo_slider',
@@ -10235,7 +9861,7 @@ function initialize_light_plugin() {
                         icon_color: markerColors ? (markerColors.length >= 9 ? markerColors[9].pastel : '#E0E9FB') : '#E0E9FB',
                         compact: true,
                         popup_width: '340px',
-                        value: DEFAULT_SHADOW_SOFTNESS,
+                        value: light.shadow_softness,
                         resettable: true,
                         reset_value: DEFAULT_SHADOW_SOFTNESS,
                         min: 0.0,
@@ -10245,7 +9871,8 @@ function initialize_light_plugin() {
                         disable_condition: () => { return !shadowLightCondition(); },
                         disable_desc: tl('property.cast_shadows_off.desc'),
                         onBefore: () => beginLightEdit(translateLightManager('light_manager.undo.change_shadow_softness')),
-                        onAfter: () => finishLightEdit(translateLightManager('light_manager.undo.change_shadow_softness'))
+                        onAfter: () => finishLightEdit(translateLightManager('light_manager.undo.change_shadow_softness')),
+                        show_condition: () => { return selectedLightCondition(); }
                     },
                     shadow_clip_label: {
                         type: 'bar_display',
@@ -10253,7 +9880,8 @@ function initialize_light_plugin() {
                         paragraph: false,
                         expand: false,
                         color: 'var(--color-subtle_text)',
-                        description: tl('property.shadow_clip') + '\n' + tl('property.shadow_clip.desc')
+                        description: tl('property.shadow_clip') + '\n' + tl('property.shadow_clip.desc'),
+                        show_condition: () => { return selectedLightCondition(); }
                     },
                     shadow_near: {
                         type: 'combo_slider',
@@ -10264,7 +9892,7 @@ function initialize_light_plugin() {
                         icon_color: markerColors ? (markerColors.length >= 2 ? markerColors[2].pastel : '#F1BB75') : '#F1BB75',
                         compact: true,
                         popup_width: '340px',
-                        value: 0.1,
+                        value: light.shadow_near,
                         resettable: true,
                         reset_value: 0.1,
                         min: 0.0,
@@ -10275,7 +9903,8 @@ function initialize_light_plugin() {
                         disable_condition: () => { return !shadowLightCondition(); },
                         disable_desc: tl('property.cast_shadows_off.desc'),
                         onBefore: () => beginLightEdit(translateLightManager('light_manager.undo.change_shadow_clip')),
-                        onAfter: () => finishLightEdit(translateLightManager('light_manager.undo.change_shadow_clip'))
+                        onAfter: () => finishLightEdit(translateLightManager('light_manager.undo.change_shadow_clip')),
+                        show_condition: () => { return selectedLightCondition(); }
                     },
                     shadow_far: {
                         type: 'combo_slider',
@@ -10286,7 +9915,7 @@ function initialize_light_plugin() {
                         icon_color: markerColors ? (markerColors.length >= 3 ? markerColors[3].pastel : '#FF9B97') : '#FF9B97',
                         compact: true,
                         popup_width: '340px',
-                        value: 128.0,
+                        value: light.shadow_far,
                         resettable: true,
                         reset_value: 128.0,
                         min: 0.1,
@@ -10297,7 +9926,8 @@ function initialize_light_plugin() {
                         disable_condition: () => { return !shadowLightCondition(); },
                         disable_desc: tl('property.cast_shadows_off.desc'),
                         onBefore: () => beginLightEdit(translateLightManager('light_manager.undo.change_shadow_clip')),
-                        onAfter: () => finishLightEdit(translateLightManager('light_manager.undo.change_shadow_clip'))
+                        onAfter: () => finishLightEdit(translateLightManager('light_manager.undo.change_shadow_clip')),
+                        show_condition: () => { return selectedLightCondition(); }
                     },
                     shadow_bounds: {
                         type: 'combo_slider',
@@ -10309,7 +9939,7 @@ function initialize_light_plugin() {
                         icon_color: markerColors ? (markerColors.length >= 4 ? markerColors[4].pastel : '#C5A6E8') : '#C5A6E8',
                         compact: true,
                         popup_width: '340px',
-                        value: 32.0,
+                        value: light.shadow_bounds,
                         resettable: true,
                         reset_value: 32.0,
                         min: 1.0,
@@ -10320,7 +9950,8 @@ function initialize_light_plugin() {
                         disable_condition: () => { return !directionalShadowCondition(); },
                         disable_desc: tl('property.cast_shadows_off.desc'),
                         onBefore: () => beginLightEdit(translateLightManager('light_manager.undo.change_shadow_bounds')),
-                        onAfter: () => finishLightEdit(translateLightManager('light_manager.undo.change_shadow_bounds'))
+                        onAfter: () => finishLightEdit(translateLightManager('light_manager.undo.change_shadow_bounds')),
+                        show_condition: () => { return selectedLightCondition(); }
                     },
                     shadow_biases_label: {
                         type: 'bar_display',
@@ -10328,7 +9959,8 @@ function initialize_light_plugin() {
                         paragraph: false,
                         expand: false,
                         color: 'var(--color-subtle_text)',
-                        description: tl('property.shadow_biases') + '\n' + tl('property.shadow_biases.desc')
+                        description: tl('property.shadow_biases') + '\n' + tl('property.shadow_biases.desc'),
+                        show_condition: () => { return selectedLightCondition(); }
                     },
                     shadow_bias: {
                         type: 'combo_slider',
@@ -10340,7 +9972,7 @@ function initialize_light_plugin() {
                         icon_color: markerColors ? (markerColors.length >= 5 ? markerColors[5].pastel : '#A6C8FF') : '#A6C8FF',
                         compact: true,
                         popup_width: '340px',
-                        value: DEFAULT_SHADOW_BIAS,
+                        value: light.shadow_bias,
                         resettable: true,
                         reset_value: DEFAULT_SHADOW_BIAS,
                         min: -0.05,
@@ -10351,7 +9983,8 @@ function initialize_light_plugin() {
                         disable_condition: () => { return !shadowLightCondition(); },
                         disable_desc: tl('property.cast_shadows_off.desc'),
                         onBefore: () => beginLightEdit(translateLightManager('light_manager.undo.change_shadow_bias')),
-                        onAfter: () => finishLightEdit(translateLightManager('light_manager.undo.change_shadow_bias'))
+                        onAfter: () => finishLightEdit(translateLightManager('light_manager.undo.change_shadow_bias')),
+                        show_condition: () => { return selectedLightCondition(); }
                     },
                     shadow_normal_bias: {
                         type: 'combo_slider',
@@ -10363,7 +9996,7 @@ function initialize_light_plugin() {
                         icon_color: markerColors ? (markerColors.length >= 6 ? markerColors[6].pastel : '#7BFFA3') : '#7BFFA3',
                         compact: true,
                         popup_width: '340px',
-                        value: DEFAULT_SHADOW_NORMAL_BIAS,
+                        value: light.shadow_normal_bias,
                         resettable: true,
                         reset_value: DEFAULT_SHADOW_NORMAL_BIAS,
                         min: -1.0,
@@ -10374,13 +10007,37 @@ function initialize_light_plugin() {
                         disable_condition: () => { return !shadowLightCondition(); },
                         disable_desc: tl('property.cast_shadows_off.desc'),
                         onBefore: () => beginLightEdit(translateLightManager('light_manager.undo.change_shadow_normal_bias')),
-                        onAfter: () => finishLightEdit(translateLightManager('light_manager.undo.change_shadow_normal_bias'))
+                        onAfter: () => finishLightEdit(translateLightManager('light_manager.undo.change_shadow_normal_bias')),
+                        show_condition: () => { return selectedLightCondition(); }
                     }
-                }
+                };
+            };
+
+            lightPropertiesPanel = new Panel('light_properties', {
+                icon: 'lightbulb',
+                growable: false,
+                resizable: true,
+                fixed_height: true,
+                min_height: 200,
+                condition: { modes: ['edit', 'render'], method: () => (Project.mode === 'render' || selectedLightCondition()) },
+                default_position: {
+                    slot: 'right_bar',
+                    float_position: [0, 0],
+                    float_size: [314, 200],
+                    height: 200,
+                    attached_to: 'transform',
+                    attached_index: 1,
+                    sidebar_index: 2,
+                },
+                mode_positions: {
+                    edit: { slot: 'right_bar', float_position: [0, 0], float_size: [314, 200], height: 200, attached_to: 'transform', attached_index: 1, sidebar_index: 2 },
+                    render: { slot: 'right_bar', height: 250, folded: false, fixed_height: true, sidebar_index: 1, attached_to: '', attached_index: 1 }
+                },
+                form: panelForm(getSelectedLight())
             });
             window.light_properties_panel = lightPropertiesPanel;
 
-            window.applyIndestructibleFormGroups(lightPropertiesPanel.form, [
+            const lightPanelFormGroups = [
                 {
 
                     elements: ['light_type', 'light_color', 'light_temperature', '+', '_', '+', 'cast_shadows', 'shadow_resolution', 'studio_shadow_resolution'],
@@ -10439,7 +10096,15 @@ function initialize_light_plugin() {
                         shadow_normal_bias: '0 0 auto'
                     }
                 }
-            ]);
+            ];
+
+            let lightPanelFormGroupsInstalled = false;
+            const applyLightPanelFormGroups = () => {
+                if (lightPanelFormGroupsInstalled || !lightPropertiesPanel?.form?.form_data?.light_type) return;
+                window.applyIndestructibleFormGroups(lightPropertiesPanel.form, lightPanelFormGroups);
+                lightPanelFormGroupsInstalled = true;
+            };
+            applyLightPanelFormGroups();
 
             const lightPanelStyles = Blockbench.addCSS(`
                 #panel_light_properties {
@@ -10595,15 +10260,20 @@ function initialize_light_plugin() {
             `);
             deletables.push(lightPanelStyles);
 
-            lightPropertiesPanel.form.form_data.light_color.colorpicker.onChange = (color) => {
-                if (syncingLightSettings) return;
-                let newColor = tinycolor(color);
-                applyLightPanelValue('color', [newColor._r, newColor._g, newColor._b], translateLightManager('light_manager.undo.change_color'));
-            };
+            const bindLightPanelColorControl = () => {
+                const colorpicker = lightPropertiesPanel?.form?.form_data?.light_color?.colorpicker;
+                if (!colorpicker) return;
 
-            lightPropertiesPanel.form.form_data.light_color.colorpicker.onBefore = () => beginLightEdit(translateLightManager('light_manager.undo.change_color'));
-            lightPropertiesPanel.form.form_data.light_color.colorpicker.onAfter = () => finishLightEdit(translateLightManager('light_manager.undo.change_color'));
-            lightPropertiesPanel.form.on('change', ({ result }) => {
+                colorpicker.onChange = (color) => {
+                    if (syncingLightSettings) return;
+                    const newColor = tinycolor(color);
+                    applyLightPanelValue('color', [newColor._r, newColor._g, newColor._b], translateLightManager('light_manager.undo.change_color'));
+                };
+                colorpicker.onBefore = () => beginLightEdit(translateLightManager('light_manager.undo.change_color'));
+                colorpicker.onAfter = () => finishLightEdit(translateLightManager('light_manager.undo.change_color'));
+            };
+            bindLightPanelColorControl();
+            const lightPropertiesPanelListener = lightPropertiesPanel.form.on('change', ({ result }) => {
                 if (syncingLightSettings) return;
 
                 if (result.light_type !== undefined) {
@@ -10706,6 +10376,20 @@ function initialize_light_plugin() {
                 lightPropertiesPanel.form.update();
             };
 
+            refreshLightPropertiesPanel = (light = getSelectedLight()) => {
+                if (!lightPropertiesPanel?.form) return;
+                syncingLightSettings = true;
+                try {
+                    lightPropertiesPanel.form.form_config = panelForm(light);
+                    lightPropertiesPanel.form.buildForm();
+                    applyLightPanelFormGroups();
+                    bindLightPanelColorControl();
+                } finally {
+                    syncingLightSettings = false;
+                }
+                if (light) syncLightSettingsPanel(light);
+            };
+
             const syncLightManagerShadows = (options = {}) => {
                 markLightManagerShadowsDirty(options);
                 configureLightManagerRenderers();
@@ -10763,18 +10447,74 @@ function initialize_light_plugin() {
             });
             deletables.push(finishEditShadowListener);
 
-            ['undo', 'redo', 'load_undo_save'].forEach(eventName => {
-                const listener = Blockbench.on(eventName, () => {
-                    markLightManagerShadowsDirty({ scene: true });
-                    window.update_light_element_callback?.({
-                        shadows: true,
-                        scene: true,
-                        gizmos: true,
-                        cleanup: true
-                    });
-                });
-                deletables.push(listener);
+            /*
+             * Shader Architect can replace a mesh material and its custom
+             * depth/distance materials without emitting Blockbench's usual
+             * update_view event. Since this renderer intentionally uses
+             * manual shadow updates, that first material change previously
+             * left the shadow target stale until a light control dirtied it.
+             * Coalesce a full material pass into one shadow invalidation, but
+             * do not mark the scene dirty: Shader Architect owns the mesh's
+             * cast/receive flags for the material that was just applied.
+             */
+            let shaderMaterialShadowSyncPending = false;
+            let shaderMaterialShadowSyncFrame = null;
+            const shaderMaterialShadowListener = Blockbench.on('shader_material_applied', () => {
+                if (shaderMaterialShadowSyncPending) return;
+                shaderMaterialShadowSyncPending = true;
+
+                const sync = () => {
+                    shaderMaterialShadowSyncFrame = null;
+                    if (!shaderMaterialShadowSyncPending) return;
+                    shaderMaterialShadowSyncPending = false;
+                    markLightManagerShadowsDirty();
+                    configureLightManagerRenderers();
+                    invalidateLightManagerShadowMaps();
+                };
+
+                if (typeof requestAnimationFrame === 'function') {
+                    shaderMaterialShadowSyncFrame = requestAnimationFrame(sync);
+                } else if (typeof queueMicrotask === 'function') {
+                    shaderMaterialShadowSyncFrame = 'microtask';
+                    queueMicrotask(sync);
+                } else {
+                    shaderMaterialShadowSyncFrame = 'promise';
+                    Promise.resolve().then(sync);
+                }
             });
+            deletables.push(shaderMaterialShadowListener);
+            deletables.push({
+                delete: () => {
+                    shaderMaterialShadowSyncPending = false;
+                    if (typeof shaderMaterialShadowSyncFrame === 'number' && typeof cancelAnimationFrame === 'function') {
+                        cancelAnimationFrame(shaderMaterialShadowSyncFrame);
+                    }
+                    shaderMaterialShadowSyncFrame = null;
+                }
+            });
+
+            const undoSaveListener = Blockbench.on('load_undo_save', ({ save, reference } = {}) => {
+                const snapshots = [
+                    ...Object.values(save?.elements || {}),
+                    ...Object.values(reference?.elements || {})
+                ];
+                const lightOnly = snapshots.length > 0 && snapshots.every(element => (
+                    element?.type === 'light' ||
+                    (window.LightElement && element instanceof window.LightElement)
+                ));
+
+                if (lightOnly) {
+                    window.ShaderEngine?.beginLightTopologyTransaction?.('light_undo');
+                }
+                if (!lightOnly) markLightManagerShadowsDirty({ scene: true });
+                window.update_light_element_callback?.({
+                    shadows: true,
+                    scene: !lightOnly,
+                    gizmos: true,
+                    cleanup: true
+                });
+            });
+            deletables.push(undoSaveListener);
 
             ['add_cube', 'add_mesh', 'add_texture_mesh', 'add_lightflow_volume'].forEach(eventName => {
                 const listener = Blockbench.on(eventName, () => {
@@ -10785,24 +10525,42 @@ function initialize_light_plugin() {
 
             let lightPanelSelectionListener = Blockbench.on('update_selection', () => {
                 const light = getSelectedLight();
-                if (light) syncLightSettingsPanel(light);
+                if (light && lightPropertiesPanel?.form?.form_data?.light_type) {
+                    syncLightSettingsPanel(light);
+                } else {
+                    refreshLightPropertiesPanel(light);
+                }
                 if (lightPropertiesPanel.isVisible() && LightElement.selected.length === 0) {
-                    Panels.transform.selectTab();
-                    if (Project.mode === 'render') {
-                        Panels.material_properties.selectTab(Panels.material_properties);
+                    if (Project.mode === 'edit') {
+                        Panels.transform.selectTab(Panels.transform);
                     }
                 }
-                const renderElementSelected = [window.Cube, window.Mesh, window.TextureMesh].some(ElementType => (
+                const renderElementSelected = [window.Cube, window.Mesh, window.TextureMesh, window.LightflowVolumeElement].some(ElementType => (
                     ElementType && Array.isArray(ElementType.selected) && ElementType.selected.length > 0
                 ));
                 if (Project.mode === 'render' && LightElement.selected.length > 0 && !renderElementSelected) {
-                    Panels.material_properties.selectTab(Panels.light_properties);
+                    lightPropertiesPanel.selectTab(lightPropertiesPanel);
                 }
             });
             deletables.push(lightPanelSelectionListener);
-            deletables.push(lightPropertiesPanel);
+            deletables.push(lightPropertiesPanel, lightPropertiesPanelListener);
 
             window.LIGHT_MANAGER_LOADED = true;
+            [
+                'LIGHT_MANAGER_LOADED',
+                'LightManagerMarkShadowsDirty',
+                'ComboSlider',
+                'CompactDropdownSelect',
+                'BarDisplay',
+                'TextInputWidget',
+                'AdvancedColorPicker',
+                'applyIndestructibleFormGroups',
+                'LightManagerUI',
+                'LightManagerRefreshIconTextures',
+                'LightElement',
+                'LightAnimator',
+                'light_properties_panel'
+            ].forEach(trackLightManagerWindowBinding);
             window.LightManagerPrepareRender?.();
             window.dispatchEvent(new CustomEvent('light_manager_initialized', {
                 detail: 'Light Manager plugin has been initialized and is ready to use.'
@@ -10812,21 +10570,34 @@ function initialize_light_plugin() {
 
         onunload() {
             cancelLightManagerElementUpdate();
-            window.LightManagerAreaGizmos?.clear();
-            window.LightManagerViewportControls?.dispose();
+            cancelScheduledLightManagerTasks();
+            disposeDocumentInteractions();
+            const ownedLightElement = lightManagerOwnedWindowBindings.get('LightElement');
+            lightManagerOwnedWindowBindings.get('LightManagerAreaGizmos')?.clear?.();
+            lightManagerOwnedWindowBindings.get('LightManagerViewportControls')?.dispose?.();
+            disposeLightElementPreviewResources(ownedLightElement);
             disposeLightManagerResources();
             cleanupLightManagerRegistries();
 
             Object.keys(window.three_lights || {}).forEach(uuid => {
                 const light = window.three_lights[uuid];
+                if (!light?.userData?.lightManagerElementUuid) return;
                 disposeThreeLight(light);
                 delete window.three_lights[uuid];
             });
+            disposeRetiredLightManagerLights();
 
-            if (window.three_lights_group && window.three_lights_group.parent) {
-                window.three_lights_group.parent.remove(window.three_lights_group);
+            if (ownedThreeLightsGroup) {
+                const fallbackParent = window.Canvas?.scene || ownedThreeLightsGroup.parent;
+                if (fallbackParent) {
+                    ownedThreeLightsGroup.children.slice().forEach(child => fallbackParent.add(child));
+                }
+                ownedThreeLightsGroup.parent?.remove?.(ownedThreeLightsGroup);
+                if (window.three_lights_group === ownedThreeLightsGroup) {
+                    delete window.three_lights_group;
+                }
             }
-            delete window.three_lights_group;
+            ownedThreeLightsGroup = null;
 
             Object.keys(lightTextures).forEach(key => {
                 if (lightTextures[key] && typeof lightTextures[key].dispose === 'function') {
@@ -10836,33 +10607,15 @@ function initialize_light_plugin() {
             });
             lightTextures = {};
 
-            delete OutlinerElement.types.light;
-            if (NodePreviewController.controllers && NodePreviewController.controllers.light) {
-                NodePreviewController.controllers.light.delete();
+            if (OutlinerElement.types.light === ownedLightElement) {
+                delete OutlinerElement.types.light;
             }
+            if (NodePreviewController.controllers?.light === lightPreviewController) {
+                lightPreviewController.delete();
+            }
+            lightPreviewController = null;
 
-            delete window.LIGHT_MANAGER_LOADED;
-            if (window.applyIndestructibleFormGroups === applyIndestructibleFormGroups) {
-                delete window.applyIndestructibleFormGroups;
-            }
-            if (window.LightManagerUI === lightManagerUIApi) delete window.LightManagerUI;
             lightManagerUIApi = null;
-            delete window.ComboSlider;
-            delete window.CompactDropdownSelect;
-            delete window.BarDisplay;
-            delete window.TextInputWidget;
-            delete window.light_properties_panel;
-            delete window.LightElement;
-            delete window.LightAnimator;
-            delete window.LightManagerAreaGizmos;
-            delete window.LightManagerViewportControls;
-            delete window.LightManagerFitTool;
-            delete window.LightManagerPrepareRender;
-            delete window.LightManagerMarkShadowsDirty;
-            delete window.LightManagerDebugShadows;
-            delete window.LightManagerSyncLights;
-            delete window.LightManagerRefreshIconTextures;
-            delete window.update_light_element_callback;
             if (window.LightflowLifecycle === lightflowLifecycle) {
                 lightflowLifecycle?.releaseOwner?.();
             }
@@ -10870,13 +10623,13 @@ function initialize_light_plugin() {
             restoreLightManagerAnimatorPreview();
             restoreLightManagerRendererShadowSettings();
             resetLightManagerShadowState();
-            if (window.generateIconBase64 === generateIconBase64) delete window.generateIconBase64;
+            clearOwnedLightManagerWindowBindings();
         }
     });
 }
 
 // Asynchronous initialization of all exclusive textures that will visually represent each light type
-async function load_textures() {
+async function loadLightIconSources() {
     const specs = [
         ['point', 'lightbulb', 'P'],
         ['directional', 'light_mode', 'D'],
@@ -10891,27 +10644,38 @@ async function load_textures() {
             });
             return [key, source];
         } catch (error) {
+            warnLightManagerOnce(`icon-${key}`, `[Light Manager] Could not render the ${key} Material icon; using a fallback.`, error);
             return [key, lightManagerFallbackIconDataUrl(fallbackLabel)];
         }
     }));
-    generated.forEach(([key, source]) => { light_icons_b64[key] = source; });
-    window.LightManagerRefreshIconTextures?.(light_icons_b64);
+    generated.forEach(([key, source]) => { lightIconSources[key] = source; });
+    window.LightManagerRefreshIconTextures?.(lightIconSources);
 }
 
 // Register the plugin and its custom outliner type synchronously. Icon polish
 // is cosmetic and must never delay project parsing.
-light_icons_b64.point = lightManagerFallbackIconDataUrl('P');
-light_icons_b64.directional = lightManagerFallbackIconDataUrl('D');
-light_icons_b64.spot = lightManagerFallbackIconDataUrl('S');
-initialize_light_plugin();
+lightIconSources.point = lightManagerFallbackIconDataUrl('P');
+lightIconSources.directional = lightManagerFallbackIconDataUrl('D');
+lightIconSources.spot = lightManagerFallbackIconDataUrl('S');
+initializeLightManagerPlugin();
 
 const scheduleLightManagerIconUpgrade = callback => {
     if (typeof requestIdleCallback === 'function') {
-        requestIdleCallback(callback, { timeout: 1800 });
+        let cancellation;
+        const idleRequest = requestIdleCallback(() => {
+            lightManagerScheduledTaskCancellations.delete(cancellation);
+            callback();
+        }, { timeout: 1800 });
+        cancellation = () => {
+            if (typeof cancelIdleCallback === 'function') cancelIdleCallback(idleRequest);
+        };
+        lightManagerScheduledTaskCancellations.add(cancellation);
     } else {
-        setTimeout(callback, 0);
+        scheduleLightManagerTimeout(callback, 0);
     }
 };
 scheduleLightManagerIconUpgrade(() => {
-    load_textures().catch(() => { /* SVG fallback icons are already active. */ });
+    loadLightIconSources().catch(error => {
+        console.warn('[Light Manager] Material icon upgrade failed; fallback icons remain active.', error);
+    });
 });
