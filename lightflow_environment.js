@@ -40,7 +40,7 @@
         sun_enabled: true,
         sun_intensity: 2.2,
         moon_intensity: 0.28,
-        celestial_size: 0.055,
+        celestial_size: 0.1,
         moon_phase: 0,
         sun_mode: 'vanilla',
         moon_mode: 'vanilla',
@@ -55,7 +55,7 @@
         moon_phase_offset: 0,
         sun_horizon_scale: 1.34,
         sun_gaze_scale: 1.16,
-        sun_glare: 0.72,
+        sun_glare: 0.25,
         sunset_directional_glow: 1,
         stars_enabled: true,
         star_brightness: 0.72,
@@ -69,7 +69,7 @@
         cloud_direction: 0,
         cloud_contrast: 1,
         cloud_brightness: 1,
-        cloud_height: 128,
+        cloud_height: 512,
         cloud_thickness: 4,
         cloud_extrusion: 1,
         sun_cast_shadows: true,
@@ -257,7 +257,7 @@
         result.moon_phase_offset = Math.round(clamp(finite(result.moon_phase_offset, 0), -64, 64));
         result.sun_horizon_scale = clamp(finite(result.sun_horizon_scale, 1.34), 1, 2.5);
         result.sun_gaze_scale = clamp(finite(result.sun_gaze_scale, 1.16), 1, 2.5);
-        result.sun_glare = clamp(finite(result.sun_glare, 0.72), 0, 3);
+        result.sun_glare = clamp(finite(result.sun_glare, 0.25), 0, 3);
         result.sunset_directional_glow = clamp(finite(result.sunset_directional_glow, 1), 0, 3);
         result.stars_enabled = result.stars_enabled !== false;
         result.star_brightness = clamp(finite(result.star_brightness, 0.72), 0, 3);
@@ -541,7 +541,7 @@
         let horizon = mixColor(hexToRgb(preset.night_horizon), hexToRgb(preset.horizon), daylight);
         zenith = mixColor(zenith, hexToRgb(preset.sunrise_zenith), twilight * 0.72);
         horizon = mixColor(horizon, hexToRgb(preset.sunrise_horizon), twilight);
-        const ground = mixColor(hexToRgb('#070910'), hexToRgb(preset.ground), daylight);
+        const ground = mixColor(hexToRgb('#0a0c16'), hexToRgb(preset.ground), daylight);
         const ambientColor = mixColor(zenith, horizon, 0.58);
         const ambientIntensity = (preset.ambient_night +
             (preset.ambient_day - preset.ambient_night) * daylight) * settings.environment_strength;
@@ -2091,8 +2091,8 @@
                     ...original,
                     type: 'custom_checkbox',
                     layout: 'space_between',
-                    icon_on: 'toggle_on',
-                    icon_off: 'toggle_off',
+                    icon_on: 'check_box',
+                    icon_off: 'check_box_outline_blank',
                     icon_size: '24px',
                     icon_color_on: 'var(--color-accent)',
                     icon_color_off: 'var(--color-subtle_text)'
