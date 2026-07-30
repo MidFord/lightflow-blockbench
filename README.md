@@ -8,7 +8,7 @@
 [![Development Preview](https://img.shields.io/badge/status-stable%20development%20preview-f59e0b)](#project-status)
 [![Blockbench 4.9+](https://img.shields.io/badge/Blockbench-4.9%2B-1e88e5)](#requirements)
 [![Plugin Marketplace](https://img.shields.io/badge/Marketplace-not%20published%20yet-6b7280)](#installation)
-[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/P5P31BXUB6)
+
 
 Lightflow is the rendering toolkit I always wanted inside Blockbench.
 
