@@ -8,6 +8,7 @@
 [![Development Preview](https://img.shields.io/badge/status-stable%20development%20preview-f59e0b)](#project-status)
 [![Blockbench 4.9+](https://img.shields.io/badge/Blockbench-4.9%2B-1e88e5)](#requirements)
 [![Plugin Marketplace](https://img.shields.io/badge/Marketplace-not%20published%20yet-6b7280)](#installation)
+[![Support Lightflow on Ko-fi](https://img.shields.io/badge/Support%20Lightflow-Ko--fi-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/midford327)
 
 
 Lightflow is the rendering toolkit I always wanted inside Blockbench.
@@ -196,6 +197,16 @@ Before the first public Marketplace release, my priorities are:
 - packaging, metadata, and review preparation for the Blockbench Plugin Marketplace.
 
 Longer-term experiments may include deeper animation workflows, expanded atmosphere tools, optional alternate rendering backends, and new material systems — only when they can be implemented honestly and reliably.
+
+## Support Lightflow
+
+Lightflow is an independent project built and maintained by MidFord.
+
+If Lightflow improves your Blockbench workflow and you would like to help support continued development, testing, documentation, and future releases, you can support the project on Ko-fi:
+
+[![Support Lightflow on Ko-fi](https://img.shields.io/badge/Support%20Lightflow-Ko--fi-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/midford327)
+
+Support is completely optional and does not affect access to Lightflow or its features.
 
 ## License and trademarks
 
