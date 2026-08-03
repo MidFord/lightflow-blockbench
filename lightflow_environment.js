@@ -2846,7 +2846,10 @@
             };
             const textureListeners = ['add_texture', 'remove_texture', 'update_texture']
                 .map(eventName => Blockbench.on(eventName, textureChanged));
-            const gizmoVisibilityListener = () => updateSunShadowGizmo();
+            const gizmoVisibilityListener = () => {
+                if (!canShowEnvironmentShadowGizmo()) sunShadowGizmoDrag = null;
+                updateSunShadowGizmo();
+            };
             const viewListener = Blockbench.on('update_view', gizmoVisibilityListener);
             const lightManagerListener = () => {
                 ensureSunLightParent();

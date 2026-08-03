@@ -2392,8 +2392,18 @@ function lightManagerCanvasGizmosVisible() {
     return !window.Canvas || Canvas.show_gizmos !== false;
 }
 
+function lightManagerLightGizmosVisible() {
+    return lightManagerCanvasGizmosVisible() &&
+        (!window.LightManagerAreaGizmos || LightManagerAreaGizmos.enabled !== false);
+}
+
 function refreshLightManagerGizmoVisibility() {
-    const visible = lightManagerCanvasGizmosVisible();
+    const visible = lightManagerLightGizmosVisible();
+    const viewportControls = window.LightManagerViewportControls;
+    if (!visible && viewportControls) {
+        viewportControls.pendingFreeMove = false;
+        if (viewportControls.drag) viewportControls.cancelDrag?.(true);
+    }
     const lights = window.LightElement && Array.isArray(window.LightElement.all)
         ? window.LightElement.all
         : [];
@@ -2911,9 +2921,7 @@ window.LightManagerViewportControls = {
     },
 
     canShowViewportGizmos() {
-        if (window.Canvas && Canvas.show_gizmos === false) return false;
-        if (window.LightManagerAreaGizmos && LightManagerAreaGizmos.enabled === false) return false;
-        return true;
+        return lightManagerLightGizmosVisible();
     },
 
     isHandleToolAllowed() {
@@ -8675,7 +8683,7 @@ function initializeLightManagerPlugin() {
                     mesh.name = element.uuid;
                     mesh.type = element.type;
                     mesh.isElement = true;
-                    mesh.visible = element.visibility !== false && lightManagerCanvasGizmosVisible();
+                    mesh.visible = element.visibility !== false && lightManagerLightGizmosVisible();
 
                     mesh.rotation.order = Format.euler_order || 'ZYX';
 
@@ -8772,7 +8780,7 @@ function initializeLightManagerPlugin() {
                 },
                 updateSelection(element, options = {}) {
                     let { mesh } = element;
-                    const canvasGizmosVisible = lightManagerCanvasGizmosVisible();
+                    const canvasGizmosVisible = lightManagerLightGizmosVisible();
                     mesh.visible = element.visibility !== false && canvasGizmosVisible;
                     if (mesh.sprite) mesh.sprite.visible = canvasGizmosVisible;
                     if (mesh.gizmo) mesh.gizmo.visible = canvasGizmosVisible;
