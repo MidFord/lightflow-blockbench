@@ -1871,24 +1871,36 @@
         return volume;
     }
 
+    function canShowVolumeGizmos() {
+        return !window.Canvas || Canvas.show_gizmos !== false;
+    }
+
+    function refreshVolumeGizmoVisibility() {
+        if (!VolumeElement || !Array.isArray(VolumeElement.all)) return;
+        VolumeElement.all.forEach(volume => updateVolumeGizmo(volume));
+    }
+
     function updateVolumeGizmo(volume) {
         const mesh = volume?.mesh;
         if (!mesh) return;
         sanitizeVolume(volume);
         const size = volume.size;
-        mesh.visible = volume.visibility !== false;
+        const showGizmos = canShowVolumeGizmos();
+        mesh.visible = volume.visibility !== false && showGizmos;
         if (mesh.boxGizmo) {
-            mesh.boxGizmo.visible = volume.shape !== 'sphere';
+            mesh.boxGizmo.visible = showGizmos && volume.shape !== 'sphere';
             mesh.boxGizmo.scale.set(size[0], size[1], size[2]);
         }
         if (mesh.sphereGizmo) {
-            mesh.sphereGizmo.visible = volume.shape === 'sphere';
+            mesh.sphereGizmo.visible = showGizmos && volume.shape === 'sphere';
             mesh.sphereGizmo.scale.set(size[0], size[1], size[2]);
         }
         if (mesh.boxSelection) {
+            mesh.boxSelection.visible = showGizmos && volume.shape !== 'sphere';
             mesh.boxSelection.scale.set(size[0], size[1], size[2]);
         }
         if (mesh.sphereSelection) {
+            mesh.sphereSelection.visible = showGizmos && volume.shape === 'sphere';
             mesh.sphereSelection.scale.set(size[0], size[1], size[2]);
         }
         const selected = !!volume.selected;
@@ -2127,7 +2139,7 @@
                 mesh.geometry.boundingBox = new THREE.Box3().makeEmpty();
                 mesh.raycast = function (raycaster, intersects) {
                     const proxy = element.shape === 'sphere' ? this.sphereSelection : this.boxSelection;
-                    if (!proxy || this.visible === false) return;
+                    if (!canShowVolumeGizmos() || !proxy || this.visible === false) return;
                     proxy.updateMatrixWorld(true);
                     proxy.raycast(raycaster, intersects);
                 };
@@ -2962,6 +2974,9 @@
                 requestPreviewRender();
             };
             window.addEventListener('light_manager_initialized', lightManagerListener);
+            const gizmoVisibilityListener = () => refreshVolumeGizmoVisibility();
+            const viewListener = Blockbench.on('update_view', gizmoVisibilityListener);
+            window.addEventListener('lightflow_gizmo_visibility_changed', gizmoVisibilityListener);
             const depthMutationListeners = [
                 'update_transform', 'update_geometry', 'update_faces', 'update_uv'
             ].map(eventName => Blockbench.on(eventName, () => AtmosphereManager.invalidateDepthCache()));
@@ -2969,9 +2984,13 @@
                 'add_cube', 'add_mesh', 'add_texture_mesh', 'remove_cube', 'remove_mesh',
                 'undo', 'redo'
             ].map(eventName => Blockbench.on(eventName, () => AtmosphereManager.invalidateSceneCache()));
-            deletables.push(studioListener, selectionListener, ...depthMutationListeners, ...sceneMutationListeners, {
-                delete() { window.removeEventListener('light_manager_initialized', lightManagerListener); }
+            deletables.push(studioListener, selectionListener, viewListener, ...depthMutationListeners, ...sceneMutationListeners, {
+                delete() {
+                    window.removeEventListener('light_manager_initialized', lightManagerListener);
+                    window.removeEventListener('lightflow_gizmo_visibility_changed', gizmoVisibilityListener);
+                }
             });
+            refreshVolumeGizmoVisibility();
             syncAtmospherePanel();
             startAnimationLoop();
             requestPreviewRender();

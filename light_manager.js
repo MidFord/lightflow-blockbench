@@ -2388,6 +2388,47 @@ function unregisterLightManagerCanvasGizmo(object) {
     if (index >= 0) Canvas.gizmos.splice(index, 1);
 }
 
+function lightManagerCanvasGizmosVisible() {
+    return !window.Canvas || Canvas.show_gizmos !== false;
+}
+
+function lightManagerLightGizmosVisible() {
+    return lightManagerCanvasGizmosVisible() &&
+        (!window.LightManagerAreaGizmos || LightManagerAreaGizmos.enabled !== false);
+}
+
+function refreshLightManagerGizmoVisibility() {
+    const visible = lightManagerLightGizmosVisible();
+    const viewportControls = window.LightManagerViewportControls;
+    if (!visible && viewportControls) {
+        viewportControls.pendingFreeMove = false;
+        if (viewportControls.drag) viewportControls.cancelDrag?.(true);
+    }
+    const lights = window.LightElement && Array.isArray(window.LightElement.all)
+        ? window.LightElement.all
+        : [];
+    lights.forEach(element => {
+        const mesh = element?.mesh;
+        if (!mesh) return;
+        mesh.visible = element.visibility !== false && visible;
+        if (mesh.sprite) mesh.sprite.visible = visible;
+        if (mesh.gizmo) mesh.gizmo.visible = visible;
+    });
+    window.LightManagerAreaGizmos?.updateAll();
+    window.LightManagerViewportControls?.updateAll();
+    const LightflowGizmoEvent = window.CustomEvent;
+    if (typeof window.dispatchEvent === 'function' && typeof LightflowGizmoEvent === 'function') {
+        window.dispatchEvent(new LightflowGizmoEvent('lightflow_gizmo_visibility_changed', {
+            detail: {
+                showGizmos: visible,
+                showLightAreaGizmos: window.LightManagerAreaGizmos?.enabled !== false
+            }
+        }));
+    }
+}
+
+window.LightManagerRefreshGizmoVisibility = refreshLightManagerGizmoVisibility;
+
 if (window.LightManagerAreaGizmos && typeof window.LightManagerAreaGizmos.clear === 'function') {
     window.LightManagerAreaGizmos.clear();
 }
@@ -2398,7 +2439,7 @@ window.LightManagerAreaGizmos = {
     group: null,
 
     getGroup() {
-        if (!window.scene || !this.enabled || (window.Canvas && Canvas.show_gizmos === false)) return null;
+        if (!window.scene || !this.enabled || !lightManagerCanvasGizmosVisible()) return null;
         if (!this.group || this.group.parent !== window.scene) {
             if (this.group && this.group.parent) this.group.parent.remove(this.group);
             this.group = new THREE.Group();
@@ -2613,7 +2654,7 @@ window.LightManagerAreaGizmos = {
     },
 
     updateAll() {
-        if (!this.enabled || (window.Canvas && Canvas.show_gizmos === false)) {
+        if (!this.enabled || !lightManagerCanvasGizmosVisible()) {
             this.clear();
             return;
         }
@@ -2643,9 +2684,8 @@ window.LightManagerAreaGizmos = {
     setEnabled(enabled) {
         this.enabled = !!enabled;
         lightManagerSafeSet(LIGHT_MANAGER_STORAGE_KEYS.areaGizmos, this.enabled ? 'true' : 'false');
-        if (this.enabled) this.updateAll();
-        else this.clear();
-        window.LightManagerViewportControls?.updateAll();
+        if (!this.enabled) this.clear();
+        window.LightManagerRefreshGizmoVisibility?.();
     },
 
     toggle() {
@@ -2734,7 +2774,7 @@ window.LightManagerViewportControls = {
     },
 
     getGroup() {
-        if (!window.scene) return null;
+        if (!window.scene || !this.canShowViewportGizmos()) return null;
         if (!this.group || this.group.parent !== window.scene) {
             if (this.group && this.group.parent) this.group.parent.remove(this.group);
             this.group = new THREE.Group();
@@ -2881,9 +2921,7 @@ window.LightManagerViewportControls = {
     },
 
     canShowViewportGizmos() {
-        if (window.Canvas && Canvas.show_gizmos === false) return false;
-        if (window.LightManagerAreaGizmos && LightManagerAreaGizmos.enabled === false) return false;
-        return true;
+        return lightManagerLightGizmosVisible();
     },
 
     isHandleToolAllowed() {
@@ -3024,6 +3062,7 @@ window.LightManagerViewportControls = {
 
     updateAll() {
         if (!this.isEditMode() || !this.canShowViewportGizmos()) {
+            this.clearMoveIndicator();
             this.clearHelpersOnly();
             return;
         }
@@ -4222,6 +4261,7 @@ const lightIconSources = {};
     'LightManagerPrepareRender',
     'LightManagerAreaGizmos',
     'LightManagerViewportControls',
+    'LightManagerRefreshGizmoVisibility',
     'LightManagerFitTool',
     'update_light_element_callback'
 ].forEach(trackLightManagerWindowBinding);
@@ -8643,7 +8683,7 @@ function initializeLightManagerPlugin() {
                     mesh.name = element.uuid;
                     mesh.type = element.type;
                     mesh.isElement = true;
-                    mesh.visible = element.visibility;
+                    mesh.visible = element.visibility !== false && lightManagerLightGizmosVisible();
 
                     mesh.rotation.order = Format.euler_order || 'ZYX';
 
@@ -8740,6 +8780,10 @@ function initializeLightManagerPlugin() {
                 },
                 updateSelection(element, options = {}) {
                     let { mesh } = element;
+                    const canvasGizmosVisible = lightManagerLightGizmosVisible();
+                    mesh.visible = element.visibility !== false && canvasGizmosVisible;
+                    if (mesh.sprite) mesh.sprite.visible = canvasGizmosVisible;
+                    if (mesh.gizmo) mesh.gizmo.visible = canvasGizmosVisible;
 
                     let desiredTexture = lightTextures[element.light_type] || lightTextures.point;
                     if (mesh.sprite.material.map !== desiredTexture) {
@@ -9168,8 +9212,7 @@ function initializeLightManagerPlugin() {
                     previousViewOptionsOnFormChange(result);
                 }
                 if (result.show_gizmos !== undefined || result.show_light_area_gizmos !== undefined) {
-                    window.LightManagerAreaGizmos.updateAll();
-                    window.LightManagerViewportControls?.updateAll();
+                    window.LightManagerRefreshGizmoVisibility?.();
                 }
             };
             ViewOptionsDialog.onFormChange = lightManagerViewOptionsOnFormChange;
