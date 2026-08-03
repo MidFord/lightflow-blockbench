@@ -1470,6 +1470,11 @@
         return Math.max(0.08, preview.calculateControlScale(worldPosition) || 0.45) * 0.52;
     }
 
+    function canShowEnvironmentShadowGizmo() {
+        return (!window.Canvas || Canvas.show_gizmos !== false) &&
+            (!window.LightManagerAreaGizmos || LightManagerAreaGizmos.enabled !== false);
+    }
+
     function updateSunShadowGizmo() {
         const gizmo = createSunShadowGizmo();
         if (!gizmo || !sunLight || !sunTarget) return;
@@ -1479,7 +1484,7 @@
             settings.sun_enabled &&
             settings.sun_cast_shadows &&
             settings.shadow_auto_fit &&
-            (!window.Canvas || Canvas.show_gizmos !== false)
+            canShowEnvironmentShadowGizmo()
         );
         gizmo.root.visible = shouldShow;
         if (!shouldShow) return;
@@ -1597,7 +1602,7 @@
     function installSunShadowGizmoInteraction() {
         if (typeof document === 'undefined' || sunShadowGizmoListeners.length) return;
         const onPointerDown = event => {
-            if (event.button !== 0 || !sunShadowGizmo?.root?.visible || window.Canvas?.show_gizmos === false) return;
+            if (event.button !== 0 || !sunShadowGizmo?.root?.visible || !canShowEnvironmentShadowGizmo()) return;
             const preview = getSunShadowGizmoPreview(event);
             if (!preview?.canvas || event.target !== preview.canvas) return;
             setSunShadowGizmoRay(event, preview);
@@ -2841,14 +2846,19 @@
             };
             const textureListeners = ['add_texture', 'remove_texture', 'update_texture']
                 .map(eventName => Blockbench.on(eventName, textureChanged));
-            const viewListener = Blockbench.on('update_view', () => updateSunShadowGizmo());
+            const gizmoVisibilityListener = () => updateSunShadowGizmo();
+            const viewListener = Blockbench.on('update_view', gizmoVisibilityListener);
             const lightManagerListener = () => {
                 ensureSunLightParent();
                 updateScene({ forceShadow: true });
             };
             window.addEventListener('light_manager_initialized', lightManagerListener);
+            window.addEventListener('lightflow_gizmo_visibility_changed', gizmoVisibilityListener);
             deletables.push(...textureListeners, viewListener, {
-                delete() { window.removeEventListener('light_manager_initialized', lightManagerListener); }
+                delete() {
+                    window.removeEventListener('light_manager_initialized', lightManagerListener);
+                    window.removeEventListener('lightflow_gizmo_visibility_changed', gizmoVisibilityListener);
+                }
             });
             startAnimation();
         },
