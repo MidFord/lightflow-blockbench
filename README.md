@@ -150,6 +150,7 @@ Advanced users can still edit GLSL, import/export `.samat` materials, inspect pe
 - **[Workflows](docs/WORKFLOWS.md)** — product renders, cinematic Minecraft scenes, transparent exports, and performance-first iteration.
 - **[Performance & Troubleshooting](docs/TROUBLESHOOTING.md)** — common problems, quality costs, and safe starting settings.
 - **[Development Status](docs/DEVELOPMENT_STATUS.md)** — what is stable today, what is still changing, and what is planned.
+- **[Next Update Progress](docs/NEXT_UPDATE.md)** — detailed checklist for the active Rendercraft-focused development update and longer-term roadmap.
 
 ## Compatibility and honest boundaries
 
@@ -184,19 +185,31 @@ When reporting a problem, include:
 
 Please separate reproducible bugs from visual suggestions. Both are useful, but they require different investigation.
 
-## Roadmap
+## Next update
 
-Before the first public Marketplace release, my priorities are:
+The next development update is centered on the **Rendercraft rewrite** and the systems around it. A large part of the new rendering path is already implemented in the current development build, while the remaining work is focused on validation, performance, UI/UX, documentation, and release preparation.
 
-- final UI and UX consistency across all modules;
-- broader real-project compatibility testing;
-- safer migrations between development builds;
-- clearer presets and beginner onboarding;
-- more examples and visual documentation;
-- additional performance work for large scenes and integrated viewport effects;
-- packaging, metadata, and review preparation for the Blockbench Plugin Marketplace.
+### Current progress highlights
 
-Longer-term experiments may include deeper animation workflows, expanded atmosphere tools, optional alternate rendering backends, and new material systems — only when they can be implemented honestly and reliably.
+- [x] Rewritten Rendercraft material pipeline with redesigned Bevel, Inner Glow, Rim, transparency, and directional shading.
+- [x] Texture Relief generated from meaningful texture boundaries, with Studio Render integration and artistic lighting controls.
+- [x] Photoshop-style and HSV-oriented blend modes for Rendercraft highlights, shadows, glow, and Texture Relief.
+- [x] New full-sky Environment gradients with Ground Color integrated into the gradient system.
+- [x] New Rendercraft cloud shading, bevel controls, sky/sun lighting response, and distance fog.
+- [x] Studio Render shader preparation, Rendercraft Bloom integration, high-frequency detail preservation, and improved supersampling reduction.
+- [x] Global gizmo visibility synchronization across Light Manager, Atmosphere Volume Domains, and Environment helpers.
+- [ ] Finish Texture Relief and viewport/final-render parity validation.
+- [ ] Finish Rendercraft, Studio Render, and large-scene performance testing.
+- [ ] Finish UI/UX consistency and simplify artist-facing controls.
+- [ ] Add Light Element parenting to armature bones ([issue #4](https://github.com/MidFord/lightflow-blockbench/issues/4)).
+- [ ] Complete new Rendercraft / Environment documentation and visual examples.
+- [ ] Complete compatibility, migration, packaging, and Plugin Marketplace release preparation.
+
+**[See the complete development checklist →](docs/NEXT_UPDATE.md)**
+
+### Longer-term direction
+
+After the current Rendercraft-focused update, planned research and larger features include animation and image-sequence rendering, a visual Shader Graph, particles, `.mcstructure` workflows, deeper renderer experiments, and continued performance work for very large scenes.
 
 ## Support Lightflow
 
