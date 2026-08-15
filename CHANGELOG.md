@@ -2,13 +2,13 @@
 
 All notable changes to Lightflow for Blockbench are documented here.
 
-Lightflow currently uses a **suite development milestone** plus independent module versions. Until the first public release, entries may describe release candidates and matched development builds rather than strict semantic-versioned packages.
+Lightflow uses a **suite release milestone** alongside independent module versions. `v0.1.0` freezes the first stable development preview as a historical baseline while the individual plugins retain their own module versions.
 
-## [Unreleased]
+## [v0.1.0] - 2026-08-15
 
 ### Documentation and first stable development preview
 
-- Repositioned Lightflow as the first stable development version intended for real artist testing while clearly documenting that it is not feature-complete, not a final public release, and not yet available in the Blockbench Plugin Marketplace.
+- Repositioned Lightflow as the first stable development version intended for real artist testing while clearly documenting that it is not feature-complete, not the final Marketplace release, and not yet available in the Blockbench Plugin Marketplace.
 - Rebuilt the README around the artist workflow, project purpose, current limitations, manual installation, first-render path, honest renderer boundaries, feedback requirements, and Marketplace roadmap.
 - Added dedicated guides for installation, the first render, module responsibilities, practical workflows, performance/troubleshooting, and development status.
 - Documented the matched supplied module versions: Light Manager 1.7.0, Environment 1.5.1, Shader Architect 2.9.1, Atmosphere 1.2.0, and Studio Render 1.9.0.
