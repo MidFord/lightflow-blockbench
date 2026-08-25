@@ -1,11 +1,11 @@
 {
-  "name": "lightflow-blockbench-release-candidate",
+  "name": "lightflow-blockbench-3-development",
   "private": true,
-  "version": "0.0.0",
-  "description": "Validation harness for the Lightflow Blockbench plugin suite",
+  "version": "3.0.0-development",
+  "description": "Validation harness for the Lightflow 3.0 Blockbench development branch",
   "scripts": {
-    "check": "node --check light_manager.js && node --check shader_architect.js && node --check lightflow_atmosphere.js && node --check lightflow_environment.js && node --check studio_render.js",
-    "test": "node --test tests/release_candidate.test.js",
+    "check": "node --check light_manager.js && node --check shader_architect.js && node --check studio_render.js && node --check lightflow_environment.js && node --check lightflow_atmosphere.js && node --check lightflow_cinematic.js && node --check visual_shader_graph.js && node --check bedrock_structure_studio.js",
+    "test": "node --test tests/development_core.test.js",
     "validate": "npm run check && npm test"
   },
   "engines": {
