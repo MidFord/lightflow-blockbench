@@ -21,7 +21,9 @@ Do not treat this branch as a drop-in replacement for the public/release branche
 | `visual_shader_graph.js` | 1.2.0 | Typed vertex/fragment shader graph compiled into Shader Architect materials | New / experimental |
 | `bedrock_structure_studio.js` | 2.2.1 | `.mcstructure` editing, Bedrock NBT, resource-pack resolution and chunk-atlas preview | New / experimental |
 
-All eight JavaScript modules in this snapshot pass `node --check`.
+The authoritative snapshot contains 104,692 source lines across these eight modules. All eight pass `node --check` in the complete preservation bundle.
+
+> **Remote source-sync boundary:** the branch documentation and validation scaffold are synchronized to GitHub, but the GitHub connector used to establish the branch cannot ingest the local multi-megabyte source archive directly. Until a dedicated source-sync commit replaces the inherited root JavaScript payload, verify the working tree against [`docs/development-3.0/SOURCE_SYNC_STATUS.md`](docs/development-3.0/SOURCE_SYNC_STATUS.md) and the SHA-256 values in the snapshot manifest. The complete source snapshot is preserved in the companion Git bundle/ZIP artifact.
 
 ## The Lightflow 3.0 system
 
@@ -67,6 +69,7 @@ Start here:
 - [`docs/development-3.0/ROADMAP.md`](docs/development-3.0/ROADMAP.md) — stabilization roadmap from this snapshot to a publishable build.
 - [`docs/development-3.0/VALIDATION.md`](docs/development-3.0/VALIDATION.md) — testing matrix and release acceptance criteria.
 - [`docs/development-3.0/SNAPSHOT_MANIFEST.md`](docs/development-3.0/SNAPSHOT_MANIFEST.md) — exact source inventory, sizes and checksums.
+- [`docs/development-3.0/SOURCE_SYNC_STATUS.md`](docs/development-3.0/SOURCE_SYNC_STATUS.md) — remote source-payload synchronization boundary.
 
 The older documentation under `docs/` remains useful historical context, but the documents above are authoritative for this development branch.
 
@@ -88,7 +91,7 @@ npm test
 npm run validate
 ```
 
-`npm run check` validates the syntax of all eight development modules. Runtime validation still requires Blockbench Desktop and representative GPU testing.
+`npm run check` validates the syntax of all eight development modules once the source payload matches the snapshot manifest. Runtime validation still requires Blockbench Desktop and representative GPU testing.
 
 ## Publication status
 
