@@ -1,232 +1,97 @@
-<h1>
-  <img src="./assets/lightflow_beta_icon.png" alt="Lightflow" width="80" align="right">
-  Lightflow for Blockbench
-</h1>
+# Lightflow 3.0 Development
 
-> **Light, shape, atmosphere, and final renders — without leaving Blockbench.**
+> **Development branch:** `development/lightflow-3.0`  
+> **Status:** active internal development snapshot — **not release-ready, not Marketplace-ready, and not a stable public build**.  
+> **Snapshot date:** 2026-08-24
 
-[![Development Preview](https://img.shields.io/badge/status-stable%20development%20preview-f59e0b)](#project-status)
-[![Blockbench 4.9+](https://img.shields.io/badge/Blockbench-4.9%2B-1e88e5)](#requirements)
-[![Plugin Marketplace](https://img.shields.io/badge/Marketplace-not%20published%20yet-6b7280)](#installation)
-[![Support Lightflow on Ko-fi](https://img.shields.io/badge/Support%20Lightflow-Ko--fi-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/midford327)
+Lightflow 3.0 is the current integrated development line for the Lightflow rendering ecosystem inside Blockbench. This branch exists to preserve the complete state of the project while the renderer architecture, cinematics, shader authoring, Bedrock structure workflow, performance work, and release packaging are still evolving.
 
+Do not treat this branch as a drop-in replacement for the public/release branches. Project data, material schemas, internal APIs, render behavior, UI, defaults, and plugin boundaries may still change without migration guarantees.
 
-Lightflow is the rendering toolkit I always wanted inside Blockbench.
+## What is in this snapshot
 
-I built it for artists who want to take a model from a normal viewport to a deliberate final image: place real lights, shape shadows, build materials, create a Minecraft-inspired sky, add fog and light shafts, compose the shot, and export a high-resolution render — all in the same editor where the model was created.
+| Module | Version | Role | Development state |
+| --- | ---: | --- | --- |
+| `light_manager.js` | 1.8.2 | Shared Lightflow foundation: lights, shadows, gizmos, lifecycle, UI primitives | Integrated / stabilization |
+| `shader_architect.js` | 3.2.6 | Material system, Rendercraft, PBR, screen-space pipeline, AO/SSR, warmup and renderer orchestration | Major active development |
+| `studio_render.js` | 1.9.10 | High-resolution still renderer, Scene Composer, Bloom, grading, camera presets | Integrated / validation |
+| `lightflow_environment.js` | 1.9.0 | Sky, time, stars, celestial bodies, clouds, reflections and environment lighting | Integrated / validation |
+| `lightflow_atmosphere.js` | 1.2.0 | Local volumetrics, fog, shafts, procedural cloud domains | Functional / active beta |
+| `lightflow_cinematic.js` | 0.1.0 | Sequences, physical cameras, deterministic frame evaluation and streaming render foundations | New / experimental |
+| `visual_shader_graph.js` | 1.2.0 | Typed vertex/fragment shader graph compiled into Shader Architect materials | New / experimental |
+| `bedrock_structure_studio.js` | 2.2.1 | `.mcstructure` editing, Bedrock NBT, resource-pack resolution and chunk-atlas preview | New / experimental |
 
-Lightflow is already usable as my **first stable development version**, but it is **not finished, not a final public release, and not yet available in the Blockbench Plugin Marketplace**. Interfaces, presets, compatibility details, and project data may still change while I prepare the first public release.
+All eight JavaScript modules in this snapshot pass `node --check`.
 
-## What Lightflow brings to Blockbench
-
-| Module | What it does |
-| --- | --- |
-| **Light Manager** | Point, spot, and directional lights; viewport gizmos; animation; adaptive shadows; final-render shadow quality. |
-| **Lightflow Environment** | Minecraft-style time, sky, stars, sun, moon, clouds, ambient response, reflections, and environment shadows. |
-| **Shader Architect** | Artist-facing materials, PBR and stylized presets, material instances, per-element/per-face overrides, editable GLSL, AO, SSR, SSS, rim light, outlines, and pixelated shadows. |
-| **Lightflow Atmosphere** | Local fog, height fog, volumetric clouds, cinematic dust, and occluded light shafts. |
-| **Studio Render** | Realtime Scene Composer, Bloom, color grading, camera presets, framing, transparent output, tiled supersampling, and high-resolution still exports. |
-
-Together, the five modules form one workflow:
+## The Lightflow 3.0 system
 
 ```text
-MODEL → LIGHT → ENVIRONMENT → MATERIAL → ATMOSPHERE → COMPOSE → RENDER
+                             ┌───────────────────────────┐
+                             │      Light Manager        │
+                             │ lifecycle • lights • UI   │
+                             └─────────────┬─────────────┘
+                                           │
+                ┌──────────────────────────┼───────────────────────────┐
+                │                          │                           │
+                ▼                          ▼                           ▼
+      ┌───────────────────┐      ┌──────────────────────┐    ┌────────────────────┐
+      │ Environment       │      │ Shader Architect     │    │ Atmosphere         │
+      │ sky • clouds      │      │ materials • renderer│    │ fog • shafts       │
+      └─────────┬─────────┘      └──────────┬───────────┘    └─────────┬──────────┘
+                │                            │                          │
+                └────────────────────────────┼──────────────────────────┘
+                                             ▼
+                                  ┌──────────────────────┐
+                                  │ Studio Render        │
+                                  │ compose • export     │
+                                  └──────────┬───────────┘
+                                             │
+                       ┌─────────────────────┼─────────────────────┐
+                       ▼                     ▼                     ▼
+            ┌──────────────────┐  ┌──────────────────────┐  ┌──────────────────────┐
+            │ Cinematic        │  │ Visual Shader Graph  │  │ Bedrock Structure    │
+            │ timeline/render  │  │ author/compile       │  │ world-data workflow  │
+            └──────────────────┘  └──────────────────────┘  └──────────────────────┘
 ```
 
-## Why I am building it
+The important architectural shift in 3.0 is that Lightflow is no longer only a collection of five artist-facing plugins. It is becoming a shared rendering platform with explicit runtime contracts between modules: lifecycle hydration, shader/material compilation, frame resources, screen access, Studio Render preparation, deterministic frame context, and specialized import/render bridges.
 
-Blockbench is one of the fastest and most approachable tools for creating stylized and Minecraft-oriented assets. But presenting those assets often means leaving the editor, rebuilding the scene elsewhere, or accepting a basic viewport screenshot.
+## Documentation for this branch
 
-Lightflow is my attempt to close that gap without turning Blockbench into something it is not. The goal is not to imitate an offline ray tracer with fake labels. The goal is a fast, readable, artist-controlled renderer that respects Blockbench projects and makes polished visual presentation accessible to beginners while retaining deep controls for technical artists.
+Start here:
 
-## Project status
+- [`DEVELOPMENT.md`](DEVELOPMENT.md) — branch policy, current milestone and release gates.
+- [`docs/development-3.0/MODULE_STATUS.md`](docs/development-3.0/MODULE_STATUS.md) — detailed subsystem-by-subsystem implementation inventory.
+- [`docs/development-3.0/ARCHITECTURE.md`](docs/development-3.0/ARCHITECTURE.md) — cross-module architecture and runtime contracts.
+- [`docs/development-3.0/KNOWN_ISSUES.md`](docs/development-3.0/KNOWN_ISSUES.md) — known regressions, unresolved behavior and validation risks.
+- [`docs/development-3.0/ROADMAP.md`](docs/development-3.0/ROADMAP.md) — stabilization roadmap from this snapshot to a publishable build.
+- [`docs/development-3.0/VALIDATION.md`](docs/development-3.0/VALIDATION.md) — testing matrix and release acceptance criteria.
+- [`docs/development-3.0/SNAPSHOT_MANIFEST.md`](docs/development-3.0/SNAPSHOT_MANIFEST.md) — exact source inventory, sizes and checksums.
 
-**Current milestone: stable development preview / pre-release.**
+The older documentation under `docs/` remains useful historical context, but the documents above are authoritative for this development branch.
 
-- The complete five-module workflow is functional and can produce polished still images.
-- This is the first version I consider stable enough for real artist testing.
-- It is still under active development and should not be treated as feature-complete.
-- Lightflow is not yet published in the official Blockbench Plugin Marketplace.
-- Installation is currently manual.
-- Some UI, defaults, presets, persistence formats, and compatibility behavior may change before the first public release.
-- Back up important `.bbmodel` files before testing new builds.
+## Development rules
 
-The repository is currently being prepared for a wider public release. Feedback from real projects is especially valuable during this phase.
+1. **Do not publish directly from this branch.** Release candidates must be cut into a separate branch after the validation gates are satisfied.
+2. **Preserve project compatibility deliberately.** Any change to persisted properties, graph formats, material IDs or project JSON must include a migration decision.
+3. **Keep module contracts explicit.** Shared `window.*` APIs must be versioned or documented before widening their use.
+4. **Treat viewport and final render parity as a feature.** A visual feature is not complete until it is validated in both paths where applicable.
+5. **Performance regressions are release blockers.** Shader warmup, frame cost, shadow cost, screen-space passes, large structures and high-resolution export must be measured separately.
+6. **Experimental does not mean undocumented.** New Cinematic, Shader Graph and Structure Studio behavior belongs in the development documentation before it is considered stable.
 
-## Requirements
-
-- **Blockbench 4.9.0 or newer**.
-- **Blockbench Desktop is strongly recommended.**
-- A WebGL-capable GPU; a dedicated GPU is recommended for Atmosphere, realtime Bloom, high-resolution shadows, and 4K/8K exports.
-- If your computer has both integrated and dedicated graphics, configure your operating system to run Blockbench with the **high-performance / dedicated GPU**. This can make viewport previews, realtime effects, and final renders significantly faster.
-- All Lightflow modules should come from the same build.
-- Use `.bbmodel` for working files that need Lightflow project data to persist.
-
-## Installation
-
-Lightflow is **not in the Plugin Marketplace yet**. You can install it directly from its raw GitHub URLs or from downloaded files.
-
-### Install from URL
-
-In Blockbench, open **File → Plugins → Load Plugin from URL**, then paste and install each URL **one at a time in this order**. Each field below can be copied independently:
-
-1. **Light Manager**
-
-```text
-https://raw.githubusercontent.com/MidFord/lightflow-blockbench/refs/heads/main/light_manager.js
-```
-
-2. **Shader Architect**
-
-```text
-https://raw.githubusercontent.com/MidFord/lightflow-blockbench/refs/heads/main/shader_architect.js
-```
-
-3. **Studio Render**
-
-```text
-https://raw.githubusercontent.com/MidFord/lightflow-blockbench/refs/heads/main/studio_render.js
-```
-
-4. **Lightflow Atmosphere**
-
-```text
-https://raw.githubusercontent.com/MidFord/lightflow-blockbench/refs/heads/main/lightflow_atmosphere.js
-```
-
-5. **Lightflow Environment**
-
-```text
-https://raw.githubusercontent.com/MidFord/lightflow-blockbench/refs/heads/main/lightflow_environment.js
-```
-
-Restart Blockbench or reload the plugins after installing or updating them.
-
-> **Important:** Light Manager is the foundation module and must be installed first.
->
-> **Current maturity:** Light Manager, Shader Architect, and Studio Render are currently the most complete and polished modules. Lightflow Atmosphere and Lightflow Environment are functional, but remain in a more active beta stage and may change more frequently.
-
-### Install from downloaded files
-
-You can also download or clone the repository and use **File → Plugins → Load Plugin from File**. Load the same five JavaScript files in the order shown above.
-
-### Dedicated GPU recommendation
-
-Use **Blockbench Desktop** whenever possible. If your system has a dedicated GPU, configure your operating system or GPU control panel so Blockbench uses the **high-performance GPU** instead of integrated graphics. This improves realtime preview performance and can reduce final render times.
-
-For update instructions, common installation problems, and development builds, see **[Installation Guide](docs/INSTALLATION.md)**.
-
-## Your first Lightflow render
-
-1. Open a model and switch to **Lightflow Render** mode.
-2. Add a directional light with **Light Manager** and aim it at the model.
-3. Open **Environment Composer** and choose a sky preset or time of day.
-4. Open **Material Studio**, choose a Lightflow material, and apply it globally.
-5. Add a **Volume Domain** only when the shot benefits from mist, clouds, dust, or light shafts.
-6. Open **Scene Composer** and adjust Bloom and color grading.
-7. Open **Studio Render**, choose a resolution and samples, then render to preview or save.
-
-The full guided walkthrough is in **[Your First Render](docs/FIRST_RENDER.md)**.
-
-## A renderer designed around artists
-
-Lightflow exposes complex rendering systems through controls that describe the visual result rather than the implementation whenever possible:
-
-- place and aim lights directly in the viewport;
-- use separate preview and final shadow quality;
-- start from materials and lighting profiles instead of writing shaders;
-- override one object or one cube face without rebuilding the entire material;
-- fit lights, shadow bounds, atmospheres, and render framing to selected content;
-- keep expensive effects at interactive preview quality, then raise them for Studio Render;
-- preserve transparent pixels, emissive textures, additive textures, layered textures, Meshes, Texture Meshes, and zero-thickness cubes.
-
-Advanced users can still edit GLSL, import/export `.samat` materials, inspect performance counters, and build reusable material instances.
-
-## Documentation
-
-- **[Installation Guide](docs/INSTALLATION.md)** — install, update, remove, and verify the suite.
-- **[Your First Render](docs/FIRST_RENDER.md)** — a practical beginner tutorial from model to final image.
-- **[Module Guide](docs/MODULES.md)** — where every tool lives and when to use it.
-- **[Workflows](docs/WORKFLOWS.md)** — product renders, cinematic Minecraft scenes, transparent exports, and performance-first iteration.
-- **[Performance & Troubleshooting](docs/TROUBLESHOOTING.md)** — common problems, quality costs, and safe starting settings.
-- **[Development Status](docs/DEVELOPMENT_STATUS.md)** — what is stable today, what is still changing, and what is planned.
-- **[Next Update Progress](docs/NEXT_UPDATE.md)** — detailed checklist for the active Rendercraft-focused development update and longer-term roadmap.
-
-## Compatibility and honest boundaries
-
-Lightflow currently runs through Blockbench's Three.js/WebGL rendering environment. It uses optimized raster lighting, shadow maps, screen-space effects, volumetric composition, and supersampled still rendering.
-
-It does **not** currently provide hardware ray tracing, path tracing, or a cosmetic “RTX” switch. Colored transmissive shadows are also not part of the current stable path. I would rather document a real limitation than advertise a feature the host renderer cannot genuinely provide.
-
-Lightflow is not a replacement for Blender, a game engine, or an offline renderer. It is a focused presentation and rendering workflow built specifically for Blockbench artists.
-
-## Development and validation
-
-The repository includes syntax and regression validation for the independently loadable modules:
+## Validation
 
 ```bash
 npm install
+npm run check
+npm test
 npm run validate
 ```
 
-The validation harness requires Node.js 18 or newer. Automated checks do not replace manual testing inside Blockbench with a real GPU.
+`npm run check` validates the syntax of all eight development modules. Runtime validation still requires Blockbench Desktop and representative GPU testing.
 
-## Feedback and bug reports
+## Publication status
 
-When reporting a problem, include:
+This branch intentionally makes no promise of Marketplace compatibility. In particular, the current source size and module boundaries need a packaging review before publication. Shader Architect alone is larger than two megabytes in this snapshot, so packaging constraints must be revalidated rather than assumed.
 
-- your Blockbench version and operating system;
-- GPU model and display scaling;
-- the Lightflow module versions;
-- a minimal `.bbmodel` or reproducible scene when possible;
-- exact steps to reproduce;
-- screenshots or a short recording;
-- browser console errors from **View → Developer Tools**.
-
-Please separate reproducible bugs from visual suggestions. Both are useful, but they require different investigation.
-
-## Next update
-
-The next development update is centered on the **Rendercraft rewrite** and the systems around it. A large part of the new rendering path is already implemented in the current development build, while the remaining work is focused on validation, performance, UI/UX, documentation, and release preparation.
-
-### Current progress highlights
-
-- [x] Rewritten Rendercraft material pipeline with redesigned Bevel, Inner Glow, Rim, transparency, and directional shading.
-- [x] Texture Relief generated from meaningful texture boundaries, with Studio Render integration and artistic lighting controls.
-- [x] Photoshop-style and HSV-oriented blend modes for Rendercraft highlights, shadows, glow, and Texture Relief.
-- [x] New full-sky Environment gradients with Ground Color integrated into the gradient system.
-- [x] New Rendercraft cloud shading, bevel controls, sky/sun lighting response, and distance fog.
-- [x] Studio Render shader preparation, Rendercraft Bloom integration, high-frequency detail preservation, and improved supersampling reduction.
-- [x] Global gizmo visibility synchronization across Light Manager, Atmosphere Volume Domains, and Environment helpers.
-- [ ] Finish Texture Relief and viewport/final-render parity validation.
-- [ ] Finish Rendercraft, Studio Render, and large-scene performance testing.
-- [ ] Finish UI/UX consistency and simplify artist-facing controls.
-- [ ] Add Light Element parenting to armature bones ([issue #4](https://github.com/MidFord/lightflow-blockbench/issues/4)).
-- [ ] Complete new Rendercraft / Environment documentation and visual examples.
-- [ ] Complete compatibility, migration, packaging, and Plugin Marketplace release preparation.
-
-**[See the complete development checklist →](docs/NEXT_UPDATE.md)**
-
-### Longer-term direction
-
-After the current Rendercraft-focused update, planned research and larger features include animation and image-sequence rendering, a visual Shader Graph, particles, `.mcstructure` workflows, deeper renderer experiments, and continued performance work for very large scenes.
-
-## Support Lightflow
-
-Lightflow is an independent project built and maintained by MidFord.
-
-If Lightflow improves your Blockbench workflow and you would like to help support continued development, testing, documentation, and future releases, you can support the project on Ko-fi:
-
-[![Support Lightflow on Ko-fi](https://img.shields.io/badge/Support%20Lightflow-Ko--fi-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/midford327)
-
-Support is completely optional and does not affect access to Lightflow or its features.
-
-## License and trademarks
-
-The project does not currently include a repository license file. Until a license is added, normal copyright restrictions apply; public source visibility alone does not grant permission to redistribute or reuse the code.
-
-Blockbench is a separate project and trademark. Minecraft is a trademark of Microsoft. Lightflow is an independent project and is not affiliated with, endorsed by, or sponsored by Blockbench, Mojang Studios, or Microsoft.
-
----
-
-<p align="center"><strong>Built by MidFord for artists who want their Blockbench work to feel finished.</strong></p>
+Lightflow remains an independent project by MidFord and is not affiliated with or endorsed by Blockbench, Mojang Studios, Microsoft, or their respective trademarks.
