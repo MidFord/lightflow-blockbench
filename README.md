@@ -8,6 +8,7 @@
 [![Development Preview](https://img.shields.io/badge/status-stable%20development%20preview-f59e0b)](#project-status)
 [![Blockbench 4.9+](https://img.shields.io/badge/Blockbench-4.9%2B-1e88e5)](#requirements)
 [![Plugin Marketplace](https://img.shields.io/badge/Marketplace-not%20published%20yet-6b7280)](#installation)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-0b7285)](LICENSE)
 [![Support Lightflow on Ko-fi](https://img.shields.io/badge/Support%20Lightflow-Ko--fi-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/midford327)
 
 
@@ -151,6 +152,8 @@ Advanced users can still edit GLSL, import/export `.samat` materials, inspect pe
 - **[Performance & Troubleshooting](docs/TROUBLESHOOTING.md)** — common problems, quality costs, and safe starting settings.
 - **[Development Status](docs/DEVELOPMENT_STATUS.md)** — what is stable today, what is still changing, and what is planned.
 - **[Next Update Progress](docs/NEXT_UPDATE.md)** — detailed checklist for the active Rendercraft-focused development update and longer-term roadmap.
+- **[Development Guide](docs/DEVELOPMENT.md)** — local setup, validation, manual GPU testing, and cross-module development practices.
+- **[Contributing](CONTRIBUTING.md)** — contribution workflow, pull-request expectations, testing, and licensing.
 
 ## Compatibility and honest boundaries
 
@@ -170,6 +173,8 @@ npm run validate
 ```
 
 The validation harness requires Node.js 18 or newer. Automated checks do not replace manual testing inside Blockbench with a real GPU.
+
+Contributions are welcome. See **[CONTRIBUTING.md](CONTRIBUTING.md)** for the contribution workflow and **[Development Guide](docs/DEVELOPMENT.md)** for local setup, validation, and manual rendering checks.
 
 ## Feedback and bug reports
 
@@ -223,7 +228,11 @@ Support is completely optional and does not affect access to Lightflow or its fe
 
 ## License and trademarks
 
-The project does not currently include a repository license file. Until a license is added, normal copyright restrictions apply; public source visibility alone does not grant permission to redistribute or reuse the code.
+Lightflow is open-source software licensed under the **[Apache License 2.0](LICENSE)**. You may use, modify, reproduce, and distribute the project, including for commercial purposes, subject to the terms of that license. Contributions intentionally submitted for inclusion in Lightflow are accepted under the same license unless explicitly stated otherwise; see **[CONTRIBUTING.md](CONTRIBUTING.md)**.
+
+Copyright 2026 MidFord. Attribution information is also provided in **[NOTICE](NOTICE)**.
+
+The Apache License applies to Lightflow code and documentation in this repository unless a file or component is explicitly identified otherwise. It does not grant rights to third-party trademarks.
 
 Blockbench is a separate project and trademark. Minecraft is a trademark of Microsoft. Lightflow is an independent project and is not affiliated with, endorsed by, or sponsored by Blockbench, Mojang Studios, or Microsoft.
 
