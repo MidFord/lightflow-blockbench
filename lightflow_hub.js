@@ -297,6 +297,8 @@
                     origin: 'github'
                 };
             } catch (_) {
+                // Stable releases that predate Lightflow Hub (or are unrelated)
+                // are intentionally skipped instead of making the channel unusable.
             }
         }
         throw new Error(tr('releaseUnavailable'));
@@ -304,6 +306,7 @@
 
     async function fetchGitHubManifest(channel, experimentalBranch) {
         if (channel === 'stable') return fetchStableManifest();
+
         let ref = 'refs/heads/main';
         let label = 'main';
         if (channel === 'experimental') {
@@ -336,7 +339,7 @@
         const patterns = [
             /const\s+(?:PLUGIN_VERSION|VERSION|LAB_VERSION)\s*=\s*['"]([^'"]+)['"]/,
             /(?:root\.)?Plugin\.register\([\s\S]{0,900}?version\s*:\s*['"]([^'"]+)['"]/,
-            /version\s*:\s*['"]([^'"]+)['"]/ 
+            /version\s*:\s*['"]([^'"]+)['"]/
         ];
         for (const pattern of patterns) {
             const match = String(source || '').match(pattern);
@@ -593,13 +596,28 @@
         return {
             data() {
                 const preferences = loadPreferences();
-                return {preferences, revision: 0, busy: false, error: '', notice: '', search: '', group: 'all', releaseLabel: '', manifestOrigin, hubRemoteVersion: manifestState.hub.version, sourceReady: false};
+                return {
+                    preferences,
+                    revision: 0,
+                    busy: false,
+                    error: '',
+                    notice: '',
+                    search: '',
+                    group: 'all',
+                    releaseLabel: '',
+                    manifestOrigin,
+                    hubRemoteVersion: manifestState.hub.version,
+                    sourceReady: false
+                };
             },
             computed: {
                 modules() {
                     void this.revision;
                     const query = this.search.trim().toLowerCase();
-                    return manifestState.modules.map(module => moduleView(module, this.preferences)).filter(module => this.group === 'all' || module.group === this.group).filter(module => !query || `${module.title} ${module.description} ${module.id}`.toLowerCase().includes(query));
+                    return manifestState.modules
+                        .map(module => moduleView(module, this.preferences))
+                        .filter(module => this.group === 'all' || module.group === this.group)
+                        .filter(module => !query || `${module.title} ${module.description} ${module.id}`.toLowerCase().includes(query));
                 },
                 updates() { return this.modulesAll.filter(module => module.updateAvailable || module.sourceMismatch); },
                 modulesAll() { void this.revision; return manifestState.modules.map(module => moduleView(module, this.preferences)); },
@@ -611,7 +629,10 @@
                 hubUpdateAvailable() { return compareVersions(this.hubRemoteVersion, HUB_VERSION) > 0; }
             },
             methods: {
-                t: tr, statusText, statusClass, sourceText,
+                t: tr,
+                statusText,
+                statusClass,
+                sourceText,
                 targetSourceText() { return this.preferences.source === 'local' ? tr('local') : tr('github'); },
                 targetSourceButton() { return tr('useSource', {source: this.targetSourceText()}); },
                 bump() { this.revision++; },
@@ -626,23 +647,35 @@
                     this.sourceReady = false;
                     await this.run(async () => {
                         const result = applyManifestResult(await loadManifestForPreferences(this.preferences, true));
-                        this.releaseLabel = result.label; this.manifestOrigin = result.origin; this.hubRemoteVersion = result.manifest.hub.version; this.sourceReady = true; this.notice = result.warning || tr('upToDate');
+                        this.releaseLabel = result.label;
+                        this.manifestOrigin = result.origin;
+                        this.hubRemoteVersion = result.manifest.hub.version;
+                        this.sourceReady = true;
+                        this.notice = result.warning || tr('upToDate');
                     });
                 },
                 async changeSource() { savePreferences(this.preferences); await this.refresh(); },
                 async changeChannel() { savePreferences(this.preferences); await this.refresh(); },
-                branchChanged() { this.preferences.experimentalBranch = sanitizeRef(this.preferences.experimentalBranch) || 'experimental'; savePreferences(this.preferences); },
+                branchChanged() {
+                    this.preferences.experimentalBranch = sanitizeRef(this.preferences.experimentalBranch) || 'experimental';
+                    savePreferences(this.preferences);
+                },
                 automaticChanged() { savePreferences(this.preferences); },
                 chooseFolder() {
                     if (typeof Blockbench.pickDirectory !== 'function') { this.error = tr('noFolder'); return; }
                     const directory = Blockbench.pickDirectory({title: tr('chooseFolder'), resource_id: 'lightflow_modules'});
                     if (!directory) return;
-                    this.preferences.localDirectory = directory; savePreferences(this.preferences); this.refresh();
+                    this.preferences.localDirectory = directory;
+                    savePreferences(this.preferences);
+                    this.refresh();
                 },
                 useSiblingFolder() {
                     const directory = inferSiblingDirectory();
                     if (!directory) { this.error = tr('noFolder'); return; }
-                    this.preferences.localDirectory = directory; savePreferences(this.preferences); this.notice = tr('folderDetected'); this.refresh();
+                    this.preferences.localDirectory = directory;
+                    savePreferences(this.preferences);
+                    this.notice = tr('folderDetected');
+                    this.refresh();
                 },
                 chooseFiles() {
                     Blockbench.import({extensions: ['js'], multiple: true, type: 'JavaScript', resource_id: 'lightflow_modules'}, async files => {
@@ -657,8 +690,14 @@
                         });
                     });
                 },
-                async install(module) { if (!this.sourceReady) return; await this.run(() => installModules([module.id], this.preferences)); },
-                async forceReplace(module) { if (!this.sourceReady) return; await this.run(() => installModules([module.id], this.preferences, {force: true})); },
+                async install(module) {
+                    if (!this.sourceReady) return;
+                    await this.run(() => installModules([module.id], this.preferences));
+                },
+                async forceReplace(module) {
+                    if (!this.sourceReady) return;
+                    await this.run(() => installModules([module.id], this.preferences, {force: true}));
+                },
                 async installRecommended() {
                     if (!this.sourceReady) return;
                     const ids = this.modulesAll.filter(module => module.recommended && module.compatible && (!module.installed || module.sourceMismatch)).map(module => module.id);
@@ -678,36 +717,258 @@
                         const dependents = installedDependents(module.id).filter(item => !getPlugin(item.id)?.disabled);
                         if (dependents.length && !await confirmBox(tr('dependencyWarning', {names: dependents.map(item => item.title).join(', ')}), tr('disable'))) return;
                     }
-                    await this.run(async () => { const plugin = getPlugin(module.id); if (!plugin?.toggleDisabled) throw new Error(`${module.title}: plugin record unavailable`); plugin.toggleDisabled(); });
+                    await this.run(async () => {
+                        const plugin = getPlugin(module.id);
+                        if (!plugin?.toggleDisabled) throw new Error(`${module.title}: plugin record unavailable`);
+                        plugin.toggleDisabled();
+                    });
                 },
                 async remove(module) {
                     const dependents = installedDependents(module.id);
                     let message = tr('confirmUninstall', {name: module.title});
                     if (dependents.length) message += `\n\n${tr('dependencyWarning', {names: dependents.map(item => item.title).join(', ')})}`;
                     if (!await confirmBox(message, tr('uninstall'))) return;
-                    await this.run(async () => { const plugin = getPlugin(module.id); if (!plugin?.uninstall) throw new Error(`${module.title}: plugin record unavailable`); plugin.uninstall(); });
+                    await this.run(async () => {
+                        const plugin = getPlugin(module.id);
+                        if (!plugin?.uninstall) throw new Error(`${module.title}: plugin record unavailable`);
+                        plugin.uninstall();
+                    });
                 },
                 async reload(module) {
-                    await this.run(async () => { const source = moduleSource(module, this.preferences); if (source.kind === 'local') await replaceWithFile(module, source.value, {sourceApproved: true}); else await replaceWithUrl(module, source.value, {sourceApproved: true}); });
+                    await this.run(async () => {
+                        const source = moduleSource(module, this.preferences);
+                        if (source.kind === 'local') await replaceWithFile(module, source.value, {sourceApproved: true});
+                        else await replaceWithUrl(module, source.value, {sourceApproved: true});
+                    });
                 },
                 async updateHub() {
-                    await this.run(async () => { const module = {id: HUB_ID, file: manifestState.hub.file, title: tr('title')}; const url = rawUrl(currentRef, manifestState.hub.file); setTimeout(() => replaceWithUrl(module, url, {sourceApproved: true}).catch(notifyError), 50); hubDialog?.hide?.(); });
+                    await this.run(async () => {
+                        const module = {id: HUB_ID, file: manifestState.hub.file, title: tr('title')};
+                        const url = rawUrl(currentRef, manifestState.hub.file);
+                        setTimeout(() => replaceWithUrl(module, url, {sourceApproved: true}).catch(notifyError), 50);
+                        hubDialog?.hide?.();
+                    });
                 },
                 openUrl
             },
-            mounted() { this.$nextTick(() => this.refresh()); },
-            template: `<div class="lfhub-root"><header class="lfhub-header"><div class="lfhub-brand"><span class="lfhub-mark"><i class="material-icons">flare</i></span><div class="lfhub-brand-copy"><div class="lfhub-title">{{ t('title') }}</div><p>{{ t('subtitle') }}</p></div></div><div class="lfhub-links"><button @click="openUrl('${REPOSITORY.github}')" :title="t('viewGithub')"><i class="material-icons">code</i><span>GitHub</span></button><button @click="openUrl('${REPOSITORY.x}')" :title="t('followX')"><i class="material-icons">campaign</i><span>X</span></button><button @click="openUrl('${REPOSITORY.issues}')" :title="t('reportIssue')"><i class="material-icons">bug_report</i><span>{{ t('reportIssue') }}</span></button></div></header><section class="lfhub-sourcebar"><div class="lfhub-control-group"><span class="lfhub-control-label">{{ t('sourceLabel') }}</span><div class="lfhub-segment" role="group"><button :class="{active: preferences.source === 'github'}" @click="preferences.source='github'; changeSource()"><i class="material-icons">cloud_download</i>{{ t('github') }}</button><button :class="{active: preferences.source === 'local'}" @click="preferences.source='local'; changeSource()"><i class="material-icons">folder</i>{{ t('local') }}</button></div></div><div v-if="!localMode" class="lfhub-control-group lfhub-channel-group"><span class="lfhub-control-label">{{ t('channelLabel') }}</span><div class="lfhub-segment lfhub-channels" role="group"><button v-for="channel in ['stable','main','experimental']" :key="channel" :class="{active: preferences.channel === channel}" @click="preferences.channel=channel; changeChannel()">{{ t(channel) }}</button></div></div><label v-if="!localMode && preferences.channel === 'experimental'" class="lfhub-branch"><span>{{ t('branch') }}</span><input v-model="preferences.experimentalBranch" @change="branchChanged(); refresh()"></label><div v-if="localMode" class="lfhub-local-path"><span :title="preferences.localDirectory">{{ preferences.localDirectory || t('noFolder') }}</span><button @click="chooseFolder"><i class="material-icons">folder_open</i>{{ t('chooseFolder') }}</button><button @click="useSiblingFolder" :title="t('siblingFolder')"><i class="material-icons">my_location</i></button><button @click="chooseFiles" :title="t('chooseFiles')"><i class="material-icons">note_add</i></button></div><button class="lfhub-refresh" @click="refresh" :disabled="busy" :title="t('refresh')"><i class="material-icons" :class="{spin:busy}">sync</i></button></section><div class="lfhub-context"><span class="lfhub-channel-badge">{{ localMode ? t('local') : channelBadge }}</span><span>{{ releaseLabel || channelHelp }}</span><label class="lfhub-auto"><input type="checkbox" v-model="preferences.automaticChecks" @change="automaticChanged">{{ t('automaticChecks') }}</label></div><div v-if="hubUpdateAvailable" class="lfhub-banner update"><i class="material-icons">system_update</i><span>{{ t('hubUpdate', {version: hubRemoteVersion}) }}</span><button @click="updateHub">{{ t('updateHub') }}</button></div><div v-if="error" class="lfhub-banner error"><i class="material-icons">error_outline</i><span>{{ error }}</span><button @click="error=''">×</button></div><div v-else-if="notice" class="lfhub-banner notice"><i class="material-icons">info_outline</i><span>{{ notice }}</span><button @click="notice=''">×</button></div><div v-if="sourceMismatchCount && sourceReady" class="lfhub-banner migration"><i class="material-icons">swap_horiz</i><span>{{ t('migrateSummary', {count: sourceMismatchCount}) }}</span><button @click="updateAll" :disabled="busy">{{ targetSourceButton() }}</button></div><section class="lfhub-toolbar"><div class="lfhub-toolbar-main"><label class="lfhub-search"><i class="material-icons">search</i><input v-model="search" :placeholder="t('search')"></label><div class="lfhub-bulk"><button @click="installRecommended" :disabled="busy || !sourceReady"><i class="material-icons">playlist_add_check</i>{{ t('installRecommended') }}</button><button class="accent" @click="updateAll" :disabled="busy || !sourceReady || !updates.length"><i class="material-icons">system_update_alt</i>{{ t('updateAll') }}<span v-if="updates.length" class="count">{{ updates.length }}</span></button></div></div><nav class="lfhub-filters"><button v-for="item in ['all','essential','creative','specialized','developer']" :key="item" :class="{active:group===item}" @click="group=item">{{ t(item) }}</button></nav></section><main class="lfhub-list" :aria-busy="busy"><article class="lfhub-module" v-for="module in modules" :key="module.id" :class="{dimmed:!module.compatible}"><div class="lfhub-icon"><i class="material-icons">{{ module.icon }}</i></div><div class="lfhub-copy"><div class="lfhub-module-title"><strong>{{ module.title }}</strong><span v-if="module.maturity && module.maturity !== 'stable'" class="lfhub-maturity">{{ module.maturity }}</span></div><p>{{ module.description }}</p><div class="lfhub-meta"><span :class="['lfhub-status', statusClass(module)]">{{ statusText(module) }}</span><span v-if="module.installed">v{{ module.installedVersion }}</span><i v-if="module.updateAvailable" class="material-icons arrow">arrow_forward</i><span v-if="module.updateAvailable">v{{ module.version }}</span><span v-if="module.installed" class="lfhub-source">{{ sourceText(module) }}</span><span v-if="localMode && !module.localExists" class="lfhub-missing"><i class="material-icons">insert_drive_file</i>{{ t('missingLocal') }}</span><span v-if="module.dependencies.length" class="lfhub-deps">{{ t('dependencies') }}: {{ module.dependencies.join(', ') }}</span><span v-if="!module.compatible">Blockbench {{ module.min_blockbench }}+</span></div></div><div class="lfhub-actions"><button v-if="!module.installed" class="primary" @click="install(module)" :disabled="busy || !sourceReady || !module.compatible || (localMode && !module.localExists)"><i class="material-icons">download</i>{{ t('install') }}</button><button v-else-if="module.sourceMismatch" class="source-change" @click="forceReplace(module)" :disabled="busy || !sourceReady"><i class="material-icons">swap_horiz</i>{{ targetSourceButton() }}</button><button v-else-if="module.updateAvailable" class="primary" @click="install(module)" :disabled="busy || !sourceReady"><i class="material-icons">system_update_alt</i>{{ t('update') }}</button><button v-else @click="reload(module)" :disabled="busy || !sourceReady || (localMode && !module.localExists)" :title="t('reload')"><i class="material-icons">refresh</i></button><button v-if="module.installed" @click="toggle(module)" :disabled="busy" :title="module.disabled ? t('enable') : t('disable')"><i class="material-icons">{{ module.disabled ? 'toggle_off' : 'toggle_on' }}</i></button><button v-if="module.installed" class="danger" @click="remove(module)" :disabled="busy" :title="t('uninstall')"><i class="material-icons">delete_outline</i></button></div></article><div v-if="!modules.length" class="lfhub-empty"><i class="material-icons">search_off</i><span>{{ t('noResults') }}</span></div></main><footer class="lfhub-footer"><span>Lightflow Hub v${HUB_VERSION}</span><span>{{ manifestOrigin === 'local' ? t('sourceLocal') : t('sourceGithub') }}</span></footer></div>`
+            mounted() {
+                this.$nextTick(() => this.refresh());
+            },
+            template: `
+                <div class="lfhub-root">
+                    <header class="lfhub-header">
+                        <div class="lfhub-brand"><span class="lfhub-mark"><i class="material-icons">flare</i></span><div class="lfhub-brand-copy"><div class="lfhub-title">{{ t('title') }}</div><p>{{ t('subtitle') }}</p></div></div>
+                        <div class="lfhub-links">
+                            <button @click="openUrl('${REPOSITORY.github}')" :title="t('viewGithub')"><i class="material-icons">code</i><span>GitHub</span></button>
+                            <button @click="openUrl('${REPOSITORY.x}')" :title="t('followX')"><i class="material-icons">campaign</i><span>X</span></button>
+                            <button @click="openUrl('${REPOSITORY.issues}')" :title="t('reportIssue')"><i class="material-icons">bug_report</i><span>{{ t('reportIssue') }}</span></button>
+                        </div>
+                    </header>
+
+                    <section class="lfhub-sourcebar">
+                        <div class="lfhub-control-group">
+                            <span class="lfhub-control-label">{{ t('sourceLabel') }}</span>
+                            <div class="lfhub-segment" role="group">
+                                <button :class="{active: preferences.source === 'github'}" @click="preferences.source='github'; changeSource()"><i class="material-icons">cloud_download</i>{{ t('github') }}</button>
+                                <button :class="{active: preferences.source === 'local'}" @click="preferences.source='local'; changeSource()"><i class="material-icons">folder</i>{{ t('local') }}</button>
+                            </div>
+                        </div>
+                        <div v-if="!localMode" class="lfhub-control-group lfhub-channel-group">
+                            <span class="lfhub-control-label">{{ t('channelLabel') }}</span>
+                            <div class="lfhub-segment lfhub-channels" role="group">
+                                <button v-for="channel in ['stable','main','experimental']" :key="channel" :class="{active: preferences.channel === channel}" @click="preferences.channel=channel; changeChannel()">{{ t(channel) }}</button>
+                            </div>
+                        </div>
+                        <label v-if="!localMode && preferences.channel === 'experimental'" class="lfhub-branch"><span>{{ t('branch') }}</span><input v-model="preferences.experimentalBranch" @change="branchChanged(); refresh()"></label>
+                        <div v-if="localMode" class="lfhub-local-path"><span :title="preferences.localDirectory">{{ preferences.localDirectory || t('noFolder') }}</span><button @click="chooseFolder"><i class="material-icons">folder_open</i>{{ t('chooseFolder') }}</button><button @click="useSiblingFolder" :title="t('siblingFolder')"><i class="material-icons">my_location</i></button><button @click="chooseFiles" :title="t('chooseFiles')"><i class="material-icons">note_add</i></button></div>
+                        <button class="lfhub-refresh" @click="refresh" :disabled="busy" :title="t('refresh')"><i class="material-icons" :class="{spin:busy}">sync</i></button>
+                    </section>
+
+                    <div class="lfhub-context">
+                        <span class="lfhub-channel-badge">{{ localMode ? t('local') : channelBadge }}</span>
+                        <span>{{ releaseLabel || channelHelp }}</span>
+                        <label class="lfhub-auto"><input type="checkbox" v-model="preferences.automaticChecks" @change="automaticChanged">{{ t('automaticChecks') }}</label>
+                    </div>
+                    <div v-if="hubUpdateAvailable" class="lfhub-banner update"><i class="material-icons">system_update</i><span>{{ t('hubUpdate', {version: hubRemoteVersion}) }}</span><button @click="updateHub">{{ t('updateHub') }}</button></div>
+                    <div v-if="error" class="lfhub-banner error"><i class="material-icons">error_outline</i><span>{{ error }}</span><button @click="error=''">×</button></div>
+                    <div v-else-if="notice" class="lfhub-banner notice"><i class="material-icons">info_outline</i><span>{{ notice }}</span><button @click="notice=''">×</button></div>
+                    <div v-if="sourceMismatchCount && sourceReady" class="lfhub-banner migration"><i class="material-icons">swap_horiz</i><span>{{ t('migrateSummary', {count: sourceMismatchCount}) }}</span><button @click="updateAll" :disabled="busy">{{ targetSourceButton() }}</button></div>
+
+                    <section class="lfhub-toolbar">
+                        <div class="lfhub-toolbar-main">
+                            <label class="lfhub-search"><i class="material-icons">search</i><input v-model="search" :placeholder="t('search')"></label>
+                            <div class="lfhub-bulk">
+                                <button @click="installRecommended" :disabled="busy || !sourceReady"><i class="material-icons">playlist_add_check</i>{{ t('installRecommended') }}</button>
+                                <button class="accent" @click="updateAll" :disabled="busy || !sourceReady || !updates.length"><i class="material-icons">system_update_alt</i>{{ t('updateAll') }}<span v-if="updates.length" class="count">{{ updates.length }}</span></button>
+                            </div>
+                        </div>
+                        <nav class="lfhub-filters">
+                            <button v-for="item in ['all','essential','creative','specialized','developer']" :key="item" :class="{active:group===item}" @click="group=item">{{ t(item) }}</button>
+                        </nav>
+                    </section>
+
+                    <main class="lfhub-list" :aria-busy="busy">
+                        <article class="lfhub-module" v-for="module in modules" :key="module.id" :class="{dimmed:!module.compatible}">
+                            <div class="lfhub-icon"><i class="material-icons">{{ module.icon }}</i></div>
+                            <div class="lfhub-copy">
+                            <div class="lfhub-module-title"><strong>{{ module.title }}</strong><span v-if="module.maturity && module.maturity !== 'stable'" class="lfhub-maturity">{{ module.maturity }}</span></div>
+                                <p>{{ module.description }}</p>
+                                <div class="lfhub-meta">
+                                    <span :class="['lfhub-status', statusClass(module)]">{{ statusText(module) }}</span>
+                                    <span v-if="module.installed">v{{ module.installedVersion }}</span><i v-if="module.updateAvailable" class="material-icons arrow">arrow_forward</i><span v-if="module.updateAvailable">v{{ module.version }}</span>
+                                    <span v-if="module.installed" class="lfhub-source">{{ sourceText(module) }}</span>
+                                    <span v-if="localMode && !module.localExists" class="lfhub-missing"><i class="material-icons">insert_drive_file</i>{{ t('missingLocal') }}</span>
+                                    <span v-if="module.dependencies.length" class="lfhub-deps">{{ t('dependencies') }}: {{ module.dependencies.join(', ') }}</span>
+                                    <span v-if="!module.compatible">Blockbench {{ module.min_blockbench }}+</span>
+                                </div>
+                            </div>
+                            <div class="lfhub-actions">
+                                <button v-if="!module.installed" class="primary" @click="install(module)" :disabled="busy || !sourceReady || !module.compatible || (localMode && !module.localExists)"><i class="material-icons">download</i>{{ t('install') }}</button>
+                                <button v-else-if="module.sourceMismatch" class="source-change" @click="forceReplace(module)" :disabled="busy || !sourceReady"><i class="material-icons">swap_horiz</i>{{ targetSourceButton() }}</button>
+                                <button v-else-if="module.updateAvailable" class="primary" @click="install(module)" :disabled="busy || !sourceReady"><i class="material-icons">system_update_alt</i>{{ t('update') }}</button>
+                                <button v-else @click="reload(module)" :disabled="busy || !sourceReady || (localMode && !module.localExists)" :title="t('reload')"><i class="material-icons">refresh</i></button>
+                                <button v-if="module.installed" @click="toggle(module)" :disabled="busy" :title="module.disabled ? t('enable') : t('disable')"><i class="material-icons">{{ module.disabled ? 'toggle_off' : 'toggle_on' }}</i></button>
+                                <button v-if="module.installed" class="danger" @click="remove(module)" :disabled="busy" :title="t('uninstall')"><i class="material-icons">delete_outline</i></button>
+                            </div>
+                        </article>
+                        <div v-if="!modules.length" class="lfhub-empty"><i class="material-icons">search_off</i><span>{{ t('noResults') }}</span></div>
+                    </main>
+                    <footer class="lfhub-footer"><span>Lightflow Hub v${HUB_VERSION}</span><span>{{ manifestOrigin === 'local' ? t('sourceLocal') : t('sourceGithub') }}</span></footer>
+                </div>
+            `
         };
     }
 
     function openHub() {
         hubDialog?.hide?.();
-        hubDialog = new Dialog({id: 'lightflow_hub_dialog', title: tr('title'), width: 940, buttons: [], component: createComponent(), onConfirm() { hubDialog = null; }, onCancel() { hubDialog = null; }});
+        hubDialog = new Dialog({
+            id: 'lightflow_hub_dialog',
+            title: tr('title'),
+            width: 940,
+            buttons: [],
+            component: createComponent(),
+            onConfirm() { hubDialog = null; },
+            onCancel() { hubDialog = null; }
+        });
         hubDialog.show();
     }
 
     function addStyles() {
-        stylesheet = Blockbench.addCSS(`#lightflow_hub_dialog .dialog_content{padding:0;overflow:hidden}#lightflow_hub_dialog .dialog_wrapper{width:min(940px,calc(100vw - 28px));max-width:calc(100vw - 28px)}#lightflow_hub_dialog .dialog_bar.button_bar:empty{display:none}.lfhub-root,.lfhub-root *{box-sizing:border-box}.lfhub-root{height:min(760px,calc(100vh - 104px));min-height:520px;display:flex;flex-direction:column;overflow:hidden;color:var(--color-text);background:var(--color-ui);font-size:13px}.lfhub-header{min-height:72px;display:flex;align-items:center;justify-content:space-between;gap:20px;padding:14px 16px 15px;border-bottom:1px solid var(--color-border);background:var(--color-back)}.lfhub-brand{display:flex;align-items:center;gap:12px;min-width:0}.lfhub-brand-copy{min-width:0}.lfhub-mark{width:40px;height:40px;flex:0 0 40px;display:grid;place-items:center;color:white;background:var(--color-accent);border-radius:5px}.lfhub-title{font-size:19px;line-height:24px;font-weight:600}.lfhub-brand p{max-width:58ch;margin:2px 0 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.lfhub-links,.lfhub-segment,.lfhub-actions,.lfhub-bulk,.lfhub-filters{display:flex;align-items:center;gap:6px}.lfhub-root button{border:1px solid var(--color-border);border-radius:4px;background:var(--color-button);color:var(--color-text);cursor:pointer}.lfhub-sourcebar{min-height:66px;display:grid;grid-template-columns:auto minmax(290px,1fr) auto auto;align-items:end;gap:16px;padding:9px 14px 10px;border-bottom:1px solid var(--color-border)}.lfhub-control-group{display:flex;flex-direction:column;gap:5px}.lfhub-segment{gap:0}.lfhub-segment button{min-height:34px;min-width:98px}.lfhub-segment button.active,.lfhub-filters button.active{color:white;background:var(--color-accent);border-color:var(--color-accent)}.lfhub-branch{display:flex;flex-direction:column;gap:5px}.lfhub-branch input,.lfhub-search input{height:34px;border:1px solid var(--color-border);background:var(--color-back);color:var(--color-text);border-radius:4px;padding:0 10px}.lfhub-context{min-height:34px;display:flex;align-items:center;gap:9px;padding:6px 14px;border-bottom:1px solid var(--color-border)}.lfhub-auto{margin-left:auto}.lfhub-banner{margin:8px 14px 0;display:flex;align-items:center;gap:9px;padding:7px 9px;border:1px solid var(--color-border);border-left-width:3px}.lfhub-banner span{flex:1}.lfhub-toolbar{padding:10px 14px 11px;border-bottom:1px solid var(--color-border)}.lfhub-toolbar-main{display:flex;gap:10px}.lfhub-search{min-width:210px;max-width:360px;flex:1}.lfhub-search input{width:100%}.lfhub-bulk{margin-left:auto}.lfhub-filters{margin-top:8px;flex-wrap:wrap}.lfhub-list{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:0 14px}.lfhub-module{min-height:88px;display:grid;grid-template-columns:42px minmax(0,1fr) auto;align-items:center;gap:12px;padding:12px 3px;border-bottom:1px solid var(--color-border)}.lfhub-copy{min-width:0}.lfhub-module-title{display:flex;align-items:center;gap:8px}.lfhub-copy p{margin:4px 0 7px}.lfhub-meta{display:flex;flex-wrap:wrap;gap:5px 9px}.lfhub-actions{justify-content:flex-end}.lfhub-actions button{min-width:36px;height:36px}.lfhub-actions button.primary,.lfhub-bulk button.accent{color:white;background:var(--color-accent);border-color:var(--color-accent)}.lfhub-footer{min-height:30px;display:flex;justify-content:space-between;align-items:center;padding:5px 14px;border-top:1px solid var(--color-border)}.lfhub-root button:disabled{opacity:.42;cursor:default}.lfhub-root .spin{animation:lfhub-spin .8s linear infinite}@keyframes lfhub-spin{to{transform:rotate(360deg)}}@media(max-width:760px){.lfhub-root{height:calc(100vh - 78px);min-height:420px}.lfhub-sourcebar{grid-template-columns:1fr auto}.lfhub-channel-group,.lfhub-local-path,.lfhub-branch{grid-column:1/-1}.lfhub-toolbar-main{flex-direction:column}.lfhub-search{max-width:none}.lfhub-bulk{margin-left:0}.lfhub-module{grid-template-columns:36px minmax(0,1fr)}.lfhub-actions{grid-column:2}}`);
+        stylesheet = Blockbench.addCSS(`
+            #lightflow_hub_dialog .dialog_content { padding:0; overflow:hidden; }
+            #lightflow_hub_dialog .dialog_wrapper { width:min(940px, calc(100vw - 28px)); max-width:calc(100vw - 28px); }
+            #lightflow_hub_dialog .dialog_bar.button_bar:empty { display:none; }
+            .lfhub-root, .lfhub-root * { box-sizing:border-box; }
+            .lfhub-root { height:min(760px, calc(100vh - 104px)); min-height:520px; display:flex; flex-direction:column; overflow:hidden; color:var(--color-text); background:var(--color-ui); font-size:13px; }
+            .lfhub-header { min-height:72px; display:flex; align-items:center; justify-content:space-between; gap:20px; padding:14px 16px 15px; border-bottom:1px solid var(--color-border); background:var(--color-back); }
+            .lfhub-brand { display:flex; align-items:center; gap:12px; min-width:0; }
+            .lfhub-brand-copy { min-width:0; }
+            .lfhub-mark { width:40px; height:40px; flex:0 0 40px; display:grid; place-items:center; color:white; background:var(--color-accent); border-radius:5px; }
+            .lfhub-mark i { font-size:23px; }
+            .lfhub-title { margin:0; font-size:19px; line-height:24px; font-weight:600; letter-spacing:-.2px; }
+            .lfhub-brand p { max-width:58ch; margin:2px 0 0; color:color-mix(in srgb, var(--color-text) 68%, var(--color-ui)); line-height:18px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+            .lfhub-links, .lfhub-segment, .lfhub-actions, .lfhub-bulk, .lfhub-filters { display:flex; align-items:center; gap:6px; }
+            .lfhub-links button, .lfhub-sourcebar button, .lfhub-toolbar button, .lfhub-actions button, .lfhub-banner button { min-height:34px; border:1px solid var(--color-border); border-radius:4px; background:var(--color-button); color:var(--color-text); cursor:pointer; transition:background-color 120ms ease, border-color 120ms ease, color 120ms ease, transform 80ms ease; }
+            .lfhub-links button { padding:0 10px; display:flex; align-items:center; justify-content:center; gap:6px; color:color-mix(in srgb, var(--color-text) 82%, var(--color-ui)); }
+            .lfhub-links button:hover, .lfhub-sourcebar button:hover, .lfhub-toolbar button:hover, .lfhub-actions button:hover { background:var(--color-selected); border-color:color-mix(in srgb, var(--color-text) 28%, var(--color-border)); }
+            .lfhub-root button:active:not(:disabled) { transform:translateY(1px); }
+            .lfhub-root button:focus-visible, .lfhub-root input:focus-visible { outline:2px solid var(--color-accent); outline-offset:2px; }
+            .lfhub-sourcebar { min-height:66px; display:grid; grid-template-columns:auto minmax(290px, 1fr) auto auto; align-items:end; gap:16px; padding:9px 14px 10px; border-bottom:1px solid var(--color-border); }
+            .lfhub-control-group { min-width:0; display:flex; flex-direction:column; align-items:flex-start; gap:5px; }
+            .lfhub-control-label { color:color-mix(in srgb, var(--color-text) 62%, var(--color-ui)); font-size:11px; line-height:13px; font-weight:500; letter-spacing:.3px; }
+            .lfhub-channel-group { justify-self:start; }
+            .lfhub-segment { gap:0; }
+            .lfhub-segment button { min-width:102px; border-radius:0; margin-left:-1px; padding:6px 12px; display:flex; justify-content:center; align-items:center; gap:7px; }
+            .lfhub-channels button { min-width:98px; }
+            .lfhub-segment button:first-child { margin-left:0; border-radius:4px 0 0 4px; }
+            .lfhub-segment button:last-child { border-radius:0 4px 4px 0; }
+            .lfhub-segment button.active, .lfhub-filters button.active { color:white; background:var(--color-accent); border-color:var(--color-accent); }
+            .lfhub-branch { align-self:end; display:flex; flex-direction:column; align-items:flex-start; gap:5px; min-width:160px; }
+            .lfhub-branch span { color:color-mix(in srgb, var(--color-text) 62%, var(--color-ui)); font-size:11px; }
+            .lfhub-branch input, .lfhub-search input { min-width:0; height:34px; border:1px solid var(--color-border); background:var(--color-back); color:var(--color-text); border-radius:4px; padding:0 10px; }
+            .lfhub-local-path { min-width:0; align-self:end; display:flex; align-items:center; gap:6px; }
+            .lfhub-local-path > span { min-width:80px; flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:color-mix(in srgb, var(--color-text) 68%, var(--color-ui)); }
+            .lfhub-local-path button { padding:5px 10px; display:flex; align-items:center; gap:6px; white-space:nowrap; }
+            .lfhub-local-path button:not(:first-of-type) { width:34px; justify-content:center; padding:0; }
+            .lfhub-refresh { width:36px; align-self:end; display:grid; place-items:center; padding:0; }
+            .lfhub-context { min-height:34px; display:flex; align-items:center; gap:9px; padding:6px 14px; border-bottom:1px solid var(--color-border); color:color-mix(in srgb, var(--color-text) 68%, var(--color-ui)); font-size:12px; }
+            .lfhub-channel-badge { padding:2px 7px; border:1px solid var(--color-border); border-radius:3px; color:var(--color-text); background:var(--color-back); font-weight:500; }
+            .lfhub-auto { margin-left:auto; display:flex; align-items:center; gap:7px; white-space:nowrap; }
+            .lfhub-banner { margin:8px 14px 0; min-height:40px; display:flex; align-items:center; gap:9px; padding:7px 9px; border:1px solid var(--color-border); border-left-width:3px; border-radius:4px; background:var(--color-back); line-height:17px; }
+            .lfhub-banner > i { flex:0 0 auto; }
+            .lfhub-banner span { min-width:0; flex:1; }
+            .lfhub-banner.error { border-left-color:var(--color-error); }
+            .lfhub-banner.update, .lfhub-banner.migration { border-left-color:var(--color-accent); }
+            .lfhub-banner.notice { border-left-color:color-mix(in srgb, var(--color-text) 45%, var(--color-border)); }
+            .lfhub-banner button { flex:0 0 auto; min-height:30px; padding:4px 10px; }
+            .lfhub-toolbar { display:flex; flex-direction:column; align-items:stretch; gap:8px; padding:10px 14px 11px; border-bottom:1px solid var(--color-border); }
+            .lfhub-toolbar-main { display:flex; align-items:center; gap:10px; min-width:0; }
+            .lfhub-search { min-width:210px; max-width:360px; flex:1; position:relative; display:flex; align-items:center; }
+            .lfhub-search i { position:absolute; left:9px; color:color-mix(in srgb, var(--color-text) 58%, var(--color-ui)); pointer-events:none; }
+            .lfhub-search input { width:100%; padding-left:34px; }
+            .lfhub-filters { min-width:0; flex-wrap:wrap; gap:5px; }
+            .lfhub-filters button { min-height:30px; padding:4px 11px; white-space:nowrap; }
+            .lfhub-bulk { margin-left:auto; }
+            .lfhub-bulk button { display:flex; align-items:center; gap:6px; padding:5px 11px; white-space:nowrap; }
+            .lfhub-bulk button.accent, .lfhub-actions button.primary { color:white; background:var(--color-accent); border-color:var(--color-accent); }
+            .lfhub-bulk .count { min-width:18px; height:18px; display:grid; place-items:center; border-radius:3px; background:rgba(0,0,0,.24); color:white; font-size:11px; font-variant-numeric:tabular-nums; }
+            .lfhub-list { flex:1; min-height:0; overflow-y:auto; overflow-x:hidden; padding:0 14px; scrollbar-gutter:stable; }
+            .lfhub-module { min-height:88px; display:grid; grid-template-columns:42px minmax(0,1fr) auto; align-items:center; gap:12px; padding:12px 3px; border-bottom:1px solid var(--color-border); }
+            .lfhub-module.dimmed { opacity:.64; }
+            .lfhub-icon { width:40px; height:40px; display:grid; place-items:center; border:1px solid var(--color-border); border-radius:5px; color:color-mix(in srgb, var(--color-text) 88%, var(--color-ui)); background:var(--color-back); }
+            .lfhub-icon i { font-size:21px; }
+            .lfhub-copy { min-width:0; }
+            .lfhub-module-title { display:flex; align-items:center; gap:8px; min-width:0; }
+            .lfhub-module-title strong { overflow:hidden; text-overflow:ellipsis; font-size:14px; line-height:18px; font-weight:600; }
+            .lfhub-maturity { padding:1px 5px; border:1px solid var(--color-border); border-radius:2px; color:color-mix(in srgb, var(--color-text) 66%, var(--color-ui)); font-size:10px; line-height:15px; letter-spacing:.35px; text-transform:uppercase; }
+            .lfhub-copy p { max-width:68ch; margin:4px 0 7px; color:color-mix(in srgb, var(--color-text) 72%, var(--color-ui)); line-height:18px; text-wrap:pretty; }
+            .lfhub-meta { display:flex; flex-wrap:wrap; align-items:center; gap:5px 9px; color:color-mix(in srgb, var(--color-text) 64%, var(--color-ui)); font-size:12px; line-height:18px; font-variant-numeric:tabular-nums; }
+            .lfhub-status { padding:1px 6px; border-radius:3px; border:1px solid var(--color-border); color:var(--color-text); line-height:17px; }
+            .lfhub-status.installed { border-color:#4d9667; color:#7fd39b; }
+            .lfhub-status.update { border-color:var(--color-accent); color:white; background:var(--color-accent); }
+            .lfhub-status.disabled { border-color:#a17a3f; color:#d7ad6d; }
+            .lfhub-status.incompatible { border-color:var(--color-error); color:#ef8d98; }
+            .lfhub-meta .arrow { font-size:14px; }
+            .lfhub-source, .lfhub-deps { padding-left:9px; border-left:1px solid var(--color-border); }
+            .lfhub-missing { color:var(--color-error); display:flex; align-items:center; gap:4px; }
+            .lfhub-missing i { font-size:14px; }
+            .lfhub-actions { justify-content:flex-end; }
+            .lfhub-actions button { min-width:36px; height:36px; padding:5px 9px; display:flex; justify-content:center; align-items:center; gap:6px; white-space:nowrap; }
+            .lfhub-actions button.source-change { color:var(--color-text); background:transparent; border-color:color-mix(in srgb, var(--color-accent) 55%, var(--color-border)); }
+            .lfhub-actions button.source-change:hover { color:white; background:var(--color-accent); border-color:var(--color-accent); }
+            .lfhub-actions button.danger:hover { color:white; background:var(--color-error); border-color:var(--color-error); }
+            .lfhub-empty { height:100%; min-height:180px; display:flex; flex-direction:column; justify-content:center; align-items:center; gap:9px; color:color-mix(in srgb, var(--color-text) 62%, var(--color-ui)); }
+            .lfhub-empty i { font-size:34px; }
+            .lfhub-footer { min-height:30px; display:flex; justify-content:space-between; align-items:center; padding:5px 14px; border-top:1px solid var(--color-border); color:color-mix(in srgb, var(--color-text) 58%, var(--color-ui)); font-size:11px; }
+            .lfhub-root button:disabled { opacity:.42; cursor:default; }
+            .lfhub-root .material-icons { font-size:18px; }
+            .lfhub-root .spin { animation:lfhub-spin .8s linear infinite; }
+            @keyframes lfhub-spin { to { transform:rotate(360deg); } }
+            @media (max-width: 760px) {
+                .lfhub-root { height:calc(100vh - 78px); min-height:420px; }
+                .lfhub-header { align-items:flex-start; }
+                .lfhub-links button span { display:none; }
+                .lfhub-links button { width:34px; padding:0; }
+                .lfhub-sourcebar { grid-template-columns:1fr auto; }
+                .lfhub-channel-group, .lfhub-local-path, .lfhub-branch { grid-column:1 / -1; }
+                .lfhub-refresh { grid-column:2; grid-row:1; }
+                .lfhub-toolbar-main { align-items:stretch; flex-direction:column; }
+                .lfhub-search { width:100%; max-width:none; }
+                .lfhub-bulk { width:100%; margin-left:0; }
+                .lfhub-bulk button { flex:1; justify-content:center; }
+                .lfhub-module { grid-template-columns:36px minmax(0,1fr); }
+                .lfhub-actions { grid-column:2; justify-content:flex-start; }
+                .lfhub-deps { display:none; }
+            }
+            @media (max-width: 520px) {
+                .lfhub-brand p, .lfhub-context > span:not(.lfhub-channel-badge) { display:none; }
+                .lfhub-sourcebar { gap:10px; }
+                .lfhub-segment { width:100%; }
+                .lfhub-segment button { min-width:0; flex:1; }
+                .lfhub-auto { font-size:11px; }
+                .lfhub-actions button.source-change { max-width:150px; overflow:hidden; text-overflow:ellipsis; }
+            }
+        `);
     }
 
     async function automaticCheck() {
@@ -719,24 +980,60 @@
         try {
             const result = applyManifestResult(await loadManifestForPreferences(preferences, false));
             const count = manifestState.modules.map(module => moduleView(module, preferences)).filter(module => module.updateAvailable).length;
-            if (count || compareVersions(result.manifest.hub.version, HUB_VERSION) > 0) Blockbench.showToastNotification?.({text: count ? `${count} Lightflow update${count === 1 ? '' : 's'} available` : tr('hubUpdate', {version: result.manifest.hub.version}), icon: 'system_update_alt', expire: 9000, click: openHub});
-        } catch (error) { console.info('[Lightflow Hub] Automatic update check skipped:', error?.message || error); }
+            if (count || compareVersions(result.manifest.hub.version, HUB_VERSION) > 0) {
+                Blockbench.showToastNotification?.({
+                    text: count ? `${count} Lightflow update${count === 1 ? '' : 's'} available` : tr('hubUpdate', {version: result.manifest.hub.version}),
+                    icon: 'system_update_alt', expire: 9000, click: openHub
+                });
+            }
+        } catch (error) {
+            console.info('[Lightflow Hub] Automatic update check skipped:', error?.message || error);
+        }
     }
 
     function unload() {
-        disposed = true; hubDialog?.hide?.(); hubDialog = null; openAction?.delete?.(); openAction = null; stylesheet?.delete?.(); stylesheet = null; if (globalThis.LightflowHub?.version === HUB_VERSION) delete globalThis.LightflowHub;
+        disposed = true;
+        hubDialog?.hide?.();
+        hubDialog = null;
+        openAction?.delete?.();
+        openAction = null;
+        stylesheet?.delete?.();
+        stylesheet = null;
+        if (globalThis.LightflowHub?.version === HUB_VERSION) delete globalThis.LightflowHub;
     }
 
     Plugin.register(HUB_ID, {
-        title: 'Lightflow Hub', icon: 'hub', author: 'MidFord327',
+        title: 'Lightflow Hub',
+        icon: 'hub',
+        author: 'MidFord327',
         description: 'Install, update, enable, disable, and organize every Lightflow module from GitHub releases, development branches, or a local folder.',
         about: 'Lightflow Hub is the modular suite manager. It never silently replaces local modules and only installs updates after an explicit action.',
-        tags: ['Lightflow', 'Utility', 'Developer Tools'], version: HUB_VERSION, min_version: '4.9.0', variant: 'both', website: REPOSITORY.github, repository: REPOSITORY.github, bug_tracker: REPOSITORY.issues,
+        tags: ['Lightflow', 'Utility', 'Developer Tools'],
+        version: HUB_VERSION,
+        min_version: '4.9.0',
+        variant: 'both',
+        website: REPOSITORY.github,
+        repository: REPOSITORY.github,
+        bug_tracker: REPOSITORY.issues,
         onload() {
-            disposed = false; addStyles();
-            openAction = new Action('open_lightflow_hub', {name: 'Lightflow Hub', description: tr('subtitle'), icon: 'hub', category: 'tools', click: openHub});
+            disposed = false;
+            addStyles();
+            openAction = new Action('open_lightflow_hub', {
+                name: 'Lightflow Hub',
+                description: tr('subtitle'),
+                icon: 'hub',
+                category: 'tools',
+                click: openHub
+            });
             MenuBar.addAction(openAction, 'tools');
-            globalThis.LightflowHub = Object.freeze({version: HUB_VERSION, open: openHub, checkForUpdates: async () => applyManifestResult(await loadManifestForPreferences(loadPreferences(), true)), getCatalog: () => manifestState.modules.map(module => ({...module, dependencies: [...module.dependencies]})), getState: () => ({ref: currentRef, origin: manifestOrigin, preferences: loadPreferences()}), __test: Object.freeze({compareVersions, sanitizeManifest, sanitizeRef, sanitizeFile, dependencyOrder, rawUrl, extractPluginVersion, stableReleaseCandidates})});
+            globalThis.LightflowHub = Object.freeze({
+                version: HUB_VERSION,
+                open: openHub,
+                checkForUpdates: async () => applyManifestResult(await loadManifestForPreferences(loadPreferences(), true)),
+                getCatalog: () => manifestState.modules.map(module => ({...module, dependencies: [...module.dependencies]})),
+                getState: () => ({ref: currentRef, origin: manifestOrigin, preferences: loadPreferences()}),
+                __test: Object.freeze({compareVersions, sanitizeManifest, sanitizeRef, sanitizeFile, dependencyOrder, rawUrl, extractPluginVersion, stableReleaseCandidates})
+            });
             setTimeout(() => { if (!disposed) automaticCheck(); }, 3500);
         },
         onunload: unload
