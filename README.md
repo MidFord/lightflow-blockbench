@@ -65,7 +65,25 @@ The repository is currently being prepared for a wider public release. Feedback 
 
 ## Installation
 
-Lightflow is **not in the Plugin Marketplace yet**. You can install it directly from its raw GitHub URLs or from downloaded files.
+Lightflow is **not in the Plugin Marketplace yet**. The recommended bootstrap is **Lightflow Hub**, which keeps Stable, Main, Experimental, and local installations separated and installs dependencies in the correct order.
+
+### Recommended: Lightflow Hub
+
+In Blockbench, open **File → Plugins → Load Plugin from URL** and install this single URL:
+
+```text
+https://raw.githubusercontent.com/MidFord/lightflow-blockbench/refs/heads/main/lightflow_hub.js
+```
+
+Then open **Tools → Lightflow Hub**. The Hub exposes three GitHub channels:
+
+- **Stable** — the newest published non-prerelease GitHub Release that contains a compatible `lightflow.manifest.json`.
+- **Main** — the current public `main` branch.
+- **Experimental** — the configurable experimental branch; the default is `experimental`.
+
+The Hub never silently replaces a local installation. Channel/source migrations and updates require an explicit action.
+
+The manual URLs below remain available as a fallback.
 
 ### Install from URL
 
