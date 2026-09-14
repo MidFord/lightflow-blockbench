@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "suite": "Lightflow",
+  "generated_at": "2026-09-14",
+  "repository": {
+    "owner": "MidFord",
+    "name": "lightflow-blockbench",
+    "website": "https://github.com/MidFord/lightflow-blockbench",
+    "issues": "https://github.com/MidFord/lightflow-blockbench/issues",
+    "x": "https://x.com/ford_mid_wells"
+  },
+  "hub": {
+    "id": "lightflow_hub",
+    "file": "lightflow_hub.js",
+    "version": "1.0.0",
+    "min_blockbench": "4.9.0"
+  },
+  "modules": [
+    {"id":"light_manager","file":"light_manager.js","title":"Light Manager","description":"Lights, gizmos, animation, and shadows for the entire suite.","description_es":"Luces, gizmos, animación y sombras para toda la suite.","version":"1.7.0","min_blockbench":"4.9.0","icon":"light_mode","group":"essential","recommended":true,"maturity":"beta","dependencies":[]},
+    {"id":"shader_architect","file":"shader_architect.js","title":"Shader Architect","description":"Lightflow, PBR, and Rendercraft materials, instances, and screen effects.","description_es":"Materiales Lightflow, PBR, Rendercraft, instancias y efectos de pantalla.","version":"2.9.1","min_blockbench":"4.9.0","icon":"architecture","group":"essential","recommended":true,"maturity":"beta","dependencies":["light_manager"]},
+    {"id":"lightflow_environment","file":"lightflow_environment.js","title":"Lightflow Environment","description":"Sky, sun, moon, clouds, reflections, and environment lighting.","description_es":"Cielo, sol, luna, nubes, reflejos e iluminación ambiental.","version":"1.5.1","min_blockbench":"4.9.0","icon":"wb_twilight","group":"essential","recommended":true,"maturity":"beta","dependencies":["light_manager"]},
+    {"id":"lightflow_atmosphere","file":"lightflow_atmosphere.js","title":"Lightflow Atmosphere","description":"Local fog, light shafts, dust, and procedural volumes.","description_es":"Niebla local, haces de luz, polvo y volúmenes procedurales.","version":"1.2.0","min_blockbench":"4.9.0","icon":"blur_on","group":"essential","recommended":true,"maturity":"beta","dependencies":["light_manager"]},
+    {"id":"studio_render","file":"studio_render.js","title":"Studio Render","description":"High-resolution scene composition and supersampled image export.","description_es":"Composición y exportación de imágenes con alta resolución y supersampling.","version":"1.9.0","min_blockbench":"4.9.0","icon":"photo_camera_back","group":"essential","recommended":true,"maturity":"beta","dependencies":[]}
+  ]
+}
