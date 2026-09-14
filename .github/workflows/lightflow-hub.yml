@@ -1,0 +1,58 @@
+name: Lightflow Hub
+
+on:
+  push:
+    branches:
+      - main
+      - experimental
+    tags:
+      - 'lightflow-hub-v*'
+    paths:
+      - '*.js'
+      - 'lightflow.manifest.json'
+      - 'tests/lightflow_hub_contract.test.js'
+      - '.github/workflows/lightflow-hub.yml'
+  pull_request:
+    paths:
+      - '*.js'
+      - 'lightflow.manifest.json'
+      - 'tests/lightflow_hub_contract.test.js'
+      - '.github/workflows/lightflow-hub.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Check Hub syntax
+        run: node --check lightflow_hub.js
+      - name: Validate manifest and Hub contract
+        run: node tests/lightflow_hub_contract.test.js
+
+  publish-release:
+    if: startsWith(github.ref, 'refs/tags/lightflow-hub-v')
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish GitHub Release if missing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            version="${GITHUB_REF_NAME#lightflow-hub-v}"
+            gh release create "$GITHUB_REF_NAME" \
+              --verify-tag \
+              --title "Lightflow Hub ${version}" \
+              --generate-notes
+          fi
