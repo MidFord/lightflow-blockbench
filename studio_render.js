@@ -5,6 +5,7 @@
     const STORAGE_KEY = 'studio_render.settings';
     const FRAME_STORAGE_KEY = 'studio_render.frame';
     const PROJECT_CAMERA_PRESETS_PROPERTY = 'studio_render_camera_presets_json';
+    const SCENE_COMPOSER_UNDO_ASPECT = 'studio_render_scene_composer';
     const CAMERA_PRESET_SCHEMA_VERSION = 2;
     const MAX_OUTPUT_DIMENSION = 16384;
     const MAX_OUTPUT_PIXELS = 140000000;
@@ -39,17 +40,22 @@
         show_tile_grid: false,
         show_advanced: false,
         bloom_enabled: false,
-        bloom_threshold: 0.72,
-        bloom_strength: 0.8,
-        bloom_radius: 18,
-        bloom_hdr_strength: 1.0,
-        bloom_emissive_strength: 1.35,
+        bloom_threshold: 0.78,
+        bloom_soft_knee: 0.22,
+        bloom_strength: 0.9,
+        bloom_core_strength: 0.28,
+        bloom_core_radius: 1.25,
+        bloom_halo_strength: 0.72,
+        bloom_radius: 24,
+        bloom_hdr_strength: 0.75,
+        bloom_emissive_strength: 1.25,
         bloom_occlusion: true,
+        bloom_pipeline_revision: 3,
         viewport_bloom_enabled: true,
         // 0 follows every viewport render. A numeric value is an optional cap.
         viewport_bloom_fps: 0,
         viewport_bloom_quality: 'adaptive',
-        viewport_composer_revision: 2,
+        viewport_composer_revision: 3,
         color_grading_enabled: false,
         exposure: 1.0,
         contrast: 1.0,
@@ -74,9 +80,26 @@
     let sceneComposerCloseListener;
     let sceneComposerLifecycleHydrator;
     let sceneComposerFormListener;
+    let sceneComposerPanelStyles;
+    let sceneComposerAttachmentEstablished = false;
+    let sceneComposerAttachmentTimers = [];
+    let sceneComposerAttachmentListener;
+    let sceneComposerUndoHooks;
+    let framePipelineReadyListener;
+    let framePipelineDisposedListener;
+    let framePipelineRegistration;
+    let framePipelineResources = [];
+    let activeSceneComposerUndo = null;
     let sceneComposerRefreshFrame = null;
     let sceneComposerRevision = 0;
     let syncingSceneComposerPanel = false;
+    let sceneComposerPanelMode = 'essentials';
+    const sceneComposerPanelGroupsOpen = {
+        preview: true,
+        bloom: true,
+        grading: false
+    };
+    let syncingSceneComposerDialog = false;
     let activeComposerDialog;
     let activeCameraPresetDialog;
     let cameraPresetsProjectProperty;
@@ -90,6 +113,14 @@
     let currentSettings = Object.assign({}, DEFAULT_SETTINGS);
     let gpuGuidanceShown = false;
     let activeRenderSession = null;
+    const studioRenderPreviewOwner = {
+        preview: null,
+        familyKey: '',
+        generation: 0,
+        created: 0,
+        retired: 0,
+        lastRetireReason: ''
+    };
     const publishedWindowBindings = new Map();
     const studioRenderReportedWarnings = new Set();
     const studioCameraPresetPreviews = new WeakSet();
@@ -99,9 +130,20 @@
     const BLOOM_MASK_STATE = {
         emissiveMaterials: new WeakMap(),
         occluderMaterials: new WeakMap(),
-        resources: new Set()
+        rendercraftMaterials: new WeakMap(),
+        rendercraftBloomSupport: new WeakMap(),
+        resources: new Set(),
+        derivedResources: new Set()
     };
     const VIEWPORT_COMPOSER_STATE = new Map();
+    const BLOOM_PIPELINE_BY_RENDERER = new WeakMap();
+    const BLOOM_PIPELINE_INSTANCES = new Set();
+    // Capability cache for the 2.3.1 temporal-AA accumulator. The render
+    // path prefers RGBA16F linear accumulation and keeps Canvas2D as the
+    // compatibility fallback when the framebuffer probe fails.
+    const STUDIO_HDR_CAPABILITIES = new WeakMap();
+    let activeStudioAccumulatorBytes = 0;
+    let lastStudioAccumulationMode = 'cpu_srgb8';
 
     /*
      * Dialog and panel input is normalized into one settings object. The main
@@ -158,14 +200,87 @@
             else delete window[binding.name];
         });
         session.windowFlags = null;
+        // A scene/material update may have reached its RAF while Studio owned
+        // the offscreen compiler. Its causes were intentionally preserved; queue
+        // a fresh flush now that material mutation is safe again.
+        try {
+            if (window.ShaderEngine?.pendingSceneUpdateCauses?.size) {
+                window.ShaderEngine.requestSceneUpdate?.('studio_render_release');
+            }
+        } catch (error) {}
+        // Studio pauses the normal shader warm-up queue for the whole async
+        // session. Resume it only after shared camera/shadow state is restored.
+        try {
+            window.ShaderEngine?.scheduleNextShaderWarmup?.();
+        } catch (error) {}
+        // Non-Studio previews are intentionally frozen while the offscreen
+        // renderer owns the GPU. Repaint once ownership is released.
+        try {
+            window.LightflowRequestPreviewRender?.({ cause: 'studio_render_complete' });
+        } catch (error) {}
     }
 
-    const VIEWPORT_BLOOM_PROFILES = {
-        adaptive: { scale: 0.42, minScale: 0.2, maxScale: 0.7, maxDimension: 1400, adaptive: true },
-        performance: { scale: 0.25, maxDimension: 720 },
-        balanced: { scale: 0.42, maxDimension: 1100 },
-        high: { scale: 0.7, maxDimension: 1600 }
-    };
+    const VIEWPORT_BLOOM_PROFILES = Object.freeze({
+        adaptive: Object.freeze({
+            scale: 1 / 3,
+            scaleStates: Object.freeze([0.25, 1 / 3, 0.5, 2 / 3]),
+            tier: 1,
+            maxLevels: 4,
+            minMipSize: 10,
+            downsampleKernel: 'hq13_karis_first',
+            upsampleKernel: 'tent9',
+            maxDimension: 4096,
+            adaptive: true
+        }),
+        performance: Object.freeze({
+            scale: 0.25,
+            maxLevels: 4,
+            minMipSize: 8,
+            downsampleKernel: 'dual_kawase',
+            upsampleKernel: 'bilinear',
+            maxDimension: 2048,
+            adaptive: false
+        }),
+        balanced: Object.freeze({
+            scale: 0.5,
+            maxLevels: 5,
+            minMipSize: 10,
+            downsampleKernel: 'hq13_karis_first',
+            upsampleKernel: 'tent9',
+            maxDimension: 4096,
+            adaptive: false
+        }),
+        high: Object.freeze({
+            scale: 2 / 3,
+            maxLevels: 6,
+            minMipSize: 12,
+            downsampleKernel: 'hq13_karis_first',
+            upsampleKernel: 'tent9',
+            maxDimension: MAX_OUTPUT_DIMENSION,
+            adaptive: false
+        })
+    });
+    const STUDIO_BLOOM_PROFILE = Object.freeze({
+        ...VIEWPORT_BLOOM_PROFILES.high,
+        quality: 'studio_high',
+        adaptive: false
+    });
+    const STUDIO_POST_QUALITY_CONTRACT = Object.freeze({
+        version: 'studio-post-max-v1',
+        ambientOcclusion: Object.freeze({
+            quality: 'studio',
+            scale: 1,
+            effectiveSPP: 18,
+            hierarchyLevels: 0
+        }),
+        bloom: Object.freeze({
+            quality: STUDIO_BLOOM_PROFILE.quality,
+            scale: STUDIO_BLOOM_PROFILE.scale,
+            maxLevels: STUDIO_BLOOM_PROFILE.maxLevels,
+            downsampleKernel: STUDIO_BLOOM_PROFILE.downsampleKernel,
+            upsampleKernel: STUDIO_BLOOM_PROFILE.upsampleKernel
+        })
+    });
 
     function warnStudioRenderOnce(key, message, error) {
         if (studioRenderReportedWarnings.has(key)) return;
@@ -214,7 +329,12 @@
 
     function isLightflowRenderMode() {
         const selected = window.Modes?.selected;
-        return !!selected && (selected.id === 'render' || selected === window.Modes?.render);
+        if (!!selected && (selected.id === 'render' || selected === window.Modes?.render)) return true;
+        const engine = window.ShaderEngine;
+        const viewMode = String(engine?.getActiveViewMode?.() || '').toLowerCase();
+        if (viewMode === 'lightflow' || viewMode === 'render') return true;
+        const globalMode = String(engine?.globalRenderMode || '').toLowerCase();
+        return !!globalMode && globalMode !== 'classic' && globalMode !== 'textured';
     }
 
     function getViewportBloomProfile(settings) {
@@ -425,7 +545,7 @@
             'studio_render.field.resolution_preset': 'Resolution',
             'studio_render.field.resolution': 'Custom Size',
             'studio_render.field.output_scale': 'Resolution Scale',
-            'studio_render.field.samples': 'Antialiasing',
+            'studio_render.field.samples': 'AA Samples',
             'studio_render.field.tile_size': 'Tile Size',
             'studio_render.field.capture_area': 'Capture Area',
             'studio_render.field.match_frame_ratio': 'Match Frame Ratio',
@@ -437,8 +557,12 @@
             'studio_render.field.show_advanced': 'Advanced Controls',
             'studio_render.field.bloom_enabled': 'Bloom',
             'studio_render.field.bloom_threshold': 'Bloom Threshold',
+            'studio_render.field.bloom_soft_knee': 'Threshold Soft Knee',
             'studio_render.field.bloom_strength': 'Bloom Strength',
-            'studio_render.field.bloom_radius': 'Bloom Radius',
+            'studio_render.field.bloom_core_strength': 'Hot Core Strength',
+            'studio_render.field.bloom_core_radius': 'Hot Core Radius',
+            'studio_render.field.bloom_halo_strength': 'Soft Halo Strength',
+            'studio_render.field.bloom_radius': 'Soft Halo Radius',
             'studio_render.field.bloom_hdr_strength': 'Bright Surface Bloom',
             'studio_render.field.bloom_emissive_strength': 'Emissive Texture Bloom',
             'studio_render.field.bloom_occlusion': 'Block Bloom Behind Geometry',
@@ -459,7 +583,32 @@
             'studio_render.field.vignette': 'Vignette',
             'studio_render.action.scene_composer': 'Scene Composer...',
             'studio_render.action.scene_composer.desc': 'Match realtime viewport post-processing to Studio Render and coordinate the Lightflow environment',
-            'studio_render.panel.composer': 'COMPOSER',
+            'studio_render.panel.composer': 'Image',
+            'studio_render.workflow.camera': 'Camera & frame',
+            'studio_render.workflow.essentials': 'Essentials',
+            'studio_render.workflow.advanced': 'Advanced',
+            'studio_render.workflow.output': 'Output',
+            'studio_render.workflow.image': 'Image',
+            'studio_render.workflow.preview_off': 'Bloom is enabled for export, but its viewport preview is off.',
+            'studio_render.workflow.preview_on': 'Bloom preview enabled · Export uses final quality.',
+            'studio_render.workflow.bloom_off': 'Bloom disabled in viewport and export.',
+            'studio_render.workflow.cancel': 'Cancel render',
+            'studio_render.workflow.cancelling': 'Cancelling; restoring the scene…',
+            'studio_render.composer.summary': 'Realtime Post-Processing',
+            'studio_render.composer.summary.desc': 'Coordinate viewport preview and Studio Render finishing effects.',
+            'studio_render.composer.group.preview': 'Viewport Preview',
+            'studio_render.composer.group.bloom': 'Bloom',
+            'studio_render.composer.group.grading': 'Color Grading',
+            'studio_render.composer.section.playback': 'Preview Performance',
+            'studio_render.composer.section.threshold': 'Threshold & Response',
+            'studio_render.composer.section.core': 'Hot Core',
+            'studio_render.composer.section.halo': 'Soft Halo',
+            'studio_render.composer.section.sources': 'Light Sources',
+            'studio_render.composer.section.image': 'Image Balance',
+            'studio_render.composer.section.white_balance': 'White Balance',
+            'studio_render.composer.section.finishing': 'Finishing',
+            'studio_render.composer.action.advanced': 'Advanced Composer',
+            'studio_render.undo.edit_composer': 'Edit Scene Composer',
             'studio_render.field.zoom': 'Focal Length',
             'studio_render.field.gpu': 'GPU',
             'studio_render.field.gpu_renderer': 'Renderer',
@@ -480,12 +629,12 @@
             'studio_render.option.resolution.square_4k': 'Square 4K - 4096 x 4096',
             'studio_render.option.resolution.eight_k': '8K UHD - 7680 x 4320',
             'studio_render.option.resolution.custom': 'Custom',
-            'studio_render.option.samples.1': 'Off - native pixels',
-            'studio_render.option.samples.2': 'Clean SSAA - 2x',
-            'studio_render.option.samples.3': 'Fine SSAA - 3x',
-            'studio_render.option.samples.4': 'Studio SSAA - 4x',
-            'studio_render.option.samples.6': 'Cinema SSAA - 6x',
-            'studio_render.option.samples.8': 'Extreme SSAA - 8x',
+            'studio_render.option.samples.1': '1 sample',
+            'studio_render.option.samples.2': '2 samples',
+            'studio_render.option.samples.3': '3 samples',
+            'studio_render.option.samples.4': '4 samples',
+            'studio_render.option.samples.6': '6 samples',
+            'studio_render.option.samples.8': '8 samples',
             'studio_render.option.tile.auto': 'Auto',
             'studio_render.option.tile.1024': '1024 px',
             'studio_render.option.tile.1536': '1536 px',
@@ -517,6 +666,8 @@
             'studio_render.status.preparing': 'Preparing studio render...',
             'studio_render.status.tile': 'Rendering tile',
             'studio_render.status.downsample': 'Compositing final image...',
+            'studio_render.status.encoding': 'Encoding PNG in the background...',
+            'studio_render.status.handoff': 'Handing off rendered frame...',
             'studio_render.message.no_preview': 'No preview is available to render.',
             'studio_render.message.no_offscreen': 'Blockbench offscreen preview is not ready yet. Open a preview once and try again.',
             'studio_render.message.too_large': 'The requested output is too large for a safe browser canvas.',
@@ -561,7 +712,7 @@
             'studio_render.field.frame_size': 'Frame Size',
             'studio_render.option.rotation.target': 'Focal Point',
             'studio_render.option.rotation.euler': 'Rotation',
-            'studio_render.frame.resize_hint': 'Resize Frame - Ctrl: Square, Shift: Lock Aspect Ratio',
+            'studio_render.frame.resize_hint': 'Resize Frame - Alt: Resize from Center, Ctrl: Square, Shift: Lock Aspect Ratio',
             'studio_render.frame.label': 'Studio Render Frame'
         });
 
@@ -594,7 +745,7 @@
             'studio_render.field.resolution_preset': 'Resolucion',
             'studio_render.field.resolution': 'Tamano Personalizado',
             'studio_render.field.output_scale': 'Escala de Resolucion',
-            'studio_render.field.samples': 'Antialiasing',
+            'studio_render.field.samples': 'Muestras AA',
             'studio_render.field.tile_size': 'Tamano de Tile',
             'studio_render.field.capture_area': 'Area de Captura',
             'studio_render.field.match_frame_ratio': 'Igualar Proporcion',
@@ -606,8 +757,12 @@
             'studio_render.field.show_advanced': 'Controles Avanzados',
             'studio_render.field.bloom_enabled': 'Bloom',
             'studio_render.field.bloom_threshold': 'Umbral de Bloom',
+            'studio_render.field.bloom_soft_knee': 'Suavidad del umbral',
             'studio_render.field.bloom_strength': 'Fuerza de Bloom',
-            'studio_render.field.bloom_radius': 'Radio de Bloom',
+            'studio_render.field.bloom_core_strength': 'Fuerza del nucleo brillante',
+            'studio_render.field.bloom_core_radius': 'Radio del nucleo brillante',
+            'studio_render.field.bloom_halo_strength': 'Fuerza del halo suave',
+            'studio_render.field.bloom_radius': 'Radio del halo suave',
             'studio_render.field.bloom_hdr_strength': 'Bloom de superficies brillantes',
             'studio_render.field.bloom_emissive_strength': 'Bloom de texturas emisivas',
             'studio_render.field.bloom_occlusion': 'Bloquear Bloom detrás de geometría',
@@ -628,7 +783,32 @@
             'studio_render.field.vignette': 'Viñeta',
             'studio_render.action.scene_composer': 'Compositor de escena...',
             'studio_render.action.scene_composer.desc': 'Iguala el postprocesado del viewport con Studio Render y coordina el entorno Lightflow',
-            'studio_render.panel.composer': 'COMPOSITOR',
+            'studio_render.panel.composer': 'Imagen',
+            'studio_render.workflow.camera': 'Cámara y encuadre',
+            'studio_render.workflow.essentials': 'Básicos',
+            'studio_render.workflow.advanced': 'Avanzados',
+            'studio_render.workflow.output': 'Salida',
+            'studio_render.workflow.image': 'Imagen',
+            'studio_render.workflow.preview_off': 'Bloom activo para exportar, pero su previsualización está desactivada.',
+            'studio_render.workflow.preview_on': 'Bloom previsualizado · La exportación usa calidad final.',
+            'studio_render.workflow.bloom_off': 'Bloom desactivado en vista y exportación.',
+            'studio_render.workflow.cancel': 'Cancelar render',
+            'studio_render.workflow.cancelling': 'Cancelando; restaurando la escena…',
+            'studio_render.composer.summary': 'Postprocesado en tiempo real',
+            'studio_render.composer.summary.desc': 'Coordina la previsualización del viewport y el acabado de Studio Render.',
+            'studio_render.composer.group.preview': 'Previsualización',
+            'studio_render.composer.group.bloom': 'Bloom',
+            'studio_render.composer.group.grading': 'Corrección de color',
+            'studio_render.composer.section.playback': 'Rendimiento del preview',
+            'studio_render.composer.section.threshold': 'Umbral y respuesta',
+            'studio_render.composer.section.core': 'Núcleo brillante',
+            'studio_render.composer.section.halo': 'Halo suave',
+            'studio_render.composer.section.sources': 'Fuentes luminosas',
+            'studio_render.composer.section.image': 'Balance de imagen',
+            'studio_render.composer.section.white_balance': 'Balance de blancos',
+            'studio_render.composer.section.finishing': 'Acabado',
+            'studio_render.composer.action.advanced': 'Compositor avanzado',
+            'studio_render.undo.edit_composer': 'Editar compositor de escena',
             'studio_render.field.zoom': 'Distancia Focal',
             'studio_render.field.gpu': 'GPU',
             'studio_render.field.gpu_renderer': 'Renderer',
@@ -649,12 +829,12 @@
             'studio_render.option.resolution.square_4k': 'Cuadrado 4K - 4096 x 4096',
             'studio_render.option.resolution.eight_k': '8K UHD - 7680 x 4320',
             'studio_render.option.resolution.custom': 'Personalizada',
-            'studio_render.option.samples.1': 'Apagado - pixeles nativos',
-            'studio_render.option.samples.2': 'SSAA Limpio - 2x',
-            'studio_render.option.samples.3': 'SSAA Fino - 3x',
-            'studio_render.option.samples.4': 'SSAA Estudio - 4x',
-            'studio_render.option.samples.6': 'SSAA Cine - 6x',
-            'studio_render.option.samples.8': 'SSAA Extremo - 8x',
+            'studio_render.option.samples.1': '1 muestra',
+            'studio_render.option.samples.2': '2 muestras',
+            'studio_render.option.samples.3': '3 muestras',
+            'studio_render.option.samples.4': '4 muestras',
+            'studio_render.option.samples.6': '6 muestras',
+            'studio_render.option.samples.8': '8 muestras',
             'studio_render.option.tile.auto': 'Auto',
             'studio_render.option.tile.1024': '1024 px',
             'studio_render.option.tile.1536': '1536 px',
@@ -686,6 +866,8 @@
             'studio_render.status.preparing': 'Preparando render de estudio...',
             'studio_render.status.tile': 'Renderizando tile',
             'studio_render.status.downsample': 'Componiendo imagen final...',
+            'studio_render.status.encoding': 'Codificando PNG en segundo plano...',
+            'studio_render.status.handoff': 'Entregando fotograma renderizado...',
             'studio_render.message.no_preview': 'No hay preview disponible para renderizar.',
             'studio_render.message.no_offscreen': 'El preview offscreen de Blockbench no esta listo. Abre un preview e intenta de nuevo.',
             'studio_render.message.too_large': 'La salida solicitada es demasiado grande para un canvas seguro.',
@@ -730,7 +912,7 @@
             'studio_render.field.frame_size': 'Tamano del Marco',
             'studio_render.option.rotation.target': 'Punto Focal',
             'studio_render.option.rotation.euler': 'Rotacion',
-            'studio_render.frame.resize_hint': 'Redimensionar Marco - Ctrl: Cuadrado, Shift: Bloquear Proporcion',
+            'studio_render.frame.resize_hint': 'Redimensionar Marco - Alt: Desde el Centro, Ctrl: Cuadrado, Shift: Bloquear Proporcion',
             'studio_render.frame.label': 'Marco de Render'
         });
     }
@@ -738,7 +920,23 @@
     function loadSettings() {
         const stored = readJSON(STORAGE_KEY, {});
         const legacyViewportComposer = toNumber(stored.viewport_composer_revision, 0) < 2;
+        const legacyBloomPipeline = toNumber(stored.bloom_pipeline_revision, 0) < 2;
         const settings = Object.assign({}, DEFAULT_SETTINGS, stored);
+        if (legacyBloomPipeline) {
+            const migrateLegacyDefault = (key, previousValue, nextValue) => {
+                if (
+                    !Object.prototype.hasOwnProperty.call(stored, key) ||
+                    Math.abs(toNumber(stored[key], previousValue) - previousValue) < 0.000001
+                ) {
+                    settings[key] = nextValue;
+                }
+            };
+            migrateLegacyDefault('bloom_threshold', 0.72, DEFAULT_SETTINGS.bloom_threshold);
+            migrateLegacyDefault('bloom_strength', 0.8, DEFAULT_SETTINGS.bloom_strength);
+            migrateLegacyDefault('bloom_radius', 18, DEFAULT_SETTINGS.bloom_radius);
+            migrateLegacyDefault('bloom_hdr_strength', 1, DEFAULT_SETTINGS.bloom_hdr_strength);
+            migrateLegacyDefault('bloom_emissive_strength', 1.35, DEFAULT_SETTINGS.bloom_emissive_strength);
+        }
         settings.camera_preset_id = typeof settings.camera_preset_id === 'string' ? settings.camera_preset_id : '';
         if (!Array.isArray(settings.resolution)) {
             settings.resolution = DEFAULT_SETTINGS.resolution.slice();
@@ -757,12 +955,17 @@
         settings.show_tile_grid = !!settings.show_tile_grid;
         settings.show_advanced = !!settings.show_advanced;
         settings.bloom_enabled = !!settings.bloom_enabled;
-        settings.bloom_threshold = clamp(toNumber(settings.bloom_threshold, 0.72), 0, 1);
-        settings.bloom_strength = clamp(toNumber(settings.bloom_strength, 0.8), 0, 3);
-        settings.bloom_radius = clamp(toNumber(settings.bloom_radius, 18), 1, 96);
-        settings.bloom_hdr_strength = clamp(toNumber(settings.bloom_hdr_strength, 1), 0, 4);
-        settings.bloom_emissive_strength = clamp(toNumber(settings.bloom_emissive_strength, 1.35), 0, 6);
+        settings.bloom_threshold = clamp(toNumber(settings.bloom_threshold, DEFAULT_SETTINGS.bloom_threshold), 0, 4);
+        settings.bloom_soft_knee = clamp(toNumber(settings.bloom_soft_knee, DEFAULT_SETTINGS.bloom_soft_knee), 0, 1);
+        settings.bloom_strength = clamp(toNumber(settings.bloom_strength, DEFAULT_SETTINGS.bloom_strength), 0, 3);
+        settings.bloom_core_strength = clamp(toNumber(settings.bloom_core_strength, DEFAULT_SETTINGS.bloom_core_strength), 0, 2);
+        settings.bloom_core_radius = clamp(toNumber(settings.bloom_core_radius, DEFAULT_SETTINGS.bloom_core_radius), 0.25, 12);
+        settings.bloom_halo_strength = clamp(toNumber(settings.bloom_halo_strength, DEFAULT_SETTINGS.bloom_halo_strength), 0, 2);
+        settings.bloom_radius = clamp(toNumber(settings.bloom_radius, DEFAULT_SETTINGS.bloom_radius), 1, 128);
+        settings.bloom_hdr_strength = clamp(toNumber(settings.bloom_hdr_strength, DEFAULT_SETTINGS.bloom_hdr_strength), 0, 4);
+        settings.bloom_emissive_strength = clamp(toNumber(settings.bloom_emissive_strength, DEFAULT_SETTINGS.bloom_emissive_strength), 0, 8);
         settings.bloom_occlusion = settings.bloom_occlusion !== false;
+        settings.bloom_pipeline_revision = 3;
         settings.viewport_bloom_enabled = settings.viewport_bloom_enabled !== false;
         settings.viewport_bloom_fps = legacyViewportComposer
             ? 0
@@ -770,7 +973,7 @@
         settings.viewport_bloom_quality = VIEWPORT_BLOOM_PROFILES[settings.viewport_bloom_quality]
             ? settings.viewport_bloom_quality
             : 'adaptive';
-        settings.viewport_composer_revision = 2;
+        settings.viewport_composer_revision = 3;
         settings.color_grading_enabled = !!settings.color_grading_enabled;
         settings.exposure = clamp(toNumber(settings.exposure, 1), 0.1, 4);
         settings.contrast = clamp(toNumber(settings.contrast, 1), 0, 3);
@@ -900,6 +1103,137 @@
         return null;
     }
 
+    function getStudioRendererFamilyKey() {
+        const architectKey = window.ShaderArchitectGetStudioRendererFamilyKey?.();
+        if (architectKey) return String(architectKey);
+        const mode = window.ShaderEngine?.globalRenderMode || 'classic';
+        const overrides = window.ShaderEngine?.projectHasMaterialOverrides?.() ? 'overrides' : 'global';
+        return `studio_renderer_family_fallback:${mode}:${overrides}`;
+    }
+
+    function isStudioPreviewContextLost(preview) {
+        try { return !!preview?.renderer?.getContext?.()?.isContextLost?.(); }
+        catch (error) { return true; }
+    }
+
+    function copyStudioRendererTemplate(preview, template) {
+        const renderer = preview?.renderer;
+        const templateRenderer = template?.renderer;
+        if (!renderer || !templateRenderer) return preview;
+
+        const templateSize = templateRenderer.getSize?.(new THREE.Vector2()) || null;
+        const width = roundDimension(template?.width || templateSize?.x || 512);
+        const height = roundDimension(template?.height || templateSize?.y || 512);
+        preview.width = width;
+        preview.height = height;
+        renderer.setPixelRatio?.(templateRenderer.getPixelRatio?.() || 1);
+        renderer.setSize(width, height, false);
+
+        renderer.shadowMap.enabled = !!templateRenderer.shadowMap?.enabled;
+        renderer.shadowMap.type = templateRenderer.shadowMap?.type;
+        renderer.shadowMap.autoUpdate = !!templateRenderer.shadowMap?.autoUpdate;
+        renderer.outputEncoding = templateRenderer.outputEncoding;
+        renderer.toneMapping = templateRenderer.toneMapping;
+        renderer.toneMappingExposure = templateRenderer.toneMappingExposure;
+        renderer.physicallyCorrectLights = templateRenderer.physicallyCorrectLights;
+        renderer.localClippingEnabled = templateRenderer.localClippingEnabled;
+        renderer.sortObjects = templateRenderer.sortObjects;
+        return preview;
+    }
+
+    function createOwnedStudioRenderPreview(familyKey, template) {
+        if (typeof window.Preview !== 'function' || !template?.renderer) return null;
+        const generation = studioRenderPreviewOwner.generation + 1;
+        const preview = new window.Preview({
+            id: `studio_render_owned_${generation}`,
+            offscreen: true,
+            antialias: false
+        });
+        copyStudioRendererTemplate(preview, template);
+        preview.sa_studio_owned_preview = true;
+        preview.sa_studio_renderer_family = familyKey;
+        preview.sa_studio_renderer_generation = generation;
+        return preview;
+    }
+
+    function retireOwnedStudioRenderPreview(preview, reason = 'retired', options = {}) {
+        if (!preview?.sa_studio_owned_preview) return false;
+        preview.sa_studio_intentional_context_retire = true;
+        const renderer = preview.renderer;
+        const contextLost = options.contextLost === true || isStudioPreviewContextLost(preview);
+        try {
+            window.LightflowRenderer?.releaseExternal?.(preview, {
+                contextLost,
+                hibernate: false,
+                trimPool: true
+            });
+        } catch (error) {
+            warnStudioRenderOnce(
+                'owned-preview-release',
+                '[Studio Render] Failed to release the owned offscreen pipeline.',
+                error
+            );
+        }
+
+        let loseContext = null;
+        if (!contextLost) {
+            try { loseContext = renderer?.getContext?.().getExtension?.('WEBGL_lose_context'); }
+            catch (error) {}
+        }
+        try { renderer?.renderLists?.dispose?.(); } catch (error) {}
+        try { renderer?.dispose?.(); } catch (error) {}
+        try { preview.node?.remove?.(); } catch (error) {}
+        if (Array.isArray(window.Preview?.all)) {
+            const index = Preview.all.indexOf(preview);
+            if (index >= 0) Preview.all.splice(index, 1);
+        }
+        try { loseContext?.loseContext?.(); } catch (error) {}
+
+        studioRenderPreviewOwner.retired += 1;
+        studioRenderPreviewOwner.lastRetireReason = reason;
+        return true;
+    }
+
+    function releaseOwnedStudioRenderPreview(reason = 'release', options = {}) {
+        const preview = studioRenderPreviewOwner.preview;
+        if (!preview) return false;
+        if (activeRenderSession?.renderPreview === preview && options.force !== true) {
+            activeRenderSession.retireOwnedPreviewOnFinish = true;
+            activeRenderSession.retireOwnedPreviewReason = reason;
+            return false;
+        }
+        studioRenderPreviewOwner.preview = null;
+        studioRenderPreviewOwner.familyKey = '';
+        return retireOwnedStudioRenderPreview(preview, reason, options);
+    }
+
+    function acquireOwnedStudioRenderPreview(familyKey = getStudioRendererFamilyKey()) {
+        const existing = studioRenderPreviewOwner.preview;
+        const existingLost = isStudioPreviewContextLost(existing);
+        if (existing && !existingLost && studioRenderPreviewOwner.familyKey === familyKey) {
+            copyStudioRendererTemplate(existing, getOffscreenPreview());
+            return existing;
+        }
+
+        const template = getOffscreenPreview();
+        const next = createOwnedStudioRenderPreview(familyKey, template);
+        if (!next) return null;
+
+        const previous = studioRenderPreviewOwner.preview;
+        studioRenderPreviewOwner.preview = next;
+        studioRenderPreviewOwner.familyKey = familyKey;
+        studioRenderPreviewOwner.generation = next.sa_studio_renderer_generation;
+        studioRenderPreviewOwner.created += 1;
+        if (previous) {
+            retireOwnedStudioRenderPreview(
+                previous,
+                existingLost ? 'context_lost' : 'material_family_changed',
+                { contextLost: existingLost }
+            );
+        }
+        return next;
+    }
+
     function addStudioRenderHiddenObject(objects, object) {
         if (!object || typeof object.visible !== 'boolean') return;
         objects.add(object);
@@ -989,10 +1323,6 @@
             canvasApi.ground_animation = false;
         }
 
-        if (typeof window.updateCubeHighlights === 'function') {
-            updateCubeHighlights(null, true);
-        }
-
         try {
             return await callback();
         } finally {
@@ -1004,16 +1334,13 @@
                 canvasApi.ground_animation = groundAnimationBefore;
             }
 
-            if (typeof window.updateCubeHighlights === 'function') {
-                updateCubeHighlights();
-            }
         }
     }
 
     async function withoutStudioRenderHighlights(callback) {
         const snapshots = [];
 
-        [window.Cube, window.Mesh, window.TextureMesh].forEach(ElementType => {
+        [window.Cube, window.Mesh, window.TextureMesh, window.Billboard].forEach(ElementType => {
             if (ElementType && Array.isArray(ElementType.all)) ElementType.all.forEach(cube => {
                 const mesh = cube && cube.mesh;
                 const attribute = mesh?.geometry?.attributes?.highlight;
@@ -1028,7 +1355,7 @@
                 }
                 if (!hasHighlight) return;
 
-                snapshots.push({ attribute, values: attribute.array.slice() });
+                snapshots.push({ element: cube, attribute, selected: !!cube.selected, values: attribute.array.slice(), clearedVersion: (attribute.version || 0) + 1 });
                 attribute.array.fill(0);
                 attribute.needsUpdate = true;
             });
@@ -1038,10 +1365,88 @@
             return await callback();
         } finally {
             snapshots.forEach(snapshot => {
+                const current = snapshot.element?.mesh?.geometry?.attributes?.highlight;
+                if (current !== snapshot.attribute || !!snapshot.element.selected !== snapshot.selected || snapshot.attribute.version !== snapshot.clearedVersion) {
+                    snapshot.element.preview_controller?.updateHighlight?.(snapshot.element);
+                    return;
+                }
                 snapshot.attribute.array.set(snapshot.values);
                 snapshot.attribute.needsUpdate = true;
             });
         }
+    }
+
+    async function withoutStudioRenderArtKeyMarkers(callback) {
+        const markers = (window.ArtKeyElement?.all || [])
+            .map(element => element?.mesh?.sourceGizmo)
+            .filter(Boolean);
+        const previousVisibility = markers.map(marker => [marker, marker.visible]);
+        markers.forEach(marker => { marker.visible = false; });
+        try {
+            return await callback();
+        } finally {
+            previousVisibility.forEach(([marker, visible]) => { marker.visible = visible; });
+        }
+    }
+
+    function captureStudioRenderBillboards() {
+        const snapshots = [];
+        const billboards = Array.isArray(window.Billboard?.all) ? Billboard.all : [];
+        billboards.forEach(element => {
+            const mesh = element?.mesh;
+            if (!mesh?.quaternion) return;
+            snapshots.push({ mesh, quaternion: mesh.quaternion.clone() });
+        });
+        return snapshots;
+    }
+
+    function restoreStudioRenderBillboards(snapshots) {
+        Array.from(snapshots || []).forEach(snapshot => {
+            if (!snapshot?.mesh?.quaternion || !snapshot.quaternion) return;
+            snapshot.mesh.quaternion.copy(snapshot.quaternion);
+            snapshot.mesh.updateMatrixWorld?.(true);
+        });
+    }
+
+    function updateStudioRenderBillboards(camera) {
+        if (!camera) return;
+        const billboards = Array.isArray(window.Billboard?.all) ? Billboard.all : [];
+        const cameraPosition = new THREE.Vector3();
+        const cameraQuaternion = new THREE.Quaternion();
+        if (typeof camera.getWorldPosition === 'function') camera.getWorldPosition(cameraPosition);
+        else cameraPosition.copy(camera.position);
+        if (typeof camera.getWorldQuaternion === 'function') camera.getWorldQuaternion(cameraQuaternion);
+        else cameraQuaternion.copy(camera.quaternion);
+
+        billboards.forEach(element => {
+            if (element?.visibility === false) return;
+            const mesh = element?.mesh;
+            if (!mesh) return;
+            const mode = element.facing_mode || 'lookat';
+            if (mode === 'lookat' || mode === 'lookat_y') {
+                const target = cameraPosition.clone();
+                if (mode === 'lookat_y') {
+                    mesh.updateWorldMatrix?.(true, false);
+                    target.y = new THREE.Vector3().setFromMatrixPosition(mesh.matrixWorld).y;
+                }
+                mesh.lookAt(target);
+            } else {
+                const facingQuaternion = cameraQuaternion.clone();
+                if (mode === 'rotate_y') {
+                    const facingEuler = new THREE.Euler().setFromQuaternion(facingQuaternion, 'YXZ');
+                    facingEuler.x = 0;
+                    facingEuler.z = 0;
+                    facingQuaternion.setFromEuler(facingEuler);
+                }
+                if (mesh.parent?.getWorldQuaternion) {
+                    facingQuaternion.premultiply(
+                        mesh.parent.getWorldQuaternion(new THREE.Quaternion()).invert()
+                    );
+                }
+                mesh.quaternion.copy(facingQuaternion);
+            }
+            mesh.updateMatrixWorld?.(true);
+        });
     }
 
     function getAnglePresetOptions() {
@@ -1109,12 +1514,17 @@
         const source = frame && typeof frame === 'object' ? frame : {};
         const width = clamp(toNumber(source.width, 0.82), 0.001, 1);
         const height = clamp(toNumber(source.height, 0.82), 0.001, 1);
-        return {
+        const normalized = {
             x: clamp(toNumber(source.x, (1 - width) / 2), 0, 1 - width),
             y: clamp(toNumber(source.y, (1 - height) / 2), 0, 1 - height),
             width,
             height
         };
+        const referenceAspect = Number(source.reference_aspect);
+        if (Number.isFinite(referenceAspect) && referenceAspect > 0) {
+            normalized.reference_aspect = referenceAspect;
+        }
+        return normalized;
     }
 
     function normalizeCameraPreset(entry) {
@@ -1483,16 +1893,22 @@
         const width = Math.max(1, preview.width || preview.node?.clientWidth || 1);
         const height = Math.max(1, preview.height || preview.node?.clientHeight || 1);
         const targetAspect = width / height;
-        const adapted = preset.camera.exact_projection
-            ? { scale: 1, frame: normalizeFrameState(preset.frame) }
-            : (preset.output.capture_area === 'frame'
-                ? adaptCameraPresetFrame(preset, targetAspect)
-                : { scale: 1, frame: normalizeFrameState(preset.frame) });
+        const adaptsRenderFrame = preset.output.capture_area === 'frame';
+        const adapted = adaptsRenderFrame
+            ? adaptCameraPresetFrame(preset, targetAspect)
+            : { scale: 1, frame: normalizeFrameState(preset.frame) };
         const isOrtho = preset.camera.projection === 'orthographic';
         const hasExactProjectionShift = !isOrtho && preset.camera.exact_projection === true && (
             Number.isFinite(preset.camera.projection_shift_x) ||
             Number.isFinite(preset.camera.projection_shift_y)
         );
+        // Keep off-axis rays invariant when the saved render frame is fitted to a new viewport aspect.
+        const projectionShiftScaleX = adaptsRenderFrame
+            ? adapted.scale * preset.camera.reference_aspect / Math.max(0.0001, targetAspect)
+            : 1;
+        const projectionShiftScaleY = adaptsRenderFrame ? adapted.scale : 1;
+        const exactProjectionShiftX = (Number(preset.camera.projection_shift_x) || 0) * projectionShiftScaleX;
+        const exactProjectionShiftY = (Number(preset.camera.projection_shift_y) || 0) * projectionShiftScaleY;
 
         preview.setProjectionMode?.(isOrtho);
         const camera = isOrtho ? preview.camOrtho : preview.camPers;
@@ -1533,8 +1949,8 @@
                 camera,
                 width,
                 height,
-                Number(preset.camera.projection_shift_x) || 0,
-                Number(preset.camera.projection_shift_y) || 0
+                exactProjectionShiftX,
+                exactProjectionShiftY
             );
         }
         camera.updateMatrixWorld?.(true);
@@ -1546,30 +1962,34 @@
                 camera,
                 width,
                 height,
-                Number(preset.camera.projection_shift_x) || 0,
-                Number(preset.camera.projection_shift_y) || 0
+                exactProjectionShiftX,
+                exactProjectionShiftY
             );
         }
         camera.updateMatrixWorld?.(true);
 
-        currentSettings = normalizeForm({
-            ...currentSettings,
-            ...preset.output,
-            resolution: preset.output.resolution.slice(),
-            camera_preset_id: preset.id,
-            angle_preset: 'view',
-            zoom: null
-        });
-        saveSettings(currentSettings);
-        StudioRenderFrame.setState(adapted.frame, preview, currentSettings);
-        if (currentSettings.capture_area === 'frame') {
-            StudioRenderFrame.show(preview, currentSettings);
-        } else {
-            StudioRenderFrame.remove(false);
+        if (options.transient !== true) {
+            currentSettings = normalizeForm({
+                ...currentSettings,
+                ...preset.output,
+                resolution: preset.output.resolution.slice(),
+                camera_preset_id: preset.id,
+                angle_preset: 'view',
+                zoom: null
+            });
+            saveSettings(currentSettings);
+            StudioRenderFrame.setState(adapted.frame, preview, currentSettings);
+            if (currentSettings.capture_area === 'frame') {
+                StudioRenderFrame.show(preview, currentSettings);
+            } else {
+                StudioRenderFrame.remove(false);
+            }
         }
         renderPreviewWithExactCameraPose(preview);
-        syncFrameAction();
-        refreshSceneComposerPreviews();
+        if (options.transient !== true) {
+            syncFrameAction();
+            refreshSceneComposerPreviews();
+        }
         if (options.notify !== false) {
             Blockbench.showQuickMessage(translate('studio_render.message.preset_applied', 'Camera preset applied') + ': ' + preset.name);
         }
@@ -1578,6 +1998,8 @@
 
     function normalizeForm(form) {
         const settings = Object.assign({}, DEFAULT_SETTINGS, form || {});
+        delete settings._studio_workflow_tab;
+        delete settings._studio_summary;
         settings.camera_preset_id = typeof settings.camera_preset_id === 'string' ? settings.camera_preset_id : '';
         if (!Array.isArray(settings.resolution)) {
             settings.resolution = DEFAULT_SETTINGS.resolution.slice();
@@ -1600,18 +2022,23 @@
         settings.show_tile_grid = !!settings.show_tile_grid;
         settings.show_advanced = !!settings.show_advanced;
         settings.bloom_enabled = !!settings.bloom_enabled;
-        settings.bloom_threshold = clamp(toNumber(settings.bloom_threshold, 0.72), 0, 1);
-        settings.bloom_strength = clamp(toNumber(settings.bloom_strength, 0.8), 0, 3);
-        settings.bloom_radius = clamp(toNumber(settings.bloom_radius, 18), 1, 96);
-        settings.bloom_hdr_strength = clamp(toNumber(settings.bloom_hdr_strength, 1), 0, 4);
-        settings.bloom_emissive_strength = clamp(toNumber(settings.bloom_emissive_strength, 1.35), 0, 6);
+        settings.bloom_threshold = clamp(toNumber(settings.bloom_threshold, DEFAULT_SETTINGS.bloom_threshold), 0, 4);
+        settings.bloom_soft_knee = clamp(toNumber(settings.bloom_soft_knee, DEFAULT_SETTINGS.bloom_soft_knee), 0, 1);
+        settings.bloom_strength = clamp(toNumber(settings.bloom_strength, DEFAULT_SETTINGS.bloom_strength), 0, 3);
+        settings.bloom_core_strength = clamp(toNumber(settings.bloom_core_strength, DEFAULT_SETTINGS.bloom_core_strength), 0, 2);
+        settings.bloom_core_radius = clamp(toNumber(settings.bloom_core_radius, DEFAULT_SETTINGS.bloom_core_radius), 0.25, 12);
+        settings.bloom_halo_strength = clamp(toNumber(settings.bloom_halo_strength, DEFAULT_SETTINGS.bloom_halo_strength), 0, 2);
+        settings.bloom_radius = clamp(toNumber(settings.bloom_radius, DEFAULT_SETTINGS.bloom_radius), 1, 128);
+        settings.bloom_hdr_strength = clamp(toNumber(settings.bloom_hdr_strength, DEFAULT_SETTINGS.bloom_hdr_strength), 0, 4);
+        settings.bloom_emissive_strength = clamp(toNumber(settings.bloom_emissive_strength, DEFAULT_SETTINGS.bloom_emissive_strength), 0, 8);
         settings.bloom_occlusion = settings.bloom_occlusion !== false;
+        settings.bloom_pipeline_revision = 3;
         settings.viewport_bloom_enabled = settings.viewport_bloom_enabled !== false;
         settings.viewport_bloom_fps = clamp(toNumber(settings.viewport_bloom_fps, 0), 0, 144);
         settings.viewport_bloom_quality = VIEWPORT_BLOOM_PROFILES[settings.viewport_bloom_quality]
             ? settings.viewport_bloom_quality
             : 'adaptive';
-        settings.viewport_composer_revision = 2;
+        settings.viewport_composer_revision = 3;
         settings.color_grading_enabled = !!settings.color_grading_enabled;
         settings.exposure = clamp(toNumber(settings.exposure, 1), 0.1, 4);
         settings.contrast = clamp(toNumber(settings.contrast, 1), 0, 3);
@@ -1634,6 +2061,62 @@
         delete settings.frame_reset;
         delete settings.gpu_status;
         return settings;
+    }
+
+    function getEnvironmentBloomProfile(sourceSettings) {
+        const getter = window.LightflowEnvironment?.getBloomSettings;
+        if (typeof getter !== 'function') return null;
+        try {
+            const profile = getter.call(window.LightflowEnvironment, {
+                studioBloomEnabled: !!sourceSettings?.bloom_enabled
+            });
+            return profile && typeof profile === 'object' ? profile : null;
+        } catch (error) {
+            warnStudioRenderOnce(
+                'environment_bloom_profile',
+                '[Studio Render] Lightflow Environment Bloom settings could not be read.',
+                error
+            );
+            return null;
+        }
+    }
+
+    function resolveBloomSettings(sourceSettings) {
+        const resolved = Object.assign({}, DEFAULT_SETTINGS, sourceSettings || {});
+        const profile = getEnvironmentBloomProfile(resolved);
+        /*
+         * Studio Render owns the master switch. Environment contributes its
+         * live profile only while its own Bloom is enabled; it must neither
+         * force Studio Bloom on nor turn authored/emissive Bloom off.
+         */
+        if (profile?.enabled === true) {
+            const assignAlias = (targetKey, aliases) => {
+                const key = aliases.find(alias => profile[alias] !== undefined);
+                if (key !== undefined) resolved[targetKey] = profile[key];
+            };
+            assignAlias('bloom_threshold', ['bloom_threshold', 'threshold']);
+            assignAlias('bloom_soft_knee', ['bloom_soft_knee', 'soft_knee', 'softKnee']);
+            assignAlias('bloom_strength', ['bloom_strength', 'strength']);
+            assignAlias('bloom_core_strength', ['bloom_core_strength', 'core_strength', 'coreStrength']);
+            assignAlias('bloom_core_radius', ['bloom_core_radius', 'core_radius', 'coreRadius']);
+            assignAlias('bloom_halo_strength', ['bloom_halo_strength', 'halo_strength', 'haloStrength']);
+            assignAlias('bloom_radius', ['bloom_radius', 'halo_radius', 'haloRadius']);
+            assignAlias('bloom_hdr_strength', ['bloom_hdr_strength', 'hdr_strength', 'hdrStrength']);
+            assignAlias('bloom_emissive_strength', ['bloom_emissive_strength', 'emissive_strength', 'emissiveStrength']);
+            assignAlias('bloom_occlusion', ['bloom_occlusion', 'occlusion']);
+        }
+        resolved.bloom_enabled = !!resolved.bloom_enabled;
+        resolved.bloom_threshold = clamp(toNumber(resolved.bloom_threshold, DEFAULT_SETTINGS.bloom_threshold), 0, 4);
+        resolved.bloom_soft_knee = clamp(toNumber(resolved.bloom_soft_knee, DEFAULT_SETTINGS.bloom_soft_knee), 0, 1);
+        resolved.bloom_strength = clamp(toNumber(resolved.bloom_strength, DEFAULT_SETTINGS.bloom_strength), 0, 3);
+        resolved.bloom_core_strength = clamp(toNumber(resolved.bloom_core_strength, DEFAULT_SETTINGS.bloom_core_strength), 0, 2);
+        resolved.bloom_core_radius = clamp(toNumber(resolved.bloom_core_radius, DEFAULT_SETTINGS.bloom_core_radius), 0.25, 12);
+        resolved.bloom_halo_strength = clamp(toNumber(resolved.bloom_halo_strength, DEFAULT_SETTINGS.bloom_halo_strength), 0, 2);
+        resolved.bloom_radius = clamp(toNumber(resolved.bloom_radius, DEFAULT_SETTINGS.bloom_radius), 1, 128);
+        resolved.bloom_hdr_strength = clamp(toNumber(resolved.bloom_hdr_strength, DEFAULT_SETTINGS.bloom_hdr_strength), 0, 4);
+        resolved.bloom_emissive_strength = clamp(toNumber(resolved.bloom_emissive_strength, DEFAULT_SETTINGS.bloom_emissive_strength), 0, 8);
+        resolved.bloom_occlusion = resolved.bloom_occlusion !== false;
+        return resolved;
     }
 
     function normalizeColor(value) {
@@ -1669,7 +2152,120 @@
         return (size.width * size.height) <= MAX_OUTPUT_PIXELS;
     }
 
-    function resolveTileSize(settings, renderer, sampleFactor) {
+    // Studio tile safety is learned per renderer + workload family. The cold
+    // start for heavy Lightflow/Rendercraft is intentionally conservative:
+    // the user's RTX 5050 report proved that a legal 1920x1080/2048-class
+    // single tile can still trigger a device reset. Capability limits answer
+    // "can this texture exist?"; they do not answer "can this shader finish
+    // this many pixels without tripping the GPU watchdog?".
+    const studioTileSafetyByRenderer = new WeakMap();
+    const STUDIO_HEAVY_TILE_TIERS = Object.freeze([512, 768, 1024, 1280, 1536]);
+
+    function getStudioWorkloadTileCeiling(workloadClass) {
+        // Live RTX 5050 validation certifies Rendercraft at 1024 (16 tiles for
+        // 4096², 87 ms max fence). 1280 keeps the same tile count while raising
+        // watchdog pressure, so it cannot improve that workload's throughput.
+        return workloadClass === 'rendercraft' ? 1024 : 1536;
+    }
+
+    function getStudioWorkloadClass() {
+        const mode = String(window.ShaderEngine?.globalRenderMode || '').toLowerCase();
+        if (mode === 'cinematic_craft' || mode === 'luma_forge') return 'rendercraft';
+        if (mode === 'lightflow' || mode === 'shaded_lightflow' || mode === 'pixelated_shaded_lightflow') return 'lightflow';
+        if (mode === 'pbr' || mode === 'realview_pbr') return 'pbr';
+        return isLightflowRenderMode() ? 'lightflow_other' : 'classic';
+    }
+
+    function isStudioHeavyWorkloadClass(workloadClass) {
+        return workloadClass === 'rendercraft' ||
+            workloadClass === 'lightflow' ||
+            workloadClass === 'lightflow_other';
+    }
+
+    function getStudioTileSafetyState(renderer, workloadClass = getStudioWorkloadClass()) {
+        if (!renderer || (typeof renderer !== 'object' && typeof renderer !== 'function')) {
+            return { workloadClass, target: 768, contextLosses: 0, successes: 0, consecutiveSuccesses: 0, lastFenceMs: 0 };
+        }
+        let byWorkload = studioTileSafetyByRenderer.get(renderer);
+        if (!byWorkload) {
+            byWorkload = new Map();
+            studioTileSafetyByRenderer.set(renderer, byWorkload);
+        }
+        let state = byWorkload.get(workloadClass);
+        if (!state) {
+            state = {
+                workloadClass,
+                target: 768,
+                contextLosses: 0,
+                successes: 0,
+                consecutiveSuccesses: 0,
+                lastFenceMs: 0,
+                lastTileSize: 0,
+                lastOutcome: 'cold'
+            };
+            byWorkload.set(workloadClass, state);
+        }
+        return state;
+    }
+
+    function getAdaptiveStudioHeavyTileTarget(renderer, sampleCount = 1, workloadClass = getStudioWorkloadClass()) {
+        const state = getStudioTileSafetyState(renderer, workloadClass);
+        const multiSample = Math.max(1, Number(sampleCount) || 1) > 1;
+        // Multisample renders multiply the exact same heavy fragment work; do
+        // not exceed the currently certified single-sample tier.
+        const target = Math.min(
+            getStudioWorkloadTileCeiling(workloadClass),
+            Math.max(512, Number(state.target) || 768)
+        );
+        return multiSample ? Math.min(target, 768) : target;
+    }
+
+    function recordStudioTileSafetySuccess(renderer, session) {
+        if (!renderer || !session || !session.heavyLightflowSession || session.studioContextLost) return;
+        const state = getStudioTileSafetyState(renderer, session.workloadClass);
+        state.successes += 1;
+        state.consecutiveSuccesses = Math.max(0, Number(state.consecutiveSuccesses) || 0) + 1;
+        state.lastFenceMs = Math.max(0, Number(session.maxGpuFenceMs) || 0);
+        state.lastTileSize = Math.max(0, Number(session.tileSize) || 0);
+        state.lastOutcome = 'success';
+
+        // Promote only between renders, never mid-render. A full certified tile
+        // with bounded fence latency earns one tier for the next invocation.
+        // This keeps cold-start correctness while allowing fast hardware to
+        // recover throughput naturally without any vendor-name heuristic.
+        const certifiedTiers = STUDIO_HEAVY_TILE_TIERS.filter(
+            value => value <= getStudioWorkloadTileCeiling(session.workloadClass)
+        );
+        const currentIndex = certifiedTiers.indexOf(state.target);
+        const fullTierWasExercised = state.lastTileSize >= state.target * 0.95;
+        if (
+            currentIndex >= 0 &&
+            currentIndex < certifiedTiers.length - 1 &&
+            fullTierWasExercised &&
+            state.lastFenceMs > 0 &&
+            state.lastFenceMs <= 260 &&
+            state.consecutiveSuccesses >= 2
+        ) {
+            state.target = certifiedTiers[currentIndex + 1];
+            state.consecutiveSuccesses = 0;
+            state.lastOutcome = 'promoted';
+        }
+    }
+
+    function recordStudioTileSafetyFailure(renderer, session) {
+        if (!renderer || !session) return;
+        const state = getStudioTileSafetyState(renderer, session.workloadClass);
+        state.contextLosses += 1;
+        state.consecutiveSuccesses = 0;
+        state.lastFenceMs = Math.max(0, Number(session.maxGpuFenceMs) || 0);
+        state.lastTileSize = Math.max(0, Number(session.tileSize) || 0);
+        state.lastOutcome = 'context_lost';
+        const current = Math.max(512, Number(state.target) || 768);
+        const lower = STUDIO_HEAVY_TILE_TIERS.filter(value => value < current).pop();
+        state.target = lower || 512;
+    }
+
+    function resolveTileSize(settings, renderer, sampleFactor, sampleCount = 1) {
         const gpuProfile = getGpuProfile(renderer);
         const maxTextureSize = Math.max(
             sampleFactor,
@@ -1680,13 +2276,16 @@
             )
         );
 
-        const autoTileSize = gpuProfile.classification === 'software'
-            ? 1024
-            : (
-                gpuProfile.classification === 'integrated'
-                    ? 1536
-                    : DEFAULT_TILE_SIZE
-            );
+        // Resource legality and workload safety are separate contracts. Heavy
+        // Lightflow/Rendercraft starts at a watchdog-safe tier and can only grow
+        // after this exact renderer/workload has completed a certified render.
+        const workloadClass = getStudioWorkloadClass();
+        const heavyLightflowSession = isStudioHeavyWorkloadClass(workloadClass);
+        const multiSample = Math.max(1, Number(sampleCount) || 1) > 1;
+        const portableWorkloadTarget = heavyLightflowSession
+            ? getAdaptiveStudioHeavyTileTarget(renderer, sampleCount, workloadClass)
+            : 2048;
+        const autoTileSize = Math.min(maxTextureSize, portableWorkloadTarget);
 
         const requested = settings.tile_size === 'auto'
             ? autoTileSize
@@ -1720,10 +2319,13 @@
 
         const minimumTile = Math.min(256, safeMax);
 
+        const workloadCap = heavyLightflowSession
+            ? Math.min(safeMax, portableWorkloadTarget)
+            : safeMax;
         const tile = clamp(
             requested || DEFAULT_TILE_SIZE,
             minimumTile,
-            safeMax
+            Math.min(safeMax, workloadCap)
         );
 
         return Math.max(sampleFactor, Math.floor(tile / sampleFactor) * sampleFactor);
@@ -1764,14 +2366,14 @@
         if (settings.background_mode === 'solid') {
             ctx.fillStyle = normalizeColor(settings.background_color);
             ctx.fillRect(0, 0, size.width, size.height);
-        } else {
-            ctx.clearRect(0, 0, size.width, size.height);
         }
         return { canvas, ctx };
     }
 
     function copyPreviewCamera(renderPreview, sourcePreview, settings, baseWidth, baseHeight) {
-        renderPreview.setProjectionMode(sourcePreview.isOrtho);
+        if (renderPreview.isOrtho !== sourcePreview.isOrtho) {
+            renderPreview.setProjectionMode(sourcePreview.isOrtho);
+        }
         renderPreview.controls.unlinked = sourcePreview.controls.unlinked;
         renderPreview.controls.target.copy(sourcePreview.controls.target);
 
@@ -1828,7 +2430,7 @@
         }
     }
 
-    function renderPreviewWithExactCameraPose(renderPreview) {
+    function renderPreviewWithExactCameraPose(renderPreview, options = {}) {
         const camera = renderPreview?.camera;
         const controls = renderPreview?.controls;
         if (!camera || !controls || typeof controls.update !== 'function') {
@@ -1862,6 +2464,14 @@
 
         try {
             restoreExactPose();
+            if (typeof window.LightflowRenderer?.renderExternal === 'function') {
+                return window.LightflowRenderer.renderExternal(renderPreview, {
+                    profile: 'studio',
+                    exactCameraPose: true,
+                    requiredResources: options.requiredResources,
+                    onFrameResources: options.onFrameResources
+                });
+            }
             return renderPreview.render();
         } finally {
             if (controls.update === exactCameraUpdate) {
@@ -1930,20 +2540,58 @@
         camera.updateProjectionMatrix();
     }
 
-    function configureTileCamera(renderPreview, sourcePreview, settings, tile) {
-        const camera = renderPreview.camera;
+    function getStudioSampleJitters(sampleCount) {
+        const count = Math.max(1, Math.floor(Number(sampleCount) || 1));
+        if (count === 1) return [{ x: 0, y: 0 }];
+        const halton = (index, base) => {
+            let result = 0;
+            let fraction = 1 / base;
+            let value = index;
+            while (value > 0) {
+                result += fraction * (value % base);
+                value = Math.floor(value / base);
+                fraction /= base;
+            }
+            return result;
+        };
+        const samples = Array.from({ length: count }, (unused, index) => ({
+            x: halton(index + 1, 2) - 0.5,
+            y: halton(index + 1, 3) - 0.5
+        }));
+        const mean = samples.reduce(
+            (sum, sample) => ({ x: sum.x + sample.x, y: sum.y + sample.y }),
+            { x: 0, y: 0 }
+        );
+        mean.x /= count;
+        mean.y /= count;
+        samples.forEach(sample => {
+            sample.x -= mean.x;
+            sample.y -= mean.y;
+        });
+        return samples;
+    }
+
+    function configureTileCamera(renderPreview, sourcePreview, settings, tile, sampleJitter = null) {
         const baseWidth = tile.fullViewWidth;
         const baseHeight = tile.fullViewHeight;
+        const renderWidth = Math.max(1, Number(tile.renderWidth || tile.sampleWidth) || 1);
+        const renderHeight = Math.max(1, Number(tile.renderHeight || tile.sampleHeight) || 1);
+        const jitterX = Number(sampleJitter?.x) || 0;
+        const jitterY = Number(sampleJitter?.y) || 0;
+        const jitteredViewX = tile.viewX + jitterX * tile.viewWidth / renderWidth;
+        const jitteredViewY = tile.viewY + jitterY * tile.viewHeight / renderHeight;
 
         copyPreviewCamera(renderPreview, sourcePreview, settings, baseWidth, baseHeight);
+        // Projection changes replace the active camera, including on tile one.
+        const camera = renderPreview.camera;
 
         if (typeof camera.setViewOffset === 'function') {
             const projectionShift = renderPreview.studio_render_projection_shift || { x: 0, y: 0 };
             camera.setViewOffset(
                 tile.fullViewWidth,
                 tile.fullViewHeight,
-                tile.viewX - projectionShift.x * tile.fullViewWidth * 0.5,
-                tile.viewY + projectionShift.y * tile.fullViewHeight * 0.5,
+                jitteredViewX - projectionShift.x * tile.fullViewWidth * 0.5,
+                jitteredViewY + projectionShift.y * tile.fullViewHeight * 0.5,
                 tile.viewWidth,
                 tile.viewHeight
             );
@@ -1959,17 +2607,19 @@
                 },
                 tile.fullViewWidth,
                 tile.fullViewHeight,
-                tile.viewX,
-                tile.viewY,
+                jitteredViewX,
+                jitteredViewY,
                 tile.viewWidth,
                 tile.viewHeight
             );
         }
     }
 
-    function getFrameRectForPreview(preview, settings) {
+    function getFrameRectForPreview(preview, settings, frameState = null) {
         if (!preview) return null;
-        const state = StudioRenderFrame.getState(preview, settings);
+        const state = frameState
+            ? normalizeFrameState(frameState)
+            : StudioRenderFrame.getState(preview, settings);
         const width = preview.width || preview.node?.clientWidth || 1;
         const height = preview.height || preview.node?.clientHeight || 1;
         return {
@@ -2171,7 +2821,15 @@
         return tiles;
     }
 
-    function prepareRendererForTile(renderPreview, sourcePreview, settings, tile) {
+    function prepareRendererForTile(
+        renderPreview,
+        sourcePreview,
+        settings,
+        tile,
+        renderSession,
+        sampleJitter = null,
+        sampleIndex = 0
+    ) {
         const renderWidth = tile.renderWidth || tile.sampleWidth;
         const renderHeight = tile.renderHeight || tile.sampleHeight;
         const renderer = renderPreview.renderer;
@@ -2180,12 +2838,20 @@
             The physical canvas must match tile and rim units instead of
             inheriting monitor DPI.
         */
-        if (renderer && typeof renderer.setPixelRatio === 'function') {
+        if (renderer && typeof renderer.setPixelRatio === 'function' && renderer.getPixelRatio?.() !== 1) {
             renderer.setPixelRatio(1);
         }
 
-        renderPreview.resize(renderWidth, renderHeight);
-        configureTileCamera(renderPreview, sourcePreview, settings, tile);
+        // Native Preview.resize -> renderer.setSize resets canvas storage even
+        // at the same size. Supersamples only change the projection jitter.
+        if (
+            renderPreview.width !== renderWidth || renderPreview.height !== renderHeight ||
+            renderPreview.canvas?.width !== renderWidth || renderPreview.canvas?.height !== renderHeight
+        ) {
+            renderPreview.resize(renderWidth, renderHeight);
+        }
+        configureTileCamera(renderPreview, sourcePreview, settings, tile, sampleJitter);
+        updateStudioRenderBillboards(renderPreview.camera);
         if (typeof renderPreview.renderer?.setClearColor === 'function') {
             renderPreview.renderer.setClearColor(0x000000, 0);
         }
@@ -2195,21 +2861,43 @@
         if (typeof renderPreview.renderer?.setScissorTest === 'function') {
             renderPreview.renderer.setScissorTest(false);
         }
-        if (typeof window.LightManagerPrepareRender === 'function') {
+        const studioSampleScale = 1;
+        const studioFrameScale = Math.max(
+            1.0,
+            Number(tile.promotionalRimFrameScale) || 1.0
+        );
+        if (typeof window.ShaderArchitectSetStudioRenderSampleScale === 'function') {
+            window.ShaderArchitectSetStudioRenderSampleScale(
+                studioSampleScale,
+                studioFrameScale,
+                sampleIndex
+            );
+        }
+
+        let lightManagerPrepared = !!renderSession?.lightManagerPrepared;
+        if (!lightManagerPrepared && typeof window.LightManagerPrepareRender === 'function') {
             window.LightManagerPrepareRender(renderPreview, { studio: true });
+            lightManagerPrepared = true;
+            if (renderSession) renderSession.lightManagerPrepared = true;
         }
         if (typeof Blockbench !== 'undefined' && typeof Blockbench.dispatchEvent === 'function') {
-            Blockbench.dispatchEvent('studio_render_pre_tile', {
+            const event = {
                 preview: renderPreview,
                 source_preview: sourcePreview,
                 tile,
                 settings,
+                sampleIndex,
+                lightManagerPrepared,
 
                 promotionalRimFrameScale: Math.max(
                     1.0,
                     Number(tile.promotionalRimFrameScale) || 1.0
                 )
-            });
+            };
+            if (sampleIndex === 0) {
+                Blockbench.dispatchEvent('studio_render_pre_tile', event);
+            }
+            Blockbench.dispatchEvent('studio_render_pre_sample', event);
         }
     }
 
@@ -2237,7 +2925,8 @@
         });
     }
 
-    function synchronizeStudioRenderLighting(renderPreview) {
+    function synchronizeStudioRenderLighting(renderPreview, renderSession) {
+        if (renderSession?.lightingPrepared) return;
         /*
          * Fancy Shader materials calculate their direct light and shadow index
          * uniforms manually. Keep them synchronized immediately before the
@@ -2257,20 +2946,43 @@
                 source: 'studio_render_pre_tile'
             });
         }
+        if (renderSession) renderSession.lightingPrepared = true;
     }
 
-    function compositeStudioRenderPostEffects(renderPreview, settings, tile) {
+    function freezeStudioShadowMapAfterFirstTile(renderPreview, renderSession) {
+        if (
+            !renderSession ||
+            renderSession.shadowMapPrimed ||
+            !renderSession.lightManagerPrepared
+        ) return;
+        const shadowMap = renderPreview?.renderer?.shadowMap;
+        if (!shadowMap) return;
+
+        /*
+         * Every tile sees the same static scene and lights. Once Three has
+         * populated the Studio shadow targets on the first beauty render, keep
+         * them for all remaining camera view-offset tiles instead of drawing
+         * every shadow caster again for every tile.
+         */
+        shadowMap.autoUpdate = false;
+        shadowMap.needsUpdate = false;
+        renderPreview.sa_studio_render_reuse_shadows = true;
+        renderSession.shadowMapPrimed = true;
+    }
+
+    function compositeStudioRenderPostEffects(
+        renderPreview,
+        settings,
+        tile,
+        destinationTarget = null
+    ) {
         const manager = window.MinecraftPromotionalSilhouetteManager;
         if (!manager || typeof manager.renderSilhouette !== 'function') return;
 
         const renderer = renderPreview && renderPreview.renderer;
         if (!renderer) return;
 
-        const sampleScale = clamp(
-            parseInt(settings.samples, 10) || 1,
-            1,
-            8
-        );
+        const sampleScale = 1;
         const frameScale = Math.max(
             1.0,
             Number(tile.promotionalRimFrameScale) || 1.0
@@ -2300,7 +3012,7 @@
 
         try {
             if (typeof renderer.setRenderTarget === 'function') {
-                renderer.setRenderTarget(null);
+                renderer.setRenderTarget(destinationTarget);
             }
             if (typeof renderer.setViewport === 'function') {
                 renderer.setViewport(
@@ -2346,18 +3058,51 @@
     function getMaterialEmissiveState(material) {
         if (!material) return { active: false, mode: 0 };
 
+        const shaderId = String(material.sa_shader_id || '').toLowerCase();
+        const isRendercraftMaterial = !!(
+            (shaderId === 'cinematic_craft' || shaderId === 'luma_forge') &&
+            material.uniforms?.SA_RENDERCRAFT_OUTPUT_MODE &&
+            material.vertexShader &&
+            material.fragmentShader
+        );
+        let supportsSelectiveRendercraftBloom = false;
+        if (isRendercraftMaterial) {
+            let support = BLOOM_MASK_STATE.rendercraftBloomSupport.get(material);
+            if (!support || support.source !== material.fragmentShader) {
+                support = {
+                    source: material.fragmentShader,
+                    supported: /SA_RENDERCRAFT_OUTPUT_MODE\s*==\s*2/.test(material.fragmentShader)
+                };
+                BLOOM_MASK_STATE.rendercraftBloomSupport.set(material, support);
+            }
+            supportsSelectiveRendercraftBloom = support.supported;
+        }
         const renderMode = String(material.sa_source_render_mode || '').toLowerCase();
-        const emissiveMode = renderMode === 'emissive' || getMaterialUniformValue(material, 'EMISSIVE', false) === true;
-        const additiveMode = renderMode === 'additive' || material.blending === THREE.AdditiveBlending;
-        const useMERMap = getMaterialUniformValue(material, 'uUseBlockbenchMERMap', false) === true;
-        const useShaderEmissiveMap = getMaterialUniformValue(material, 'uUseEmissiveMap', false) === true;
-        const useStandardEmissiveMap = !!material.emissiveMap;
+        const emissiveMode = renderMode === 'emissive' ||
+            getMaterialUniformValue(material, 'EMISSIVE', false) === true;
+        const additiveMode = renderMode === 'additive' ||
+            getMaterialUniformValue(material, 'ADDITIVE', false) === true ||
+            material.blending === THREE.AdditiveBlending;
+        const merMap = getMaterialTexture(material, 'uMetallicRoughnessMap');
+        const emissiveMap = getMaterialTexture(material, 'uEmissiveMap', material.emissiveMap || null);
+        const useMERMap = !!(
+            merMap &&
+            getMaterialUniformValue(material, 'uUseBlockbenchMERMap', false) === true
+        );
+        const useShaderEmissiveMap = !!(
+            emissiveMap &&
+            getMaterialUniformValue(material, 'uUseEmissiveMap', false) === true
+        );
+        const useStandardEmissiveMap = !!(material.emissiveMap && material.emissiveMap.isTexture);
         const useEmissiveMap = useShaderEmissiveMap || useStandardEmissiveMap;
         const useTextureEmission = getMaterialUniformValue(material, 'uEmissiveUseTexture', false) === true;
         const hasShaderEmission = !!material.uniforms?.uEmissiveStrength;
+        const fallbackEmissiveStrength = Number.isFinite(Number(material.emissiveIntensity))
+            ? Number(material.emissiveIntensity)
+            : 1;
         const emissiveStrength = Math.max(
             0,
-            Number(getMaterialUniformValue(material, 'uEmissiveStrength', material.emissiveIntensity || 1)) || 0
+            Number(getMaterialUniformValue(material, 'uEmissiveStrength', fallbackEmissiveStrength)) || 0
         );
         const emissiveColor = getMaterialUniformValue(material, 'uEmissiveColor', material.emissive || null);
         const emissiveColorEnergy = emissiveColor
@@ -2382,23 +3127,61 @@
             !useStandardEmissiveMap &&
             emissiveStrength > 0.0005
         );
+        const useMapEmission = !!(useEmissiveMap && emissiveStrength > 0.0005);
+        const useMEREmission = !!(useMERMap && emissiveStrength > 0.0005);
+        const bevelGlowIntensity = getMaterialUniformValue(
+            material,
+            'BEVEL_GLOW_SYNC_TO_PROMO_RIM',
+            false
+        ) === true &&
+            Number(getMaterialUniformValue(material, 'BEVEL_GLOW_MODE', 0)) !== 1 &&
+            Number(getMaterialUniformValue(material, 'PROMO_RIM_COLOR_MODE', 0)) !== 3
+            ? Number(getMaterialUniformValue(material, 'PROMO_RIM_INTENSITY', 0)) || 0
+            : Number(getMaterialUniformValue(material, 'BEVEL_GLOW_INTENSITY', 0)) || 0;
+        const hasExplicitEmission = !!(
+            emissiveMode ||
+            additiveMode ||
+            useShaderEmission ||
+            useStandardColorEmission ||
+            useMEREmission ||
+            useMapEmission
+        );
+        const hasRendercraftEdgeEmission = !!(
+            supportsSelectiveRendercraftBloom &&
+            getMaterialUniformValue(material, 'BEVEL_GLOW_ENABLED', false) === true &&
+            Number(getMaterialUniformValue(material, 'BEVEL_GLOW_WIDTH', 0)) > 0.00001 &&
+            bevelGlowIntensity > 0.0005
+        );
+        const useRendercraftBloom = !!(
+            supportsSelectiveRendercraftBloom &&
+            (hasExplicitEmission || hasRendercraftEdgeEmission)
+        );
 
         return {
-            active: emissiveMode || additiveMode || useShaderEmission || useStandardColorEmission || useMERMap || useEmissiveMap,
+            active: useRendercraftBloom || hasExplicitEmission,
             mode: emissiveMode ? 1 : (additiveMode ? 2 : 0),
+            useRendercraftBloom,
+            hasRendercraftEdgeEmission,
             useShaderEmission: useShaderEmission || useStandardColorEmission,
             useTextureEmission,
-            useMERMap,
-            useEmissiveMap,
+            useMERMap: useMEREmission,
+            useEmissiveMap: useMapEmission,
             tintEmissiveMap: useStandardEmissiveMap && !useShaderEmissiveMap,
             emissiveStrength,
             baseMap: getMaterialTexture(material, 'map'),
             baseColorMap: getMaterialTexture(material, 'uBaseColorMap'),
-            emissiveMap: getMaterialTexture(material, 'uEmissiveMap', material.emissiveMap || null),
-            merMap: getMaterialTexture(material, 'uMetallicRoughnessMap'),
+            emissiveMap,
+            merMap,
             emissiveColor,
-            baseColor: getMaterialUniformValue(material, 'uBaseColor', null),
-            baseAlpha: Math.max(0, Number(getMaterialUniformValue(material, 'uBaseAlpha', 1)) || 0),
+            baseColor: getMaterialUniformValue(material, 'uBaseColor', material.color || null),
+            baseAlpha: Math.max(
+                0,
+                Number(getMaterialUniformValue(
+                    material,
+                    'uBaseAlpha',
+                    material.opacity !== undefined ? material.opacity : 1
+                )) || 0
+            ),
             useBaseColorMap: getMaterialUniformValue(material, 'uUseBaseColorMap', false) === true,
             autoTile: getMaterialUniformValue(material, 'AUTO_TILE', false) === true,
             tiling: getMaterialUniformValue(material, 'TILING', null),
@@ -2433,7 +3216,184 @@
         return target.set(fallbackX, fallbackY);
     }
 
-    function getBloomMaskMaterial(sourceMaterial, emissive) {
+    function getBloomFallbackTexture(white) {
+        const key = white ? 'whiteTexture' : 'blackTexture';
+        if (BLOOM_MASK_STATE[key]) return BLOOM_MASK_STATE[key];
+        const channel = white ? 255 : 0;
+        const texture = new THREE.DataTexture(
+            new Uint8Array([channel, channel, channel, 255]),
+            1,
+            1,
+            THREE.RGBAFormat
+        );
+        texture.name = white
+            ? 'StudioRender_BloomWhiteFallback'
+            : 'StudioRender_BloomBlackFallback';
+        texture.needsUpdate = true;
+        BLOOM_MASK_STATE[key] = texture;
+        BLOOM_MASK_STATE.resources.add(texture);
+        return texture;
+    }
+
+    function disposeBloomDerivedResources() {
+        BLOOM_MASK_STATE.derivedResources.forEach(resource => resource?.dispose?.());
+        BLOOM_MASK_STATE.derivedResources.clear();
+        BLOOM_MASK_STATE.emissiveMaterials = new WeakMap();
+        BLOOM_MASK_STATE.occluderMaterials = new WeakMap();
+        BLOOM_MASK_STATE.rendercraftMaterials = new WeakMap();
+        BLOOM_MASK_STATE.rendercraftBloomSupport = new WeakMap();
+    }
+
+    // Specialized Studio passes are derived from the immutable base shader
+    // source recorded by Shader Architect's program recipe. Studio never
+    // removes MRT declarations with regular expressions and never mutates the
+    // interactive beauty program to create an auxiliary pass.
+    function getStudioPassShaderSource(sourceMaterial, pass, features = {}) {
+        const glowRecipe = sourceMaterial?.userData?.lightflowProgramRecipe;
+        if (pass === 'studio_bloom' && sourceMaterial?.uniforms?.BEVEL_GLOW_ENABLED?.value &&
+            glowRecipe?.baseVertexShader && glowRecipe?.baseFragmentShader?.includes('SA_RENDERCRAFT_GLOW_BLOOM')) {
+            return {
+                vertexShader: glowRecipe.baseVertexShader,
+                fragmentShader: '#define SA_RENDERCRAFT_GLOW_BLOOM 1\n' + glowRecipe.baseFragmentShader
+            };
+        }
+        const resolved = window.LightflowRenderer?.getPassShaderSource?.(
+            sourceMaterial,
+            { pass, features }
+        );
+        if (resolved?.vertexShader && resolved?.fragmentShader) return resolved;
+
+        const metadata = sourceMaterial?.userData?.lightflowProgramRecipe;
+        if (metadata?.baseVertexShader && metadata?.baseFragmentShader) {
+            return {
+                recipe: metadata.recipe || null,
+                vertexShader: metadata.baseVertexShader,
+                fragmentShader: metadata.baseFragmentShader,
+                sourceAudit: null
+            };
+        }
+
+        // Legacy/non-Lightflow materials are safe only if they are already
+        // single-output. An MRT beauty shader is never heuristically rewritten.
+        const vertexShader = String(sourceMaterial?.vertexShader || '');
+        const fragmentShader = String(sourceMaterial?.fragmentShader || '');
+        if (
+            vertexShader.includes('SA_LIGHTFLOW_MRT_VERTEX') ||
+            fragmentShader.includes('SA_LIGHTFLOW_MRT_FRAGMENT')
+        ) {
+            console.warn('[Studio Render] Refusing to derive studio_bloom from an MRT beauty shader without a program recipe.');
+            return null;
+        }
+        return { vertexShader, fragmentShader, recipe: null, sourceAudit: null };
+    }
+
+    function getRendercraftBloomMaterial(sourceMaterial) {
+        let material = BLOOM_MASK_STATE.rendercraftMaterials.get(sourceMaterial);
+        const sourceUniforms = sourceMaterial.uniforms || {};
+        const selectiveOutputMode = 2;
+        const passSource = getStudioPassShaderSource(sourceMaterial, 'studio_bloom', {
+            selectiveBloom: true
+        });
+        if (!passSource) return null;
+        const studioVertexShader = passSource.vertexShader;
+        const studioFragmentShader = passSource.fragmentShader;
+
+        if (!material) {
+            const uniforms = {};
+            Object.entries(sourceUniforms).forEach(([name, uniform]) => {
+                uniforms[name] = { value: uniform?.value };
+            });
+            uniforms.SA_RENDERCRAFT_OUTPUT_MODE = { value: selectiveOutputMode };
+            material = new THREE.ShaderMaterial({
+                uniforms,
+                vertexShader: studioVertexShader,
+                fragmentShader: studioFragmentShader,
+                defines: {
+                    ...(sourceMaterial.defines || {}),
+                    SA_RENDERCRAFT_STUDIO_BLOOM: 1
+                },
+                lights: !!sourceMaterial.lights,
+                fog: !!sourceMaterial.fog,
+                clipping: !!sourceMaterial.clipping,
+                extensions: {
+                    ...(sourceMaterial.extensions || {}),
+                    derivatives: true
+                },
+                depthTest: sourceMaterial.depthTest !== false,
+                depthWrite: true,
+                transparent: false,
+                blending: THREE.NoBlending,
+                side: sourceMaterial.side !== undefined
+                    ? sourceMaterial.side
+                    : THREE.FrontSide
+            });
+            material.name = 'StudioRender_RendercraftLinearBloomMask';
+            material.toneMapped = false;
+            material.glslVersion = null;
+            material.userData = material.userData || {};
+            material.userData.saStudioSingleOutput = true;
+            if (material.extensions && Object.prototype.hasOwnProperty.call(material.extensions, 'drawBuffers')) {
+                delete material.extensions.drawBuffers;
+            }
+            BLOOM_MASK_STATE.rendercraftMaterials.set(sourceMaterial, material);
+            BLOOM_MASK_STATE.derivedResources.add(material);
+        }
+
+        let programChanged = false;
+        if (material.vertexShader !== studioVertexShader) {
+            material.vertexShader = studioVertexShader;
+            programChanged = true;
+        }
+        if (material.fragmentShader !== studioFragmentShader) {
+            material.fragmentShader = studioFragmentShader;
+            programChanged = true;
+        }
+        if (!!material.lights !== !!sourceMaterial.lights) {
+            material.lights = !!sourceMaterial.lights;
+            programChanged = true;
+        }
+        const sourceDefines = {
+            ...(sourceMaterial.defines || {}),
+            SA_RENDERCRAFT_STUDIO_BLOOM: 1
+        };
+        const currentDefines = material.defines || {};
+        const sourceDefineKeys = Object.keys(sourceDefines);
+        const currentDefineKeys = Object.keys(currentDefines);
+        const definesChanged = sourceDefineKeys.length !== currentDefineKeys.length ||
+            sourceDefineKeys.some(key => currentDefines[key] !== sourceDefines[key]);
+        if (definesChanged) {
+            material.defines = sourceDefines;
+            programChanged = true;
+        }
+        Object.entries(sourceUniforms).forEach(([name, uniform]) => {
+            if (name === 'SA_RENDERCRAFT_OUTPUT_MODE') return;
+            if (!material.uniforms[name]) material.uniforms[name] = { value: uniform?.value };
+            else material.uniforms[name].value = uniform?.value;
+        });
+        material.uniforms.SA_RENDERCRAFT_OUTPUT_MODE =
+            material.uniforms.SA_RENDERCRAFT_OUTPUT_MODE || { value: selectiveOutputMode };
+        material.uniforms.SA_RENDERCRAFT_OUTPUT_MODE.value = selectiveOutputMode;
+        material.side = sourceMaterial.side !== undefined
+            ? sourceMaterial.side
+            : THREE.FrontSide;
+        material.alphaTest = sourceMaterial.alphaTest || 0.01;
+        material.depthTest = sourceMaterial.depthTest !== false;
+        material.depthWrite = true;
+        material.uniformsNeedUpdate = true;
+        if (programChanged) material.needsUpdate = true;
+        return material;
+    }
+
+    function getBloomMaskMaterial(sourceMaterial, emissive, state = getMaterialEmissiveState(sourceMaterial)) {
+        // Explicit Rendercraft emission does not need the 181K beauty shader.
+        // The generic Studio emission pass below already preserves base/emissive/MER
+        // semantics and linear bloom encoding. Only edge-glow still needs the current
+        // Rendercraft-specialized path until that bevel module is split in Phase 2.
+        if (emissive && state.hasRendercraftEdgeEmission) {
+            const specializedMaterial = getRendercraftBloomMaterial(sourceMaterial);
+            if (specializedMaterial) return specializedMaterial;
+        }
+
         const cache = emissive
             ? BLOOM_MASK_STATE.emissiveMaterials
             : BLOOM_MASK_STATE.occluderMaterials;
@@ -2506,6 +3466,23 @@
                     uniform bool uEmit;
                     varying vec2 vMaterialUv;
 
+                    vec3 bloomSRGBToLinear(vec3 color) {
+                        vec3 lower = color / 12.92;
+                        vec3 upper = pow(
+                            max((color + 0.055) / 1.055, vec3(0.0)),
+                            vec3(2.4)
+                        );
+                        return mix(lower, upper, step(vec3(0.04045), color));
+                    }
+
+                    vec3 encodeBloomSignal(vec3 linearColor) {
+                        const float inverseLogRange = 0.2446505421;
+                        return log2(
+                            vec3(1.0) +
+                            clamp(linearColor, vec3(0.0), vec3(16.0))
+                        ) * inverseLogRange;
+                    }
+
                     void main() {
                         vec4 base = texture2D(map, vMaterialUv);
                         base.rgb *= uBaseColor;
@@ -2517,38 +3494,50 @@
                             ).rgb;
                         }
                         if (base.a < uAlphaCutoff) discard;
+                        vec3 baseLinear = bloomSRGBToLinear(
+                            clamp(base.rgb, vec3(0.0), vec3(1.0))
+                        );
 
                         if (!uEmit) {
-                            gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);
+                            gl_FragColor = vec4(
+                                0.0,
+                                0.0,
+                                0.0,
+                                clamp(base.a, 0.0, 1.0)
+                            );
                             return;
                         }
 
                         vec3 emission = vec3(0.0);
                         if (uMode == 1) {
-                            // Native Blockbench/Minecraft emissive semantics.
-                            emission += base.rgb * (1.0 - base.a);
+                            // Render Mode Emissive is an independent bloom source.
+                            emission += baseLinear;
                         } else if (uMode == 2) {
-                            emission += base.rgb * base.a;
+                            emission += baseLinear * base.a;
                         }
                         if (uUseShaderEmission) {
                             emission += (
                                 uUseTextureEmission
-                                    ? base.rgb
-                                    : uEmissiveColor
+                                    ? baseLinear
+                                    : bloomSRGBToLinear(clamp(
+                                        uEmissiveColor,
+                                        vec3(0.0),
+                                        vec3(1.0)
+                                    ))
                             ) * uEmissiveStrength;
                         }
                         if (uUseEmissiveMap) {
-                            vec3 mapEmission = texture2D(
+                            vec3 mapEmission = bloomSRGBToLinear(texture2D(
                                 uEmissiveMap,
                                 vMaterialUv * uEmissiveMapScale
-                            ).rgb;
+                            ).rgb);
                             if (uTintEmissiveMap) {
                                 mapEmission *= uEmissiveColor;
                             }
                             emission += mapEmission * uEmissiveStrength;
                         }
                         if (uUseMERMap) {
-                            emission += base.rgb * texture2D(
+                            emission += baseLinear * texture2D(
                                 uMERMap,
                                 vMaterialUv * uMERMapScale
                             ).g * uEmissiveStrength;
@@ -2572,7 +3561,10 @@
                             gl_FragColor = vec4(0.0);
                             return;
                         }
-                        gl_FragColor = vec4(max(emission, vec3(0.0)), clamp(energy, 0.0, 1.0));
+                        gl_FragColor = vec4(
+                            encodeBloomSignal(max(emission, vec3(0.0))),
+                            clamp(base.a, 0.0, 1.0)
+                        );
                     }
                 `,
                 depthTest: true,
@@ -2583,15 +3575,16 @@
             });
             material.name = emissive ? 'StudioRender_EmissiveMask' : 'StudioRender_BloomOccluder';
             cache.set(sourceMaterial, material);
-            BLOOM_MASK_STATE.resources.add(material);
+            BLOOM_MASK_STATE.derivedResources.add(material);
         }
 
-        const state = getMaterialEmissiveState(sourceMaterial);
-        const fallback = sourceMaterial.map || getMaterialTexture(sourceMaterial, 'map');
+        const whiteFallback = getBloomFallbackTexture(true);
+        const blackFallback = getBloomFallbackTexture(false);
+        const fallback = sourceMaterial.map || getMaterialTexture(sourceMaterial, 'map') || whiteFallback;
         material.uniforms.map.value = state.baseMap || fallback;
-        material.uniforms.uBaseColorMap.value = state.baseColorMap || state.baseMap || fallback;
-        material.uniforms.uEmissiveMap.value = state.emissiveMap || state.baseMap || fallback;
-        material.uniforms.uMERMap.value = state.merMap || state.baseMap || fallback;
+        material.uniforms.uBaseColorMap.value = state.baseColorMap || whiteFallback;
+        material.uniforms.uEmissiveMap.value = state.emissiveMap || blackFallback;
+        material.uniforms.uMERMap.value = state.merMap || blackFallback;
         copyColorToVector(material.uniforms.uBaseColor.value, state.baseColor);
         material.uniforms.uBaseAlpha.value = state.baseAlpha;
         material.uniforms.uAutoTile.value = !!state.autoTile;
@@ -2615,24 +3608,88 @@
         return material;
     }
 
-    function renderBloomMaskTile(renderPreview, targetContext, tile, sampleFactor) {
+    function buildBloomMaskManifest(scene) {
+        const changes = [];
+        const visit = object => {
+            if (!object || !object.visible || !(object.isMesh || object.isSprite) || !object.material) return;
+            const materials = Array.isArray(object.material) ? object.material : [object.material];
+            if (!materials.some(material => material?.visible !== false)) return;
+            changes.push({
+                object,
+                material: object.material,
+                replacement: null
+            });
+        };
+        if (typeof scene.traverseVisible === 'function') scene.traverseVisible(visit);
+        else scene.traverse(visit);
+        return changes;
+    }
+
+    function bloomMaskManifestIsValid(changes) {
+        return Array.isArray(changes) && changes.every(change => (
+            change?.object && change.object.material === change.material
+        ));
+    }
+
+    function createBloomMaskMaterialResolver() {
+        // Uniforms may animate without material.version changing. Share work
+        // within this pass only, so the next frame always reads current values.
+        const statesBySource = new Map();
+        const replacementsBySource = new Map();
+        const getState = source => {
+            if (!statesBySource.has(source)) {
+                statesBySource.set(source, getMaterialEmissiveState(source));
+            }
+            return statesBySource.get(source);
+        };
+        const getReplacement = source => {
+            if (replacementsBySource.has(source)) return replacementsBySource.get(source);
+            const state = getState(source);
+            const replacement = getBloomMaskMaterial(source, state.active, state);
+            replacementsBySource.set(source, replacement);
+            return replacement;
+        };
+        return { getState, getReplacement };
+    }
+
+    function refreshBloomMaskManifest(changes, resolver = createBloomMaskMaterialResolver()) {
+        changes.forEach(change => {
+            const sources = Array.isArray(change.material)
+                ? change.material
+                : [change.material];
+            const replacements = sources.map(resolver.getReplacement);
+            change.replacement = Array.isArray(change.material)
+                ? replacements
+                : replacements[0];
+        });
+    }
+
+    function renderBloomMaskTileFallback(renderPreview, targetContext, tile, sampleFactor, renderSession = null) {
         if (!renderPreview?.renderer || !targetContext || !window.Canvas?.scene) return;
 
         const scene = Canvas.scene;
         const renderer = renderPreview.renderer;
-        const changes = [];
+        const gl = renderer.getContext?.();
+        if (gl?.isContextLost?.()) {
+            throw new Error('Studio Render WebGL context was lost before the bloom mask pass.');
+        }
+        let changes = renderSession?.bloomMaskManifest;
+        let refreshManifest = false;
 
-        scene.traverse(object => {
-            if (!object || !object.visible || !(object.isMesh || object.isSprite) || !object.material) return;
-            const original = object.material;
-            const sourceMaterials = Array.isArray(original) ? original : [original];
-            const replacements = sourceMaterials.map(source => {
-                const state = getMaterialEmissiveState(source);
-                return getBloomMaskMaterial(source, state.active);
-            });
-            changes.push({ object, material: original });
-            object.material = Array.isArray(original) ? replacements : replacements[0];
-        });
+        /*
+         * The object/material topology is stable for a Studio Render session.
+         * Retain it across tiles and only refresh one mask material per unique
+         * source material. This avoids traversing the complete scene and
+         * resolving the same emissive state for every object on every tile.
+         */
+        if (!bloomMaskManifestIsValid(changes)) {
+            changes = buildBloomMaskManifest(scene);
+            refreshManifest = true;
+            if (renderSession) renderSession.bloomMaskManifest = changes;
+        }
+        if (refreshManifest || changes.some(change => !change.replacement)) {
+            refreshBloomMaskManifest(changes);
+        }
 
         const previousTarget = renderer.getRenderTarget?.();
         const previousAutoClear = renderer.autoClear;
@@ -2642,6 +3699,9 @@
         renderer.getClearColor?.(previousClearColor);
 
         try {
+            changes.forEach(change => {
+                change.object.material = change.replacement;
+            });
             renderer.autoClear = true;
             if (renderer.shadowMap) renderer.shadowMap.autoUpdate = false;
             renderer.setRenderTarget?.(null);
@@ -2666,7 +3726,179 @@
         }
     }
 
-    function drawTile(ctx, renderPreview, tile, sampleFactor) {
+    function getStudioUniformValue(uniform) {
+        if (uniform && typeof uniform === 'object' && 'value' in uniform) {
+            return uniform.value;
+        }
+        return uniform;
+    }
+
+    function isStudioUniformEnabled(uniform) {
+        const value = getStudioUniformValue(uniform);
+        return value === true || value === 1 || value === '1' || value === 'true';
+    }
+
+    function materialUsesStudioSurfaceDetail(material) {
+        const uniforms = material?.uniforms;
+        if (!uniforms) return false;
+
+        const reliefEnabled =
+            Object.prototype.hasOwnProperty.call(uniforms, 'TEXTURE_RELIEF_ENABLED') &&
+            isStudioUniformEnabled(uniforms.TEXTURE_RELIEF_ENABLED);
+        const reliefStrength = Number(
+            getStudioUniformValue(uniforms.TEXTURE_RELIEF_STRENGTH) || 0
+        );
+        const reliefWidthUniform = uniforms.TEXTURE_RELIEF_WIDTH;
+        const reliefWidth = reliefWidthUniform === undefined
+            ? 1
+            : Number(getStudioUniformValue(reliefWidthUniform) || 0);
+        const rendercraftRelief =
+            reliefEnabled && reliefStrength > 0.0001 && reliefWidth > 0.00001;
+
+        const nativePbrUniform = uniforms.uUseNativePBR;
+        const nativePbrEnabled = nativePbrUniform === undefined ||
+            isStudioUniformEnabled(nativePbrUniform);
+        const heightDetail =
+            nativePbrEnabled &&
+            isStudioUniformEnabled(uniforms.uUseHeightMap) &&
+            Math.abs(Number(getStudioUniformValue(uniforms.uHeightScale) || 0)) > 0.0001;
+        const normalDetail =
+            nativePbrEnabled &&
+            isStudioUniformEnabled(uniforms.uUseNormalMap) &&
+            Math.abs(Number(getStudioUniformValue(uniforms.uNormalScale) || 0)) > 0.0001;
+
+        return rendercraftRelief || heightDetail || normalDetail;
+    }
+
+    function sceneUsesStudioSurfaceDetail() {
+        if (typeof window.ShaderArchitectGetStudioRenderCapabilities === 'function') {
+            try {
+                const capabilities = window.ShaderArchitectGetStudioRenderCapabilities();
+                if (
+                    capabilities &&
+                    typeof capabilities === 'object' &&
+                    Object.prototype.hasOwnProperty.call(capabilities, 'requiresDetailResolve')
+                ) {
+                    return capabilities.requiresDetailResolve === true;
+                }
+            } catch (error) {
+                console.warn('[Studio Render] Shader Architect capability query failed:', error);
+            }
+        }
+
+        const scene = window.Canvas?.scene;
+        if (!scene || typeof scene.traverse !== 'function') return false;
+        let found = false;
+        scene.traverse(object => {
+            if (found || object?.visible === false || !object?.material) return;
+            const materials = Array.isArray(object.material)
+                ? object.material
+                : [object.material];
+            found = materials.some(materialUsesStudioSurfaceDetail);
+        });
+        return found;
+    }
+
+    const studioSurfaceDetailResolveScratch = [];
+
+    function getStudioSurfaceDetailResolveScratch(index, width, height) {
+        let canvas = studioSurfaceDetailResolveScratch[index];
+        if (!canvas) {
+            canvas = document.createElement('canvas');
+            studioSurfaceDetailResolveScratch[index] = canvas;
+        }
+        const safeWidth = Math.max(1, Math.ceil(width));
+        const safeHeight = Math.max(1, Math.ceil(height));
+        if (canvas.width !== safeWidth) canvas.width = safeWidth;
+        if (canvas.height !== safeHeight) canvas.height = safeHeight;
+        return canvas;
+    }
+
+    function releaseStudioSurfaceDetailResolveScratch() {
+        studioSurfaceDetailResolveScratch.forEach(canvas => {
+            if (!canvas) return;
+            /* Resizing releases Chromium's retained backing store. */
+            canvas.width = 1;
+            canvas.height = 1;
+        });
+        studioSurfaceDetailResolveScratch.length = 0;
+    }
+
+    function resolveStudioSurfaceDetailSource(
+        sourceCanvas,
+        sourceWidth,
+        sourceHeight,
+        destinationWidth,
+        destinationHeight
+    ) {
+        /*
+         * Chromium's one-step 4x/8x canvas reduction can erase narrow normal
+         * lighting bands. Progressively halve the tile until it is at most 2x
+         * the output size. This keeps the resolve deterministic, bounds memory
+         * to two tile-sized scratch canvases and avoids sampling one arbitrary
+         * sub-pixel directly from the original 4x/8x image.
+         */
+        const detailWidth = Math.max(1, Math.ceil(destinationWidth * 2));
+        const detailHeight = Math.max(1, Math.ceil(destinationHeight * 2));
+        let currentCanvas = sourceCanvas;
+        let currentWidth = Math.max(1, Math.ceil(sourceWidth));
+        let currentHeight = Math.max(1, Math.ceil(sourceHeight));
+        let scratchIndex = 0;
+
+        while (currentWidth > detailWidth || currentHeight > detailHeight) {
+            const nextWidth = Math.max(detailWidth, Math.ceil(currentWidth / 2));
+            const nextHeight = Math.max(detailHeight, Math.ceil(currentHeight / 2));
+            if (nextWidth === currentWidth && nextHeight === currentHeight) break;
+
+            const nextCanvas = getStudioSurfaceDetailResolveScratch(
+                scratchIndex % 2,
+                nextWidth,
+                nextHeight
+            );
+            const nextContext = nextCanvas.getContext('2d', { alpha: true });
+            nextContext.save();
+            nextContext.setTransform(1, 0, 0, 1, 0, 0);
+            nextContext.globalCompositeOperation = 'copy';
+            nextContext.globalAlpha = 1;
+            nextContext.imageSmoothingEnabled = true;
+            if ('imageSmoothingQuality' in nextContext) {
+                nextContext.imageSmoothingQuality = 'high';
+            }
+            nextContext.clearRect(0, 0, nextWidth, nextHeight);
+            nextContext.drawImage(
+                currentCanvas,
+                0,
+                0,
+                currentWidth,
+                currentHeight,
+                0,
+                0,
+                nextWidth,
+                nextHeight
+            );
+            nextContext.restore();
+
+            currentCanvas = nextCanvas;
+            currentWidth = nextWidth;
+            currentHeight = nextHeight;
+            scratchIndex++;
+        }
+
+        return {
+            canvas: currentCanvas,
+            width: currentWidth,
+            height: currentHeight
+        };
+    }
+
+    function drawTile(
+        ctx,
+        renderPreview,
+        tile,
+        sampleFactor,
+        preserveSurfaceDetail = false,
+        sourceCanvas = null
+    ) {
         const scale = Math.max(1, Number(sampleFactor) || 1);
 
         const cropLeft = Number(tile.cropX || 0);
@@ -2698,73 +3930,295 @@
         );
         ctx.clip();
 
+        const renderCanvas = sourceCanvas || renderPreview.canvas;
+        const resolvedSource = preserveSurfaceDetail && scale > 1
+            ? resolveStudioSurfaceDetailSource(
+                renderCanvas,
+                sourceWidth,
+                sourceHeight,
+                destinationWidth,
+                destinationHeight
+            )
+            : {
+                canvas: renderCanvas,
+                width: sourceWidth,
+                height: sourceHeight
+            };
+
+        ctx.imageSmoothingEnabled = true;
+        if ('imageSmoothingQuality' in ctx) ctx.imageSmoothingQuality = 'high';
         ctx.drawImage(
-            renderPreview.canvas,
+            resolvedSource.canvas,
             0,
             0,
-            sourceWidth,
-            sourceHeight,
+            resolvedSource.width,
+            resolvedSource.height,
             destinationX,
             destinationY,
             destinationWidth,
             destinationHeight
         );
 
+        /*
+         * Do not blend a nearest-neighbour copy over the resolved tile. Even a
+         * deterministic 2x source still selects one phase of the supersample
+         * grid and can produce tile seams, false edge contrast and AA-dependent
+         * material changes. Texture Relief now guarantees its own final-pixel
+         * coverage in the shader, so progressive high-quality reduction is the
+         * only resolve required here.
+         */
+
         ctx.restore();
     }
 
     async function waitForFrame() {
         await new Promise(resolve => {
+            // Electron can suspend animation frames when minimized/occluded.
+            // Keep render cancellation and its finally cleanup reachable there.
+            let frame = null;
+            let settled = false;
+            const finish = () => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(fallback);
+                if (frame !== null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frame);
+                resolve();
+            };
+            const fallback = setTimeout(finish, typeof document !== 'undefined' && document.hidden ? 0 : 250);
             if (typeof requestAnimationFrame === 'function') {
-                requestAnimationFrame(resolve);
-            } else {
-                setTimeout(resolve, 0);
+                frame = requestAnimationFrame(finish);
             }
         });
     }
 
     async function recoverPreviewShadowsAfterStudioRender(sourcePreview, renderPreview) {
-        if (typeof window.LightManagerPrepareRender !== 'function') return;
+        const targetPreview = sourcePreview || renderPreview;
+        if (!targetPreview) return;
 
-        const previews = [];
-        if (sourcePreview) previews.push(sourcePreview);
-        if (renderPreview && renderPreview !== sourcePreview) previews.push(renderPreview);
-
-        previews.forEach(preview => {
-            window.LightManagerPrepareRender(preview, { force: true, studio: false });
-        });
-
-        if (typeof window.UpdateShaderArchitectLights === 'function') {
-            window.UpdateShaderArchitectLights();
-        } else if (typeof window.updateLights === 'function') {
-            window.updateLights();
+        /*
+         * THREE.Light shadow maps are shared by every preview. Restore their
+         * normal resolution/state once; forcing both renderers and then forcing
+         * the source again caused the visible pause after every photograph.
+         * Light Manager already detects whether resolution/quality changed and
+         * marks the map dirty only when required.
+         */
+        if (typeof window.LightManagerPrepareRender === 'function') {
+            window.LightManagerPrepareRender(targetPreview, {
+                studio: false,
+                source: 'studio_render_restore',
+                allowStudioRestore: true
+            });
         }
 
-        if (sourcePreview && typeof sourcePreview.render === 'function') {
-            await waitForFrame();
-            window.LightManagerPrepareRender(sourcePreview, { force: true, studio: false });
-            renderPreviewWithExactCameraPose(sourcePreview);
+        const updateContext = {
+            studio: true,
+            preview: targetPreview,
+            source: 'studio_render_restore'
+        };
+        if (typeof window.UpdateShaderArchitectLights === 'function') {
+            window.UpdateShaderArchitectLights(updateContext);
+        } else if (typeof window.updateLights === 'function') {
+            window.updateLights(updateContext);
+        }
+
+        // Do not render the source preview while Studio still owns the shared
+        // GPU/shadow state. restoreStudioRenderFlags() schedules exactly one
+        // repaint after every restore step has completed.
+    }
+
+    async function encodeCanvasWithWorker(canvas) {
+        if (
+            typeof Worker === 'undefined' ||
+            typeof OffscreenCanvas === 'undefined' ||
+            typeof createImageBitmap !== 'function' ||
+            typeof URL === 'undefined' ||
+            typeof Blob === 'undefined'
+        ) return null;
+
+        const workerSource = `
+            self.onmessage = async event => {
+                const payload = event.data || {};
+                try {
+                    const canvas = new OffscreenCanvas(payload.width, payload.height);
+                    const context = canvas.getContext('2d', { alpha: true });
+                    if (!context) throw new Error('Offscreen 2D context is unavailable.');
+                    context.drawImage(payload.bitmap, 0, 0);
+                    payload.bitmap.close?.();
+                    const blob = await canvas.convertToBlob({ type: 'image/png' });
+                    self.postMessage({ ok: true, blob });
+                } catch (error) {
+                    self.postMessage({
+                        ok: false,
+                        message: error && error.message ? error.message : String(error)
+                    });
+                }
+            };
+        `;
+
+        const workerUrl = URL.createObjectURL(new Blob([workerSource], {
+            type: 'text/javascript'
+        }));
+        let worker = null;
+        let bitmap = null;
+
+        try {
+            bitmap = await createImageBitmap(canvas);
+            return await new Promise((resolve, reject) => {
+                worker = new Worker(workerUrl);
+                const timeout = setTimeout(() => {
+                    reject(new Error('Background PNG encoding timed out.'));
+                }, 120000);
+
+                worker.onmessage = event => {
+                    clearTimeout(timeout);
+                    const payload = event.data || {};
+                    if (payload.ok && payload.blob) resolve(payload.blob);
+                    else reject(new Error(payload.message || 'Background PNG encoding failed.'));
+                };
+                worker.onerror = event => {
+                    clearTimeout(timeout);
+                    reject(event.error || new Error(event.message || 'Background PNG worker failed.'));
+                };
+                worker.postMessage({
+                    bitmap,
+                    width: canvas.width,
+                    height: canvas.height
+                }, [bitmap]);
+                bitmap = null;
+            });
+        } finally {
+            bitmap?.close?.();
+            worker?.terminate?.();
+            URL.revokeObjectURL(workerUrl);
         }
     }
 
-    async function copyImageToClipboard(dataUrl) {
+    async function canvasToPngBlob(canvas) {
+        if (!canvas) throw new Error('Studio Render canvas is unavailable.');
+
+        try {
+            const workerBlob = await encodeCanvasWithWorker(canvas);
+            if (workerBlob) return workerBlob;
+        } catch (error) {
+            warnStudioRenderOnce(
+                'png-worker-fallback',
+                '[Studio Render] Background PNG encoding was unavailable; using the canvas fallback.',
+                error
+            );
+        }
+
+        if (typeof canvas.toBlob === 'function') {
+            return new Promise((resolve, reject) => {
+                canvas.toBlob(result => {
+                    if (result) resolve(result);
+                    else reject(new Error('PNG encoding returned an empty image.'));
+                }, 'image/png');
+            });
+        }
+
+        const response = await fetch(canvas.toDataURL('image/png'));
+        return response.blob();
+    }
+
+    async function blobToDataUrl(blob) {
+        if (!blob) return '';
+        if (typeof FileReader === 'undefined') {
+            return URL.createObjectURL(blob);
+        }
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result || ''));
+            reader.onerror = () => reject(reader.error || new Error('Could not read the encoded PNG.'));
+            reader.readAsDataURL(blob);
+        });
+    }
+
+    function createTemporaryImageUrl(blob) {
+        const url = URL.createObjectURL(blob);
+        setTimeout(() => URL.revokeObjectURL(url), 120000);
+        return url;
+    }
+
+    async function copyImageToClipboard(image) {
         if (!navigator.clipboard || !navigator.clipboard.write || typeof ClipboardItem === 'undefined') {
             Blockbench.showQuickMessage('message.screenshot.right_click');
             return false;
         }
-        const response = await fetch(dataUrl);
-        const blob = await response.blob();
+        const blob = image instanceof Blob
+            ? image
+            : await (await fetch(image)).blob();
         await navigator.clipboard.write([
             new ClipboardItem({
-                [blob.type]: blob
+                [blob.type || 'image/png']: blob
             })
         ]);
         Blockbench.showQuickMessage(translate('studio_render.message.copied', 'Studio render copied to clipboard'));
         return true;
     }
 
-    function applyFinalBloom(canvas, settings, sourceMaskCanvas, options = {}) {
-        if (!canvas || !settings?.bloom_enabled) return canvas;
+    function studioBloomHasVisibleContribution(settings) {
+        if (!settings?.bloom_enabled) return false;
+        const strength = clamp(
+            toNumber(settings.bloom_strength, DEFAULT_SETTINGS.bloom_strength),
+            0,
+            3
+        );
+        const coreStrength = clamp(
+            toNumber(settings.bloom_core_strength, DEFAULT_SETTINGS.bloom_core_strength),
+            0,
+            2
+        );
+        const haloStrength = clamp(
+            toNumber(settings.bloom_halo_strength, DEFAULT_SETTINGS.bloom_halo_strength),
+            0,
+            2
+        );
+        const hdrStrength = clamp(
+            toNumber(settings.bloom_hdr_strength, DEFAULT_SETTINGS.bloom_hdr_strength),
+            0,
+            4
+        );
+        const emissiveStrength = clamp(
+            toNumber(settings.bloom_emissive_strength, DEFAULT_SETTINGS.bloom_emissive_strength),
+            0,
+            8
+        );
+        return strength > 0 &&
+            (coreStrength > 0 || haloStrength > 0) &&
+            (hdrStrength > 0 || emissiveStrength > 0);
+    }
+
+    const CPU_FALLBACK_BLOOM_DIVISORS = Object.freeze([2, 4, 8]);
+
+    function createCPUFallbackBloomPyramidPlan(width, height, settings, radiusScale = 1) {
+        const safeWidth = Math.max(1, Math.round(width || 1));
+        const safeHeight = Math.max(1, Math.round(height || 1));
+        const strength = clamp(toNumber(settings.bloom_strength, DEFAULT_SETTINGS.bloom_strength), 0, 3);
+        const coreStrength = clamp(toNumber(settings.bloom_core_strength, DEFAULT_SETTINGS.bloom_core_strength), 0, 2);
+        const haloStrength = clamp(toNumber(settings.bloom_halo_strength, DEFAULT_SETTINGS.bloom_halo_strength), 0, 2);
+        const coreRadius = clamp(
+            toNumber(settings.bloom_core_radius, DEFAULT_SETTINGS.bloom_core_radius),
+            0.25,
+            12
+        ) * radiusScale;
+        const haloRadius = clamp(
+            toNumber(settings.bloom_radius, DEFAULT_SETTINGS.bloom_radius),
+            1,
+            128
+        ) * radiusScale;
+        const weights = [coreStrength, haloStrength * 0.62, haloStrength * 0.38];
+        return Object.freeze(CPU_FALLBACK_BLOOM_DIVISORS.map((divisor, index) => Object.freeze({
+            index,
+            divisor,
+            width: Math.max(2, Math.round(safeWidth / divisor)),
+            height: Math.max(2, Math.round(safeHeight / divisor)),
+            sourceRadius: index === 0 ? coreRadius : haloRadius,
+            weight: weights[index] * strength
+        })));
+    }
+
+    function applyFinalBloomCPUFallback(canvas, settings, sourceMaskCanvas, options = {}) {
+        if (!canvas || !studioBloomHasVisibleContribution(settings)) return canvas;
 
         const sourceMask = sourceMaskCanvas || canvas;
         const maxMaskDimension = Math.max(64, Number(options.maxDimension) || 4096);
@@ -2775,24 +4229,24 @@
         const width = Math.max(1, Math.round(Number(options.processingWidth) || canvas.width * sourceScale));
         const height = Math.max(1, Math.round(Number(options.processingHeight) || canvas.height * sourceScale));
         const radiusScale = Math.min(width / Math.max(canvas.width || 1, 1), height / Math.max(canvas.height || 1, 1));
-        const threshold = clamp(toNumber(settings.bloom_threshold, 0.72), 0, 1);
-        const strength = clamp(toNumber(settings.bloom_strength, 0.8), 0, 3);
-        const radius = clamp(toNumber(settings.bloom_radius, 18), 1, 96) * radiusScale;
-        const hdrStrength = clamp(toNumber(settings.bloom_hdr_strength, 1), 0, 4);
-        const emissiveStrength = clamp(toNumber(settings.bloom_emissive_strength, 1.35), 0, 6);
+        const threshold = clamp(toNumber(settings.bloom_threshold, DEFAULT_SETTINGS.bloom_threshold), 0, 4);
+        const softKnee = clamp(toNumber(settings.bloom_soft_knee, DEFAULT_SETTINGS.bloom_soft_knee), 0, 1);
+        const hdrStrength = clamp(toNumber(settings.bloom_hdr_strength, DEFAULT_SETTINGS.bloom_hdr_strength), 0, 4);
+        const emissiveStrength = clamp(toNumber(settings.bloom_emissive_strength, DEFAULT_SETTINGS.bloom_emissive_strength), 0, 8);
         const useOcclusion = settings.bloom_occlusion !== false;
         const includeSceneSignal = options.emissiveOnly !== true;
         const workspace = options.workspace || null;
-        const getWorkingCanvas = key => {
+        const getSizedWorkingCanvas = (key, targetWidth, targetHeight) => {
             let target = workspace?.[key];
             if (!target) {
                 target = document.createElement('canvas');
                 if (workspace) workspace[key] = target;
             }
-            if (target.width !== width) target.width = width;
-            if (target.height !== height) target.height = height;
+            if (target.width !== targetWidth) target.width = targetWidth;
+            if (target.height !== targetHeight) target.height = targetHeight;
             return target;
         };
+        const getWorkingCanvas = key => getSizedWorkingCanvas(key, width, height);
 
         const mask = getWorkingCanvas('processingMask');
         const maskContext = mask.getContext('2d', { willReadFrequently: true });
@@ -2816,34 +4270,71 @@
         const pixels = maskImage.data;
         const scenePixels = sceneImage?.data || null;
         const blockerPixels = blockerImage.data;
+        const bloomLogRange = 4.0874628413;
+        const decodeBloomChannel = value => Math.max(
+            0,
+            Math.pow(2, clamp(value, 0, 1) * bloomLogRange) - 1
+        );
+        const sRGBToLinearChannel = value => value <= 0.04045
+            ? value / 12.92
+            : Math.pow((value + 0.055) / 1.055, 2.4);
+        const bloomContribution = signal => {
+            if (signal <= 0.000001) return 0;
+            if (softKnee <= 0.000001 || threshold <= 0.000001) {
+                return clamp((signal - threshold) / signal, 0, 1);
+            }
+            const knee = Math.max(threshold * softKnee, 0.00001);
+            let soft = clamp(signal - threshold + knee, 0, 2 * knee);
+            soft = soft * soft / Math.max(4 * knee, 0.00001);
+            return clamp(Math.max(signal - threshold, soft) / signal, 0, 1);
+        };
 
         for (let index = 0; index < pixels.length; index += 4) {
             const geometryAlpha = pixels[index + 3] / 255;
-            const emissionR = pixels[index] / 255 * emissiveStrength;
-            const emissionG = pixels[index + 1] / 255 * emissiveStrength;
-            const emissionB = pixels[index + 2] / 255 * emissiveStrength;
-            const sceneR = scenePixels ? scenePixels[index] / 255 * hdrStrength : 0;
-            const sceneG = scenePixels ? scenePixels[index + 1] / 255 * hdrStrength : 0;
-            const sceneB = scenePixels ? scenePixels[index + 2] / 255 * hdrStrength : 0;
+            const emissionR = decodeBloomChannel(pixels[index] / 255) * emissiveStrength;
+            const emissionG = decodeBloomChannel(pixels[index + 1] / 255) * emissiveStrength;
+            const emissionB = decodeBloomChannel(pixels[index + 2] / 255) * emissiveStrength;
+            const sceneR = scenePixels
+                ? sRGBToLinearChannel(scenePixels[index] / 255) * hdrStrength
+                : 0;
+            const sceneG = scenePixels
+                ? sRGBToLinearChannel(scenePixels[index + 1] / 255) * hdrStrength
+                : 0;
+            const sceneB = scenePixels
+                ? sRGBToLinearChannel(scenePixels[index + 2] / 255) * hdrStrength
+                : 0;
 
             const hdrSignal = geometryAlpha > 0.001
                 ? Math.max(sceneR, sceneG, sceneB)
                 : 0;
             const emissiveSignal = Math.max(emissionR, emissionG, emissionB);
-            const signal = Math.max(hdrSignal, emissiveSignal);
-            const contribution = clamp(
-                (signal - threshold) / Math.max(0.001, 1 - threshold),
+            const emissiveContribution = emissiveSignal > 0.000001 ? 1 : 0;
+            const hdrContribution = bloomContribution(hdrSignal);
+            const contribution = Math.max(emissiveContribution, hdrContribution);
+
+            const combinedR = Math.max(
+                sceneR * hdrContribution,
+                emissionR * emissiveContribution
+            );
+            const combinedG = Math.max(
+                sceneG * hdrContribution,
+                emissionG * emissiveContribution
+            );
+            const combinedB = Math.max(
+                sceneB * hdrContribution,
+                emissionB * emissiveContribution
+            );
+            const combinedPeak = Math.max(combinedR, combinedG, combinedB, 0.0001);
+            const mappedPeak = clamp(
+                Math.log2(1 + combinedPeak) / bloomLogRange,
                 0,
                 1
             );
-
-            const combinedR = Math.max(sceneR, emissionR);
-            const combinedG = Math.max(sceneG, emissionG);
-            const combinedB = Math.max(sceneB, emissionB);
-            pixels[index] = Math.round(255 * clamp(combinedR * contribution, 0, 1));
-            pixels[index + 1] = Math.round(255 * clamp(combinedG * contribution, 0, 1));
-            pixels[index + 2] = Math.round(255 * clamp(combinedB * contribution, 0, 1));
-            pixels[index + 3] = Math.round(255 * contribution);
+            const bloomScale = mappedPeak / combinedPeak;
+            pixels[index] = Math.round(255 * clamp(combinedR * bloomScale, 0, 1));
+            pixels[index + 1] = Math.round(255 * clamp(combinedG * bloomScale, 0, 1));
+            pixels[index + 2] = Math.round(255 * clamp(combinedB * bloomScale, 0, 1));
+            pixels[index + 3] = Math.round(255 * contribution * geometryAlpha);
 
             const blockerAlpha = useOcclusion && geometryAlpha > 0.001
                 ? geometryAlpha * (1 - contribution)
@@ -2860,16 +4351,29 @@
         const bloomContext = bloomLayer.getContext('2d');
         bloomContext.clearRect(0, 0, width, height);
         bloomContext.globalCompositeOperation = 'lighter';
+        bloomContext.filter = 'none';
 
-        const drawBloomLayer = (blur, alpha) => {
-            bloomContext.globalAlpha = clamp(alpha * strength, 0, 1);
-            bloomContext.filter = `blur(${Math.max(0.5, blur)}px)`;
-            bloomContext.drawImage(mask, 0, 0, width, height);
-        };
+        const pyramidPlan = createCPUFallbackBloomPyramidPlan(width, height, settings, radiusScale);
+        let pyramidInput = mask;
+        pyramidPlan.forEach(level => {
+            const levelCanvas = getSizedWorkingCanvas(
+                `bloomPyramid${level.index}`,
+                level.width,
+                level.height
+            );
+            const levelContext = levelCanvas.getContext('2d');
+            levelContext.clearRect(0, 0, level.width, level.height);
+            levelContext.globalCompositeOperation = 'copy';
+            levelContext.globalAlpha = 1;
+            levelContext.filter = `blur(${Math.max(0.5, level.sourceRadius / level.divisor)}px)`;
+            levelContext.drawImage(pyramidInput, 0, 0, level.width, level.height);
+            levelContext.filter = 'none';
+            pyramidInput = levelCanvas;
 
-        drawBloomLayer(radius * 2.4, 0.20);
-        drawBloomLayer(radius * 1.05, 0.42);
-        drawBloomLayer(radius * 0.38, 0.56);
+            if (level.weight <= 0.000001) return;
+            bloomContext.globalAlpha = clamp(level.weight, 0, 1);
+            bloomContext.drawImage(levelCanvas, 0, 0, width, height);
+        });
 
         if (useOcclusion) {
             bloomContext.globalCompositeOperation = 'destination-out';
@@ -2946,16 +4450,511 @@
         target.scissorTest = false;
     }
 
-    function createViewportPostTarget(width, height, name, depthBuffer = false) {
+    function supportsViewportHalfFloat(renderer) {
+        if (!renderer || THREE.HalfFloatType === undefined) return false;
+        const centralCapabilities = window.LightflowRenderer?.getCapabilities?.(renderer, {
+            probeHalfFloat: true
+        });
+        if (centralCapabilities && typeof centralCapabilities.halfFloatRenderable === 'boolean') {
+            return centralCapabilities.halfFloatRenderable;
+        }
+        const extensions = renderer.extensions;
+        const hasExtension = name => !!(
+            extensions?.has?.(name) ||
+            extensions?.get?.(name)
+        );
+        if (renderer.capabilities?.isWebGL2) {
+            return hasExtension('EXT_color_buffer_float') ||
+                hasExtension('EXT_color_buffer_half_float');
+        }
+        return hasExtension('OES_texture_half_float') &&
+            hasExtension('EXT_color_buffer_half_float');
+    }
+
+    function probeStudioHalfFloatFramebuffer(renderer) {
+        if (!renderer || THREE.HalfFloatType === undefined || !THREE.WebGLRenderTarget) {
+            return false;
+        }
+        if (STUDIO_HDR_CAPABILITIES.has(renderer)) {
+            return STUDIO_HDR_CAPABILITIES.get(renderer);
+        }
+        const centralCapabilities = window.LightflowRenderer?.getCapabilities?.(renderer, {
+            probeHalfFloat: true
+        });
+        if (centralCapabilities && typeof centralCapabilities.halfFloatRenderable === 'boolean') {
+            STUDIO_HDR_CAPABILITIES.set(renderer, centralCapabilities.halfFloatRenderable);
+            return centralCapabilities.halfFloatRenderable;
+        }
+        if (!supportsViewportHalfFloat(renderer)) {
+            STUDIO_HDR_CAPABILITIES.set(renderer, false);
+            return false;
+        }
+
+        let target = null;
+        let supported = false;
+        const snapshot = snapshotViewportRendererState(renderer);
+        try {
+            target = new THREE.WebGLRenderTarget(2, 2, {
+                minFilter: THREE.NearestFilter,
+                magFilter: THREE.NearestFilter,
+                format: THREE.RGBAFormat,
+                type: THREE.HalfFloatType,
+                depthBuffer: false,
+                stencilBuffer: false
+            });
+            target.texture.generateMipmaps = false;
+            if (THREE.LinearEncoding !== undefined) target.texture.encoding = THREE.LinearEncoding;
+            renderer.setRenderTarget(target);
+            renderer.clear(true, false, false);
+            const gl = renderer.getContext?.();
+            supported = !!(
+                gl &&
+                gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE
+            );
+        } catch (error) {
+            supported = false;
+        } finally {
+            restoreViewportRendererState(renderer, snapshot);
+            target?.dispose?.();
+        }
+        STUDIO_HDR_CAPABILITIES.set(renderer, supported);
+        return supported;
+    }
+
+    const STUDIO_SRGB_TO_LINEAR_LUT = (() => {
+        const lut = new Float32Array(256);
+        for (let i = 0; i < 256; i++) {
+            const value = i / 255;
+            lut[i] = value <= 0.04045
+                ? value / 12.92
+                : Math.pow((value + 0.055) / 1.055, 2.4);
+        }
+        return lut;
+    })();
+
+    function studioLinearToSRGB(value) {
+        const v = Math.max(0, Math.min(1, Number(value) || 0));
+        return v <= 0.0031308
+            ? v * 12.92
+            : 1.055 * Math.pow(v, 1 / 2.4) - 0.055;
+    }
+
+    function studioDither01(x, y, seed) {
+        // Deterministic integer hash: stable across tiles/runs, no Math.sin cost.
+        let h = ((x + 1) * 0x1f123bb5) ^ ((y + 1) * 0x05491333) ^ ((seed | 0) * 0x27d4eb2d);
+        h ^= h >>> 15;
+        h = Math.imul(h, 0x85ebca6b);
+        h ^= h >>> 13;
+        return ((h >>> 24) & 255) / 255;
+    }
+
+    function createStudioCpuLinearAccumulator(width, height) {
+        const scratchCanvas = createCanvas(width, height);
+        const scratchContext = scratchCanvas?.getContext('2d', {
+            alpha: true,
+            willReadFrequently: true
+        }) || null;
+        const outputCanvas = createCanvas(width, height);
+        const outputContext = outputCanvas?.getContext('2d', {
+            alpha: true,
+            willReadFrequently: true
+        }) || null;
+        if (!scratchContext || !outputContext) return null;
+
+        let average = new Float32Array(width * height * 4);
+        let disposed = false;
+        activeStudioAccumulatorBytes = average.byteLength + width * height * 8;
+        lastStudioAccumulationMode = 'cpu_linear_float32';
+
+        return {
+            canvas: outputCanvas,
+            async accumulate(sampleIndex, sourceCanvas) {
+                if (disposed || !sourceCanvas) return false;
+                scratchContext.setTransform(1, 0, 0, 1, 0, 0);
+                scratchContext.globalCompositeOperation = 'copy';
+                scratchContext.globalAlpha = 1;
+                scratchContext.drawImage(sourceCanvas, 0, 0, width, height);
+                const pixels = scratchContext.getImageData(0, 0, width, height).data;
+                const weight = 1 / Math.max(1, sampleIndex + 1);
+                const lut = STUDIO_SRGB_TO_LINEAR_LUT;
+                const length = pixels.length;
+                for (let i = 0; i < length; i += 4) {
+                    average[i] += (lut[pixels[i]] - average[i]) * weight;
+                    average[i + 1] += (lut[pixels[i + 1]] - average[i + 1]) * weight;
+                    average[i + 2] += (lut[pixels[i + 2]] - average[i + 2]) * weight;
+                    const alpha = pixels[i + 3] / 255;
+                    average[i + 3] += (alpha - average[i + 3]) * weight;
+                }
+                // Give Chromium a delivery point for context-loss/input events
+                // between supersamples instead of monopolizing one JS turn.
+                await waitForFrame();
+                return true;
+            },
+            resolveToCanvas(seed = 0) {
+                if (disposed) return outputCanvas;
+                const image = outputContext.createImageData(width, height);
+                const out = image.data;
+                let pixelIndex = 0;
+                for (let i = 0; i < out.length; i += 4, pixelIndex++) {
+                    const x = pixelIndex % width;
+                    const y = Math.floor(pixelIndex / width);
+                    const dither = (studioDither01(x, y, seed) - 0.5) / 255;
+                    out[i] = Math.max(0, Math.min(255, Math.round((studioLinearToSRGB(average[i]) + dither) * 255)));
+                    out[i + 1] = Math.max(0, Math.min(255, Math.round((studioLinearToSRGB(average[i + 1]) + dither) * 255)));
+                    out[i + 2] = Math.max(0, Math.min(255, Math.round((studioLinearToSRGB(average[i + 2]) + dither) * 255)));
+                    out[i + 3] = Math.max(0, Math.min(255, Math.round(average[i + 3] * 255)));
+                }
+                outputContext.putImageData(image, 0, 0);
+                return outputCanvas;
+            },
+            dispose() {
+                if (disposed) return;
+                disposed = true;
+                average = new Float32Array(0);
+                scratchCanvas.width = scratchCanvas.height = 1;
+                outputCanvas.width = outputCanvas.height = 1;
+                activeStudioAccumulatorBytes = 0;
+            }
+        };
+    }
+
+    function getStudioWebGLErrorName(gl, error) {
+        if (!gl) return String(error);
+        const names = [
+            'INVALID_ENUM', 'INVALID_VALUE', 'INVALID_OPERATION',
+            'INVALID_FRAMEBUFFER_OPERATION', 'OUT_OF_MEMORY', 'CONTEXT_LOST_WEBGL'
+        ];
+        return names.find(name => gl[name] === error) || `0x${Number(error).toString(16)}`;
+    }
+
+    function drainStudioWebGLErrors(renderer) {
+        const central = window.LightflowRenderer?.drainErrors?.(renderer);
+        if (Array.isArray(central)) return central;
+        const gl = getRendererContext(renderer);
+        if (!gl?.getError) return [];
+        const errors = [];
+        for (let index = 0; index < 16; index++) {
+            const error = gl.getError();
+            if (error === gl.NO_ERROR) break;
+            errors.push(error);
+        }
+        return errors;
+    }
+
+    function beginStudioWebGLErrorScope(renderer) {
+        drainStudioWebGLErrors(renderer);
+    }
+
+    function assertStudioWebGLHealthy(renderer, stage, session = null) {
+        const gl = getRendererContext(renderer);
+        if (!gl || gl.isContextLost?.()) {
+            throw new Error(`Studio Render lost its WebGL context during ${stage}.`);
+        }
+        const errors = drainStudioWebGLErrors(renderer);
+        if (!errors.length) return true;
+        const names = errors.map(error => getStudioWebGLErrorName(gl, error));
+        if (session) {
+            session.webglErrorCount = (session.webglErrorCount || 0) + errors.length;
+            session.lastWebGLErrorStage = stage;
+            session.lastWebGLErrors = names.slice();
+        }
+        throw new Error(`Studio Render WebGL error during ${stage}: ${names.join(', ')}`);
+    }
+
+    async function waitForStudioGpuFence(renderer, session = null, maxFrames = 180) {
+        const fenceStartedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+        const finishFenceTelemetry = outcome => {
+            if (!session) return;
+            const finishedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+            const durationMs = Math.max(0, finishedAt - fenceStartedAt);
+            session.gpuFenceCount = (session.gpuFenceCount || 0) + 1;
+            session.maxGpuFenceMs = Math.max(Number(session.maxGpuFenceMs) || 0, durationMs);
+            session.lastGpuFenceOutcome = outcome || 'unknown';
+            if (outcome === 'failed') session.gpuFenceFailures = (session.gpuFenceFailures || 0) + 1;
+            if (outcome === 'timeout') session.gpuFenceTimeouts = (session.gpuFenceTimeouts || 0) + 1;
+            if (window.LightflowStudioRenderDiagnostics) {
+                window.LightflowStudioRenderDiagnostics.gpuFenceCount = session.gpuFenceCount;
+                window.LightflowStudioRenderDiagnostics.maxGpuFenceMs = session.maxGpuFenceMs;
+                window.LightflowStudioRenderDiagnostics.lastGpuFenceOutcome = session.lastGpuFenceOutcome;
+                window.LightflowStudioRenderDiagnostics.gpuFenceFailures = session.gpuFenceFailures || 0;
+                window.LightflowStudioRenderDiagnostics.gpuFenceTimeouts = session.gpuFenceTimeouts || 0;
+            }
+        };
+        const gl = getRendererContext(renderer);
+        if (!gl || gl.isContextLost?.()) {
+            throw new Error('Studio Render WebGL context was lost while waiting for the GPU.');
+        }
+        if (typeof gl.fenceSync !== 'function' || typeof gl.clientWaitSync !== 'function') {
+            await waitForFrame();
+            finishFenceTelemetry('frame_fallback');
+            return true;
+        }
+        let sync = null;
+        try {
+            sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+            gl.flush();
+            for (let frame = 0; frame < maxFrames; frame++) {
+                if (session?.cancelled) return false;
+                if (gl.isContextLost?.()) {
+                    throw new Error('Studio Render WebGL context was lost while the GPU was finishing a tile.');
+                }
+                const status = gl.clientWaitSync(sync, 0, 0);
+                if (status === gl.ALREADY_SIGNALED || status === gl.CONDITION_SATISFIED) {
+                    finishFenceTelemetry('signaled');
+                    return true;
+                }
+                if (status === gl.WAIT_FAILED) {
+                    finishFenceTelemetry('failed');
+                    return false;
+                }
+                await waitForFrame();
+            }
+            finishFenceTelemetry('timeout');
+            return false;
+        } finally {
+            if (sync && !gl.isContextLost?.()) {
+                try { gl.deleteSync(sync); } catch (error) {}
+            }
+        }
+    }
+
+    async function requireStudioGpuFence(renderer, session = null, maxFrames = 180) {
+        const completed = await waitForStudioGpuFence(renderer, session, maxFrames);
+        if (!completed && !session?.cancelled) {
+            throw new Error('Studio Render GPU fence failed or timed out; refusing to read or reuse incomplete GPU work.');
+        }
+        return completed;
+    }
+
+    function shouldUseStudioGpuAccumulator(renderer, sampleCount = 1) {
+        if (Math.max(1, Number(sampleCount) || 1) <= 1) return false;
+        if (!renderer?.capabilities?.isWebGL2) return false;
+        // Capability-driven only. Vendor/renderer strings are diagnostics, not
+        // correctness or feature gates.
+        return probeStudioHalfFloatFramebuffer(renderer);
+    }
+
+    function createStudioGpuAccumulator(renderer, width, height, linearHDR, sampleCount = 1) {
+        if (!probeStudioHalfFloatFramebuffer(renderer)) return null;
+        const targetOptions = {
+            minFilter: THREE.LinearFilter,
+            magFilter: THREE.LinearFilter,
+            format: THREE.RGBAFormat,
+            type: THREE.HalfFloatType,
+            depthBuffer: false,
+            stencilBuffer: false
+        };
+        const averageTarget = new THREE.WebGLRenderTarget(width, height, targetOptions);
+        averageTarget.texture.name = 'StudioRender_AverageAdditive';
+        averageTarget.texture.generateMipmaps = false;
+        if (THREE.LinearEncoding !== undefined) averageTarget.texture.encoding = THREE.LinearEncoding;
+        configureViewportPostTarget(averageTarget, width, height);
+
+        const geometry = new (THREE.PlaneGeometry || THREE.PlaneBufferGeometry)(2, 2);
+        const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+        const scene = new THREE.Scene();
+        const accumulationMaterial = new THREE.ShaderMaterial({
+            depthTest: false,
+            depthWrite: false,
+            transparent: true,
+            toneMapped: false,
+            blending: THREE.CustomBlending,
+            blendEquation: THREE.AddEquation,
+            blendSrc: THREE.OneFactor,
+            blendDst: THREE.OneFactor,
+            blendEquationAlpha: THREE.AddEquation,
+            blendSrcAlpha: THREE.OneFactor,
+            blendDstAlpha: THREE.OneFactor,
+            uniforms: {
+                tSample: { value: null },
+                uWeight: { value: 1 / Math.max(1, Number(sampleCount) || 1) },
+                uDecodeSRGB: { value: linearHDR ? 0 : 1 }
+            },
+            vertexShader: 'varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position.xy,0.0,1.0); }',
+            fragmentShader: `
+                precision highp float;
+                varying vec2 vUv;
+                uniform sampler2D tSample;
+                uniform float uWeight;
+                uniform float uDecodeSRGB;
+                vec3 srgbToLinear(vec3 value) {
+                    vec3 lower = value / 12.92;
+                    vec3 upper = pow(max((value + 0.055) / 1.055, vec3(0.0)), vec3(2.4));
+                    return mix(lower, upper, step(vec3(0.04045), value));
+                }
+                void main() {
+                    vec4 sampleValue = texture2D(tSample, vUv);
+                    if (uDecodeSRGB > 0.5) sampleValue.rgb = srgbToLinear(sampleValue.rgb);
+                    gl_FragColor = sampleValue * uWeight;
+                }
+            `
+        });
+        const resolveMaterial = new THREE.ShaderMaterial({
+            depthTest: false,
+            depthWrite: false,
+            transparent: false,
+            toneMapped: false,
+            uniforms: {
+                tAverage: { value: averageTarget.texture },
+                uApplyToneMap: { value: linearHDR ? 1 : 0 },
+                uResolution: { value: new THREE.Vector2(width, height) },
+                uDitherSeed: { value: 0 }
+            },
+            vertexShader: 'varying vec2 vUv; void main(){ vUv=uv; gl_Position=vec4(position.xy,0.0,1.0); }',
+            fragmentShader: `
+                precision highp float;
+                varying vec2 vUv;
+                uniform sampler2D tAverage;
+                uniform float uApplyToneMap;
+                uniform vec2 uResolution;
+                uniform float uDitherSeed;
+                vec3 neutralToneMap(vec3 color) {
+                    color = max(color, vec3(0.0));
+                    float startCompression = 0.76;
+                    float desaturation = 0.15;
+                    float darkest = min(color.r, min(color.g, color.b));
+                    float offset = darkest < 0.08
+                        ? darkest - 6.25 * darkest * darkest
+                        : 0.04;
+                    color -= vec3(offset);
+                    float peak = max(color.r, max(color.g, color.b));
+                    if (peak < startCompression) return max(color, vec3(0.0));
+                    float distanceToWhite = 1.0 - startCompression;
+                    float compressedPeak = 1.0 - distanceToWhite * distanceToWhite /
+                        max(peak + distanceToWhite - startCompression, 0.0001);
+                    color *= compressedPeak / max(peak, 0.0001);
+                    float amount = 1.0 - 1.0 /
+                        (desaturation * max(peak - compressedPeak, 0.0) + 1.0);
+                    return mix(color, vec3(compressedPeak), amount);
+                }
+                vec3 linearToSRGB(vec3 value) {
+                    value = max(value, vec3(0.0));
+                    vec3 lower = value * 12.92;
+                    vec3 upper = 1.055 * pow(value, vec3(1.0 / 2.4)) - 0.055;
+                    return mix(lower, upper, step(vec3(0.0031308), value));
+                }
+                float noise(vec2 pixel) {
+                    return fract(sin(dot(pixel + uDitherSeed, vec2(12.9898, 78.233))) * 43758.5453);
+                }
+                void main() {
+                    vec4 averageValue = texture2D(tAverage, vUv);
+                    vec3 linearColor = uApplyToneMap > 0.5
+                        ? neutralToneMap(averageValue.rgb)
+                        : max(averageValue.rgb, vec3(0.0));
+                    vec3 outputColor = linearToSRGB(linearColor);
+                    float dither = (noise(gl_FragCoord.xy) - 0.5) / 255.0;
+                    gl_FragColor = vec4(clamp(outputColor + dither, 0.0, 1.0), averageValue.a);
+                }
+            `
+        });
+        const quad = new THREE.Mesh(geometry, accumulationMaterial);
+        quad.frustumCulled = false;
+        scene.add(quad);
+        let disposed = false;
+        let cleared = false;
+        // One RGBA16F additive target plus the RGBA8 canvas upload. Compared
+        // with the old ping-pong average this halves half-float residency and
+        // removes the previous-average texture fetch from every sample.
+        activeStudioAccumulatorBytes = width * height * (8 + 4);
+        lastStudioAccumulationMode = linearHDR ? 'gpu_additive_linear_hdr' : 'gpu_additive_linear_sdr';
+
+        const renderFullscreen = material => {
+            quad.material = material;
+            renderer.render(scene, camera);
+        };
+        const primePrograms = () => {
+            // Framebuffer dimensions do not make GLSL translation/link cheaper.
+            // Compile with the exact target/output contexts and a 1x1 viewport so
+            // helper programs are discovered before a full-tile draw without doing
+            // meaningful raster work. Rendercraft itself is precompiled separately.
+            const snapshot = snapshotViewportRendererState(renderer);
+            try {
+                renderer.setRenderTarget(averageTarget);
+                renderer.setViewport(0, 0, 1, 1);
+                renderer.setScissorTest(false);
+                quad.material = accumulationMaterial;
+                renderer.compile(scene, camera);
+
+                renderer.setRenderTarget(null);
+                renderer.setViewport(0, 0, 1, 1);
+                renderer.setScissorTest(false);
+                quad.material = resolveMaterial;
+                renderer.compile(scene, camera);
+            } finally {
+                quad.material = accumulationMaterial;
+                restoreViewportRendererState(renderer, snapshot);
+            }
+            return true;
+        };
+        return {
+            linearHDR,
+            primePrograms,
+            accumulate(sampleIndex, sampleTexture) {
+                if (!sampleTexture?.isTexture) return false;
+                const snapshot = snapshotViewportRendererState(renderer);
+                try {
+                    accumulationMaterial.uniforms.tSample.value = sampleTexture;
+                    renderer.autoClear = false;
+                    renderer.setRenderTarget(averageTarget);
+                    renderer.setViewport(0, 0, width, height);
+                    renderer.setScissorTest(false);
+                    if (!cleared || sampleIndex === 0) {
+                        const oldColor = new THREE.Color();
+                        renderer.getClearColor?.(oldColor);
+                        const oldAlpha = renderer.getClearAlpha?.() ?? 1;
+                        renderer.setClearColor?.(0x000000, 0);
+                        renderer.clear(true, false, false);
+                        renderer.setClearColor?.(oldColor, oldAlpha);
+                        cleared = true;
+                    }
+                    renderFullscreen(accumulationMaterial);
+                } finally {
+                    restoreViewportRendererState(renderer, snapshot);
+                }
+                return true;
+            },
+            resolveToCanvas(seed = 0) {
+                resolveMaterial.uniforms.tAverage.value = averageTarget.texture;
+                resolveMaterial.uniforms.uDitherSeed.value = Number(seed) || 0;
+                renderer.autoClear = true;
+                renderer.setRenderTarget(null);
+                renderer.setViewport(0, 0, width, height);
+                renderer.setScissorTest(false);
+                renderer.clear(true, true, true);
+                renderFullscreen(resolveMaterial);
+            },
+            dispose() {
+                if (disposed) return;
+                disposed = true;
+                averageTarget.dispose?.();
+                accumulationMaterial.dispose?.();
+                resolveMaterial.dispose?.();
+                geometry.dispose?.();
+                activeStudioAccumulatorBytes = 0;
+            }
+        };
+    }
+
+    function createViewportPostTarget(
+        width,
+        height,
+        name,
+        depthBuffer = false,
+        hdr = false,
+        renderer = null
+    ) {
+        const useHalfFloat = hdr && supportsViewportHalfFloat(renderer);
         const target = new THREE.WebGLRenderTarget(width, height, {
             minFilter: THREE.LinearFilter,
             magFilter: THREE.LinearFilter,
             format: THREE.RGBAFormat,
-            type: THREE.UnsignedByteType,
+            type: useHalfFloat ? THREE.HalfFloatType : THREE.UnsignedByteType,
             depthBuffer,
             stencilBuffer: false
         });
         target.texture.name = name;
+        target.texture.userData = target.texture.userData || {};
+        target.texture.userData.studioRenderHDR = useHalfFloat;
         target.texture.generateMipmaps = false;
         configureViewportPostTarget(target, width, height);
         return target;
@@ -3001,41 +5000,1136 @@
         };
     }
 
-    function renderViewportBloomMask(preview, state, width, height) {
+    function createBloomLevelPlan(width, height, settings, profile) {
+        const levels = [{ width: Math.max(1, width), height: Math.max(1, height), index: 0 }];
+        const haloRadius = clamp(toNumber(settings.bloom_radius, DEFAULT_SETTINGS.bloom_radius), 1, 128);
+        const desiredLevels = clamp(
+            2 + Math.ceil(Math.log2(1 + haloRadius / 4)),
+            2,
+            Math.max(2, Number(profile.maxLevels) || 5)
+        );
+        while (levels.length < desiredLevels) {
+            const previous = levels[levels.length - 1];
+            const nextWidth = Math.max(1, Math.round(previous.width / 2));
+            const nextHeight = Math.max(1, Math.round(previous.height / 2));
+            if (
+                levels.length >= 2 &&
+                Math.min(nextWidth, nextHeight) < Math.max(4, Number(profile.minMipSize) || 8)
+            ) break;
+            levels.push({ width: nextWidth, height: nextHeight, index: levels.length });
+            if (nextWidth <= 2 || nextHeight <= 2) break;
+        }
+
+        const strength = clamp(toNumber(settings.bloom_strength, DEFAULT_SETTINGS.bloom_strength), 0, 3);
+        const coreStrength = clamp(toNumber(settings.bloom_core_strength, DEFAULT_SETTINGS.bloom_core_strength), 0, 2);
+        const haloStrength = clamp(toNumber(settings.bloom_halo_strength, DEFAULT_SETTINGS.bloom_halo_strength), 0, 2);
+        const coreRadius = clamp(toNumber(settings.bloom_core_radius, DEFAULT_SETTINGS.bloom_core_radius), 0.25, 12);
+        const coreSigma = Math.max(0.55, Math.log2(coreRadius + 1) * 0.55);
+        const haloCenter = clamp(Math.log2(Math.max(2, haloRadius * (profile.scale || 0.5))) - 0.5, 1, levels.length - 1);
+        const haloSigma = Math.max(0.8, haloCenter * 0.42);
+        const coreRaw = levels.map(level => Math.exp(-(level.index * level.index) / (2 * coreSigma * coreSigma)));
+        const haloRaw = levels.map(level => Math.exp(-Math.pow(level.index - haloCenter, 2) / (2 * haloSigma * haloSigma)));
+        const coreTotal = Math.max(0.000001, coreRaw.reduce((sum, value) => sum + value, 0));
+        const haloTotal = Math.max(0.000001, haloRaw.reduce((sum, value) => sum + value, 0));
+        levels.forEach((level, index) => {
+            level.weight = strength * (
+                coreStrength * coreRaw[index] / coreTotal +
+                haloStrength * haloRaw[index] / haloTotal
+            );
+        });
+        return levels;
+    }
+
+    function getAdaptiveBloomProfile(state, baseProfile) {
+        if (!baseProfile?.adaptive) return baseProfile;
+        const states = baseProfile.scaleStates || [0.25, 1 / 3, 0.5, 2 / 3];
+        const tier = clamp(Math.round(Number(state.adaptiveTier ?? baseProfile.tier ?? 2)), 0, states.length - 1);
+        return {
+            ...baseProfile,
+            scale: states[tier],
+            maxLevels: tier <= 1 ? 4 : (tier >= 3 ? 6 : 5),
+            downsampleKernel: tier <= 1 ? 'dual_kawase' : 'hq13_karis_first',
+            upsampleKernel: tier <= 1 ? 'bilinear' : 'tent9',
+            tier
+        };
+    }
+
+    class LightflowBloomPipeline {
+        constructor(renderer, preview = null) {
+            this.renderer = renderer;
+            this.preview = preview;
+            this.capabilities = window.LightflowRenderer?.getCapabilities?.(renderer, { probeHalfFloat: true }) || null;
+            this.generation = Number(this.capabilities?.generation) || 0;
+            this.useHalfFloat = !!(
+                THREE.HalfFloatType !== undefined &&
+                this.capabilities?.halfFloatRenderable
+            );
+            this.sourceTarget = null;
+            this.compatibilityTarget = null;
+            this.downTargets = [];
+            this.upTargets = [];
+            this.studioGlobalTarget = null;
+            this.studioSampleTarget = null;
+            this.studioAverageTargets = [null, null];
+            this.lastResult = null;
+            this.lastDiagnostics = null;
+            this.disposed = false;
+            this.createResources();
+        }
+
+        createResources() {
+            const vertexShader = `
+                varying vec2 vUv;
+                void main() {
+                    vUv = uv;
+                    gl_Position = vec4(position.xy, 0.0, 1.0);
+                }
+            `;
+            this.camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+            this.scene = new THREE.Scene();
+            this.geometry = new (THREE.PlaneGeometry || THREE.PlaneBufferGeometry)(2, 2);
+            this.quad = new THREE.Mesh(this.geometry, null);
+            this.quad.frustumCulled = false;
+            this.scene.add(this.quad);
+
+            this.extractMaterial = new THREE.ShaderMaterial({
+                uniforms: {
+                    tEmission: { value: null },
+                    tScene: { value: null },
+                    tCompatibility: { value: null },
+                    tDepth: { value: null },
+                    uHasEmission: { value: 0 },
+                    uHasScene: { value: 0 },
+                    uHasCompatibility: { value: 0 },
+                    uHasDepth: { value: 0 },
+                    uEmissionUsesCoverageAlpha: { value: 0 },
+                    uUvScale: { value: new THREE.Vector2(1, 1) },
+                    uUvOffset: { value: new THREE.Vector2(0, 0) },
+                    uThreshold: { value: DEFAULT_SETTINGS.bloom_threshold },
+                    uSoftKnee: { value: DEFAULT_SETTINGS.bloom_soft_knee },
+                    uHDRStrength: { value: DEFAULT_SETTINGS.bloom_hdr_strength },
+                    uEmissiveStrength: { value: DEFAULT_SETTINGS.bloom_emissive_strength },
+                    uOcclusion: { value: 1 }
+                },
+                vertexShader,
+                fragmentShader: `
+                    precision highp float;
+                    varying vec2 vUv;
+                    uniform sampler2D tEmission;
+                    uniform sampler2D tScene;
+                    uniform sampler2D tCompatibility;
+                    uniform sampler2D tDepth;
+                    uniform float uHasEmission;
+                    uniform float uHasScene;
+                    uniform float uHasCompatibility;
+                    uniform float uHasDepth;
+                    uniform float uEmissionUsesCoverageAlpha;
+                    uniform vec2 uUvScale;
+                    uniform vec2 uUvOffset;
+                    uniform float uThreshold;
+                    uniform float uSoftKnee;
+                    uniform float uHDRStrength;
+                    uniform float uEmissiveStrength;
+                    uniform float uOcclusion;
+
+                    vec3 decodeBloomSignal(vec3 encodedColor) {
+                        return exp2(clamp(encodedColor, vec3(0.0), vec3(1.0)) * 4.0874628413) - vec3(1.0);
+                    }
+                    vec3 srgbToLinear(vec3 color) {
+                        vec3 lower = color / 12.92;
+                        vec3 upper = pow(max((color + 0.055) / 1.055, vec3(0.0)), vec3(2.4));
+                        return mix(lower, upper, step(vec3(0.04045), color));
+                    }
+                    float bloomContribution(float signal) {
+                        if (signal <= 0.000001) return 0.0;
+                        if (uSoftKnee <= 0.000001 || uThreshold <= 0.000001) {
+                            return clamp((signal - uThreshold) / signal, 0.0, 1.0);
+                        }
+                        float knee = max(uThreshold * uSoftKnee, 0.00001);
+                        float soft = clamp(signal - uThreshold + knee, 0.0, 2.0 * knee);
+                        soft = soft * soft / max(4.0 * knee, 0.00001);
+                        return clamp(max(signal - uThreshold, soft) / signal, 0.0, 1.0);
+                    }
+                    void main() {
+                        vec2 uv = uUvOffset + vUv * uUvScale;
+                        vec3 emission = vec3(0.0);
+                        float coverage = 0.0;
+                        if (uHasEmission > 0.5) {
+                            vec4 encoded = texture2D(tEmission, uv);
+                            float emissionCoverage = mix(1.0, encoded.a, uEmissionUsesCoverageAlpha);
+                            emission = decodeBloomSignal(encoded.rgb) * uEmissiveStrength * emissionCoverage;
+                            coverage = max(coverage, encoded.a * uEmissionUsesCoverageAlpha);
+                        }
+                        if (uHasCompatibility > 0.5) {
+                            vec4 compatibility = texture2D(tCompatibility, uv);
+                            emission += max(compatibility.rgb, vec3(0.0)) * uEmissiveStrength;
+                            coverage = max(coverage, compatibility.a);
+                        }
+                        vec3 sceneSignal = vec3(0.0);
+                        if (uHasScene > 0.5) {
+                            vec4 sceneSample = texture2D(tScene, uv);
+                            sceneSignal = srgbToLinear(sceneSample.rgb) * uHDRStrength * sceneSample.a;
+                            if (uHasCompatibility > 0.5 && uHasDepth > 0.5) {
+                                float depth = texture2D(tDepth, uv).x;
+                                float background = step(0.99999, depth);
+                                float compatibilityCoverage = texture2D(tCompatibility, uv).a;
+                                sceneSignal *= 1.0 - background * clamp(compatibilityCoverage, 0.0, 1.0);
+                            }
+                        }
+                        // Authored emission (render mode, emissive map or MER)
+                        // is already a selective Bloom signal. The luminance
+                        // threshold belongs only to ordinary bright surfaces;
+                        // applying it again erased dark-colored emitters.
+                        float emissionSignal = max(emission.r, max(emission.g, emission.b));
+                        float emissionContribution = step(0.000001, emissionSignal);
+                        float sceneSignalPeak = max(sceneSignal.r, max(sceneSignal.g, sceneSignal.b));
+                        float sceneContribution = bloomContribution(sceneSignalPeak);
+                        vec3 color = max(
+                            emission * emissionContribution,
+                            sceneSignal * sceneContribution
+                        );
+                        float contribution = max(emissionContribution, sceneContribution);
+                        float blocker = clamp(coverage, 0.0, 1.0) *
+                            (1.0 - contribution) * uOcclusion;
+                        gl_FragColor = vec4(color, blocker);
+                    }
+                `,
+                depthTest: false,
+                depthWrite: false,
+                transparent: false,
+                blending: THREE.NoBlending,
+                toneMapped: false
+            });
+            this.extractMaterial.name = 'Lightflow_BloomV3_Source';
+
+            this.downsampleMaterial = new THREE.ShaderMaterial({
+                uniforms: {
+                    tInput: { value: null },
+                    uTexel: { value: new THREE.Vector2(1, 1) },
+                    uHighQuality: { value: 1 },
+                    uKaris: { value: 0 }
+                },
+                vertexShader,
+                fragmentShader: `
+                    precision highp float;
+                    varying vec2 vUv;
+                    uniform sampler2D tInput;
+                    uniform vec2 uTexel;
+                    uniform float uHighQuality;
+                    uniform float uKaris;
+                    float luma(vec3 color) { return dot(color, vec3(0.2126, 0.7152, 0.0722)); }
+                    float sampleWeight(vec3 color) {
+                        return mix(1.0, 1.0 / (1.0 + luma(color)), uKaris);
+                    }
+                    void main() {
+                        vec2 d = uTexel;
+                        vec4 s0 = texture2D(tInput, vUv + vec2(-d.x, -d.y));
+                        vec4 s1 = texture2D(tInput, vUv + vec2( d.x, -d.y));
+                        vec4 s2 = texture2D(tInput, vUv + vec2(-d.x,  d.y));
+                        vec4 s3 = texture2D(tInput, vUv + vec2( d.x,  d.y));
+                        float w0 = sampleWeight(s0.rgb);
+                        float w1 = sampleWeight(s1.rgb);
+                        float w2 = sampleWeight(s2.rgb);
+                        float w3 = sampleWeight(s3.rgb);
+                        vec3 cheap = (
+                            s0.rgb * w0 + s1.rgb * w1 +
+                            s2.rgb * w2 + s3.rgb * w3
+                        ) / max(w0 + w1 + w2 + w3, 0.00001);
+                        float blocker = max(max(s0.a, s1.a), max(s2.a, s3.a));
+                        if (uHighQuality < 0.5) {
+                            gl_FragColor = vec4(cheap, blocker);
+                            return;
+                        }
+                        vec4 a = texture2D(tInput, vUv + vec2(-2.0 * d.x, -2.0 * d.y));
+                        vec4 b = texture2D(tInput, vUv + vec2(0.0, -2.0 * d.y));
+                        vec4 c = texture2D(tInput, vUv + vec2(2.0 * d.x, -2.0 * d.y));
+                        vec4 e = texture2D(tInput, vUv + vec2(-2.0 * d.x, 0.0));
+                        vec4 f = texture2D(tInput, vUv);
+                        vec4 g = texture2D(tInput, vUv + vec2(2.0 * d.x, 0.0));
+                        vec4 h = texture2D(tInput, vUv + vec2(-2.0 * d.x, 2.0 * d.y));
+                        vec4 i = texture2D(tInput, vUv + vec2(0.0, 2.0 * d.y));
+                        vec4 j = texture2D(tInput, vUv + vec2(2.0 * d.x, 2.0 * d.y));
+                        float wa = sampleWeight(a.rgb);
+                        float wb = sampleWeight(b.rgb);
+                        float wc = sampleWeight(c.rgb);
+                        float we = sampleWeight(e.rgb);
+                        float wf = sampleWeight(f.rgb);
+                        float wg = sampleWeight(g.rgb);
+                        float wh = sampleWeight(h.rgb);
+                        float wi = sampleWeight(i.rgb);
+                        float wj = sampleWeight(j.rgb);
+                        vec3 high = (a.rgb * wa + c.rgb * wc + h.rgb * wh + j.rgb * wj) * 0.03125;
+                        high += (b.rgb * wb + e.rgb * we + g.rgb * wg + i.rgb * wi) * 0.0625;
+                        high += f.rgb * wf * 0.125;
+                        high += (s0.rgb * w0 + s1.rgb * w1 + s2.rgb * w2 + s3.rgb * w3) * 0.125;
+                        float highWeight = (wa + wc + wh + wj) * 0.03125;
+                        highWeight += (wb + we + wg + wi) * 0.0625;
+                        highWeight += wf * 0.125;
+                        highWeight += (w0 + w1 + w2 + w3) * 0.125;
+                        high /= max(highWeight, 0.00001);
+                        blocker = max(blocker, max(max(a.a, c.a), max(h.a, j.a)));
+                        gl_FragColor = vec4(mix(cheap, high, uHighQuality), blocker);
+                    }
+                `,
+                depthTest: false,
+                depthWrite: false,
+                transparent: false,
+                blending: THREE.NoBlending,
+                toneMapped: false
+            });
+            this.downsampleMaterial.name = 'Lightflow_BloomV3_Downsample';
+
+            this.upsampleMaterial = new THREE.ShaderMaterial({
+                uniforms: {
+                    tHigh: { value: null },
+                    tLow: { value: null },
+                    uLowTexel: { value: new THREE.Vector2(1, 1) },
+                    uHighWeight: { value: 1 },
+                    uLowWeight: { value: 1 },
+                    uTent: { value: 1 }
+                },
+                vertexShader,
+                fragmentShader: `
+                    precision highp float;
+                    varying vec2 vUv;
+                    uniform sampler2D tHigh;
+                    uniform sampler2D tLow;
+                    uniform vec2 uLowTexel;
+                    uniform float uHighWeight;
+                    uniform float uLowWeight;
+                    uniform float uTent;
+                    vec3 lowFrequency() {
+                        vec3 center = texture2D(tLow, vUv).rgb;
+                        vec2 d = uLowTexel;
+                        vec3 tent = center * 4.0;
+                        tent += texture2D(tLow, vUv + vec2(-d.x, 0.0)).rgb * 2.0;
+                        tent += texture2D(tLow, vUv + vec2( d.x, 0.0)).rgb * 2.0;
+                        tent += texture2D(tLow, vUv + vec2(0.0, -d.y)).rgb * 2.0;
+                        tent += texture2D(tLow, vUv + vec2(0.0,  d.y)).rgb * 2.0;
+                        tent += texture2D(tLow, vUv + vec2(-d.x, -d.y)).rgb;
+                        tent += texture2D(tLow, vUv + vec2( d.x, -d.y)).rgb;
+                        tent += texture2D(tLow, vUv + vec2(-d.x,  d.y)).rgb;
+                        tent += texture2D(tLow, vUv + vec2( d.x,  d.y)).rgb;
+                        return mix(center, tent / 16.0, uTent);
+                    }
+                    void main() {
+                        vec4 high = texture2D(tHigh, vUv);
+                        vec3 color = high.rgb * uHighWeight + lowFrequency() * uLowWeight;
+                        gl_FragColor = vec4(color, high.a);
+                    }
+                `,
+                depthTest: false,
+                depthWrite: false,
+                transparent: false,
+                blending: THREE.NoBlending,
+                toneMapped: false
+            });
+            this.upsampleMaterial.name = 'Lightflow_BloomV3_Upsample';
+
+            this.copyMaterial = new THREE.ShaderMaterial({
+                uniforms: {
+                    tInput: { value: null },
+                    uUvScale: { value: new THREE.Vector2(1, 1) },
+                    uUvOffset: { value: new THREE.Vector2(0, 0) },
+                    uWeight: { value: 1 }
+                },
+                vertexShader,
+                fragmentShader: `
+                    precision highp float;
+                    varying vec2 vUv;
+                    uniform sampler2D tInput;
+                    uniform vec2 uUvScale;
+                    uniform vec2 uUvOffset;
+                    uniform float uWeight;
+                    void main() {
+                        gl_FragColor = texture2D(tInput, uUvOffset + vUv * uUvScale) * uWeight;
+                    }
+                `,
+                depthTest: false,
+                depthWrite: false,
+                transparent: false,
+                blending: THREE.NoBlending,
+                toneMapped: false
+            });
+            this.copyMaterial.name = 'Lightflow_BloomV3_Copy';
+
+            this.averageMaterial = new THREE.ShaderMaterial({
+                uniforms: {
+                    tPrevious: { value: null },
+                    tSample: { value: null },
+                    uWeight: { value: 1 }
+                },
+                vertexShader,
+                fragmentShader: `
+                    precision highp float;
+                    varying vec2 vUv;
+                    uniform sampler2D tPrevious;
+                    uniform sampler2D tSample;
+                    uniform float uWeight;
+                    void main() {
+                        gl_FragColor = mix(texture2D(tPrevious, vUv), texture2D(tSample, vUv), uWeight);
+                    }
+                `,
+                depthTest: false,
+                depthWrite: false,
+                transparent: false,
+                blending: THREE.NoBlending,
+                toneMapped: false
+            });
+            this.averageMaterial.name = 'Lightflow_BloomV3_StudioAverage';
+
+            this.studioCompositeMaterial = new THREE.ShaderMaterial({
+                uniforms: {
+                    tBeauty: { value: null },
+                    tBloom: { value: null },
+                    uBloomUvScale: { value: new THREE.Vector2(1, 1) },
+                    uBloomUvOffset: { value: new THREE.Vector2(0, 0) }
+                },
+                vertexShader,
+                fragmentShader: `
+                    precision highp float;
+                    varying vec2 vUv;
+                    uniform sampler2D tBeauty;
+                    uniform sampler2D tBloom;
+                    uniform vec2 uBloomUvScale;
+                    uniform vec2 uBloomUvOffset;
+                    vec3 srgbToLinear(vec3 color) {
+                        vec3 lower = color / 12.92;
+                        vec3 upper = pow(max((color + 0.055) / 1.055, vec3(0.0)), vec3(2.4));
+                        return mix(lower, upper, step(vec3(0.04045), color));
+                    }
+                    vec3 linearToSRGB(vec3 color) {
+                        color = max(color, vec3(0.0));
+                        vec3 lower = color * 12.92;
+                        vec3 upper = 1.055 * pow(color, vec3(1.0 / 2.4)) - 0.055;
+                        return mix(lower, upper, step(vec3(0.0031308), color));
+                    }
+                    void main() {
+                        vec4 beauty = texture2D(tBeauty, vUv);
+                        vec4 bloom = texture2D(tBloom, uBloomUvOffset + vUv * uBloomUvScale);
+                        vec3 color = srgbToLinear(beauty.rgb) + bloom.rgb * (1.0 - bloom.a);
+                        gl_FragColor = vec4(clamp(linearToSRGB(color), 0.0, 1.0), beauty.a);
+                    }
+                `,
+                depthTest: false,
+                depthWrite: false,
+                transparent: false,
+                blending: THREE.NoBlending,
+                toneMapped: false
+            });
+            this.studioCompositeMaterial.name = 'Lightflow_BloomV3_StudioComposite';
+        }
+
+        profile(name, callback) {
+            const profiler = window.LightflowRenderer?.profilePass;
+            return typeof profiler === 'function'
+                ? profiler(this.preview, name, callback)
+                : callback();
+        }
+
+        ensureTarget(target, width, height, name, hdr = true) {
+            const expectedType = hdr && this.useHalfFloat ? THREE.HalfFloatType : THREE.UnsignedByteType;
+            if (target && target.texture?.type !== expectedType) {
+                target.dispose?.();
+                target = null;
+            }
+            if (!target) {
+                target = createViewportPostTarget(width, height, name, false, hdr, this.renderer);
+            } else {
+                configureViewportPostTarget(target, width, height);
+            }
+            return target;
+        }
+
+        renderTarget(target, material, passName) {
+            this.quad.material = material;
+            configureViewportPostTarget(target, target.width, target.height);
+            return this.profile(passName, () => {
+                this.renderer.setRenderTarget(target);
+                this.renderer.setScissorTest?.(false);
+                this.renderer.render(this.scene, this.camera);
+            });
+        }
+
+        clearTarget(target) {
+            const oldColor = new THREE.Color();
+            this.renderer.getClearColor?.(oldColor);
+            const oldAlpha = this.renderer.getClearAlpha?.() ?? 1;
+            this.renderer.setRenderTarget(target);
+            this.renderer.setScissorTest?.(false);
+            this.renderer.setClearColor?.(0x000000, 0);
+            this.renderer.clear?.(true, false, false);
+            this.renderer.setClearColor?.(oldColor, oldAlpha);
+        }
+
+        extractInto(target, options = {}) {
+            const emissionTexture = options.emissionTexture || null;
+            const sceneTexture = options.sceneTexture || null;
+            const compatibilityTexture = options.compatibilityTexture || null;
+            const depthTexture = options.depthTexture || null;
+            const fallbackTexture = emissionTexture || sceneTexture || compatibilityTexture || depthTexture;
+            if (!fallbackTexture) return false;
+            const uniforms = this.extractMaterial.uniforms;
+            uniforms.tEmission.value = emissionTexture || fallbackTexture;
+            uniforms.tScene.value = sceneTexture || fallbackTexture;
+            uniforms.tCompatibility.value = compatibilityTexture || fallbackTexture;
+            uniforms.tDepth.value = depthTexture || fallbackTexture;
+            uniforms.uHasEmission.value = emissionTexture ? 1 : 0;
+            uniforms.uHasScene.value = sceneTexture ? 1 : 0;
+            uniforms.uHasCompatibility.value = compatibilityTexture ? 1 : 0;
+            uniforms.uHasDepth.value = depthTexture ? 1 : 0;
+            uniforms.uEmissionUsesCoverageAlpha.value = options.emissionUsesCoverageAlpha ? 1 : 0;
+            uniforms.uUvScale.value.copy(options.uvScale || new THREE.Vector2(1, 1));
+            uniforms.uUvOffset.value.copy(options.uvOffset || new THREE.Vector2(0, 0));
+            uniforms.uThreshold.value = clamp(toNumber(options.settings?.bloom_threshold, DEFAULT_SETTINGS.bloom_threshold), 0, 4);
+            uniforms.uSoftKnee.value = clamp(toNumber(options.settings?.bloom_soft_knee, DEFAULT_SETTINGS.bloom_soft_knee), 0, 1);
+            uniforms.uHDRStrength.value = clamp(toNumber(options.settings?.bloom_hdr_strength, DEFAULT_SETTINGS.bloom_hdr_strength), 0, 4);
+            uniforms.uEmissiveStrength.value = clamp(toNumber(options.settings?.bloom_emissive_strength, DEFAULT_SETTINGS.bloom_emissive_strength), 0, 8);
+            uniforms.uOcclusion.value = options.settings?.bloom_occlusion === false ? 0 : 1;
+            this.renderTarget(target, this.extractMaterial, options.passName || 'bloom_source');
+            return true;
+        }
+
+        renderCompatibilitySource(preview, width, height, studio = false) {
+            const atmosphere = window.LightflowAtmosphere;
+            const environment = window.LightflowEnvironment;
+            const volumes = atmosphere?.settings?.enabled
+                ? atmosphere.getActiveVolumes?.(preview?.camera)
+                : null;
+            const hasAtmosphere = !!(
+                typeof atmosphere?.composite === 'function' &&
+                Array.isArray(volumes) &&
+                volumes.length
+            );
+            const environmentBloom = environment?.getBloomSettings?.({ studioBloomEnabled: true });
+            const hasEnvironment = !!(
+                environmentBloom?.active &&
+                typeof environment?.renderBloomContribution === 'function'
+            );
+            this.lastCompatibilityDiagnostics = null;
+            if (!hasAtmosphere && !hasEnvironment) return null;
+            this.compatibilityTarget = this.ensureTarget(
+                this.compatibilityTarget,
+                width,
+                height,
+                'Lightflow_BloomV3_Compatibility',
+                true
+            );
+            const snapshot = snapshotViewportRendererState(this.renderer);
+            try {
+                this.clearTarget(this.compatibilityTarget);
+                let rendered = false;
+                let environmentResult = null;
+                const beforeCalls = Number(this.renderer.info?.render?.calls) || 0;
+                if (hasEnvironment) {
+                    environmentResult = environment.renderBloomContribution(preview, {
+                        studio,
+                        target: this.compatibilityTarget
+                    });
+                    this.lastEnvironmentContribution = environmentResult || null;
+                    rendered = !!environmentResult;
+                }
+                if (hasAtmosphere) {
+                    rendered = atmosphere.composite(preview, {
+                        studio,
+                        bloomMask: true,
+                        linearBloom: true,
+                        target: this.compatibilityTarget
+                    }) || rendered;
+                }
+                this.lastCompatibilityDiagnostics = {
+                    rendered,
+                    drawCalls: Math.max(
+                        0,
+                        (Number(this.renderer.info?.render?.calls) || 0) - beforeCalls
+                    ),
+                    extraGeometrySubmissions: Math.max(
+                        0,
+                        Number(environmentResult?.submissions) || 0
+                    ),
+                    extraGeometryDrawCalls: Math.max(
+                        0,
+                        Number(environmentResult?.drawCalls) || 0
+                    ),
+                    atmospherePasses: hasAtmosphere ? 1 : 0
+                };
+                return rendered ? this.compatibilityTarget.texture : null;
+            } finally {
+                restoreViewportRendererState(this.renderer, snapshot);
+            }
+        }
+
+        runHierarchy(sourceTexture, width, height, settings, profile, sourceMode) {
+            const plan = createBloomLevelPlan(width, height, settings, profile);
+            let inputTexture = sourceTexture;
+            let inputWidth = width;
+            let inputHeight = height;
+            for (let index = 1; index < plan.length; index++) {
+                const level = plan[index];
+                this.downTargets[index - 1] = this.ensureTarget(
+                    this.downTargets[index - 1],
+                    level.width,
+                    level.height,
+                    'Lightflow_BloomV3_Down' + index,
+                    true
+                );
+                const uniforms = this.downsampleMaterial.uniforms;
+                uniforms.tInput.value = inputTexture;
+                uniforms.uTexel.value.set(1 / Math.max(1, inputWidth), 1 / Math.max(1, inputHeight));
+                uniforms.uHighQuality.value = profile.downsampleKernel === 'dual_kawase' ? 0 : 1;
+                uniforms.uKaris.value = index === 1 && profile.downsampleKernel === 'hq13_karis_first' ? 1 : 0;
+                this.renderTarget(this.downTargets[index - 1], this.downsampleMaterial, `bloom_downsample_${index - 1}`);
+                inputTexture = this.downTargets[index - 1].texture;
+                inputWidth = level.width;
+                inputHeight = level.height;
+            }
+            while (this.downTargets.length > plan.length - 1) this.downTargets.pop()?.dispose?.();
+
+            let lowTexture = inputTexture;
+            let lowWidth = inputWidth;
+            let lowHeight = inputHeight;
+            for (let index = plan.length - 2; index >= 0; index--) {
+                const level = plan[index];
+                const highTexture = index === 0
+                    ? sourceTexture
+                    : this.downTargets[index - 1].texture;
+                this.upTargets[index] = this.ensureTarget(
+                    this.upTargets[index],
+                    level.width,
+                    level.height,
+                    'Lightflow_BloomV3_Up' + index,
+                    true
+                );
+                const uniforms = this.upsampleMaterial.uniforms;
+                uniforms.tHigh.value = highTexture;
+                uniforms.tLow.value = lowTexture;
+                uniforms.uLowTexel.value.set(1 / Math.max(1, lowWidth), 1 / Math.max(1, lowHeight));
+                uniforms.uHighWeight.value = plan[index].weight;
+                uniforms.uLowWeight.value = index === plan.length - 2
+                    ? plan[index + 1].weight
+                    : 1;
+                uniforms.uTent.value = profile.upsampleKernel === 'tent9' ? 1 : 0;
+                this.renderTarget(this.upTargets[index], this.upsampleMaterial, `bloom_upsample_${index}`);
+                lowTexture = this.upTargets[index].texture;
+                lowWidth = level.width;
+                lowHeight = level.height;
+            }
+            while (this.upTargets.length > plan.length - 1) this.upTargets.pop()?.dispose?.();
+
+            const finalTexture = plan.length > 1 ? this.upTargets[0].texture : sourceTexture;
+            const bytes = this.estimateBytes();
+            this.lastResult = {
+                texture: finalTexture,
+                sourceTexture,
+                width,
+                height,
+                plan,
+                sourceMode,
+                initialScale: profile.scale || 1,
+                workingFormat: this.useHalfFloat ? 'rgba16f_linear' : 'rgba8_linear_clamped',
+                downsampleKernel: profile.downsampleKernel,
+                upsampleKernel: profile.upsampleKernel,
+                estimatedBytes: bytes,
+                activeTargets: this.getActiveTargets().length,
+                drawCalls: Math.max(0, (plan.length - 1) * 2),
+                targetSwitches: Math.max(0, (plan.length - 1) * 2)
+            };
+            this.lastDiagnostics = this.lastResult;
+            return this.lastResult;
+        }
+
+        run(options = {}) {
+            const settings = options.settings || DEFAULT_SETTINGS;
+            const profile = options.profile || VIEWPORT_BLOOM_PROFILES.balanced;
+            const width = Math.max(2, Math.round(options.width || 2));
+            const height = Math.max(2, Math.round(options.height || 2));
+            this.sourceTarget = this.ensureTarget(
+                this.sourceTarget,
+                width,
+                height,
+                'Lightflow_BloomV3_Source',
+                true
+            );
+            const snapshot = snapshotViewportRendererState(this.renderer);
+            try {
+                if (!this.extractInto(this.sourceTarget, options)) return null;
+                const result = this.runHierarchy(
+                    this.sourceTarget.texture,
+                    width,
+                    height,
+                    settings,
+                    profile,
+                    options.sourceMode || 'mrt'
+                );
+                result.drawCalls += 1;
+                result.targetSwitches += 1;
+                const compatibility = options.compatibilityTexture
+                    ? this.lastCompatibilityDiagnostics
+                    : null;
+                result.compatibilityDrawCalls = Math.max(0, Number(compatibility?.drawCalls) || 0);
+                result.extraGeometrySubmissions = Math.max(
+                    0,
+                    Number(compatibility?.extraGeometrySubmissions) || 0
+                );
+                result.extraGeometryDrawCalls = Math.max(
+                    0,
+                    Number(compatibility?.extraGeometryDrawCalls) || 0
+                );
+                result.drawCalls += result.compatibilityDrawCalls;
+                if (compatibility?.rendered) result.targetSwitches += 1;
+                return result;
+            } finally {
+                restoreViewportRendererState(this.renderer, snapshot);
+            }
+        }
+
+        beginStudio(preview, outputSize, settings, profile) {
+            this.preview = preview;
+            const maxTextureSize = Math.max(64, Number(this.capabilities?.maxTextureSize) || 4096);
+            const maxDimension = Math.min(
+                maxTextureSize,
+                Math.max(1024, Math.min(4096, Number(profile.maxDimension) || 4096))
+            );
+            const scale = Math.min(
+                profile.scale,
+                maxDimension / Math.max(outputSize.width, outputSize.height)
+            );
+            const width = Math.max(2, Math.round(outputSize.width * scale));
+            const height = Math.max(2, Math.round(outputSize.height * scale));
+            this.studioGlobalTarget = this.ensureTarget(
+                this.studioGlobalTarget,
+                width,
+                height,
+                'Lightflow_BloomV3_StudioGlobal',
+                true
+            );
+            const snapshot = snapshotViewportRendererState(this.renderer);
+            try { this.clearTarget(this.studioGlobalTarget); }
+            finally { restoreViewportRendererState(this.renderer, snapshot); }
+            const pipeline = this;
+            const session = {
+                width,
+                height,
+                scale,
+                outputSize,
+                settings,
+                profile,
+                sourceMode: 'mrt',
+                extraGeometrySubmissions: 0,
+                extraGeometryDrawCalls: 0,
+                compatibilityDrawCalls: 0,
+                compatibilityTargetPasses: 0,
+                capturedSamples: 0,
+                committedTiles: 0,
+                currentAverage: null,
+                tileBounds: null,
+                result: null,
+                captureSample(resources, tile, sampleIndex, sampleCount) {
+                    const x0 = Math.round(tile.outputX / outputSize.width * width);
+                    const x1 = Math.round((tile.outputX + tile.outputWidth) / outputSize.width * width);
+                    const y0 = height - Math.round((tile.outputY + tile.outputHeight) / outputSize.height * height);
+                    const y1 = height - Math.round(tile.outputY / outputSize.height * height);
+                    const tileWidth = Math.max(1, x1 - x0);
+                    const tileHeight = Math.max(1, y1 - y0);
+                    session.tileBounds = { x: x0, y: y0, width: tileWidth, height: tileHeight };
+                    pipeline.studioSampleTarget = pipeline.ensureTarget(
+                        pipeline.studioSampleTarget,
+                        tileWidth,
+                        tileHeight,
+                        'Lightflow_BloomV3_StudioSample',
+                        true
+                    );
+                    pipeline.studioAverageTargets[0] = pipeline.ensureTarget(
+                        pipeline.studioAverageTargets[0],
+                        tileWidth,
+                        tileHeight,
+                        'Lightflow_BloomV3_StudioAverageA',
+                        true
+                    );
+                    pipeline.studioAverageTargets[1] = pipeline.ensureTarget(
+                        pipeline.studioAverageTargets[1],
+                        tileWidth,
+                        tileHeight,
+                        'Lightflow_BloomV3_StudioAverageB',
+                        true
+                    );
+                    const renderWidth = Math.max(1, Number(tile.renderWidth) || resources.width || 1);
+                    const renderHeight = Math.max(1, Number(tile.renderHeight) || resources.height || 1);
+                    const cropBottom = Math.max(
+                        0,
+                        renderHeight - Number(tile.cropY || 0) - Number(tile.sampleHeight || renderHeight)
+                    );
+                    const uvScale = new THREE.Vector2(
+                        Math.max(0.000001, Number(tile.sampleWidth || renderWidth) / renderWidth),
+                        Math.max(0.000001, Number(tile.sampleHeight || renderHeight) / renderHeight)
+                    );
+                    const uvOffset = new THREE.Vector2(
+                        Math.max(0, Number(tile.cropX || 0) / renderWidth),
+                        Math.max(0, cropBottom / renderHeight)
+                    );
+                    const compatibilityTexture = pipeline.renderCompatibilitySource(
+                        preview,
+                        Math.max(tileWidth, Math.round(tileWidth / uvScale.x)),
+                        Math.max(tileHeight, Math.round(tileHeight / uvScale.y)),
+                        true
+                    );
+                    const compatibilityDiagnostics = pipeline.lastCompatibilityDiagnostics || {};
+                    const snapshot = snapshotViewportRendererState(pipeline.renderer);
+                    try {
+                        pipeline.extractInto(pipeline.studioSampleTarget, {
+                            emissionTexture: resources.emissionTexture,
+                            sceneTexture: resources.colorTexture,
+                            compatibilityTexture,
+                            depthTexture: resources.depthTexture,
+                            emissionUsesCoverageAlpha: false,
+                            uvScale,
+                            uvOffset,
+                            settings,
+                            passName: 'studio_bloom_source_accumulation'
+                        });
+                        if (sampleIndex === 0) {
+                            pipeline.copyMaterial.uniforms.tInput.value = pipeline.studioSampleTarget.texture;
+                            pipeline.copyMaterial.uniforms.uUvScale.value.set(1, 1);
+                            pipeline.copyMaterial.uniforms.uUvOffset.value.set(0, 0);
+                            pipeline.copyMaterial.uniforms.uWeight.value = 1;
+                            pipeline.renderTarget(
+                                pipeline.studioAverageTargets[0],
+                                pipeline.copyMaterial,
+                                'studio_bloom_average_0'
+                            );
+                            session.currentAverage = pipeline.studioAverageTargets[0];
+                        } else {
+                            const next = session.currentAverage === pipeline.studioAverageTargets[0]
+                                ? pipeline.studioAverageTargets[1]
+                                : pipeline.studioAverageTargets[0];
+                            pipeline.averageMaterial.uniforms.tPrevious.value = session.currentAverage.texture;
+                            pipeline.averageMaterial.uniforms.tSample.value = pipeline.studioSampleTarget.texture;
+                            pipeline.averageMaterial.uniforms.uWeight.value = 1 / Math.max(1, sampleIndex + 1);
+                            pipeline.renderTarget(next, pipeline.averageMaterial, `studio_bloom_average_${sampleIndex}`);
+                            session.currentAverage = next;
+                        }
+                        session.capturedSamples += 1;
+                        const compatibility = resources.compatibilityOccluders || {};
+                        session.extraGeometrySubmissions += Math.max(0, Number(compatibility.submissions) || 0);
+                        session.extraGeometryDrawCalls += Math.max(0, Number(compatibility.drawCalls) || 0);
+                        session.extraGeometrySubmissions += Math.max(
+                            0,
+                            Number(compatibilityDiagnostics.extraGeometrySubmissions) || 0
+                        );
+                        session.extraGeometryDrawCalls += Math.max(
+                            0,
+                            Number(compatibilityDiagnostics.extraGeometryDrawCalls) || 0
+                        );
+                        session.compatibilityDrawCalls += Math.max(
+                            0,
+                            Number(compatibilityDiagnostics.drawCalls) || 0
+                        );
+                        if (compatibilityTexture) session.compatibilityTargetPasses += 1;
+                        if (compatibility.submissions > 0 && compatibilityTexture) {
+                            session.sourceMode = 'mrt_plus_compatibility';
+                        } else if (compatibility.submissions > 0) {
+                            session.sourceMode = 'mrt_plus_compatibility_occluders';
+                        } else if (compatibilityTexture) {
+                            session.sourceMode = 'mrt_plus_environment_atmosphere';
+                        }
+                        if (sampleIndex === sampleCount - 1) session.commitTile();
+                    } finally {
+                        restoreViewportRendererState(pipeline.renderer, snapshot);
+                    }
+                },
+                commitTile() {
+                    if (!session.currentAverage || !session.tileBounds) return false;
+                    const target = pipeline.studioGlobalTarget;
+                    const previousViewport = target.viewport?.clone?.() || null;
+                    const previousScissor = target.scissor?.clone?.() || null;
+                    const previousScissorTest = target.scissorTest;
+                    const snapshot = snapshotViewportRendererState(pipeline.renderer);
+                    try {
+                        target.viewport?.set?.(
+                            session.tileBounds.x,
+                            session.tileBounds.y,
+                            session.tileBounds.width,
+                            session.tileBounds.height
+                        );
+                        target.scissorTest = false;
+                        pipeline.copyMaterial.uniforms.tInput.value = session.currentAverage.texture;
+                        pipeline.copyMaterial.uniforms.uUvScale.value.set(1, 1);
+                        pipeline.copyMaterial.uniforms.uUvOffset.value.set(0, 0);
+                        pipeline.copyMaterial.uniforms.uWeight.value = 1;
+                        pipeline.quad.material = pipeline.copyMaterial;
+                        pipeline.profile('studio_bloom_commit_tile', () => {
+                            pipeline.renderer.autoClear = false;
+                            pipeline.renderer.setRenderTarget(target);
+                            pipeline.renderer.setScissorTest?.(false);
+                            pipeline.renderer.render(pipeline.scene, pipeline.camera);
+                        });
+                        session.committedTiles += 1;
+                        return true;
+                    } finally {
+                        if (previousViewport && target.viewport) target.viewport.copy(previousViewport);
+                        if (previousScissor && target.scissor) target.scissor.copy(previousScissor);
+                        target.scissorTest = previousScissorTest;
+                        configureViewportPostTarget(target, width, height);
+                        restoreViewportRendererState(pipeline.renderer, snapshot);
+                    }
+                },
+                finish() {
+                    const snapshot = snapshotViewportRendererState(pipeline.renderer);
+                    try {
+                        session.result = pipeline.runHierarchy(
+                            pipeline.studioGlobalTarget.texture,
+                            width,
+                            height,
+                            settings,
+                            profile,
+                            session.sourceMode
+                        );
+                        session.result.studioSourceResolution = [width, height];
+                        session.result.initialScale = scale;
+                        session.result.extraGeometrySubmissions = session.extraGeometrySubmissions;
+                        session.result.extraGeometryDrawCalls = session.extraGeometryDrawCalls;
+                        session.result.sourcePasses = session.capturedSamples;
+                        session.result.accumulationPasses = session.capturedSamples;
+                        session.result.tileCommitPasses = session.committedTiles;
+                        session.result.compatibilityDrawCalls = session.compatibilityDrawCalls;
+                        session.result.drawCalls += session.capturedSamples * 2 +
+                            session.committedTiles + session.compatibilityDrawCalls;
+                        session.result.targetSwitches += session.capturedSamples * 2 +
+                            session.committedTiles + session.compatibilityTargetPasses;
+                        return session.result;
+                    } finally {
+                        restoreViewportRendererState(pipeline.renderer, snapshot);
+                    }
+                },
+                async compositeCanvas(canvas, tiles, renderPreview, renderSession) {
+                    if (!canvas || !session.result?.texture) return false;
+                    const outputContext = canvas.getContext('2d', { alpha: true });
+                    const scratch = createCanvas(2, 2);
+                    const scratchContext = scratch.getContext('2d', { alpha: true });
+                    const beautyTexture = new THREE.CanvasTexture(scratch);
+                    beautyTexture.generateMipmaps = false;
+                    beautyTexture.minFilter = THREE.LinearFilter;
+                    beautyTexture.magFilter = THREE.LinearFilter;
+                    const material = pipeline.studioCompositeMaterial;
+                    material.uniforms.tBeauty.value = beautyTexture;
+                    material.uniforms.tBloom.value = session.result.texture;
+                    const gl = getRendererContext(pipeline.renderer);
+                    const snapshot = snapshotViewportRendererState(pipeline.renderer);
+                    try {
+                        for (let index = 0; index < tiles.length; index++) {
+                            const tile = tiles[index];
+                            const x0 = Math.max(0, Math.round(tile.outputX));
+                            const y0 = Math.max(0, Math.round(tile.outputY));
+                            const x1 = Math.min(canvas.width, Math.round(tile.outputX + tile.outputWidth));
+                            const y1 = Math.min(canvas.height, Math.round(tile.outputY + tile.outputHeight));
+                            const tileWidth = Math.max(1, x1 - x0);
+                            const tileHeight = Math.max(1, y1 - y0);
+                            scratch.width = tileWidth;
+                            scratch.height = tileHeight;
+                            scratchContext.globalCompositeOperation = 'copy';
+                            scratchContext.globalAlpha = 1;
+                            scratchContext.drawImage(canvas, x0, y0, tileWidth, tileHeight, 0, 0, tileWidth, tileHeight);
+                            beautyTexture.needsUpdate = true;
+                            material.uniforms.uBloomUvScale.value.set(
+                                tileWidth / canvas.width,
+                                tileHeight / canvas.height
+                            );
+                            material.uniforms.uBloomUvOffset.value.set(
+                                x0 / canvas.width,
+                                1 - y1 / canvas.height
+                            );
+                            pipeline.renderer.setSize?.(tileWidth, tileHeight, false);
+                            pipeline.renderer.setRenderTarget(null);
+                            pipeline.renderer.setScissorTest?.(false);
+                            pipeline.renderer.autoClear = true;
+                            pipeline.renderer.setClearColor?.(0x000000, 0);
+                            if (gl) gl.viewport(0, 0, tileWidth, tileHeight);
+                            pipeline.quad.material = material;
+                            pipeline.profile('studio_bloom_composite', () => (
+                                pipeline.renderer.render(pipeline.scene, pipeline.camera)
+                            ));
+                            await requireStudioGpuFence(pipeline.renderer, renderSession);
+                            if (renderSession?.cancelled) return false;
+                            outputContext.save();
+                            outputContext.beginPath();
+                            outputContext.rect(x0, y0, tileWidth, tileHeight);
+                            outputContext.clip();
+                            outputContext.clearRect(x0, y0, tileWidth, tileHeight);
+                            outputContext.globalCompositeOperation = 'source-over';
+                            outputContext.globalAlpha = 1;
+                            outputContext.drawImage(
+                                renderPreview.canvas,
+                                0,
+                                0,
+                                tileWidth,
+                                tileHeight,
+                                x0,
+                                y0,
+                                tileWidth,
+                                tileHeight
+                            );
+                            outputContext.restore();
+                        }
+                        session.result.compositePasses = tiles.length;
+                        session.result.drawCalls += tiles.length;
+                        session.result.targetSwitches += tiles.length;
+                        return true;
+                    } finally {
+                        beautyTexture.dispose?.();
+                        scratch.width = scratch.height = 1;
+                        restoreViewportRendererState(pipeline.renderer, snapshot);
+                    }
+                },
+                dispose(options = {}) {
+                    pipeline.releaseStudioResources(options);
+                }
+            };
+            return session;
+        }
+
+        getActiveTargets() {
+            return Array.from(new Set([
+                this.sourceTarget,
+                this.compatibilityTarget,
+                this.studioGlobalTarget,
+                this.studioSampleTarget,
+                ...this.studioAverageTargets,
+                ...this.downTargets,
+                ...this.upTargets
+            ].filter(Boolean)));
+        }
+
+        estimateBytes() {
+            const targets = this.getActiveTargets();
+            let bytes = 0;
+            targets.forEach(target => {
+                const type = target.texture?.type;
+                const bytesPerChannel = type === THREE.FloatType ? 4 : (type === THREE.HalfFloatType ? 2 : 1);
+                bytes += Math.max(1, target.width || 1) * Math.max(1, target.height || 1) * 4 * bytesPerChannel;
+            });
+            return bytes;
+        }
+
+        releaseStudioResources(options = {}) {
+            if (options.contextLost !== true) {
+                this.studioGlobalTarget?.dispose?.();
+                this.studioSampleTarget?.dispose?.();
+                this.studioAverageTargets.forEach(target => target?.dispose?.());
+            }
+            this.studioGlobalTarget = null;
+            this.studioSampleTarget = null;
+            this.studioAverageTargets = [null, null];
+        }
+
+        dispose(options = {}) {
+            if (this.disposed) return;
+            this.disposed = true;
+            if (options.contextLost !== true) {
+                [
+                    this.sourceTarget,
+                    this.compatibilityTarget,
+                    this.studioGlobalTarget,
+                    this.studioSampleTarget,
+                    ...this.studioAverageTargets,
+                    ...this.downTargets,
+                    ...this.upTargets
+                ].forEach(target => target?.dispose?.());
+                [
+                    this.extractMaterial,
+                    this.downsampleMaterial,
+                    this.upsampleMaterial,
+                    this.copyMaterial,
+                    this.averageMaterial,
+                    this.studioCompositeMaterial,
+                    this.geometry
+                ].forEach(resource => resource?.dispose?.());
+            }
+            BLOOM_PIPELINE_INSTANCES.delete(this);
+        }
+    }
+
+    function getLightflowBloomPipeline(preview) {
+        const renderer = preview?.renderer;
+        if (!renderer) return null;
+        const capabilities = window.LightflowRenderer?.getCapabilities?.(renderer, { probeHalfFloat: true }) || null;
+        const generation = Number(capabilities?.generation) || 0;
+        let pipeline = BLOOM_PIPELINE_BY_RENDERER.get(renderer);
+        if (pipeline && (pipeline.disposed || pipeline.generation !== generation || capabilities?.lost)) {
+            pipeline.dispose({ contextLost: !!capabilities?.lost || pipeline.generation !== generation });
+            BLOOM_PIPELINE_BY_RENDERER.delete(renderer);
+            pipeline = null;
+        }
+        if (!pipeline && !capabilities?.lost) {
+            pipeline = new LightflowBloomPipeline(renderer, preview);
+            BLOOM_PIPELINE_BY_RENDERER.set(renderer, pipeline);
+            BLOOM_PIPELINE_INSTANCES.add(pipeline);
+        }
+        if (pipeline) pipeline.preview = preview;
+        return pipeline;
+    }
+
+    function renderViewportBloomMaskFallback(preview, state, width, height) {
         const renderer = preview?.renderer;
         const scene = window.Canvas?.scene;
         if (!renderer || !scene || !THREE.WebGLRenderTarget) return false;
 
+        let maskSizeChanged = false;
         if (!state.maskTarget) {
-            state.maskTarget = createViewportPostTarget(width, height, 'Lightflow_ViewportBloomMask', true);
+            state.maskTarget = createViewportPostTarget(
+                width,
+                height,
+                'Lightflow_ViewportBloomMask',
+                true,
+                true,
+                renderer
+            );
+            maskSizeChanged = true;
         } else {
+            maskSizeChanged = state.maskTarget.width !== width || state.maskTarget.height !== height;
             configureViewportPostTarget(state.maskTarget, width, height);
         }
 
-        const hiddenVisibility = new Map();
-        collectStudioRenderHiddenObjects().forEach(object => {
-            if (!object || hiddenVisibility.has(object)) return;
-            hiddenVisibility.set(object, object.visible);
-            object.visible = false;
-        });
-
-        const materialChanges = [];
-        const replaceMaterial = object => {
-            if (!object?.visible || !(object.isMesh || object.isSprite) || !object.material) return;
-            const original = object.material;
-            const sourceMaterials = Array.isArray(original) ? original : [original];
-            const replacements = sourceMaterials.map(source => {
-                return getBloomMaskMaterial(source, getMaterialEmissiveState(source).active);
-            });
-            materialChanges.push({ object, material: original });
-            object.material = Array.isArray(original) ? replacements : replacements[0];
-        };
-        if (typeof scene.traverseVisible === 'function') scene.traverseVisible(replaceMaterial);
-        else scene.traverse(replaceMaterial);
-
         const snapshot = snapshotViewportRendererState(renderer);
+        const hiddenVisibility = new Map();
+        let materialChanges = [];
         let succeeded = false;
         try {
+            collectStudioRenderHiddenObjects().forEach(object => {
+                if (!object || hiddenVisibility.has(object)) return;
+                hiddenVisibility.set(object, object.visible);
+                object.visible = false;
+            });
+            // Visit the visible hierarchy once. Thousands of cubes can share a
+            // source material: resolve its emission and mask uniforms once per
+            // pass, including the detection step, instead of once per face.
+            materialChanges = buildBloomMaskManifest(scene);
+            const resolver = createBloomMaskMaterialResolver();
+            const hasEncodedEmission = materialChanges.some(change => {
+                const materials = Array.isArray(change.material) ? change.material : [change.material];
+                return materials.some(material => (
+                    material?.visible !== false && resolver.getState(material).active
+                ));
+            });
+            const atmosphere = window.LightflowAtmosphere;
+            const atmosphereVolumes = atmosphere?.settings?.enabled
+                ? atmosphere.getActiveVolumes?.(preview.camera)
+                : null;
+            const hasAtmosphereEmission = Array.isArray(atmosphereVolumes) && atmosphereVolumes.length > 0;
+            if (!hasEncodedEmission && !hasAtmosphereEmission) {
+                if (state.maskIsBlack && !maskSizeChanged) return true;
+                renderer.autoClear = true;
+                if (renderer.shadowMap) renderer.shadowMap.autoUpdate = false;
+                configureViewportPostTarget(state.maskTarget, width, height);
+                renderer.setRenderTarget(state.maskTarget);
+                renderer.setClearColor?.(0x000000, 0);
+                renderer.clear?.(true, true, true);
+                state.maskIsBlack = true;
+                return true;
+            }
+            refreshBloomMaskManifest(materialChanges, resolver);
+            materialChanges.forEach(change => {
+                change.object.material = change.replacement;
+            });
             renderer.autoClear = true;
             if (renderer.shadowMap) renderer.shadowMap.autoUpdate = false;
             /*
@@ -3049,11 +6143,24 @@
             renderer.setRenderTarget(state.maskTarget);
             renderer.setClearColor?.(0x000000, 0);
             renderer.clear?.(true, true, true);
-            renderer.render(scene, preview.camera);
+            const renderFallbackMask = () => renderer.render(scene, preview.camera);
+            if (typeof window.LightflowRenderer?.profilePass === 'function') {
+                window.LightflowRenderer.profilePass(
+                    preview,
+                    'bloom_fallback_mask_geometry',
+                    renderFallbackMask
+                );
+            } else {
+                renderFallbackMask();
+            }
             if (window.LightflowAtmosphere?.composite) {
-                window.LightflowAtmosphere.composite(preview, { studio: true, bloomMask: true });
+                // Viewport Bloom consumes the current preview-quality Atmosphere
+                // integration. Marking this as Studio forced a different frame
+                // signature and could trigger a second volumetric raymarch.
+                window.LightflowAtmosphere.composite(preview, { studio: false, bloomMask: true });
                 renderer.setRenderTarget(state.maskTarget);
             }
+            state.maskIsBlack = false;
             succeeded = true;
         } finally {
             for (let index = materialChanges.length - 1; index >= 0; index--) {
@@ -3071,75 +6178,13 @@
         state.postScene = new THREE.Scene();
         state.postGeometry = new THREE.PlaneGeometry(2, 2);
 
-        state.downsampleMaterial = new THREE.ShaderMaterial({
-            uniforms: {
-                tInput: { value: null },
-                uTexel: { value: new THREE.Vector2(1, 1) },
-                uOffset: { value: 1 },
-                uThreshold: { value: 0.72 },
-                uEmissiveStrength: { value: 1.35 },
-                uApplyThreshold: { value: true }
-            },
-            vertexShader: `
-                varying vec2 vUv;
-                void main() {
-                    vUv = uv;
-                    gl_Position = vec4(position.xy, 0.0, 1.0);
-                }
-            `,
-            fragmentShader: `
-                precision highp float;
-                uniform sampler2D tInput;
-                uniform vec2 uTexel;
-                uniform float uOffset;
-                uniform float uThreshold;
-                uniform float uEmissiveStrength;
-                uniform bool uApplyThreshold;
-                varying vec2 vUv;
-
-                vec3 bloomSample(vec2 uv) {
-                    vec3 color = texture2D(tInput, uv).rgb;
-                    if (!uApplyThreshold) return color;
-                    color *= uEmissiveStrength;
-                    float signal = max(color.r, max(color.g, color.b));
-                    float contribution = clamp((signal - uThreshold) / max(0.001, 1.0 - uThreshold), 0.0, 1.0);
-                    return color * contribution;
-                }
-
-                void main() {
-                    vec2 d = uTexel * uOffset;
-                    vec3 color = bloomSample(vUv) * 4.0;
-                    color += bloomSample(vUv + vec2( d.x, 0.0)) * 2.0;
-                    color += bloomSample(vUv + vec2(-d.x, 0.0)) * 2.0;
-                    color += bloomSample(vUv + vec2(0.0,  d.y)) * 2.0;
-                    color += bloomSample(vUv + vec2(0.0, -d.y)) * 2.0;
-                    color += bloomSample(vUv + vec2( d.x,  d.y));
-                    color += bloomSample(vUv + vec2(-d.x,  d.y));
-                    color += bloomSample(vUv + vec2( d.x, -d.y));
-                    color += bloomSample(vUv + vec2(-d.x, -d.y));
-                    gl_FragColor = vec4(color * 0.0625, 1.0);
-                }
-            `,
-            depthTest: false,
-            depthWrite: false,
-            transparent: false,
-            blending: THREE.NoBlending
-        });
-        state.downsampleMaterial.name = 'Lightflow_ViewportBloomDownsample';
-
         state.compositeMaterial = new THREE.ShaderMaterial({
             uniforms: {
                 tBeauty: { value: null },
-                tMask: { value: null },
-                tBloom0: { value: null },
-                tBloom1: { value: null },
-                tBloom2: { value: null },
+                tBloom: { value: null },
                 uUseBeauty: { value: false },
                 uUseBloom: { value: true },
                 uUseColorGrade: { value: false },
-                uThreshold: { value: 0.72 },
-                uBloomStrength: { value: 0.8 },
-                uEmissiveStrength: { value: 1.35 },
                 uExposure: { value: 1 },
                 uContrast: { value: 1 },
                 uSaturation: { value: 1 },
@@ -3157,16 +6202,10 @@
             fragmentShader: `
                 precision highp float;
                 uniform sampler2D tBeauty;
-                uniform sampler2D tMask;
-                uniform sampler2D tBloom0;
-                uniform sampler2D tBloom1;
-                uniform sampler2D tBloom2;
+                uniform sampler2D tBloom;
                 uniform bool uUseBeauty;
                 uniform bool uUseBloom;
                 uniform bool uUseColorGrade;
-                uniform float uThreshold;
-                uniform float uBloomStrength;
-                uniform float uEmissiveStrength;
                 uniform float uExposure;
                 uniform float uContrast;
                 uniform float uSaturation;
@@ -3174,13 +6213,6 @@
                 uniform float uTint;
                 uniform float uVignette;
                 varying vec2 vUv;
-
-                vec3 extractCore(vec3 color) {
-                    color *= uEmissiveStrength;
-                    float signal = max(color.r, max(color.g, color.b));
-                    float contribution = clamp((signal - uThreshold) / max(0.001, 1.0 - uThreshold), 0.0, 1.0);
-                    return color * contribution;
-                }
 
                 vec3 colorGrade(vec3 color) {
                     color *= uExposure;
@@ -3197,11 +6229,8 @@
                     vec4 beauty = uUseBeauty ? texture2D(tBeauty, vUv) : vec4(0.0);
                     vec3 bloom = vec3(0.0);
                     if (uUseBloom) {
-                        bloom += extractCore(texture2D(tMask, vUv).rgb) * 0.10;
-                        bloom += texture2D(tBloom0, vUv).rgb * 0.42;
-                        bloom += texture2D(tBloom1, vUv).rgb * 0.30;
-                        bloom += texture2D(tBloom2, vUv).rgb * 0.18;
-                        bloom *= uBloomStrength;
+                        vec4 bloomSample = texture2D(tBloom, vUv);
+                        bloom = bloomSample.rgb * (1.0 - bloomSample.a);
                     }
                     vec3 color = beauty.rgb + bloom;
                     if (uUseColorGrade) color = colorGrade(color);
@@ -3211,10 +6240,16 @@
             depthTest: false,
             depthWrite: false,
             transparent: true,
-            blending: THREE.AdditiveBlending
+            blending: THREE.CustomBlending,
+            blendEquation: THREE.AddEquation,
+            blendSrc: THREE.OneFactor,
+            blendDst: THREE.OneFactor,
+            blendEquationAlpha: THREE.AddEquation,
+            blendSrcAlpha: THREE.ZeroFactor,
+            blendDstAlpha: THREE.OneFactor
         });
         state.compositeMaterial.name = 'Lightflow_ViewportGPUComposer';
-        state.postQuad = new THREE.Mesh(state.postGeometry, state.downsampleMaterial);
+        state.postQuad = new THREE.Mesh(state.postGeometry, state.compositeMaterial);
         state.postQuad.frustumCulled = false;
         state.postScene.add(state.postQuad);
     }
@@ -3222,7 +6257,14 @@
     function ensureViewportBeautyTexture(state, renderer, snapshot, width, height) {
         let needsInitialization = false;
         if (!state.beautyTarget) {
-            state.beautyTarget = createViewportPostTarget(width, height, 'Lightflow_ViewportBeauty');
+            state.beautyTarget = createViewportPostTarget(
+                width,
+                height,
+                'Lightflow_ViewportBeauty',
+                false,
+                false,
+                renderer
+            );
             needsInitialization = true;
         } else {
             needsInitialization = state.beautyTarget.width !== width || state.beautyTarget.height !== height;
@@ -3237,71 +6279,22 @@
         return state.beautyTarget.texture;
     }
 
-    function renderViewportBloomPyramid(preview, state, maskWidth, maskHeight, viewWidth, viewHeight) {
-        const renderer = preview.renderer;
-        createViewportComposerResources(state);
-        const sizes = [2, 4, 8].map(divisor => ({
-            width: Math.max(2, Math.round(maskWidth / divisor)),
-            height: Math.max(2, Math.round(maskHeight / divisor))
-        }));
-        state.bloomTargets = state.bloomTargets || [];
-        sizes.forEach((size, index) => {
-            if (!state.bloomTargets[index]) {
-                state.bloomTargets[index] = createViewportPostTarget(
-                    size.width,
-                    size.height,
-                    'Lightflow_ViewportBloomMip' + index
-                );
-            } else {
-                configureViewportPostTarget(state.bloomTargets[index], size.width, size.height);
-            }
-        });
-
-        const material = state.downsampleMaterial;
-        const uniforms = material.uniforms;
-        const radiusInMaskPixels = clamp(toNumber(currentSettings.bloom_radius, 18), 1, 96) * maskWidth / Math.max(1, viewWidth);
-        state.postQuad.material = material;
-        renderer.autoClear = true;
-        renderer.setClearColor?.(0x000000, 0);
-
-        let input = state.maskTarget.texture;
-        let inputWidth = maskWidth;
-        let inputHeight = maskHeight;
-        for (let index = 0; index < state.bloomTargets.length; index++) {
-            const target = state.bloomTargets[index];
-            uniforms.tInput.value = input;
-            uniforms.uTexel.value.set(1 / Math.max(1, inputWidth), 1 / Math.max(1, inputHeight));
-            uniforms.uOffset.value = clamp(0.85 + radiusInMaskPixels * (0.055 + index * 0.035), 0.85, 5.5);
-            uniforms.uThreshold.value = clamp(toNumber(currentSettings.bloom_threshold, 0.72), 0, 1);
-            uniforms.uEmissiveStrength.value = clamp(toNumber(currentSettings.bloom_emissive_strength, 1.35), 0, 6);
-            uniforms.uApplyThreshold.value = index === 0;
-            renderer.setRenderTarget(target);
-            renderer.clear?.(true, false, false);
-            renderer.render(state.postScene, state.postCamera);
-            input = target.texture;
-            inputWidth = target.width;
-            inputHeight = target.height;
-        }
-        return state.bloomTargets;
+    function getViewportBeautyTexture(state) {
+        return state?.sharedBeautyTexture || state?.beautyTarget?.texture || null;
     }
 
-    function renderViewportGPUComposite(preview, state, snapshot, useBloom, useColorGrade) {
+    function renderViewportGPUComposite(preview, state, snapshot, bloomSettings, useBloom, useColorGrade) {
         const renderer = preview.renderer;
         createViewportComposerResources(state);
         const material = state.compositeMaterial;
         const uniforms = material.uniforms;
-        const fallback = state.maskTarget?.texture || state.beautyTarget?.texture;
-        uniforms.tBeauty.value = state.beautyTarget?.texture || fallback;
-        uniforms.tMask.value = state.maskTarget?.texture || fallback;
-        uniforms.tBloom0.value = state.bloomTargets?.[0]?.texture || fallback;
-        uniforms.tBloom1.value = state.bloomTargets?.[1]?.texture || uniforms.tBloom0.value;
-        uniforms.tBloom2.value = state.bloomTargets?.[2]?.texture || uniforms.tBloom1.value;
+        const beautyTexture = getViewportBeautyTexture(state);
+        const fallback = state.bloomResult?.texture || state.sharedEmissionTexture || state.maskTarget?.texture || beautyTexture;
+        uniforms.tBeauty.value = beautyTexture || fallback;
+        uniforms.tBloom.value = state.bloomResult?.texture || fallback;
         uniforms.uUseBeauty.value = !!useColorGrade;
         uniforms.uUseBloom.value = !!useBloom;
         uniforms.uUseColorGrade.value = !!useColorGrade;
-        uniforms.uThreshold.value = clamp(toNumber(currentSettings.bloom_threshold, 0.72), 0, 1);
-        uniforms.uBloomStrength.value = clamp(toNumber(currentSettings.bloom_strength, 0.8), 0, 3);
-        uniforms.uEmissiveStrength.value = clamp(toNumber(currentSettings.bloom_emissive_strength, 1.35), 0, 6);
         uniforms.uExposure.value = clamp(toNumber(currentSettings.exposure, 1), 0.1, 4);
         uniforms.uContrast.value = clamp(toNumber(currentSettings.contrast, 1), 0, 3);
         uniforms.uSaturation.value = clamp(toNumber(currentSettings.saturation, 1), 0, 3);
@@ -3333,7 +6326,12 @@
         if (snapshot.scissor) renderer.setScissor?.(snapshot.scissor);
         renderer.setScissorTest?.(snapshot.scissorTest);
         renderer.autoClear = false;
-        renderer.render(state.postScene, state.postCamera);
+        const renderComposite = () => renderer.render(state.postScene, state.postCamera);
+        if (typeof window.LightflowRenderer?.profilePass === 'function') {
+            window.LightflowRenderer.profilePass(preview, 'bloom_composite', renderComposite);
+        } else {
+            renderComposite();
+        }
     }
 
     function getViewportComposerState(preview) {
@@ -3343,15 +6341,17 @@
         state = {
             preview,
             maskTarget: null,
-            bloomTargets: null,
+            maskIsBlack: false,
+            sharedEmissionTexture: null,
+            bloomResult: null,
             beautyTarget: null,
             copyPosition: new THREE.Vector2(),
             postScene: null,
             postCamera: null,
             postQuad: null,
             postGeometry: null,
-            downsampleMaterial: null,
             compositeMaterial: null,
+            adaptiveTier: VIEWPORT_BLOOM_PROFILES.adaptive.tier,
             dynamicScale: VIEWPORT_BLOOM_PROFILES.adaptive.scale,
             composerMs: 0,
             adaptiveFrames: 0,
@@ -3371,23 +6371,37 @@
 
     function updateAdaptiveViewportBloom(state, elapsed, profile) {
         if (!profile.adaptive) return;
-        state.composerMs = state.composerMs > 0 ? state.composerMs * 0.88 + elapsed * 0.12 : elapsed;
-        state.adaptiveFrames++;
-        if (state.adaptiveFrames < 24) return;
-        state.adaptiveFrames = 0;
-        const fpsLimit = clamp(toNumber(currentSettings.viewport_bloom_fps, 0), 0, 144);
-        const frameBudget = 1000 / Math.max(30, fpsLimit || 60);
-        if (state.composerMs > frameBudget * 0.46) {
-            state.dynamicScale = Math.max(profile.minScale, state.dynamicScale * 0.88);
-        } else if (state.composerMs < frameBudget * 0.22) {
-            state.dynamicScale = Math.min(profile.maxScale, state.dynamicScale * 1.06);
+        state.composerMs = state.composerMs > 0 ? state.composerMs * 0.9 + elapsed * 0.1 : elapsed;
+        const budget = window.LightflowFrameBudget?.get?.() || {};
+        const bloomScale = clamp(toNumber(budget.bloomScale, 1), 0.5, 1);
+        const pressure = bloomScale < 0.82;
+        const spare = bloomScale > 0.98;
+        state.adaptivePressureFrames = pressure ? (state.adaptivePressureFrames || 0) + 1 : 0;
+        state.adaptiveSpareFrames = spare ? (state.adaptiveSpareFrames || 0) + 1 : 0;
+        const states = profile.scaleStates || [0.25, 1 / 3, 0.5, 2 / 3];
+        let tier = clamp(Math.round(Number(state.adaptiveTier ?? profile.tier ?? 2)), 0, states.length - 1);
+        if (state.adaptivePressureFrames >= 90 && tier > 0) {
+            tier -= 1;
+            state.adaptivePressureFrames = 0;
+            state.adaptiveSpareFrames = 0;
+        } else if (state.adaptiveSpareFrames >= 180 && tier < states.length - 1) {
+            tier += 1;
+            state.adaptivePressureFrames = 0;
+            state.adaptiveSpareFrames = 0;
         }
+        state.adaptiveTier = tier;
+        state.dynamicScale = states[tier];
     }
 
     function renderViewportComposer(preview) {
         if (!preview?.renderer || !preview.canvas || window.LightManagerStudioRenderSession || preview.sa_studio_render_active) return;
+        if (window.ShaderEngine?.shouldDeferProjectPreviewEffect?.(3, preview)) return;
         if (!isLightflowRenderMode()) return;
-        const useBloom = !!(currentSettings.viewport_bloom_enabled && currentSettings.bloom_enabled);
+        const bloomSettings = resolveBloomSettings(currentSettings);
+        const useBloom = !!(
+            currentSettings.viewport_bloom_enabled &&
+            studioBloomHasVisibleContribution(bloomSettings)
+        );
         const useColorGrade = !!currentSettings.color_grading_enabled;
         if (!useBloom && !useColorGrade) return;
 
@@ -3407,16 +6421,31 @@
         const drawingBuffer = renderer.getDrawingBufferSize?.(new THREE.Vector2()) || null;
         const viewWidth = Math.max(1, Math.round(currentViewport?.z || drawingBuffer?.x || preview.canvas.width || 1));
         const viewHeight = Math.max(1, Math.round(currentViewport?.w || drawingBuffer?.y || preview.canvas.height || 1));
-        const profile = getViewportBloomProfile(currentSettings);
-        const requestedScale = profile.adaptive ? state.dynamicScale : profile.scale;
-        const bloomScale = Math.min(requestedScale, profile.maxDimension / Math.max(viewWidth, viewHeight));
+        const baseProfile = getViewportBloomProfile(currentSettings);
+        const profile = getAdaptiveBloomProfile(state, baseProfile);
+        const rendererCapabilities = window.LightflowRenderer?.getCapabilities?.(renderer) || {};
+        const legalDimension = Math.max(64, Number(rendererCapabilities.maxTextureSize) || profile.maxDimension);
+        const bloomScale = Math.min(
+            profile.scale,
+            Math.min(profile.maxDimension, legalDimension) / Math.max(viewWidth, viewHeight)
+        );
         const maskWidth = Math.max(2, Math.round(viewWidth * bloomScale));
         const maskHeight = Math.max(2, Math.round(viewHeight * bloomScale));
         const started = performance.now();
 
         state.rendering = true;
         try {
-            if (useColorGrade) {
+            const sharedFrame = window.LightflowFramePipeline?.getFrameResources?.(preview);
+            const canonicalSceneTexture = sharedFrame?.colorTexture || null;
+            const hasCompositedRim = (window.MinecraftPromotionalSilhouetteManager?.getGroups?.()?.size || 0) > 0;
+            state.sharedBeautyTexture = !useColorGrade && !hasCompositedRim
+                ? canonicalSceneTexture
+                : null;
+            state.sharedEmissionTexture = useBloom ? (sharedFrame?.emissionTexture || null) : null;
+            const needsBeautyTexture = useColorGrade || hasCompositedRim || (
+                useBloom && bloomSettings.bloom_hdr_strength > 0.0001
+            );
+            if (needsBeautyTexture && !state.sharedBeautyTexture) {
                 const beauty = ensureViewportBeautyTexture(state, renderer, snapshot, viewWidth, viewHeight);
                 if (!beauty || typeof renderer.copyFramebufferToTexture !== 'function') return;
                 const originX = Math.max(0, Math.round(currentViewport?.x || 0));
@@ -3424,11 +6453,49 @@
                 renderer.copyFramebufferToTexture(state.copyPosition.set(originX, originY), beauty);
             }
             let bloomReady = false;
-            if (useBloom && renderViewportBloomMask(preview, state, maskWidth, maskHeight)) {
-                renderViewportBloomPyramid(preview, state, maskWidth, maskHeight, viewWidth, viewHeight);
-                bloomReady = true;
+            state.bloomResult = null;
+            if (useBloom) {
+                const bloomPipeline = getLightflowBloomPipeline(preview);
+                let emissionTexture = state.sharedEmissionTexture;
+                let emissionUsesCoverageAlpha = false;
+                let compatibilityTexture = null;
+                let sourceMode = emissionTexture ? 'mrt' : 'fallback_mask';
+                if (emissionTexture && bloomPipeline) {
+                    compatibilityTexture = bloomPipeline.renderCompatibilitySource(
+                        preview,
+                        maskWidth,
+                        maskHeight,
+                        false
+                    );
+                    if (sharedFrame?.compatibilityOccluders?.submissions > 0) {
+                        sourceMode = 'mrt_plus_compatibility_occluders';
+                    }
+                    if (compatibilityTexture) {
+                        sourceMode = sharedFrame?.compatibilityOccluders?.submissions > 0
+                            ? 'mrt_plus_compatibility'
+                            : 'mrt_plus_environment_atmosphere';
+                    }
+                } else if (renderViewportBloomMaskFallback(preview, state, maskWidth, maskHeight)) {
+                    emissionTexture = state.maskTarget?.texture || null;
+                    emissionUsesCoverageAlpha = true;
+                }
+                if (bloomPipeline && (emissionTexture || canonicalSceneTexture || getViewportBeautyTexture(state))) {
+                    state.bloomResult = bloomPipeline.run({
+                        emissionTexture,
+                        sceneTexture: canonicalSceneTexture || getViewportBeautyTexture(state),
+                        compatibilityTexture,
+                        depthTexture: sharedFrame?.depthTexture || null,
+                        emissionUsesCoverageAlpha,
+                        settings: bloomSettings,
+                        profile,
+                        width: maskWidth,
+                        height: maskHeight,
+                        sourceMode
+                    });
+                    bloomReady = !!state.bloomResult;
+                }
             }
-            renderViewportGPUComposite(preview, state, snapshot, bloomReady, useColorGrade);
+            renderViewportGPUComposite(preview, state, snapshot, bloomSettings, bloomReady, useColorGrade);
             state.lastRender = now;
         } catch (error) {
             if (!state.failureReported) {
@@ -3437,8 +6504,10 @@
             }
         } finally {
             restoreViewportRendererState(renderer, snapshot);
+            state.sharedBeautyTexture = null;
+            state.sharedEmissionTexture = null;
             state.rendering = false;
-            updateAdaptiveViewportBloom(state, performance.now() - started, profile);
+            updateAdaptiveViewportBloom(state, performance.now() - started, baseProfile);
         }
     }
 
@@ -3452,8 +6521,27 @@
         return previews;
     }
 
+    function collectStudioRenderRenderers() {
+        const renderers = [];
+        const canvases = new Set();
+        collectStudioRenderPreviews().forEach(preview => {
+            const renderer = preview?.renderer;
+            const canvas = renderer?.domElement;
+            if (!renderer || !canvas || canvases.has(canvas)) return;
+            canvases.add(canvas);
+            renderers.push(renderer);
+        });
+        return renderers;
+    }
+
     function patchViewportComposer(preview) {
-        if (!preview?.renderer || typeof preview.render !== 'function' || VIEWPORT_COMPOSER_STATE.has(preview)) return;
+        if (!preview?.renderer || typeof preview.render !== 'function') return;
+        if (window.LightflowFramePipeline?.disposed === false) {
+            window.LightflowFramePipeline.patchPreview?.(preview);
+            return;
+        }
+        const existingState = VIEWPORT_COMPOSER_STATE.get(preview);
+        if (existingState && !existingState.wrapperDetached) return;
         const originalRender = preview.render;
         const patchedRender = function lightflowSceneComposerRender() {
             const result = originalRender.apply(this, arguments);
@@ -3464,6 +6552,7 @@
         if (!state) return;
         state.originalRender = originalRender;
         state.patchedRender = patchedRender;
+        state.wrapperDetached = false;
         preview.render = patchedRender;
     }
 
@@ -3494,7 +6583,176 @@
     }
 
     function patchAllViewportComposers() {
+        if (window.LightflowFramePipeline?.disposed === false) {
+            attachViewportComposerToFramePipeline();
+            return;
+        }
         collectStudioRenderPreviews().forEach(patchViewportComposer);
+    }
+
+    function attachViewportComposerToFramePipeline() {
+        if (framePipelineRegistration || window.LightflowFramePipeline?.disposed !== false) return;
+        const registerResource = (name, descriptor) => {
+            const registration = window.LightflowFramePipeline.registerResource?.(name, descriptor);
+            if (registration) framePipelineResources.push(registration);
+        };
+        registerResource('viewportComposerBeauty', {
+            owner: 'studio_viewport', format: 'rgba8', scale: 1
+        });
+        registerResource('viewportBloomSource', {
+            owner: 'studio_viewport', format: 'rgba16f', scale: 0.5
+        });
+        for (let index = 1; index <= 5; index++) {
+            registerResource(`viewportBloomDown${index}`, {
+                owner: 'studio_viewport',
+                format: 'rgba16f',
+                scale: Math.pow(0.5, index + 1)
+            });
+            registerResource(`viewportBloomUp${index - 1}`, {
+                owner: 'studio_viewport',
+                format: 'rgba16f',
+                scale: Math.pow(0.5, index)
+            });
+        }
+        const bloomActive = () => !!(
+            currentSettings.viewport_bloom_enabled &&
+            studioBloomHasVisibleContribution(resolveBloomSettings(currentSettings))
+        );
+        const gradingActive = () => !!currentSettings.color_grading_enabled;
+        framePipelineRegistration = window.LightflowFramePipeline.registerPass?.('viewport_composer', {
+            priority: 300,
+            reads: ['framebuffer'],
+            dynamicReads: () => bloomActive()
+                ? ['sceneColor', 'sceneDepth', 'sceneEmission']
+                : [],
+            writes: ['framebuffer'],
+            dynamicWrites: () => [
+                ...(gradingActive() ? ['viewportComposerBeauty'] : []),
+                ...(bloomActive() ? [
+                    'viewportBloomSource',
+                    'viewportBloomDown1', 'viewportBloomDown2', 'viewportBloomDown3',
+                    'viewportBloomDown4', 'viewportBloomDown5',
+                    'viewportBloomUp0', 'viewportBloomUp1', 'viewportBloomUp2',
+                    'viewportBloomUp3', 'viewportBloomUp4'
+                ] : [])
+            ],
+            dependsOn: ['rendercraft_rim', 'atmosphere'],
+            enabled: preview => !!(
+                preview &&
+                !preview.sa_studio_render_active &&
+                !window.LightManagerStudioRenderSession &&
+                isLightflowRenderMode() &&
+                (
+                    bloomActive() || gradingActive()
+                )
+            ),
+            execute: preview => renderViewportComposer(preview)
+        }) || null;
+    }
+
+    function detachViewportComposerFromFramePipeline() {
+        framePipelineRegistration?.delete?.();
+        framePipelineRegistration = null;
+        framePipelineResources.forEach(registration => registration?.delete?.());
+        framePipelineResources = [];
+    }
+
+    function estimateViewportTargetBytes(target) {
+        if (!target) return 0;
+        const textureCount = Array.isArray(target.texture) ? target.texture.length : 1;
+        const type = Array.isArray(target.texture) ? target.texture[0]?.type : target.texture?.type;
+        const bytesPerChannel = type === THREE.FloatType ? 4 : (type === THREE.HalfFloatType ? 2 : 1);
+        const colorBytes = Math.max(1, target.width || 1) * Math.max(1, target.height || 1) * 4 * bytesPerChannel * textureCount;
+        const depthBytes = target.depthBuffer ? Math.max(1, target.width || 1) * Math.max(1, target.height || 1) * 4 : 0;
+        return colorBytes + depthBytes;
+    }
+
+    function releaseViewportComposerResources(state) {
+        if (!state) return;
+        state.maskTarget?.dispose?.();
+        state.beautyTarget?.dispose?.();
+        state.compositeMaterial?.dispose?.();
+        state.postGeometry?.dispose?.();
+        state.maskTarget = null;
+        state.beautyTarget = null;
+        state.compositeMaterial = null;
+        state.postGeometry = null;
+        state.postQuad = null;
+        state.postScene = null;
+        state.postCamera = null;
+        state.sharedBeautyTexture = null;
+        state.sharedEmissionTexture = null;
+        state.maskIsBlack = false;
+        state.rendering = false;
+    }
+
+    function pruneViewportComposers(activePreviews = collectStudioRenderPreviews()) {
+        const active = activePreviews instanceof Set
+            ? activePreviews
+            : new Set(activePreviews || []);
+        VIEWPORT_COMPOSER_STATE.forEach((state, preview) => {
+            if (active.has(preview)) return;
+            if (preview?.render === state.patchedRender) preview.render = state.originalRender;
+            releaseViewportComposerResources(state);
+            state.disposed = true;
+            VIEWPORT_COMPOSER_STATE.delete(preview);
+        });
+    }
+
+    function getStudioResourceDiagnostics() {
+        let renderTargets = 0;
+        let estimatedBytes = 0;
+        VIEWPORT_COMPOSER_STATE.forEach(state => {
+            [state.maskTarget, state.beautyTarget].forEach(target => {
+                if (!target) return;
+                renderTargets += 1;
+                estimatedBytes += estimateViewportTargetBytes(target);
+            });
+        });
+        const bloomPipelines = Array.from(BLOOM_PIPELINE_INSTANCES).filter(pipeline => !pipeline.disposed);
+        const latestBloom = bloomPipelines
+            .map(pipeline => pipeline.lastDiagnostics)
+            .filter(Boolean)
+            .sort((left, right) => (right.estimatedBytes || 0) - (left.estimatedBytes || 0))[0] || null;
+        const bloomEstimatedBytes = bloomPipelines.reduce(
+            (sum, pipeline) => sum + pipeline.estimateBytes(),
+            0
+        );
+        const bloomTargetCount = bloomPipelines.reduce(
+            (sum, pipeline) => sum + pipeline.getActiveTargets().length,
+            0
+        );
+        return {
+            bloomPipeline: 'native-mip-progressive-v3',
+            bloomSourceMode: latestBloom?.sourceMode || 'inactive',
+            bloomWorkingFormat: latestBloom?.workingFormat || 'unallocated',
+            bloomInitialScale: latestBloom?.initialScale || 0,
+            bloomExtractPasses: latestBloom?.sourcePasses || (latestBloom ? 1 : 0),
+            bloomLevels: latestBloom?.plan?.length || 0,
+            bloomDownsampleKernel: latestBloom?.downsampleKernel || 'none',
+            bloomUpsampleKernel: latestBloom?.upsampleKernel || 'none',
+            bloomActiveTargets: bloomTargetCount,
+            bloomEstimatedBytes,
+            bloomExtraGeometrySubmissions: latestBloom?.extraGeometrySubmissions || 0,
+            bloomDrawCalls: latestBloom?.drawCalls || 0,
+            bloomTargetSwitches: latestBloom?.targetSwitches || 0,
+            studioBloomSourceResolution: latestBloom?.studioSourceResolution || null,
+            bloomDerivedMaterials: BLOOM_MASK_STATE.derivedResources.size,
+            pluginResources: BLOOM_MASK_STATE.resources.size,
+            viewportComposerStates: VIEWPORT_COMPOSER_STATE.size,
+            viewportComposerRenderTargets: renderTargets,
+            viewportComposerEstimatedBytes: estimatedBytes,
+            studioAccumulationMode: lastStudioAccumulationMode,
+            studioAccumulatorBytes: activeStudioAccumulatorBytes,
+            ownedPreview: !!studioRenderPreviewOwner.preview,
+            ownedPreviewFamily: studioRenderPreviewOwner.familyKey || null,
+            ownedPreviewGeneration: studioRenderPreviewOwner.generation,
+            ownedPreviewCreated: studioRenderPreviewOwner.created,
+            ownedPreviewRetired: studioRenderPreviewOwner.retired,
+            ownedPreviewLastRetireReason: studioRenderPreviewOwner.lastRetireReason || null,
+            ownedPreviewPrograms: studioRenderPreviewOwner.preview?.renderer?.info?.programs?.length || 0,
+            ownedPreviewContextLost: isStudioPreviewContextLost(studioRenderPreviewOwner.preview)
+        };
     }
 
     function resetSceneComposerLifecycle() {
@@ -3503,8 +6761,19 @@
             cancelAnimationFrame(sceneComposerRefreshFrame);
         }
         sceneComposerRefreshFrame = null;
+        disposeBloomDerivedResources();
+        pruneViewportComposers();
         VIEWPORT_COMPOSER_STATE.forEach(state => {
             state.scheduled = false;
+            releaseViewportComposerResources(state);
+        });
+    }
+
+    function detachViewportComposerWrappers() {
+        VIEWPORT_COMPOSER_STATE.forEach((state, preview) => {
+            if (preview?.render !== state.patchedRender) return;
+            preview.render = state.originalRender;
+            state.wrapperDetached = true;
         });
     }
 
@@ -3512,59 +6781,154 @@
         VIEWPORT_COMPOSER_STATE.forEach((state, preview) => {
             if (preview?.render === state.patchedRender) preview.render = state.originalRender;
             state.disposed = true;
-            state.maskTarget?.dispose?.();
-            state.bloomTargets?.forEach?.(target => target?.dispose?.());
-            state.beautyTarget?.dispose?.();
-            state.downsampleMaterial?.dispose?.();
-            state.compositeMaterial?.dispose?.();
-            state.postGeometry?.dispose?.();
-            state.maskTarget = null;
-            state.bloomTargets = null;
-            state.beautyTarget = null;
+            releaseViewportComposerResources(state);
         });
         VIEWPORT_COMPOSER_STATE.clear();
     }
 
-    async function deliverRender(dataUrl, size, settings) {
+    async function exportPngBlob(blob, name, type) {
+        /*
+         * Blockbench desktop expects image exports as data URLs. A binary
+         * Buffer/Uint8Array export may silently return without opening the
+         * native save dialog, so keep the proven savetype "image" route.
+         */
+        const dataUrl = await blobToDataUrl(blob);
+        if (!dataUrl || !dataUrl.startsWith('data:image/png')) {
+            throw new Error('Studio Render could not prepare a valid PNG for export.');
+        }
+        Blockbench.export({
+            resource_id: 'studio_render',
+            extensions: ['png'],
+            type,
+            savetype: 'image',
+            name,
+            content: dataUrl
+        });
+        return dataUrl;
+    }
+
+    async function deliverRender(imageBlob, size, settings) {
         const name = settings.file_name.replace(/[\\/:*?"<>|]+/g, '_') || DEFAULT_SETTINGS.file_name;
         if (settings.destination === 'save') {
-            Blockbench.export({
-                resource_id: 'studio_render',
-                extensions: ['png'],
-                type: translate('data.image', 'Image'),
-                savetype: 'image',
-                name,
-                content: dataUrl
-            });
+            await exportPngBlob(imageBlob, name, translate('data.image', 'Image'));
         } else if (settings.destination === 'clipboard') {
-            await copyImageToClipboard(dataUrl);
-        } else if (settings.destination === 'texture' && window.Codecs?.image) {
-            Codecs.image.load(dataUrl, '', [size.width, size.height]);
-            if (Texture.all[0]) Texture.all[0].name = name;
-        } else if (window.Screencam?.returnScreenshot) {
-            Screencam.returnScreenshot(dataUrl);
+            await copyImageToClipboard(imageBlob);
         } else {
-            Blockbench.export({
-                resource_id: 'studio_render',
-                extensions: ['png'],
-                type: 'PNG Image',
-                savetype: 'image',
-                name,
-                content: dataUrl
-            });
+            // Blockbench image codecs and screenshot preview reliably consume
+            // data URLs, while blob: URLs can be rejected by Electron.
+            const dataUrl = await blobToDataUrl(imageBlob);
+            if (settings.destination === 'texture' && window.Codecs?.image) {
+                Codecs.image.load(dataUrl, '', [size.width, size.height]);
+                if (Texture.all[0]) Texture.all[0].name = name;
+            } else if (window.Screencam?.returnScreenshot) {
+                Screencam.returnScreenshot(dataUrl);
+            } else {
+                Blockbench.export({
+                    resource_id: 'studio_render',
+                    extensions: ['png'],
+                    type: 'PNG Image',
+                    savetype: 'image',
+                    name,
+                    content: dataUrl
+                });
+            }
         }
         Blockbench.showQuickMessage(translate('studio_render.message.rendered', 'Studio render complete'));
+    }
+
+    function waitForStudioContextRestore(renderer, timeoutMs = 8000) {
+        const gl = getRendererContext(renderer);
+        if (!gl?.isContextLost?.()) return Promise.resolve(true);
+        const canvas = renderer?.domElement;
+        if (!canvas?.addEventListener) return Promise.resolve(false);
+        return new Promise(resolve => {
+            let settled = false;
+            let timer = null;
+            const finish = value => {
+                if (settled) return;
+                settled = true;
+                canvas.removeEventListener('webglcontextrestored', onRestored, false);
+                if (timer !== null) clearTimeout(timer);
+                resolve(value);
+            };
+            const onRestored = () => finish(true);
+            canvas.addEventListener('webglcontextrestored', onRestored, false);
+            timer = setTimeout(() => finish(false), Math.max(250, Number(timeoutMs) || 8000));
+        });
+    }
+
+    async function waitForAllStudioContextRestores(timeoutMs = 10000) {
+        const renderers = collectStudioRenderRenderers();
+        if (!renderers.length) return true;
+        const results = await Promise.all(renderers.map(renderer => (
+            waitForStudioContextRestore(renderer, timeoutMs)
+        )));
+        const restored = results.every(Boolean);
+        // Three rebuilds renderer internals synchronously from its restored event,
+        // but Lightflow/Blockbench managers repaint from RAF/microtask callbacks.
+        // Do not release Studio ownership into that same event turn.
+        if (restored) {
+            await waitForFrame();
+            await waitForFrame();
+        }
+        return restored;
+    }
+
+    function attachStudioContextMonitor(session) {
+        if (!session) return;
+        session.contextListeners = [];
+        collectStudioRenderRenderers().forEach(renderer => {
+            const canvas = renderer?.domElement;
+            if (!canvas?.addEventListener) return;
+            const onLost = event => {
+                const preview = canvas.preview || null;
+                if (preview?.sa_studio_intentional_context_retire) return;
+                const studioRendererLost = renderer === session.renderRenderer;
+                const statusMessage = event?.statusMessage || '';
+                session.anyContextLost = true;
+                session.contextLossCount = (session.contextLossCount || 0) + 1;
+                if (statusMessage) session.contextStatusMessages.push(statusMessage);
+                if (studioRendererLost) {
+                    session.studioContextLost = true;
+                    if (!session.tileSafetyDowngraded) {
+                        session.tileSafetyDowngraded = true;
+                        recordStudioTileSafetyFailure(session.renderRenderer, session);
+                    }
+                }
+                if (window.LightflowStudioRenderDiagnostics) {
+                    window.LightflowStudioRenderDiagnostics.anyContextLost = true;
+                    window.LightflowStudioRenderDiagnostics.contextLost = !!session.studioContextLost;
+                    window.LightflowStudioRenderDiagnostics.contextLossCount = session.contextLossCount;
+                    window.LightflowStudioRenderDiagnostics.contextStatusMessages = session.contextStatusMessages.slice();
+                    if (studioRendererLost) {
+                        window.LightflowStudioRenderDiagnostics.tileSafetyOutcome = 'context_lost';
+                    }
+                }
+            };
+            const onRestored = () => {
+                session.contextRestoreCount = (session.contextRestoreCount || 0) + 1;
+                if (window.LightflowStudioRenderDiagnostics) {
+                    window.LightflowStudioRenderDiagnostics.contextRestoreCount = session.contextRestoreCount;
+                }
+            };
+            canvas.addEventListener('webglcontextlost', onLost, false);
+            canvas.addEventListener('webglcontextrestored', onRestored, false);
+            session.contextListeners.push({ canvas, onLost, onRestored });
+        });
+    }
+
+    function detachStudioContextMonitor(session) {
+        (session?.contextListeners || []).forEach(record => {
+            try { record.canvas.removeEventListener('webglcontextlost', record.onLost, false); } catch (error) {}
+            try { record.canvas.removeEventListener('webglcontextrestored', record.onRestored, false); } catch (error) {}
+        });
+        if (session) session.contextListeners = [];
     }
 
     async function renderWithSettings(inputSettings, options = {}) {
         const sourcePreview = getPreview();
         if (!sourcePreview) {
             Blockbench.showQuickMessage(translate('studio_render.message.no_preview', 'No preview is available to render.'));
-            return;
-        }
-        const renderPreview = getOffscreenPreview();
-        if (!renderPreview) {
-            Blockbench.showQuickMessage(translate('studio_render.message.no_offscreen', 'Blockbench offscreen preview is not ready yet. Open a preview once and try again.'));
             return;
         }
 
@@ -3574,9 +6938,10 @@
         } else {
             currentSettings = Object.assign({}, normalized);
         }
+        const bloomSettings = resolveBloomSettings(normalized);
         const anglePreset = getAnglePreset(normalized.angle_preset);
         const frameRect = normalized.capture_area === 'frame' && !anglePreset
-            ? getFrameRectForPreview(sourcePreview, normalized)
+            ? getFrameRectForPreview(sourcePreview, normalized, options.frameState)
             : null;
         const outputSize = computeOutputSize(normalized, frameRect);
 
@@ -3589,7 +6954,7 @@
             return;
         }
 
-        if (activeRenderSession) {
+        if (activeRenderSession || window.LightManagerStudioRenderSession) {
             Blockbench.showQuickMessage(translate(
                 'studio_render.message.render_in_progress',
                 'A Studio Render session is already in progress.'
@@ -3597,26 +6962,194 @@
             return;
         }
 
-        const sampleFactor = clamp(parseInt(normalized.samples, 10) || 1, 1, 8);
-        const { canvas, ctx } = prepareFinalCanvas(outputSize, normalized);
-        const bloomMaskCanvas = normalized.bloom_enabled
-            ? createCanvas(outputSize.width, outputSize.height)
-            : null;
-        const bloomMaskContext = bloomMaskCanvas
-            ? bloomMaskCanvas.getContext('2d', { alpha: true })
-            : null;
-        if (bloomMaskContext) {
-            bloomMaskContext.clearRect(0, 0, outputSize.width, outputSize.height);
+        const renderFamilyKey = getStudioRendererFamilyKey();
+        const renderPreview = acquireOwnedStudioRenderPreview(renderFamilyKey);
+        if (!renderPreview) {
+            Blockbench.showQuickMessage(translate('studio_render.message.no_offscreen', 'Blockbench offscreen preview is not ready yet. Open a preview once and try again.'));
+            return;
         }
+
+        const sampleCount = clamp(parseInt(normalized.samples, 10) || 1, 1, 8);
+        const rasterScale = 1;
+        Blockbench.setStatusBarText(translate('studio_render.status.preparing', 'Preparing studio render...'));
+        Blockbench.setProgress(0);
         const blockbenchShading = window.settings && window.settings.shading;
         const oldShading = blockbenchShading ? blockbenchShading.value : undefined;
         const previousState = capturePreviewState(renderPreview);
         const gpuProfile = getGpuProfile(renderPreview.renderer);
-        const renderSession = { cancelled: false };
+        const renderSession = {
+            startedAt: typeof performance !== 'undefined' ? performance.now() : Date.now(),
+            cancelled: false,
+            lightManagerPrepared: false,
+            lightingPrepared: false,
+            shadowMapPrimed: false,
+            shaderBakeVisible: false,
+            preserveSurfaceDetail: false,
+            studioContextLost: false,
+            anyContextLost: false,
+            contextLossCount: 0,
+            contextRestoreCount: 0,
+            contextStatusMessages: [],
+            contextListeners: [],
+            gpuFenceCount: 0,
+            maxGpuFenceMs: 0,
+            tileSize: 0,
+            tileCount: 0,
+            sampleCount,
+            workloadClass: getStudioWorkloadClass(),
+            heavyLightflowSession: false,
+            renderPreview,
+            renderRenderer: renderPreview.renderer,
+            renderFamilyKey,
+            renderPreviewGeneration: renderPreview.sa_studio_renderer_generation || 0,
+            tileSafetyDowngraded: false
+        };
+        renderSession.billboardSnapshots = captureStudioRenderBillboards();
+        renderSession.heavyLightflowSession = isStudioHeavyWorkloadClass(renderSession.workloadClass);
+        // Reserve the session before the first await. Otherwise two invocations
+        // in the same animation-frame gap can both pass the active-session guard.
         activeRenderSession = renderSession;
-        showGpuGuidanceIfNeeded(gpuProfile);
-
+        if (options.silent !== true && sourcePreview?.node) {
+            const node = document.createElement('div');
+            node.className = 'lightflow_render_progress';
+            const label = document.createElement('span');
+            label.setAttribute('role', 'status');
+            label.setAttribute('aria-live', 'polite');
+            label.textContent = translate('studio_render.status.preparing', 'Preparing studio render…');
+            const cancel = document.createElement('button');
+            cancel.type = 'button';
+            cancel.textContent = translate('studio_render.workflow.cancel', 'Cancel render');
+            cancel.addEventListener('click', () => {
+                renderSession.cancelled = true;
+                renderSession.cancelReason = 'ui_cancel';
+                cancel.disabled = true;
+                label.textContent = translate('studio_render.workflow.cancelling', 'Cancelling; restoring the scene…');
+            });
+            node.append(label, cancel);
+            sourcePreview.node.append(node);
+            renderSession.progressUI = {node, label};
+        }
+        let renderResult = null;
+        let frameConsumed = false;
+        const cancelledRenderResult = () => (renderResult = {
+            ok: false,
+            cancelled: true,
+            cancelReason: renderSession.cancelReason || 'cancelled',
+            delivered: false,
+            consumed: frameConsumed,
+            width: outputSize.width,
+            height: outputSize.height,
+            samples: sampleCount,
+            tileSize: renderSession.tileSize,
+            tileCount: renderSession.tileCount,
+            imageBytes: null
+        });
+        let canvas = null;
+        let ctx = null;
+        let bloomMaskCanvas = null;
+        let bloomMaskContext = null;
+        let studioBloomPipeline = null;
+        let studioBloomSession = null;
+        let studioBloomGpuEnabled = false;
+        const studioBloomProfile = STUDIO_BLOOM_PROFILE;
+        window.LightflowStudioRenderDiagnostics = {
+            active: true,
+            postQualityContract: STUDIO_POST_QUALITY_CONTRACT.version,
+            ambientOcclusion: null,
+            aoQualityTarget: STUDIO_POST_QUALITY_CONTRACT.ambientOcclusion.quality,
+            aoScaleTarget: STUDIO_POST_QUALITY_CONTRACT.ambientOcclusion.scale,
+            aoEffectiveSPPTarget: STUDIO_POST_QUALITY_CONTRACT.ambientOcclusion.effectiveSPP,
+            aoQualityForced: false,
+            bloomPipeline: 'native-mip-progressive-v3',
+            bloomRequestedQuality: String(normalized.viewport_bloom_quality || 'adaptive'),
+            bloomRuntimeQuality: studioBloomProfile.quality,
+            bloomQualityForced: true,
+            bloomProfile: {
+                scale: studioBloomProfile.scale,
+                maxLevels: studioBloomProfile.maxLevels,
+                minMipSize: studioBloomProfile.minMipSize,
+                downsampleKernel: studioBloomProfile.downsampleKernel,
+                upsampleKernel: studioBloomProfile.upsampleKernel,
+                maxDimension: studioBloomProfile.maxDimension
+            },
+            bloomCpuFallbackProfile: {
+                maxDimension: 4096,
+                divisors: CPU_FALLBACK_BLOOM_DIVISORS.slice()
+            },
+            bloomSourceMode: 'disabled',
+            bloomWorkingFormat: 'unallocated',
+            bloomInitialScale: 0,
+            bloomLevels: 0,
+            bloomDownsampleKernel: 'none',
+            bloomUpsampleKernel: 'none',
+            bloomActiveTargets: 0,
+            bloomEstimatedBytes: 0,
+            bloomExtraGeometrySubmissions: 0,
+            bloomDrawCalls: 0,
+            bloomTargetSwitches: 0,
+            studioBloomSourceResolution: [0, 0],
+            outputWidth: outputSize.width,
+            outputHeight: outputSize.height,
+            samples: sampleCount,
+            tileSize: 0,
+            tileCount: 0,
+            accumulationMode: '',
+            contextLost: false,
+            anyContextLost: false,
+            contextLossCount: 0,
+            contextRestoreCount: 0,
+            contextStatusMessages: [],
+            gpuFenceCount: 0,
+            maxGpuFenceMs: 0,
+            gpuAccumulatorEnabled: false,
+            gpuFenceCadence: 0,
+            shaderPrepareMs: 0,
+            shaderPrepareProgramDelta: 0,
+            shaderPrepareResult: null,
+            tileRenderMs: 0,
+            finalCompositeMs: 0,
+            encodeMs: 0,
+            totalMs: 0,
+            workloadClass: renderSession.workloadClass,
+            adaptiveTileTarget: renderSession.heavyLightflowSession
+                ? getAdaptiveStudioHeavyTileTarget(renderPreview.renderer, sampleCount, renderSession.workloadClass)
+                : null,
+            renderPreviewOwned: true,
+            renderPreviewFamily: renderFamilyKey,
+            renderPreviewGeneration: renderSession.renderPreviewGeneration,
+            tileSafetyOutcome: 'pending'
+        };
         try {
+            // Keep all post-reservation work inside the guarded lifetime. Even UI
+            // guidance can throw through host/plugin integrations; the finally
+            // below must always own cleanup once activeRenderSession is reserved.
+            // Diagnostic/Test Lab renders are intentionally silent and must never
+            // show a misleading "GPU unknown" modal after a poisoned context.
+            if (options.silent !== true) showGpuGuidanceIfNeeded(gpuProfile);
+
+            // Claim exclusive Studio ownership before preflight or shader
+            // preparation. Those phases can await for many frames and must not
+            // race the main preview warm-up/shadow pipeline.
+            claimStudioRenderFlags(renderSession, renderPreview);
+            attachStudioContextMonitor(renderSession);
+
+            // Let the click/progress feedback paint only after the session has
+            // been reserved. Canvas allocation can be large and must not reopen
+            // the double-start race while yielding to requestAnimationFrame.
+            await waitForFrame();
+            if (renderSession.cancelled) return cancelledRenderResult();
+            ({ canvas, ctx } = prepareFinalCanvas(outputSize, normalized));
+
+            const studioGl = getRendererContext(renderPreview.renderer);
+            if (!studioGl) {
+                throw new Error('Studio Render preflight failed: WebGL context unavailable.');
+            }
+            if (studioGl.isContextLost?.()) {
+                throw new Error('Studio Render preflight failed: offscreen WebGL context is already lost.');
+            }
+            beginStudioWebGLErrorScope(renderPreview.renderer);
+            assertStudioWebGLHealthy(renderPreview.renderer, 'preflight', renderSession);
+
             if (blockbenchShading && blockbenchShading.value !== normalized.shading) {
                 blockbenchShading.set(normalized.shading);
             }
@@ -3627,8 +7160,53 @@
                 cameraSourcePreview = snapshotCameraSource(renderPreview, outputSize.width, outputSize.height);
             }
 
-            const tileSize = resolveTileSize(normalized, renderPreview.renderer, sampleFactor);
-            const tiles = buildTileList(outputSize, sampleFactor, tileSize, cameraSourcePreview, normalized, frameRect);
+            const tileSize = resolveTileSize(normalized, renderPreview.renderer, rasterScale, sampleCount);
+            const tiles = buildTileList(outputSize, rasterScale, tileSize, cameraSourcePreview, normalized, frameRect);
+            renderSession.tileSize = tileSize;
+            renderSession.tileCount = tiles.length;
+            if (window.LightflowStudioRenderDiagnostics) {
+                window.LightflowStudioRenderDiagnostics.tileSize = tileSize;
+                window.LightflowStudioRenderDiagnostics.tileCount = tiles.length;
+            }
+            if (studioBloomHasVisibleContribution(bloomSettings)) {
+                const rendererCapabilities = window.LightflowRenderer?.getCapabilities?.(
+                    renderPreview.renderer,
+                    { probeHalfFloat: true }
+                ) || null;
+                const mrtAvailable = !!(
+                    renderPreview.renderer?.capabilities?.isWebGL2 &&
+                    Number(rendererCapabilities?.maxDrawBuffers) >= 3 &&
+                    Number(rendererCapabilities?.maxColorAttachments) >= 3 &&
+                    typeof window.LightflowRenderer?.renderExternal === 'function'
+                );
+                if (mrtAvailable) {
+                    studioBloomPipeline = getLightflowBloomPipeline(renderPreview);
+                    studioBloomSession = studioBloomPipeline?.beginStudio(
+                        renderPreview,
+                        outputSize,
+                        bloomSettings,
+                        studioBloomProfile
+                    ) || null;
+                    studioBloomGpuEnabled = !!studioBloomSession;
+                }
+                if (!studioBloomGpuEnabled) {
+                    bloomMaskCanvas = createCanvas(outputSize.width, outputSize.height);
+                    bloomMaskContext = bloomMaskCanvas.getContext('2d', { alpha: true });
+                }
+                if (window.LightflowStudioRenderDiagnostics) {
+                    window.LightflowStudioRenderDiagnostics.bloomSourceMode = studioBloomGpuEnabled
+                        ? 'mrt'
+                        : 'cpu_fallback';
+                    window.LightflowStudioRenderDiagnostics.bloomWorkingFormat = studioBloomPipeline?.useHalfFloat
+                        ? 'rgba16f_linear'
+                        : (studioBloomGpuEnabled ? 'rgba8_linear_clamped' : 'canvas2d_encoded');
+                    window.LightflowStudioRenderDiagnostics.bloomInitialScale = studioBloomSession?.scale || 0;
+                    window.LightflowStudioRenderDiagnostics.studioBloomSourceResolution = studioBloomSession
+                        ? [studioBloomSession.width, studioBloomSession.height]
+                        : [outputSize.width, outputSize.height];
+                }
+            }
+            const sampleJitters = getStudioSampleJitters(sampleCount);
             StudioRenderFrame.prepareTileProgress(tiles, outputSize, normalized);
 
             Blockbench.setStatusBarText(
@@ -3638,15 +7216,66 @@
             );
             Blockbench.setProgress(0);
 
+            if (typeof window.ShaderArchitectBeginStudioRenderBake === 'function') {
+                renderSession.shaderBakeVisible =
+                    window.ShaderArchitectBeginStudioRenderBake(renderPreview) === true;
+                if (renderSession.shaderBakeVisible) {
+                    // Paint the panel before the exact offscreen renderer links.
+                    await waitForFrame();
+                    await waitForFrame();
+                    if (renderSession.cancelled) return cancelledRenderResult();
+                }
+            }
+
+            // Studio owns a different WebGLRenderer/context, so viewport programs are
+            // not reusable here. Compile that context explicitly before tile timing;
+            // otherwise the first tile/fence misleadingly absorbs 20-60 seconds of
+            // cold shader linking and a compile failure is discovered halfway through
+            // an image instead of during preparation.
+            if (typeof window.ShaderArchitectPrepareStudioRenderer === 'function') {
+                const shaderPrepareStartedAt = typeof performance !== 'undefined'
+                    ? performance.now()
+                    : Date.now();
+                const prepareResult = await window.ShaderArchitectPrepareStudioRenderer(
+                    renderPreview,
+                    {
+                        targetRenderMode: window.ShaderEngine?.globalRenderMode || '',
+                        isTaskValid: () => !renderSession.cancelled
+                    }
+                );
+                const shaderPrepareFinishedAt = typeof performance !== 'undefined'
+                    ? performance.now()
+                    : Date.now();
+                if (renderSession.cancelled) return cancelledRenderResult();
+                if (window.LightflowStudioRenderDiagnostics) {
+                    window.LightflowStudioRenderDiagnostics.shaderPrepareMs = Math.max(
+                        0,
+                        shaderPrepareFinishedAt - shaderPrepareStartedAt
+                    );
+                    window.LightflowStudioRenderDiagnostics.shaderPrepareProgramDelta =
+                        Number(prepareResult?.programDelta) || 0;
+                    window.LightflowStudioRenderDiagnostics.shaderPrepareResult = prepareResult || null;
+                }
+                if (prepareResult && prepareResult.success === false) {
+                    throw new Error(
+                        `Studio shader preparation failed: ${prepareResult.reason || 'unknown warm-up failure'}`
+                    );
+                }
+            }
+
             /*
-             * Keep the Studio ownership flags active for the complete async
-             * session, including waitForFrame() gaps between tiles. Before
-             * this, LightManagerStudioRenderActive was deleted after every
-             * tile, which allowed queued preview refreshes to enter the normal
-             * main_preview path while the shared shadow map still had the
-             * Studio resolution.
+             * Shader Architect may rebuild or pool materials during the bake.
+             * Synchronize the newly active materials even when the global scale
+             * already equals the physical raster scale, then inspect the
+             * post-bake scene. Samples are camera jitters, not a linear
+             * framebuffer multiplier.
              */
-            claimStudioRenderFlags(renderSession, renderPreview);
+            window.ShaderArchitectSetStudioRenderSampleScale?.(
+                rasterScale,
+                Math.max(1.0, Number(tiles[0]?.promotionalRimFrameScale) || 1.0),
+                0
+            );
+            renderSession.preserveSurfaceDetail = sceneUsesStudioSurfaceDetail();
 
             const renderTiles = async () => {
                 for (let index = 0; index < tiles.length; index++) {
@@ -3658,29 +7287,205 @@
                     );
                     renderPreview.sa_studio_render_manual_silhouette = true;
                     renderPreview.sa_studio_render_active = true;
+                    const accumulationWidth = Math.max(
+                        1,
+                        Number(tile.renderWidth || tile.sampleWidth) || 1
+                    );
+                    const accumulationHeight = Math.max(
+                        1,
+                        Number(tile.renderHeight || tile.sampleHeight) || 1
+                    );
+                    // Phase 1.6: the Phase 1.5 CPU Float32 accumulator proved
+                    // stable, but a 4K x8 render spent enormous time doing
+                    // getImageData + per-pixel JS conversion for every sample.
+                    // Dedicated WebGL2 GPUs now use a single-target additive
+                    // RGBA16F accumulator (sample / N), under exclusive Studio
+                    // ownership and explicit GPU backpressure.
+                    // Integrated/software paths retain the conservative CPU fallback.
+                    const useGpuAccumulator = shouldUseStudioGpuAccumulator(
+                        renderPreview.renderer,
+                        sampleCount
+                    );
+                    const gpuAccumulator = useGpuAccumulator
+                        ? createStudioGpuAccumulator(
+                            renderPreview.renderer,
+                            accumulationWidth,
+                            accumulationHeight,
+                            false,
+                            sampleCount
+                        )
+                        : null;
+                    gpuAccumulator?.primePrograms?.();
+                    const gpuSampleTexture = gpuAccumulator
+                        ? new THREE.CanvasTexture(renderPreview.canvas)
+                        : null;
+                    if (gpuSampleTexture) {
+                        gpuSampleTexture.generateMipmaps = false;
+                        gpuSampleTexture.minFilter = THREE.LinearFilter;
+                        gpuSampleTexture.magFilter = THREE.LinearFilter;
+                    }
+                    const linearAccumulator = sampleCount > 1 && !gpuAccumulator
+                        ? createStudioCpuLinearAccumulator(
+                            accumulationWidth,
+                            accumulationHeight
+                        )
+                        : null;
+                    const accumulationCanvas = gpuAccumulator || linearAccumulator
+                        ? null
+                        : createCanvas(accumulationWidth, accumulationHeight);
+                    const accumulationContext = accumulationCanvas?.getContext('2d', {
+                        alpha: true
+                    }) || null;
+                    accumulationContext?.clearRect(
+                        0,
+                        0,
+                        accumulationWidth,
+                        accumulationHeight
+                    );
+                    if (!gpuAccumulator && !linearAccumulator) {
+                        lastStudioAccumulationMode = 'direct_single_sample';
+                    }
+                    if (window.LightflowStudioRenderDiagnostics) {
+                        window.LightflowStudioRenderDiagnostics.accumulationMode = lastStudioAccumulationMode;
+                        window.LightflowStudioRenderDiagnostics.gpuAccumulatorEnabled = !!gpuAccumulator;
+                        window.LightflowStudioRenderDiagnostics.gpuFenceCadence = gpuAccumulator ? 1 : 0;
+                    }
                     try {
-                        prepareRendererForTile(renderPreview, cameraSourcePreview, normalized, tile);
-                        synchronizeStudioRenderLighting(renderPreview);
+                        for (let sampleIndex = 0; sampleIndex < sampleCount; sampleIndex++) {
+                            if (renderSession.cancelled) return;
+                            prepareRendererForTile(
+                                renderPreview,
+                                cameraSourcePreview,
+                                normalized,
+                                tile,
+                                renderSession,
+                                sampleJitters[sampleIndex],
+                                sampleIndex
+                            );
+                            synchronizeStudioRenderLighting(renderPreview, renderSession);
+                            if (index === 0 && sampleIndex === 0 && !renderSession.preserveSurfaceDetail) {
+                                renderSession.preserveSurfaceDetail = sceneUsesStudioSurfaceDetail();
+                            }
 
-                        /*
-                         * One synchronous render is enough: Three r129 updates
-                         * WebGLShadowMap before drawing the scene. A second
-                         * render plus force:true here repeatedly invalidated
-                         * the same map for every tile and made the final tile
-                         * race the shadow refresh.
-                         */
-                        renderPreviewWithExactCameraPose(renderPreview);
-                        compositeStudioRenderPostEffects(renderPreview, normalized, tile);
+                            beginStudioWebGLErrorScope(renderPreview.renderer);
+                            renderPreviewWithExactCameraPose(renderPreview, studioBloomGpuEnabled ? {
+                                requiredResources: ['sceneColor', 'sceneDepth', 'sceneEmission'],
+                                onFrameResources: resources => {
+                                    studioBloomSession.captureSample(
+                                        resources,
+                                        tile,
+                                        sampleIndex,
+                                        sampleCount
+                                    );
+                                }
+                            } : {});
+                            freezeStudioShadowMapAfterFirstTile(renderPreview, renderSession);
+                            compositeStudioRenderPostEffects(
+                                renderPreview,
+                                normalized,
+                                tile,
+                                null
+                            );
+                            assertStudioWebGLHealthy(
+                                renderPreview.renderer,
+                                `tile ${index + 1}/${tiles.length} sample ${sampleIndex + 1}/${sampleCount}`,
+                                renderSession
+                            );
+                            if (index === 0 && sampleIndex === 0 && renderSession.shaderBakeVisible) {
+                                window.ShaderArchitectFinishStudioRenderBake?.(true);
+                                renderSession.shaderBakeVisible = false;
+                            }
+
+                            if (gpuAccumulator && gpuSampleTexture) {
+                                // GPU command ordering guarantees that the canvas
+                                // sample precedes this upload/accumulation pass. Keep
+                                // the running average in RGBA16F and quantize only once
+                                // when the tile resolves.
+                                gpuSampleTexture.needsUpdate = true;
+                                gpuAccumulator.accumulate(sampleIndex, gpuSampleTexture);
+                            } else {
+                                // CPU readback must wait for the beauty pass to finish;
+                                // this remains the conservative fallback for iGPUs and
+                                // contexts without a proven half-float framebuffer.
+                                await requireStudioGpuFence(renderPreview.renderer, renderSession);
+                                if (renderSession.cancelled) return;
+                                if (linearAccumulator) {
+                                    await linearAccumulator.accumulate(sampleIndex, renderPreview.canvas);
+                                    if (renderSession.cancelled) return;
+                                } else if (accumulationContext) {
+                                    accumulationContext.save();
+                                    accumulationContext.globalCompositeOperation = 'copy';
+                                    accumulationContext.globalAlpha = 1;
+                                    accumulationContext.drawImage(renderPreview.canvas, 0, 0);
+                                    accumulationContext.restore();
+                                }
+                            }
+
+                            if (bloomMaskContext) {
+                                bloomMaskContext.save();
+                                bloomMaskContext.globalCompositeOperation = 'lighter';
+                                bloomMaskContext.globalAlpha = 1 / sampleCount;
+                                renderBloomMaskTileFallback(
+                                    renderPreview,
+                                    bloomMaskContext,
+                                    tile,
+                                    rasterScale,
+                                    renderSession
+                                );
+                                bloomMaskContext.restore();
+                            }
+
+                            // One fence for the complete GPU sample is enough.
+                            // Phase 1.5 fenced beauty and bloom separately (576 fences
+                            // in the user's 4K x8 run). A dedicated 2048px 4K render
+                            // needs only 4*8 = 32 sample fences (+ one resolve fence
+                            // per tile) while still bounding queue depth to one sample.
+                            if (gpuAccumulator) {
+                                await requireStudioGpuFence(renderPreview.renderer, renderSession);
+                            } else if (bloomMaskContext) {
+                                await requireStudioGpuFence(renderPreview.renderer, renderSession);
+                            }
+                            if (renderSession.cancelled) return;
+
+                            const completedSamples = index * sampleCount + sampleIndex + 1;
+                            const totalSamples = Math.max(1, tiles.length * sampleCount);
+                            Blockbench.setProgress(completedSamples / totalSamples);
+                            if (renderSession.progressUI && !renderSession.cancelled) renderSession.progressUI.label.textContent = `${Math.round(completedSamples / totalSamples * 100)}% · ${outputSize.width} × ${outputSize.height} px`;
+                        }
+                        let resolvedTileCanvas = accumulationCanvas || renderPreview.canvas;
+                        if (gpuAccumulator) {
+                            gpuAccumulator.resolveToCanvas(index * 131 + sampleCount * 17);
+                            await requireStudioGpuFence(renderPreview.renderer, renderSession);
+                            if (renderSession.cancelled) return;
+                            resolvedTileCanvas = renderPreview.canvas;
+                        } else if (linearAccumulator) {
+                            resolvedTileCanvas = linearAccumulator.resolveToCanvas(
+                                index * 131 + sampleCount * 17
+                            );
+                        }
+                        drawTile(
+                            ctx,
+                            renderPreview,
+                            tile,
+                            rasterScale,
+                            false,
+                            resolvedTileCanvas
+                        );
                     } finally {
+                        // A lost context has already invalidated every GPU object.
+                        // Calling Three .dispose() after ANGLE restored a replacement
+                        // context emits "object does not belong to this context" and
+                        // can contaminate the next diagnostic render. Abandon those
+                        // handles; the lost context owns their destruction.
+                        if (!renderSession.studioContextLost) {
+                            gpuSampleTexture?.dispose?.();
+                            gpuAccumulator?.dispose?.();
+                        }
+                        linearAccumulator?.dispose?.();
                         delete renderPreview.sa_studio_render_manual_silhouette;
                         delete renderPreview.sa_studio_render_active;
                     }
-                    drawTile(ctx, renderPreview, tile, sampleFactor);
-                    if (bloomMaskContext) {
-                        renderBloomMaskTile(renderPreview, bloomMaskContext, tile, sampleFactor);
-                    }
                     StudioRenderFrame.setTileProgress(index, 'done');
-                    Blockbench.setProgress((index + 1) / tiles.length);
                     if (index % 3 === 0) {
                         await waitForFrame();
                         if (renderSession.cancelled) return;
@@ -3688,41 +7493,254 @@
                 }
             };
 
-            await withoutStudioRenderHighlights(async () => {
+            const tileRenderStartedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+            await withoutStudioRenderArtKeyMarkers(() => withoutStudioRenderHighlights(async () => {
                 if (normalized.show_gizmos) {
                     await renderTiles();
                 } else {
                     await withoutStudioRenderGizmos(renderTiles);
                 }
-            });
+            }));
+            const tileRenderFinishedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+            if (window.LightflowStudioRenderDiagnostics) {
+                window.LightflowStudioRenderDiagnostics.tileRenderMs =
+                    Math.max(0, tileRenderFinishedAt - tileRenderStartedAt);
+                const ambientOcclusion = window.LightflowAmbientOcclusion?.getDiagnostics?.(
+                    renderPreview
+                ) || null;
+                window.LightflowStudioRenderDiagnostics.ambientOcclusion = ambientOcclusion;
+                window.LightflowStudioRenderDiagnostics.aoQualityForced = !!(
+                    ambientOcclusion &&
+                    ambientOcclusion.quality === STUDIO_POST_QUALITY_CONTRACT.ambientOcclusion.quality &&
+                    Math.abs(
+                        Number(ambientOcclusion.scale) -
+                        STUDIO_POST_QUALITY_CONTRACT.ambientOcclusion.scale
+                    ) < 0.0001 &&
+                    Number(ambientOcclusion.effectiveSPP) ===
+                        STUDIO_POST_QUALITY_CONTRACT.ambientOcclusion.effectiveSPP &&
+                    Number(ambientOcclusion.hierarchyLevels) ===
+                        STUDIO_POST_QUALITY_CONTRACT.ambientOcclusion.hierarchyLevels
+                );
+            }
 
-            if (renderSession.cancelled) return;
+            if (renderSession.cancelled) return cancelledRenderResult();
 
+            recordStudioTileSafetySuccess(renderPreview.renderer, renderSession);
+            if (window.LightflowStudioRenderDiagnostics) {
+                const safetyState = getStudioTileSafetyState(renderPreview.renderer, renderSession.workloadClass);
+                window.LightflowStudioRenderDiagnostics.tileSafetyOutcome = safetyState.lastOutcome;
+                window.LightflowStudioRenderDiagnostics.nextAdaptiveTileTarget = safetyState.target;
+            }
+
+            const compositeStartedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
             Blockbench.setStatusBarText(translate('studio_render.status.downsample', 'Compositing final image...'));
-            applyFinalBloom(canvas, normalized, bloomMaskCanvas);
+            if (studioBloomGpuEnabled && studioBloomSession) {
+                const bloomResult = studioBloomSession.finish();
+                await studioBloomSession.compositeCanvas(canvas, tiles, renderPreview, renderSession);
+                if (renderSession.cancelled) return cancelledRenderResult();
+                if (window.LightflowStudioRenderDiagnostics && bloomResult) {
+                    window.LightflowStudioRenderDiagnostics.bloomSourceMode = bloomResult.sourceMode;
+                    window.LightflowStudioRenderDiagnostics.bloomWorkingFormat = bloomResult.workingFormat;
+                    window.LightflowStudioRenderDiagnostics.bloomLevels = bloomResult.plan?.length || 0;
+                    window.LightflowStudioRenderDiagnostics.bloomDownsampleKernel = bloomResult.downsampleKernel;
+                    window.LightflowStudioRenderDiagnostics.bloomUpsampleKernel = bloomResult.upsampleKernel;
+                    window.LightflowStudioRenderDiagnostics.bloomActiveTargets =
+                        bloomResult.activeTargets || studioBloomPipeline?.getActiveTargets?.().length || 0;
+                    window.LightflowStudioRenderDiagnostics.bloomEstimatedBytes = bloomResult.estimatedBytes || 0;
+                    window.LightflowStudioRenderDiagnostics.bloomExtraGeometrySubmissions =
+                        bloomResult.extraGeometrySubmissions || 0;
+                    window.LightflowStudioRenderDiagnostics.bloomDrawCalls = bloomResult.drawCalls || 0;
+                    window.LightflowStudioRenderDiagnostics.bloomTargetSwitches = bloomResult.targetSwitches || 0;
+                    window.LightflowStudioRenderDiagnostics.studioBloomSourceResolution =
+                        bloomResult.studioSourceResolution || [studioBloomSession.width, studioBloomSession.height];
+                }
+            } else {
+                applyFinalBloomCPUFallback(canvas, bloomSettings, bloomMaskCanvas, {
+                    maxDimension: Math.min(4096, studioBloomProfile.maxDimension)
+                });
+            }
             applyFinalColorGrade(canvas, normalized);
-            const dataUrl = canvas.toDataURL('image/png');
-            await deliverRender(dataUrl, outputSize, normalized);
+            const compositeFinishedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+            if (window.LightflowStudioRenderDiagnostics) {
+                window.LightflowStudioRenderDiagnostics.finalCompositeMs =
+                    Math.max(0, compositeFinishedAt - compositeStartedAt);
+            }
+            if (typeof options.consumeFrame === 'function') {
+                Blockbench.setStatusBarText(translate('studio_render.status.handoff', 'Handing off rendered frame...'));
+                await waitForFrame();
+                if (renderSession.cancelled) return cancelledRenderResult();
+                await options.consumeFrame({
+                    canvas,
+                    width: outputSize.width,
+                    height: outputSize.height,
+                    settings: Object.assign({}, normalized, {
+                        resolution: normalized.resolution.slice()
+                    }),
+                    samples: sampleCount,
+                    tileSize: renderSession.tileSize,
+                    tileCount: renderSession.tileCount
+                });
+                frameConsumed = true;
+                if (renderSession.cancelled) return cancelledRenderResult();
+                renderResult = {
+                    ok: true,
+                    delivered: false,
+                    consumed: true,
+                    width: outputSize.width,
+                    height: outputSize.height,
+                    samples: sampleCount,
+                    tileSize: renderSession.tileSize,
+                    tileCount: renderSession.tileCount,
+                    imageBytes: null
+                };
+            } else {
+                Blockbench.setStatusBarText(translate('studio_render.status.encoding', 'Encoding PNG in the background...'));
+                await waitForFrame();
+                if (renderSession.cancelled) return cancelledRenderResult();
+                const encodeStartedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+                const imageBlob = await canvasToPngBlob(canvas);
+                if (renderSession.cancelled) return cancelledRenderResult();
+                if (options.deliver !== false) {
+                    await deliverRender(imageBlob, outputSize, normalized);
+                    if (renderSession.cancelled) return cancelledRenderResult();
+                }
+                const encodeFinishedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+                if (window.LightflowStudioRenderDiagnostics) {
+                    window.LightflowStudioRenderDiagnostics.encodeMs =
+                        Math.max(0, encodeFinishedAt - encodeStartedAt);
+                }
+                renderResult = {
+                    ok: true,
+                    delivered: options.deliver !== false,
+                    consumed: false,
+                    width: outputSize.width,
+                    height: outputSize.height,
+                    samples: sampleCount,
+                    tileSize: renderSession.tileSize,
+                    tileCount: renderSession.tileCount,
+                    imageBytes: imageBlob?.size ?? null
+                };
+            }
         } catch (error) {
-            if (renderSession.cancelled) return;
-            Blockbench.showMessageBox({
+            if (renderSession.cancelled) return cancelledRenderResult();
+            const gl = getRendererContext(renderPreview?.renderer);
+            renderSession.studioContextLost = !!(renderSession.studioContextLost || gl?.isContextLost?.());
+            if (window.LightflowStudioRenderDiagnostics) {
+                window.LightflowStudioRenderDiagnostics.contextLost = renderSession.studioContextLost;
+                window.LightflowStudioRenderDiagnostics.error = error?.message || String(error);
+            }
+            renderResult = {
+                ok: false,
+                delivered: false,
+                error: error?.message || String(error),
+                contextLost: !!renderSession.studioContextLost
+            };
+            console.error('[Studio Render] Render failed.', error);
+            if (options.silent !== true) Blockbench.showMessageBox({
                 title: translate('studio_render.plugin.title', 'Studio Render'),
                 message: error && error.message ? error.message : String(error),
                 icon: 'error'
             });
         } finally {
-            restoreStudioRenderFlags(renderSession);
-            StudioRenderFrame.clearTileProgress();
-            if (blockbenchShading && typeof oldShading === 'boolean' && blockbenchShading.value !== oldShading) {
-                blockbenchShading.set(oldShading);
+            // Keep Studio ownership until every shared renderer/camera/shadow
+            // restore is complete. Releasing the flags earlier lets a queued
+            // main-preview repaint observe Studio state for one frame.
+            if (renderSession.anyContextLost || renderSession.studioContextLost) {
+                try {
+                    const restored = await waitForAllStudioContextRestores(10000);
+                    if (window.LightflowStudioRenderDiagnostics) {
+                        window.LightflowStudioRenderDiagnostics.contextRestoredBeforeRelease = restored;
+                    }
+                } catch (error) {}
             }
-            restorePreviewState(renderPreview, previousState);
-            clearCameraViewOffset(renderPreview.camera);
-            await recoverPreviewShadowsAfterStudioRender(sourcePreview, renderPreview);
+            if (renderSession.shaderBakeVisible) {
+                window.ShaderArchitectFinishStudioRenderBake?.(false);
+                renderSession.shaderBakeVisible = false;
+            }
+            delete renderPreview.sa_studio_render_reuse_shadows;
+            restoreStudioRenderBillboards(renderSession.billboardSnapshots);
+            window.ShaderArchitectSetStudioRenderSampleScale?.(1, 1, 0);
+            releaseStudioSurfaceDetailResolveScratch();
+            StudioRenderFrame.clearTileProgress();
+            studioBloomSession?.dispose?.({
+                contextLost: !!renderSession.studioContextLost
+            });
+            studioBloomSession = null;
+
+            try {
+                if (blockbenchShading && typeof oldShading === 'boolean' && blockbenchShading.value !== oldShading) {
+                    blockbenchShading.set(oldShading);
+                }
+            } catch (error) {
+                console.warn('[Studio Render] Failed to restore Blockbench shading state.', error);
+            }
+            try {
+                restorePreviewState(renderPreview, previousState);
+                clearCameraViewOffset(renderPreview.camera);
+            } catch (error) {
+                console.warn('[Studio Render] Failed to restore offscreen preview camera state.', error);
+            }
+            try {
+                const externalRelease = window.LightflowRenderer?.releaseExternal?.(renderPreview, {
+                    contextLost: !!renderSession.studioContextLost,
+                    hibernate: true,
+                    trimPool: true
+                }) || null;
+                if (window.LightflowStudioRenderDiagnostics) {
+                    window.LightflowStudioRenderDiagnostics.externalRelease = externalRelease;
+                }
+            } catch (error) {
+                console.warn('[Studio Render] Failed to release Lightflow offscreen resources.', error);
+            }
+            try {
+                await recoverPreviewShadowsAfterStudioRender(sourcePreview, renderPreview);
+            } catch (error) {
+                console.warn('[Studio Render] Failed to restore preview shadow state.', error);
+            }
+
+            detachStudioContextMonitor(renderSession);
+            restoreStudioRenderFlags(renderSession);
+
+            if (window.LightflowStudioRenderDiagnostics) {
+                window.LightflowStudioRenderDiagnostics.active = false;
+                window.LightflowStudioRenderDiagnostics.accumulationMode = lastStudioAccumulationMode;
+                const finishedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+                window.LightflowStudioRenderDiagnostics.totalMs =
+                    Math.max(0, finishedAt - (Number(renderSession.startedAt) || finishedAt));
+            }
+            if (typeof Blockbench !== 'undefined' && typeof Blockbench.dispatchEvent === 'function') {
+                Blockbench.dispatchEvent('studio_render_complete', {
+                    preview: renderPreview,
+                    source_preview: sourcePreview,
+                    settings: normalized,
+                    result: renderResult,
+                    cancelled: !!renderSession.cancelled
+                });
+            }
             Blockbench.setProgress();
+            renderSession.progressUI?.node.remove();
             Blockbench.setStatusBarText();
             if (activeRenderSession === renderSession) activeRenderSession = null;
+            if (renderPreview?.sa_studio_owned_preview) {
+                const mustRetirePreview = !!(
+                    renderSession.studioContextLost ||
+                    renderSession.retireOwnedPreviewOnFinish
+                );
+                const retireReason = mustRetirePreview
+                    ? (renderSession.retireOwnedPreviewReason || 'studio_context_lost')
+                    : 'retained_for_reuse';
+                const retired = mustRetirePreview
+                    ? releaseOwnedStudioRenderPreview(retireReason, {
+                        contextLost: !!renderSession.studioContextLost
+                    })
+                    : false;
+                if (window.LightflowStudioRenderDiagnostics) {
+                    window.LightflowStudioRenderDiagnostics.renderPreviewRetired = retired;
+                    window.LightflowStudioRenderDiagnostics.renderPreviewRetireReason = retireReason;
+                }
+            }
         }
+        return renderResult;
     }
 
     function capturePreviewState(preview) {
@@ -3796,16 +7814,24 @@
             yEdge,
             previewWidth,
             previewHeight,
-            pixelAspect
+            pixelAspect,
+            fromCenter = false
         } = options;
-        const anchorX = xEdge === 'left' ? original.x + original.width : original.x;
-        const anchorY = yEdge === 'top' ? original.y + original.height : original.y;
+        const centerX = original.x + original.width / 2;
+        const centerY = original.y + original.height / 2;
+        const anchorX = fromCenter
+            ? centerX
+            : (xEdge === 'left' ? original.x + original.width : original.x);
+        const anchorY = fromCenter
+            ? centerY
+            : (yEdge === 'top' ? original.y + original.height : original.y);
+        const sizeFactor = fromCenter ? 2 : 1;
         const rawWidth = Math.max(0, (
             xEdge === 'left' ? anchorX - pointerX : pointerX - anchorX
-        ) * previewWidth);
+        ) * previewWidth * sizeFactor);
         const rawHeight = Math.max(0, (
             yEdge === 'top' ? anchorY - pointerY : pointerY - anchorY
-        ) * previewHeight);
+        ) * previewHeight * sizeFactor);
         const aspect = Math.max(0.0001, toNumber(pixelAspect, 1));
 
         let height = rawHeight;
@@ -3816,8 +7842,12 @@
             width = rawHeight * aspect;
         }
 
-        const maxWidth = (xEdge === 'left' ? anchorX : 1 - anchorX) * previewWidth;
-        const maxHeight = (yEdge === 'top' ? anchorY : 1 - anchorY) * previewHeight;
+        const maxWidth = (fromCenter
+            ? 2 * Math.min(anchorX, 1 - anchorX)
+            : (xEdge === 'left' ? anchorX : 1 - anchorX)) * previewWidth;
+        const maxHeight = (fromCenter
+            ? 2 * Math.min(anchorY, 1 - anchorY)
+            : (yEdge === 'top' ? anchorY : 1 - anchorY)) * previewHeight;
         const minHeight = Math.max(0.05 * previewHeight, (0.05 * previewWidth) / aspect);
         const maxConstrainedHeight = Math.max(0, Math.min(maxHeight, maxWidth / aspect));
         height = Math.min(Math.max(height, Math.min(minHeight, maxConstrainedHeight)), maxConstrainedHeight);
@@ -3826,11 +7856,78 @@
         const normalizedWidth = width / previewWidth;
         const normalizedHeight = height / previewHeight;
         return {
-            x: clamp(xEdge === 'left' ? anchorX - normalizedWidth : anchorX, 0, 1 - normalizedWidth),
-            y: clamp(yEdge === 'top' ? anchorY - normalizedHeight : anchorY, 0, 1 - normalizedHeight),
+            x: clamp(fromCenter
+                ? anchorX - normalizedWidth / 2
+                : (xEdge === 'left' ? anchorX - normalizedWidth : anchorX), 0, 1 - normalizedWidth),
+            y: clamp(fromCenter
+                ? anchorY - normalizedHeight / 2
+                : (yEdge === 'top' ? anchorY - normalizedHeight : anchorY), 0, 1 - normalizedHeight),
             width: normalizedWidth,
             height: normalizedHeight
         };
+    }
+
+    function getStudioPreviewAspect(preview) {
+        const width = Math.max(1, preview?.width || preview?.node?.clientWidth || 16);
+        const height = Math.max(1, preview?.height || preview?.node?.clientHeight || 9);
+        return width / height;
+    }
+
+    function stampFrameReferenceAspect(frame, preview) {
+        return normalizeFrameState(Object.assign({}, frame, {
+            reference_aspect: getStudioPreviewAspect(preview)
+        }));
+    }
+
+    function fitFramePixelAspect(frame, preview, pixelAspect) {
+        const normalized = normalizeFrameState(frame);
+        const previewAspect = getStudioPreviewAspect(preview);
+        const safePixelAspect = Math.max(0.0001, toNumber(pixelAspect, previewAspect));
+        const centerX = normalized.x + normalized.width / 2;
+        const centerY = normalized.y + normalized.height / 2;
+        const maxWidth = Math.max(0.05, 2 * Math.min(centerX, 1 - centerX));
+        const maxHeight = Math.max(0.05, 2 * Math.min(centerY, 1 - centerY));
+        let height = Math.min(normalized.height, maxHeight);
+        let width = height * safePixelAspect / previewAspect;
+        if (width > maxWidth) {
+            width = maxWidth;
+            height = width * previewAspect / safePixelAspect;
+        }
+        width = clamp(width, 0.05, maxWidth);
+        height = clamp(height, 0.05, maxHeight);
+        return normalizeFrameState({
+            x: centerX - width / 2,
+            y: centerY - height / 2,
+            width,
+            height,
+            reference_aspect: previewAspect
+        });
+    }
+
+    function resolveStoredFrameState(stored, preview, settings) {
+        if (!stored || !Number.isFinite(stored.x) || !Number.isFinite(stored.y)) return null;
+        const frame = normalizeFrameState(stored);
+        const previewAspect = getStudioPreviewAspect(preview);
+        const storedReference = Number(stored.reference_aspect);
+        if (Number.isFinite(storedReference) && storedReference > 0) {
+            const pixelAspect = frame.width * storedReference / Math.max(0.0001, frame.height);
+            return Math.abs(storedReference - previewAspect) > 0.0001
+                ? fitFramePixelAspect(frame, preview, pixelAspect)
+                : stampFrameReferenceAspect(frame, preview);
+        }
+
+        const pixelAspect = frame.width * previewAspect / Math.max(0.0001, frame.height);
+        const outputAspect = settings?.resolution?.[0] && settings?.resolution?.[1]
+            ? settings.resolution[0] / settings.resolution[1]
+            : 16 / 9;
+        const aspectRatio = pixelAspect / Math.max(0.0001, outputAspect);
+        // Older frame records had no viewport reference. A drastic mismatch is
+        // normally stale normalized geometry from another sidebar/canvas size,
+        // which produced outputs such as 7680 x 14185 on open.
+        if (settings?.match_frame_ratio !== false && (aspectRatio < 0.55 || aspectRatio > 1.82)) {
+            return null;
+        }
+        return stampFrameReferenceAspect(frame, preview);
     }
 
     const StudioRenderFrame = {
@@ -3843,20 +7940,15 @@
         preview: null,
         state: null,
         pointerInteractionCleanup: null,
+        persistProjectState: true,
+        stateOwner: '',
 
-        getState(preview, settings) {
-            const project = getActiveProject();
-            const stored = getProjectFrameState(project) || (!project ? readJSON(FRAME_STORAGE_KEY, null) : null);
+        getDefaultState(preview, settings) {
             const width = Math.max(1, preview?.width || preview?.node?.clientWidth || 16);
             const height = Math.max(1, preview?.height || preview?.node?.clientHeight || 9);
             const aspect = settings?.resolution?.[0] && settings?.resolution?.[1]
                 ? settings.resolution[0] / settings.resolution[1]
                 : 16 / 9;
-
-            if (stored && Number.isFinite(stored.x) && Number.isFinite(stored.y)) {
-                return normalizeFrameState(stored);
-            }
-
             let normalizedWidth = 0.82;
             let normalizedHeight = normalizedWidth * width / aspect / height;
             if (normalizedHeight > 0.82) {
@@ -3867,40 +7959,72 @@
                 x: (1 - normalizedWidth) / 2,
                 y: (1 - normalizedHeight) / 2,
                 width: normalizedWidth,
-                height: normalizedHeight
+                height: normalizedHeight,
+                reference_aspect: width / height
             };
+        },
+
+        getState(preview, settings) {
+            const project = getActiveProject();
+            const stored = getProjectFrameState(project) || (!project ? readJSON(FRAME_STORAGE_KEY, null) : null);
+
+            const resolved = resolveStoredFrameState(stored, preview, settings);
+            if (resolved) return resolved;
+            return this.getDefaultState(preview, settings);
         },
 
         saveState(projectScoped = false) {
             if (!this.state) return;
-            writeJSON(FRAME_STORAGE_KEY, this.state);
-            if (projectScoped) saveProjectFrameState(this.state);
+            const persists = this.persistProjectState !== false;
+            if (persists) writeJSON(FRAME_STORAGE_KEY, this.state);
+            if (projectScoped && persists) saveProjectFrameState(this.state);
+            if (projectScoped) {
+                Blockbench.dispatchEvent('studio_render_frame_changed', {
+                    frame: Object.assign({}, this.state),
+                    preview: this.preview || getPreview(),
+                    owner: this.stateOwner || '',
+                    projectScoped: persists
+                });
+            }
         },
 
-        setState(state, preview = getPreview(), settings = currentSettings) {
-            this.state = normalizeFrameState(state);
+        setState(state, preview = getPreview(), settings = currentSettings, options = {}) {
+            this.persistProjectState = options.persistProjectState !== false;
+            this.stateOwner = String(options.owner || '');
+            this.state = stampFrameReferenceAspect(state, preview);
             this.saveState(true);
             if (this.node && this.preview === preview) {
                 this.updateNode();
             } else if (settings?.capture_area === 'frame') {
-                this.show(preview, settings);
+                this.show(preview, settings, {
+                    state: this.state,
+                    persistProjectState: this.persistProjectState,
+                    owner: this.stateOwner
+                });
             }
             return Object.assign({}, this.state);
         },
 
-        show(preview = getPreview(), settings = currentSettings) {
+        show(preview = getPreview(), settings = currentSettings, options = {}) {
             if (!preview || !preview.node) {
                 Blockbench.showQuickMessage(translate('studio_render.message.no_preview', 'No preview is available to render.'));
                 return;
             }
+            this.persistProjectState = options.persistProjectState !== false;
+            this.stateOwner = String(options.owner || '');
             if (this.node && this.preview === preview) {
+                if (options.state) this.state = stampFrameReferenceAspect(options.state, preview);
                 this.updateNode();
                 syncFrameAction();
                 return;
             }
             this.remove(false);
             this.preview = preview;
-            this.state = this.getState(preview, settings);
+            this.persistProjectState = options.persistProjectState !== false;
+            this.stateOwner = String(options.owner || '');
+            this.state = options.state
+                ? stampFrameReferenceAspect(options.state, preview)
+                : this.getState(preview, settings);
             this.node = Interface.createElement('div', {
                 id: 'studio_render_frame',
                 class: 'studio_render_frame'
@@ -3926,11 +8050,11 @@
                     class: 'studio_render_frame_handle studio_render_' + name,
                     title: translate(
                         'studio_render.frame.resize_hint',
-                        'Resize Frame - Ctrl: Square, Shift: Lock Aspect Ratio'
+                        'Resize Frame - Alt: Resize from Center, Ctrl: Square, Shift: Lock Aspect Ratio'
                     ),
                     'aria-label': translate(
                         'studio_render.frame.resize_hint',
-                        'Resize Frame - Ctrl: Square, Shift: Lock Aspect Ratio'
+                        'Resize Frame - Alt: Resize from Center, Ctrl: Square, Shift: Lock Aspect Ratio'
                     )
                 });
                 handle.addEventListener('mousedown', event => this.startResize(event, xEdge, yEdge));
@@ -4061,12 +8185,19 @@
         },
 
         reset(preview = getPreview(), settings = currentSettings) {
-            localStorage.removeItem(FRAME_STORAGE_KEY);
-            const document = getProjectCameraPresetDocument();
-            document.active_frame = null;
-            saveProjectCameraPresetDocument(document, getActiveProject(), { warn: false });
+            if (this.persistProjectState !== false) {
+                localStorage.removeItem(FRAME_STORAGE_KEY);
+                const document = getProjectCameraPresetDocument();
+                document.active_frame = null;
+                saveProjectCameraPresetDocument(document, getActiveProject(), { warn: false });
+            }
             const visibleBounds = getVisibleCanvasBounds(preview);
-            this.state = visibleBounds || this.getState(preview, settings);
+            this.state = visibleBounds || (
+                this.persistProjectState === false
+                    ? this.getDefaultState(preview, settings)
+                    : this.getState(preview, settings)
+            );
+            this.state = stampFrameReferenceAspect(this.state, preview);
             this.saveState(true);
             if (this.node) this.updateNode();
         },
@@ -4082,6 +8213,8 @@
             this.tileButton = null;
             this.tileProgressNodes = [];
             this.preview = null;
+            this.persistProjectState = true;
+            this.stateOwner = '';
             syncFrameAction();
         },
 
@@ -4185,9 +8318,10 @@
 
             const settings = getFrameSettings();
             const size = computeOutputSize(settings, rect);
-            const sampleFactor = clamp(parseInt(settings.samples, 10) || 1, 1, 8);
+            const sampleFactor = 1;
+            const sampleCount = clamp(parseInt(settings.samples, 10) || 1, 1, 8);
             const renderPreview = getOffscreenPreview();
-            const tileSize = resolveTileSize(settings, renderPreview?.renderer, sampleFactor);
+            const tileSize = resolveTileSize(settings, renderPreview?.renderer, sampleFactor, sampleCount);
             const sampleWidth = size.width * sampleFactor;
             const sampleHeight = size.height * sampleFactor;
 
@@ -4258,7 +8392,10 @@
                 this.state.y = clamp(original.y + dy, 0, 1 - original.height);
                 this.updateNode();
             };
-            this.bindPointerInteraction(move, () => this.saveState(true));
+            this.bindPointerInteraction(move, () => {
+                this.state = stampFrameReferenceAspect(this.state, this.preview);
+                this.saveState(true);
+            });
         },
 
         startResize(event, xEdge, yEdge) {
@@ -4277,6 +8414,7 @@
                 const dy = (moveEvent.clientY - startY) / previewHeight;
                 const lockSquare = !!(moveEvent.ctrlKey || moveEvent.metaKey);
                 const lockCurrentAspect = !lockSquare && !!moveEvent.shiftKey;
+                const fromCenter = !!moveEvent.altKey;
                 if (lockSquare || lockCurrentAspect) {
                     const constrained = constrainFrameResize({
                         original,
@@ -4286,6 +8424,7 @@
                         yEdge,
                         previewWidth,
                         previewHeight,
+                        fromCenter,
                         pixelAspect: lockSquare
                             ? 1
                             : (original.width * previewWidth) / Math.max(0.0001, original.height * previewHeight)
@@ -4299,10 +8438,32 @@
                 let right = original.x + original.width;
                 let bottom = original.y + original.height;
 
-                if (xEdge === 'left') left = clamp(original.x + dx, 0, right - 0.05);
-                if (xEdge === 'right') right = clamp(original.x + original.width + dx, left + 0.05, 1);
-                if (yEdge === 'top') top = clamp(original.y + dy, 0, bottom - 0.05);
-                if (yEdge === 'bottom') bottom = clamp(original.y + original.height + dy, top + 0.05, 1);
+                if (fromCenter) {
+                    const centerX = original.x + original.width / 2;
+                    const centerY = original.y + original.height / 2;
+                    const widthDelta = (xEdge === 'left' ? -dx : dx) * 2;
+                    const heightDelta = (yEdge === 'top' ? -dy : dy) * 2;
+                    const width = clamp(
+                        original.width + widthDelta,
+                        0.05,
+                        2 * Math.min(centerX, 1 - centerX)
+                    );
+                    const height = clamp(
+                        original.height + heightDelta,
+                        0.05,
+                        2 * Math.min(centerY, 1 - centerY)
+                    );
+                    left = centerX - width / 2;
+                    right = centerX + width / 2;
+                    top = centerY - height / 2;
+                    bottom = centerY + height / 2;
+                } else {
+
+                    if (xEdge === 'left') left = clamp(original.x + dx, 0, right - 0.05);
+                    if (xEdge === 'right') right = clamp(original.x + original.width + dx, left + 0.05, 1);
+                    if (yEdge === 'top') top = clamp(original.y + dy, 0, bottom - 0.05);
+                    if (yEdge === 'bottom') bottom = clamp(original.y + original.height + dy, top + 0.05, 1);
+                }
 
                 this.state.x = left;
                 this.state.y = top;
@@ -4310,7 +8471,10 @@
                 this.state.height = bottom - top;
                 this.updateNode();
             };
-            this.bindPointerInteraction(move, () => this.saveState(true));
+            this.bindPointerInteraction(move, () => {
+                this.state = stampFrameReferenceAspect(this.state, this.preview);
+                this.saveState(true);
+            });
         }
     };
 
@@ -5003,7 +9167,7 @@
 
     function getStudioRenderFormUI() {
         const api = window.LightManagerUI;
-        const required = ['bar_display', 'combo_slider', 'compact_select', 'horizontal_select', 'custom_checkbox', 'action_button'];
+        const required = ['bar_display', 'combo_slider', 'compact_select', 'horizontal_select', 'custom_checkbox', 'action_button', 'panel_search'];
         return api && required.every(type => api.formElementTypes?.includes(type)) ? api : null;
     }
 
@@ -5410,6 +9574,15 @@
                 label: 'studio_render.field.bloom_threshold',
                 value: settings.bloom_threshold,
                 min: 0,
+                max: 4,
+                step: 0.01,
+                condition: form => !!form.bloom_enabled && !!form.show_advanced
+            },
+            bloom_soft_knee: {
+                type: 'range',
+                label: 'studio_render.field.bloom_soft_knee',
+                value: settings.bloom_soft_knee,
+                min: 0,
                 max: 1,
                 step: 0.01,
                 condition: form => !!form.bloom_enabled && !!form.show_advanced
@@ -5423,12 +9596,39 @@
                 step: 0.05,
                 condition: form => !!form.bloom_enabled
             },
+            bloom_core_strength: {
+                type: 'range',
+                label: 'studio_render.field.bloom_core_strength',
+                value: settings.bloom_core_strength,
+                min: 0,
+                max: 2,
+                step: 0.02,
+                condition: form => !!form.bloom_enabled && !!form.show_advanced
+            },
+            bloom_core_radius: {
+                type: 'range',
+                label: 'studio_render.field.bloom_core_radius',
+                value: settings.bloom_core_radius,
+                min: 0.25,
+                max: 12,
+                step: 0.05,
+                condition: form => !!form.bloom_enabled && !!form.show_advanced
+            },
+            bloom_halo_strength: {
+                type: 'range',
+                label: 'studio_render.field.bloom_halo_strength',
+                value: settings.bloom_halo_strength,
+                min: 0,
+                max: 2,
+                step: 0.02,
+                condition: form => !!form.bloom_enabled && !!form.show_advanced
+            },
             bloom_radius: {
                 type: 'range',
                 label: 'studio_render.field.bloom_radius',
                 value: settings.bloom_radius,
                 min: 1,
-                max: 96,
+                max: 128,
                 step: 1,
                 condition: form => !!form.bloom_enabled && !!form.show_advanced
             },
@@ -5603,6 +9803,15 @@
                 label: 'studio_render.field.bloom_threshold',
                 value: settings.bloom_threshold,
                 min: 0,
+                max: 4,
+                step: 0.01,
+                condition: form => !!form.bloom_enabled
+            },
+            bloom_soft_knee: {
+                type: 'range',
+                label: 'studio_render.field.bloom_soft_knee',
+                value: settings.bloom_soft_knee,
+                min: 0,
                 max: 1,
                 step: 0.01,
                 condition: form => !!form.bloom_enabled
@@ -5616,12 +9825,39 @@
                 step: 0.05,
                 condition: form => !!form.bloom_enabled
             },
+            bloom_core_strength: {
+                type: 'range',
+                label: 'studio_render.field.bloom_core_strength',
+                value: settings.bloom_core_strength,
+                min: 0,
+                max: 2,
+                step: 0.02,
+                condition: form => !!form.bloom_enabled
+            },
+            bloom_core_radius: {
+                type: 'range',
+                label: 'studio_render.field.bloom_core_radius',
+                value: settings.bloom_core_radius,
+                min: 0.25,
+                max: 12,
+                step: 0.05,
+                condition: form => !!form.bloom_enabled
+            },
+            bloom_halo_strength: {
+                type: 'range',
+                label: 'studio_render.field.bloom_halo_strength',
+                value: settings.bloom_halo_strength,
+                min: 0,
+                max: 2,
+                step: 0.02,
+                condition: form => !!form.bloom_enabled
+            },
             bloom_radius: {
                 type: 'range',
                 label: 'studio_render.field.bloom_radius',
                 value: settings.bloom_radius,
                 min: 1,
-                max: 96,
+                max: 128,
                 step: 1,
                 condition: form => !!form.bloom_enabled
             },
@@ -5722,7 +9958,8 @@
                 value: environment.preset || 'vanilla',
                 options: {
                     vanilla: 'Minecraft Vanilla',
-                    vibrant_visuals: 'Minecraft Vibrant Visuals'
+                    vibrant_visuals: 'Minecraft Vibrant Visuals',
+                    rendercraft: 'Rendercraft'
                 },
                 condition: () => !!window.LightflowEnvironment
             },
@@ -5751,6 +9988,10 @@
         const preview = getPreview();
         if (!preview) return;
         patchViewportComposer(preview);
+        if (typeof window.LightflowRequestPreviewRender === 'function') {
+            window.LightflowRequestPreviewRender({ cause: 'scene_composer_update' });
+            return;
+        }
         if (sceneComposerRefreshFrame !== null) return;
         const revision = sceneComposerRevision;
         const project = window.Project || null;
@@ -5768,68 +10009,371 @@
         }
     }
 
-    function createSceneComposerPanelForm(settings) {
-        return {
-            viewport_bloom_enabled: {
-                type: 'checkbox', label: 'studio_render.field.viewport_bloom_enabled', value: settings.viewport_bloom_enabled
-            },
-            viewport_bloom_quality: {
-                type: 'select', label: 'studio_render.field.viewport_bloom_quality', value: settings.viewport_bloom_quality,
-                options: {
-                    adaptive: 'studio_render.option.viewport_bloom.adaptive',
-                    performance: 'studio_render.option.viewport_bloom.performance',
-                    balanced: 'studio_render.option.viewport_bloom.balanced',
-                    high: 'studio_render.option.viewport_bloom.high'
-                },
-                condition: form => !!form.viewport_bloom_enabled
-            },
-            viewport_bloom_fps: {
-                type: 'range', label: 'studio_render.field.viewport_bloom_fps', value: settings.viewport_bloom_fps,
-                min: 0, max: 144, step: 1, condition: form => !!form.viewport_bloom_enabled
-            },
-            bloom_enabled: {
-                type: 'checkbox', label: 'studio_render.field.bloom_enabled', value: settings.bloom_enabled
-            },
-            bloom_strength: {
-                type: 'range', label: 'studio_render.field.bloom_strength', value: settings.bloom_strength,
-                min: 0, max: 3, step: 0.05, condition: form => !!form.bloom_enabled
-            },
-            composer_advanced: {
-                type: 'buttons', buttons: ['studio_render.action.open_advanced'],
-                click() { openSceneComposerDialog(); }
+    function beginSceneComposerUndo() {
+        if (activeSceneComposerUndo || typeof Undo === 'undefined') return !!activeSceneComposerUndo;
+        const aspects = { [SCENE_COMPOSER_UNDO_ASPECT]: true };
+        Undo.initEdit(aspects);
+        activeSceneComposerUndo = { aspects, changed: false };
+        return true;
+    }
+
+    function markSceneComposerUndoChanged() {
+        if (activeSceneComposerUndo) activeSceneComposerUndo.changed = true;
+    }
+
+    function finishSceneComposerUndo() {
+        const active = activeSceneComposerUndo;
+        if (!active) return false;
+        activeSceneComposerUndo = null;
+        if (active.changed) Undo.finishEdit(translate('studio_render.undo.edit_composer', 'Edit Scene Composer'), active.aspects);
+        else Undo.cancelEdit(false);
+        return true;
+    }
+
+    function cancelSceneComposerUndo(revert = false) {
+        if (!activeSceneComposerUndo) return false;
+        activeSceneComposerUndo = null;
+        Undo.cancelEdit(!!revert);
+        return true;
+    }
+
+    function registerSceneComposerUndoHooks() {
+        if (sceneComposerUndoHooks || typeof Blockbench === 'undefined') return;
+        const createSaveListener = Blockbench.on('create_undo_save', event => {
+            if (!event?.aspects?.[SCENE_COMPOSER_UNDO_ASPECT] || !event.save) return;
+            event.save[SCENE_COMPOSER_UNDO_ASPECT] = JSON.stringify(currentSettings);
+        });
+        const loadSaveListener = Blockbench.on('load_undo_save', event => {
+            const serialized = event?.save?.[SCENE_COMPOSER_UNDO_ASPECT];
+            if (serialized === undefined) return;
+            try {
+                currentSettings = normalizeForm(Object.assign({}, DEFAULT_SETTINGS, JSON.parse(serialized)));
+                saveSettings(currentSettings);
+                syncSceneComposerPanel();
+                refreshSceneComposerPreviews();
+            } catch (error) {
+                console.warn('[Studio Render] Could not restore Scene Composer undo state.', error);
+            }
+        });
+        sceneComposerUndoHooks = {
+            delete() {
+                createSaveListener?.delete?.();
+                loadSaveListener?.delete?.();
+                sceneComposerUndoHooks = null;
             }
         };
+    }
+
+    const SCENE_COMPOSER_PANEL_GROUP_PREFIX = '_composer_group_';
+    const SCENE_COMPOSER_PANEL_GROUPS = [
+        {
+            id: 'preview', label: 'studio_render.composer.group.preview', icon: 'visibility', color: '#75D7FF',
+            entries: [
+                { subsection: 'studio_render.composer.section.playback', icon: 'speed' },
+                'viewport_bloom_enabled', 'viewport_bloom_quality', 'viewport_bloom_fps'
+            ]
+        },
+        {
+            id: 'bloom', label: 'studio_render.composer.group.bloom', icon: 'flare', color: '#F58BC4',
+            entries: [
+                'bloom_enabled',
+                { subsection: 'studio_render.composer.section.threshold', icon: 'filter_alt' },
+                'bloom_threshold', 'bloom_soft_knee', 'bloom_strength',
+                { subsection: 'studio_render.composer.section.core', icon: 'brightness_high' },
+                'bloom_core_strength', 'bloom_core_radius',
+                { subsection: 'studio_render.composer.section.halo', icon: 'blur_on' },
+                'bloom_halo_strength', 'bloom_radius',
+                { subsection: 'studio_render.composer.section.sources', icon: 'auto_awesome' },
+                'bloom_hdr_strength', 'bloom_emissive_strength', 'bloom_occlusion'
+            ]
+        },
+        {
+            id: 'grading', label: 'studio_render.composer.group.grading', icon: 'palette', color: '#C5A6E8',
+            entries: [
+                'color_grading_enabled',
+                { subsection: 'studio_render.composer.section.image', icon: 'tonality' },
+                'exposure', 'contrast', 'saturation',
+                { subsection: 'studio_render.composer.section.white_balance', icon: 'thermostat' },
+                'temperature', 'tint',
+                { subsection: 'studio_render.composer.section.finishing', icon: 'center_focus_weak' },
+                'vignette'
+            ]
+        }
+    ];
+
+    const SCENE_COMPOSER_ESSENTIAL_ENTRIES = Object.freeze({
+        preview: new Set(['viewport_bloom_enabled', 'viewport_bloom_quality', 'viewport_bloom_fps']),
+        bloom: new Set(['bloom_enabled', 'bloom_threshold', 'bloom_strength', 'bloom_halo_strength', 'bloom_radius']),
+        grading: new Set(['color_grading_enabled', 'exposure', 'contrast', 'saturation'])
+    });
+
+    function sceneComposerValuesEqual(left, right) {
+        if (typeof left === 'boolean' || typeof right === 'boolean') return left === right;
+        if (left === '' || right === '' || left === null || right === null) return left === right;
+        if (Number.isFinite(Number(left)) && Number.isFinite(Number(right))) {
+            return Math.abs(Number(left) - Number(right)) < 1e-6;
+        }
+        return left === right;
+    }
+
+    function getSceneComposerGroupState(group, settings) {
+        const keys = group.entries.filter(entry => typeof entry === 'string');
+        const modified = keys.some(key => Object.prototype.hasOwnProperty.call(DEFAULT_SETTINGS, key)
+            && !sceneComposerValuesEqual(settings[key], DEFAULT_SETTINGS[key]));
+        const enabledKey = keys.find(key => /_enabled$/.test(key));
+        const active = enabledKey ? settings[enabledKey] !== false : true;
+        const summaries = {
+            preview: `${translate('studio_render.field.viewport_bloom_quality', 'Quality')}: ${settings.viewport_bloom_quality || 'adaptive'}`,
+            bloom: `${Number(settings.bloom_strength || 0).toFixed(2)} · Halo ${Number(settings.bloom_halo_strength || 0).toFixed(2)}`,
+            grading: `Exp ${Number(settings.exposure || 0).toFixed(2)} · Sat ${Number(settings.saturation || 0).toFixed(2)}`
+        };
+        return { modified, active, summary: summaries[group.id] || '' };
+    }
+
+    function combineSceneComposerPanelCondition(groupKey, groupOpen, originalCondition) {
+        return form => {
+            const isOpen = form && Object.prototype.hasOwnProperty.call(form, groupKey)
+                ? form[groupKey] !== false
+                : groupOpen;
+            if (!isOpen) return false;
+            if (!originalCondition) return true;
+            if (typeof Condition === 'function') return Condition(originalCondition, form);
+            return typeof originalCondition === 'function' ? !!originalCondition(form) : !!originalCondition;
+        };
+    }
+
+    function createSceneComposerPanelControl(key, source, groupKey, groupOpen, color) {
+        const design = window.LightManagerUI.formDesign;
+        const control = {
+            ...source,
+            default: DEFAULT_SETTINGS[key],
+            modified: result => !sceneComposerValuesEqual(result?.[key] ?? source.value, DEFAULT_SETTINGS[key]),
+            title: source.description || source.label,
+            description: source.description || source.label,
+            condition: combineSceneComposerPanelCondition(groupKey, groupOpen, source.condition)
+        };
+        const originalOnBefore = control.onBefore;
+        const originalOnAfter = control.onAfter;
+        const withUndo = config => Object.assign(config, {
+            onBefore: event => {
+                beginSceneComposerUndo();
+                originalOnBefore?.(event);
+            },
+            onAfter: event => {
+                try {
+                    originalOnAfter?.(event);
+                } finally {
+                    finishSceneComposerUndo();
+                }
+            }
+        });
+        if (control.type === 'select') {
+            control.options = getStudioRenderSelectOptions(key, control.options);
+            delete control.type;
+            return withUndo(design.enum(control));
+        }
+        if (control.type === 'checkbox') {
+            delete control.type;
+            return withUndo(design.checkbox({ ...control, icon_size: '22px' }));
+        }
+        if (control.type === 'range' || control.type === 'number') {
+            const defaultValue = Number(DEFAULT_SETTINGS[key]);
+            return withUndo({
+                ...control,
+                type: 'combo_slider',
+                color,
+                resettable: Number.isFinite(defaultValue),
+                reset_value: Number.isFinite(defaultValue) ? defaultValue : control.value
+            });
+        }
+        return withUndo(control);
+    }
+
+    function createSceneComposerPanelForm(settings) {
+        const design = window.LightManagerUI?.formDesign;
+        if (!design?.tabs || !design?.search) {
+            return {
+                viewport_bloom_enabled: {
+                    type: 'checkbox', label: 'studio_render.field.viewport_bloom_enabled', value: settings.viewport_bloom_enabled
+                },
+                bloom_enabled: {
+                    type: 'checkbox', label: 'studio_render.field.bloom_enabled', value: settings.bloom_enabled
+                },
+                bloom_strength: {
+                    type: 'range', label: 'studio_render.field.bloom_strength', value: settings.bloom_strength,
+                    min: 0, max: 3, step: 0.05, condition: form => !!form.bloom_enabled
+                },
+                composer_advanced: {
+                    type: 'buttons', buttons: ['studio_render.action.open_advanced'], click: openSceneComposerDialog
+                }
+            };
+        }
+        const source = createSceneComposerForm(settings);
+        const form = {
+            _composer_mode: design.tabs({
+                value: sceneComposerPanelMode,
+                description: 'Composer control level',
+                options: {
+                    essentials: { name: translate('studio_render.workflow.essentials') },
+                    advanced: { name: translate('studio_render.workflow.advanced') }
+                }
+            }),
+            _composer_search: design.search({
+                placeholder: 'Find setting',
+                active_label: 'Active only',
+                collapse_label: 'Collapse all'
+            })
+        };
+
+        SCENE_COMPOSER_PANEL_GROUPS.forEach(group => {
+            const groupKey = SCENE_COMPOSER_PANEL_GROUP_PREFIX + group.id;
+            const groupOpen = sceneComposerPanelGroupsOpen[group.id] !== false;
+            const groupState = getSceneComposerGroupState(group, settings);
+            form[groupKey] = design.group({
+                label: group.label,
+                label_icon: group.icon,
+                label_icon_color: group.color,
+                value: groupOpen,
+                icon_size: '20px',
+                icon_color_on: group.color,
+                icon_color_off: `color-mix(in srgb, ${group.color} 55%, var(--color-subtle_text))`,
+                description: group.label,
+                summary: groupOpen ? '' : groupState.summary,
+                modified: form => group.entries.filter(entry => typeof entry === 'string').some(key => (
+                    Object.prototype.hasOwnProperty.call(DEFAULT_SETTINGS, key) &&
+                    !sceneComposerValuesEqual(
+                        form && Object.prototype.hasOwnProperty.call(form, key) ? form[key] : settings[key],
+                        DEFAULT_SETTINGS[key]
+                    )
+                )),
+                modified_label: 'Contains modified settings',
+                modified_color: group.color,
+                active: groupState.active
+            });
+            let subsectionIndex = 0;
+            group.entries.forEach(entry => {
+                if (
+                    sceneComposerPanelMode === 'essentials' &&
+                    typeof entry === 'string' &&
+                    !SCENE_COMPOSER_ESSENTIAL_ENTRIES[group.id]?.has(entry)
+                ) return;
+                if (entry && typeof entry === 'object' && entry.subsection) {
+                    if (sceneComposerPanelMode === 'essentials') return;
+                    form[`_composer_subsection_${group.id}_${subsectionIndex++}`] = design.subsection({
+                        value: translate(entry.subsection, entry.subsection),
+                        icon: entry.icon,
+                        icon_color: group.color,
+                        separator_color: `color-mix(in srgb, ${group.color} 58%, var(--color-border))`,
+                        border_left: `1px solid color-mix(in srgb, ${group.color} 72%, var(--color-border))`,
+                        background: `color-mix(in srgb, ${group.color} 4%, transparent)`,
+                        margin_left: '4px',
+                        margin_right: '4px',
+                        condition: combineSceneComposerPanelCondition(groupKey, groupOpen)
+                    });
+                    return;
+                }
+                if (source[entry]) {
+                    form[entry] = createSceneComposerPanelControl(entry, source[entry], groupKey, groupOpen, group.color);
+                }
+            });
+        });
+        const modifiedCount = SCENE_COMPOSER_PANEL_GROUPS.reduce((count, group) => (
+            count + (getSceneComposerGroupState(group, settings).modified ? 1 : 0)
+        ), 0);
+        const composerStatus = {
+            type: 'bar_display',
+            value: translate(!settings.bloom_enabled ? 'studio_render.workflow.bloom_off' : settings.viewport_bloom_enabled ? 'studio_render.workflow.preview_on' : 'studio_render.workflow.preview_off'),
+            search_ignore: true,
+            paragraph: true,
+            expand: true,
+            color: settings.bloom_enabled && !settings.viewport_bloom_enabled ? 'var(--color-warning)' : 'var(--color-text)',
+            font_size: '12px'
+        };
+        return {_composer_status: composerStatus, ...form};
     }
 
     function syncSceneComposerPanel() {
         if (!sceneComposerPanel?.form || syncingSceneComposerPanel) return;
         syncingSceneComposerPanel = true;
+        const scrollContainer = sceneComposerPanel.node?.querySelector?.('.form');
+        const scrollTop = scrollContainer?.scrollTop || 0;
         sceneComposerPanel.form.form_config = createSceneComposerPanelForm(currentSettings);
         sceneComposerPanel.form.buildForm();
+        const nextScrollContainer = sceneComposerPanel.node?.querySelector?.('.form');
+        if (nextScrollContainer) nextScrollContainer.scrollTop = scrollTop;
         syncingSceneComposerPanel = false;
     }
 
+    function establishSceneComposerPanelAttachment() {
+        if (window.LightManagerUI?.workspace && sceneComposerPanel) {
+            sceneComposerAttachmentEstablished = true;
+            return window.LightManagerUI.workspace.register(sceneComposerPanel);
+        }
+        if (sceneComposerAttachmentEstablished || !sceneComposerPanel) return false;
+        const overridesPanel = window.Panels?.material_properties;
+        if (!overridesPanel) return false;
+        if (sceneComposerPanel.getHostPanel?.() !== overridesPanel) {
+            overridesPanel.attachPanel(sceneComposerPanel, 2);
+        } else {
+            overridesPanel.update?.();
+        }
+        sceneComposerAttachmentEstablished = true;
+        return true;
+    }
+
     function applySceneComposerForm(form, persist) {
+        const previousSettings = JSON.stringify(currentSettings);
         const next = Object.assign({}, currentSettings, form || {});
         delete next.environment_enabled;
         delete next.environment_preset;
         delete next.environment_time;
         delete next.environment_strength;
         currentSettings = normalizeForm(next);
+        if (previousSettings !== JSON.stringify(currentSettings)) markSceneComposerUndoChanged();
         if (persist) saveSettings(currentSettings);
 
         if (window.LightflowEnvironment && form) {
             const environmentSettings = {};
+            let appliedEnvironmentPreset = false;
             if (Object.prototype.hasOwnProperty.call(form, 'environment_enabled')) environmentSettings.enabled = form.environment_enabled;
-            if (Object.prototype.hasOwnProperty.call(form, 'environment_preset')) environmentSettings.preset = form.environment_preset;
+            const requestedEnvironmentPreset = Object.prototype.hasOwnProperty.call(form, 'environment_preset')
+                ? form.environment_preset
+                : null;
+            const currentEnvironmentPreset = window.LightflowEnvironment.settings?.preset;
+            if (
+                requestedEnvironmentPreset &&
+                requestedEnvironmentPreset !== currentEnvironmentPreset &&
+                typeof window.LightflowEnvironment.applyPreset === 'function'
+            ) {
+                window.LightflowEnvironment.applyPreset(requestedEnvironmentPreset, {
+                    cause: 'scene_composer_preset',
+                    render: false,
+                    forceShadow: false,
+                    syncPanel: true
+                });
+                appliedEnvironmentPreset = true;
+            } else if (requestedEnvironmentPreset) {
+                environmentSettings.preset = requestedEnvironmentPreset;
+            }
             if (Object.prototype.hasOwnProperty.call(form, 'environment_time')) environmentSettings.time = form.environment_time;
-            if (Object.prototype.hasOwnProperty.call(form, 'environment_strength')) environmentSettings.environment_strength = form.environment_strength;
+            if (!appliedEnvironmentPreset && Object.prototype.hasOwnProperty.call(form, 'environment_strength')) {
+                environmentSettings.environment_strength = form.environment_strength;
+            }
             if (Object.keys(environmentSettings).length) {
                 window.LightflowEnvironment.setSettings(environmentSettings, {
                     cause: 'scene_composer',
                     render: false,
                     forceShadow: false
                 });
+            }
+            if (appliedEnvironmentPreset && activeComposerDialog?.form) {
+                syncingSceneComposerDialog = true;
+                try {
+                    activeComposerDialog.form.form_config = createSceneComposerForm(currentSettings);
+                    activeComposerDialog.form.buildForm();
+                } finally {
+                    syncingSceneComposerDialog = false;
+                }
             }
         }
 
@@ -5839,15 +10383,18 @@
     function openSceneComposerDialog() {
         currentSettings = loadSettings();
         const initialEnvironment = window.LightflowEnvironment?.settings || null;
+        beginSceneComposerUndo();
         activeComposerDialog = new Dialog('lightflow_scene_composer_dialog', {
             title: 'studio_render.action.scene_composer',
             width: 680,
             form: createSceneComposerForm(currentSettings),
             onFormChange(form) {
+                if (syncingSceneComposerDialog) return;
                 applySceneComposerForm(form, false);
             },
             onConfirm(form) {
                 applySceneComposerForm(form, true);
+                finishSceneComposerUndo();
                 activeComposerDialog = null;
             },
             onCancel() {
@@ -5860,10 +10407,45 @@
                     });
                 }
                 refreshSceneComposerPreviews();
+                cancelSceneComposerUndo(false);
                 activeComposerDialog = null;
             }
         });
         activeComposerDialog.show();
+    }
+
+    let studioWorkflowTab = 'output';
+    function studioOutputSummary(settings) {
+        const size = computeOutputSize(normalizeForm(settings), null);
+        return `${size.width} × ${size.height} px · ${translate('studio_render.option.background.' + settings.background_mode, settings.background_mode)} · ${settings.samples || 1}×`;
+    }
+    function createStudioWorkflowForm(settings) {
+        const source = createDialogForm(settings);
+        // Keep every original control/data binding; tabs filter presentation only.
+        const form = {
+            _studio_workflow_tab: {
+                type: FormElement.types.horizontal_select ? 'horizontal_select' : 'select',
+                label: false, value: studioWorkflowTab,
+                options: FormElement.types.horizontal_select
+                    ? {camera: {name: 'studio_render.workflow.camera'}, output: {name: 'studio_render.workflow.output'}, image: {name: 'studio_render.workflow.image'}}
+                    : {camera: 'studio_render.workflow.camera', output: 'studio_render.workflow.output', image: 'studio_render.workflow.image'}
+            },
+            _studio_summary: {type: 'info', text: studioOutputSummary(settings)},
+            show_advanced: {...source.show_advanced, condition: result => (result._studio_workflow_tab || studioWorkflowTab) !== 'camera'}
+        };
+        let section = 'camera';
+        Object.entries(source).forEach(([key, value]) => {
+            if (key === 'show_advanced') return;
+            if (/^(studio_section)?_(camera_presets|camera|frame)$/.test(key)) section = 'camera';
+            if (/^(studio_section)?_(output|export)$/.test(key)) section = 'output';
+            if (/^(studio_section)?_(look|effects)$/.test(key)) section = 'image';
+            const tab = section;
+            const control = typeof value === 'object' ? {...value} : {type: 'info', text: ''};
+            const condition = control.condition;
+            control.condition = result => (result._studio_workflow_tab || studioWorkflowTab) === tab && (!condition || Condition(condition, result));
+            form[key] = control;
+        });
+        return form;
     }
 
     function openStudioRenderDialog() {
@@ -5872,14 +10454,17 @@
             id: 'studio_render',
             title: 'studio_render.dialog.title',
             width: 680,
-            form: createDialogForm(currentSettings),
+            form: createStudioWorkflowForm(currentSettings),
             buttons: ['studio_render.button.render', 'dialog.cancel'],
             onFormChange(form) {
+                if (['camera', 'output', 'image'].includes(form._studio_workflow_tab)) studioWorkflowTab = form._studio_workflow_tab;
                 const next = normalizeForm(form);
                 if (next.resolution_preset !== 'custom') {
                     this.setFormValues({ resolution: next.resolution }, false);
                 }
                 currentSettings = next;
+                const summary = this.form?.form_data?._studio_summary?.bar?.querySelector('.small_text');
+                if (summary) summary.textContent = studioOutputSummary(next);
                 StudioRenderFrame.updateNode();
                 refreshSceneComposerPreviews();
             },
@@ -5906,6 +10491,15 @@
         const previewColor = palette[0]?.pastel || '#A2EBFF';
         const bloomColor = palette[8]?.pastel || '#FFA5D5';
         stylesheet = Blockbench.addCSS(`
+            .lightflow_render_progress {
+                position: absolute; left: 12px; bottom: 12px; z-index: 35;
+                display: flex; align-items: center; gap: 12px; max-width: calc(100% - 24px);
+                padding: 6px 8px; border: 1px solid var(--color-border); border-radius: 4px;
+                background: var(--color-ui); color: var(--color-text); font-size: 13px;
+            }
+            .lightflow_render_progress span { min-width: 0; overflow-wrap: anywhere; }
+            .lightflow_render_progress button { min-height: 28px; flex-shrink: 0; }
+            #studio_render .form_bar__studio_workflow_tab { position: sticky; top: 0; z-index: 2; background: var(--color-ui); }
             #studio_render .dialog_content {
                 scrollbar-gutter: stable;
             }
@@ -6194,46 +10788,19 @@
                 background: rgba(72, 210, 125, 0.12);
                 box-shadow: inset 0 0 0 1px rgba(72, 210, 125, 0.24);
             }
-            #panel_lightflow_scene_composer_panel {
-                overflow-y: auto !important;
-                overflow-x: hidden;
-                background: var(--color-ui);
-            }
-            #panel_lightflow_scene_composer_panel .dialog_bar {
-                min-height: 27px;
-                margin: 0;
-                padding-top: 1px;
-                padding-bottom: 1px;
-                box-sizing: border-box;
-            }
-            #panel_lightflow_scene_composer_panel .form_bar_viewport_bloom_enabled,
-            #panel_lightflow_scene_composer_panel .form_bar_bloom_enabled {
-                border-left: 3px solid ${previewColor};
-                padding-left: 7px;
-            }
-            #panel_lightflow_scene_composer_panel .form_bar_bloom_enabled {
-                border-left-color: ${bloomColor};
-            }
-            #panel_lightflow_scene_composer_panel .form_bar_viewport_bloom_fps input[type="range"] {
-                --color-thumb: ${previewColor};
-            }
-            #panel_lightflow_scene_composer_panel .form_bar_bloom_strength input[type="range"] {
-                --color-thumb: ${bloomColor};
-            }
-            #panel_lightflow_scene_composer_panel::-webkit-scrollbar {
-                width: 6px;
-            }
-            #panel_lightflow_scene_composer_panel::-webkit-scrollbar-thumb {
-                background: var(--color-button);
-                border-radius: 3px;
-            }
         `);
     }
 
     function unloadPlugin() {
         if (activeRenderSession) {
+            // Cancellation is cooperative. Keep Studio ownership until the async
+            // render reaches its finally block, where camera/shadow/context state
+            // is restored before the flags are released.
             activeRenderSession.cancelled = true;
-            restoreStudioRenderFlags(activeRenderSession);
+            activeRenderSession.retireOwnedPreviewOnFinish = true;
+            activeRenderSession.retireOwnedPreviewReason = 'plugin_unload';
+        } else {
+            releaseOwnedStudioRenderPreview('plugin_unload');
         }
         resetStudioCameraPresetsForProjectChange();
         if (cameraPositionListener) cameraPositionListener.delete?.();
@@ -6266,6 +10833,13 @@
         if (cameraPresetsAction) cameraPresetsAction.delete();
         if (sceneComposerAction) sceneComposerAction.delete();
         if (sceneComposerFormListener) sceneComposerFormListener.delete?.();
+        cancelSceneComposerUndo(false);
+        if (sceneComposerUndoHooks) sceneComposerUndoHooks.delete?.();
+        if (sceneComposerAttachmentListener) sceneComposerAttachmentListener.delete?.();
+        sceneComposerAttachmentTimers.forEach(timer => clearTimeout(timer));
+        sceneComposerAttachmentTimers = [];
+        sceneComposerAttachmentEstablished = false;
+        if (sceneComposerPanelStyles) sceneComposerPanelStyles.delete?.();
         if (sceneComposerPanel) sceneComposerPanel.delete();
         if (sceneComposerProjectListener) sceneComposerProjectListener.delete?.();
         if (sceneComposerModeListener) sceneComposerModeListener.delete?.();
@@ -6273,14 +10847,22 @@
         if (sceneComposerLifecycleHydrator) sceneComposerLifecycleHydrator.delete?.();
         if (cameraPresetsParsedListener) cameraPresetsParsedListener.delete?.();
         if (cameraPresetsProjectProperty) cameraPresetsProjectProperty.delete?.();
+        if (framePipelineReadyListener) {
+            window.removeEventListener('lightflow_frame_pipeline_ready', framePipelineReadyListener);
+        }
+        if (framePipelineDisposedListener) {
+            window.removeEventListener('lightflow_frame_pipeline_disposed', framePipelineDisposedListener);
+        }
+        detachViewportComposerFromFramePipeline();
         cameraPresetsProjectProperty = null;
         resetSceneComposerLifecycle();
         disposeViewportComposers();
         if (stylesheet && typeof stylesheet.delete === 'function') stylesheet.delete();
         BLOOM_MASK_STATE.resources.forEach(resource => resource?.dispose?.());
         BLOOM_MASK_STATE.resources.clear();
-        BLOOM_MASK_STATE.emissiveMaterials = new WeakMap();
-        BLOOM_MASK_STATE.occluderMaterials = new WeakMap();
+        disposeBloomDerivedResources();
+        BLOOM_PIPELINE_INSTANCES.forEach(pipeline => pipeline.dispose());
+        BLOOM_PIPELINE_INSTANCES.clear();
         restoreWindowBindings();
         exportAction = null;
         quickRenderAction = null;
@@ -6289,6 +10871,12 @@
         cameraPresetsAction = null;
         sceneComposerAction = null;
         sceneComposerPanel = null;
+        sceneComposerPanelStyles = null;
+        sceneComposerAttachmentListener = null;
+        sceneComposerUndoHooks = null;
+        framePipelineReadyListener = null;
+        framePipelineDisposedListener = null;
+        framePipelineRegistration = null;
         sceneComposerFormListener = null;
         sceneComposerProjectListener = null;
         sceneComposerModeListener = null;
@@ -6307,11 +10895,12 @@
         author: 'MidFord327',
         description: 'Export polished Blockbench studio renders with tiled supersampling, 4K/8K-safe output, transparency, GPU guidance, and an adjustable frame. Complements Light Manager and Shader Architect in the Lightflow suite.',
         tags: ['Lightflow', 'Rendering', 'Export'],
-        version: '1.9.0',
+        version: '1.9.10',
         min_version: '4.9.0',
         variant: 'both',
         onload() {
             addTranslations();
+            registerSceneComposerUndoHooks();
             addStyles();
             registerCameraPresetProjectProperty();
             currentSettings = loadSettings();
@@ -6412,33 +11001,65 @@
                 expand_button: true,
                 condition: { modes: ['render'], project: true },
                 default_position: {
-                    slot: 'right_bar',
+                    slot: 'left_bar',
                     float_position: [0, 0],
-                    float_size: [314, 200],
-                    height: 200,
+                    float_size: [314, 520],
+                    height: 420,
                     folded: false,
-                    attached_to: window.Panels?.lightflow_environment_panel ? 'light_properties' : 'outliner',
-                    attached_index: 3,
-                    sidebar_index: 3
+                    fixed_height: false,
+                    attached_to: window.Panels?.material_properties ? 'material_properties' : (window.Panels?.lightflow_scene ? 'lightflow_scene' : ''),
+                    attached_index: 2,
+                    sidebar_index: 2
                 },
                 mode_positions: {
                     render: {
-                        slot: 'right_bar',
-                        height: 200,
+                        slot: 'left_bar',
+                        height: 420,
                         folded: false,
-                        attached_to: window.Panels?.light_properties ? 'light_properties' : 'outliner',
-                        attached_index: 3,
-                        sidebar_index: 3
+                        fixed_height: false,
+                        attached_to: window.Panels?.material_properties ? 'material_properties' : (window.Panels?.lightflow_scene ? 'lightflow_scene' : ''),
+                        attached_index: 2,
+                        sidebar_index: 2
                     }
                 },
-                insert_after: window.Panels?.lightflow_environment_panel ? 'lightflow_environment_panel' : 'outliner',
+                insert_after: 'material_properties',
                 form: createSceneComposerPanelForm(currentSettings)
             });
 
-            sceneComposerFormListener = sceneComposerPanel.form.on('change', ({ result }) => {
+            sceneComposerFormListener = sceneComposerPanel.form.on('change', ({ result, changed_keys }) => {
                 if (syncingSceneComposerPanel) return;
-                applySceneComposerForm(result, true);
+                const changedKeys = Array.isArray(changed_keys) && changed_keys.length
+                    ? changed_keys
+                    : Object.keys(result || {});
+                changedKeys.forEach(key => {
+                    if (key === '_composer_mode' && (result?.[key] === 'essentials' || result?.[key] === 'advanced')) {
+                        if (sceneComposerPanelMode !== result[key]) {
+                            sceneComposerPanelMode = result[key];
+                            setTimeout(syncSceneComposerPanel, 0);
+                        }
+                        return;
+                    }
+                    if (!key.startsWith(SCENE_COMPOSER_PANEL_GROUP_PREFIX)) return;
+                    const groupId = key.slice(SCENE_COMPOSER_PANEL_GROUP_PREFIX.length);
+                    if (Object.prototype.hasOwnProperty.call(sceneComposerPanelGroupsOpen, groupId)) {
+                        sceneComposerPanelGroupsOpen[groupId] = result?.[key] !== false;
+                    }
+                });
+                const settingKeys = changedKeys.filter(key => Object.prototype.hasOwnProperty.call(DEFAULT_SETTINGS, key));
+                if (!settingKeys.length) return;
+                const panelResult = {};
+                settingKeys.forEach(key => {
+                    if (result && Object.prototype.hasOwnProperty.call(result, key)) panelResult[key] = result[key];
+                });
+                applySceneComposerForm(panelResult, true);
             });
+            sceneComposerPanelStyles = window.LightManagerUI?.addDesignedPanelStyles?.('lightflow_scene_composer_panel', {
+                scrollbar_width: 4,
+                row_padding: '3px 4px'
+            });
+            establishSceneComposerPanelAttachment();
+            sceneComposerAttachmentTimers = [0, 500, 1500].map(delay => setTimeout(establishSceneComposerPanelAttachment, delay));
+            sceneComposerAttachmentListener = Blockbench.on('select_mode', establishSceneComposerPanelAttachment);
 
             MenuBar.addAction(exportAction, 'file.export');
             MenuBar.addAction(quickRenderAction, 'file.export');
@@ -6451,12 +11072,27 @@
             MenuBar.addAction(sceneComposerAction, 'view');
 
             patchAllViewportComposers();
+            framePipelineReadyListener = () => {
+                detachViewportComposerWrappers();
+                attachViewportComposerToFramePipeline();
+            };
+            framePipelineDisposedListener = () => {
+                detachViewportComposerFromFramePipeline();
+                patchAllViewportComposers();
+            };
+            window.addEventListener('lightflow_frame_pipeline_ready', framePipelineReadyListener);
+            window.addEventListener('lightflow_frame_pipeline_disposed', framePipelineDisposedListener);
             sceneComposerLifecycleHydrator = window.LightflowLifecycle?.registerHydrator?.(
                 'studio_render',
                 ({ project, model, deferred }) => {
-                    resetStudioCameraPresetsForProjectChange();
-                    resetSceneComposerLifecycle();
-                    if (deferred || !project) return;
+                    if (deferred) {
+                        releaseOwnedStudioRenderPreview('project_change');
+                        resetStudioCameraPresetsForProjectChange();
+                        resetSceneComposerLifecycle();
+                        return;
+                    }
+                    if (!project) return;
+                    releaseOwnedStudioRenderPreview('project_hydrate');
                     hydrateCameraPresetProject(project, model);
                     cameraPresetPersistenceWarningShown = false;
                     StudioRenderFrame.remove(false);
@@ -6469,6 +11105,7 @@
             );
             if (!sceneComposerLifecycleHydrator) {
                 sceneComposerProjectListener = Blockbench.on('select_project', event => {
+                    releaseOwnedStudioRenderPreview('project_change');
                     resetStudioCameraPresetsForProjectChange();
                     resetSceneComposerLifecycle();
                     hydrateCameraPresetProject(event?.project || getActiveProject(), null);
@@ -6481,6 +11118,7 @@
                     refreshSceneComposerPreviews();
                 });
                 sceneComposerCloseListener = Blockbench.on('close_project', () => {
+                    releaseOwnedStudioRenderPreview('project_close');
                     resetStudioCameraPresetsForProjectChange();
                     resetSceneComposerLifecycle();
                 });
@@ -6495,11 +11133,30 @@
             publishWindowBinding('StudioRender', {
                 open: openStudioRenderDialog,
                 render: renderWithSettings,
+                renderFrame(settings, consumeFrame, options = {}) {
+                    if (typeof consumeFrame !== 'function') {
+                        return Promise.resolve({
+                            ok: false,
+                            delivered: false,
+                            consumed: false,
+                            error: 'StudioRender.renderFrame requires a frame consumer callback.'
+                        });
+                    }
+                    return renderWithSettings(settings, Object.assign({}, options, {
+                        save: false,
+                        deliver: false,
+                        silent: options.silent !== false,
+                        consumeFrame
+                    }));
+                },
                 quickRender: quickStudioRender,
                 openComposer: openSceneComposerDialog,
                 openCameraPresets: openCameraPresetManagerDialog,
                 openCameraPresetMenu,
                 refreshComposer: refreshSceneComposerPreviews,
+                renderViewportComposer,
+                detachViewportComposers: detachViewportComposerWrappers,
+                getResourceDiagnostics: getStudioResourceDiagnostics,
                 get cameraPresets() { return getProjectCameraPresets().map(preset => JSON.parse(JSON.stringify(preset))); },
                 applyCameraPreset,
                 captureCameraPreset(name) {
@@ -6512,10 +11169,36 @@
                         zoom: null
                     }), { exact_projection: true });
                 },
+                captureShot(name = 'Studio Shot', options = {}) {
+                    return captureCameraPreset(
+                        name,
+                        options.preview || getPreview(),
+                        normalizeForm({
+                            ...currentSettings,
+                            angle_preset: 'view',
+                            zoom: null
+                        }),
+                        null,
+                        { exact_projection: options.exact_projection !== false }
+                    );
+                },
+                applyShot(shot, options = {}) {
+                    return applyCameraPreset(shot, Object.assign({}, options, {
+                        notify: options.notify === true,
+                        transient: options.transient !== false
+                    }));
+                },
                 updateCameraPreset(id) {
                     return updateProjectCameraPreset(id, currentSettings);
                 },
                 deleteCameraPreset: deleteProjectCameraPreset,
+                cancelRender(reason = 'external_cancel') {
+                    if (!activeRenderSession) return false;
+                    activeRenderSession.cancelled = true;
+                    activeRenderSession.cancelReason = String(reason || 'external_cancel');
+                    return true;
+                },
+                get isRendering() { return !!activeRenderSession; },
                 get settings() { return Object.assign({}, currentSettings); },
                 setComposerSettings(next) {
                     currentSettings = normalizeForm(Object.assign({}, currentSettings, next || {}));
@@ -6524,9 +11207,46 @@
                     refreshSceneComposerPreviews();
                     return Object.assign({}, currentSettings);
                 },
-                showFrame: () => StudioRenderFrame.show(getPreview(), currentSettings),
+                getFrameState(options = {}) {
+                    const preview = options.preview || getPreview();
+                    const settings = normalizeForm(Object.assign({}, currentSettings, options.settings || {}));
+                    if (
+                        StudioRenderFrame.node && StudioRenderFrame.state &&
+                        (!options.owner || StudioRenderFrame.stateOwner === options.owner)
+                    ) {
+                        return Object.assign({}, StudioRenderFrame.state);
+                    }
+                    return Object.assign({}, StudioRenderFrame.getState(preview, settings));
+                },
+                setFrameState(frame, options = {}) {
+                    const preview = options.preview || getPreview();
+                    const settings = normalizeForm(Object.assign({}, currentSettings, options.settings || {}, {
+                        capture_area: 'frame'
+                    }));
+                    return StudioRenderFrame.setState(frame, preview, settings, {
+                        persistProjectState: options.persistProjectState !== false,
+                        owner: options.owner || ''
+                    });
+                },
+                showFrame(options = {}, frameState = null) {
+                    const preview = options.preview || getPreview();
+                    const settings = normalizeForm(Object.assign({}, currentSettings, options.settings || options, {
+                        capture_area: 'frame'
+                    }));
+                    StudioRenderFrame.show(preview, settings, {
+                        state: frameState,
+                        persistProjectState: options.persistProjectState !== false,
+                        owner: options.owner || ''
+                    });
+                    return Object.assign({}, StudioRenderFrame.state || StudioRenderFrame.getState(preview, settings));
+                },
                 hideFrame: () => StudioRenderFrame.remove(true),
-                resetFrame: () => StudioRenderFrame.reset(getPreview(), currentSettings)
+                resetFrame(options = {}) {
+                    const preview = options.preview || getPreview();
+                    const settings = normalizeForm(Object.assign({}, currentSettings, options.settings || {}));
+                    StudioRenderFrame.reset(preview, settings);
+                    return Object.assign({}, StudioRenderFrame.state || StudioRenderFrame.getState(preview, settings));
+                }
             });
         },
         onunload: unloadPlugin
