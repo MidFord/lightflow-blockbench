@@ -22,13 +22,12 @@
       "title": "Light Manager",
       "description": "Lights, gizmos, animation, and shadows for the entire suite.",
       "description_es": "Luces, gizmos, animación y sombras para toda la suite.",
-      "version": "1.7.0",
+      "version": "1.8.2",
       "min_blockbench": "4.9.0",
       "icon": "light_mode",
       "group": "essential",
       "recommended": true,
-      "dependencies": [],
-      "maturity": "stable"
+      "dependencies": []
     },
     {
       "id": "shader_architect",
@@ -36,13 +35,12 @@
       "title": "Shader Architect",
       "description": "Lightflow, PBR, and Rendercraft materials, instances, and screen effects.",
       "description_es": "Materiales Lightflow, PBR, Rendercraft, instancias y efectos de pantalla.",
-      "version": "2.9.1",
+      "version": "3.2.6",
       "min_blockbench": "4.9.0",
       "icon": "architecture",
       "group": "essential",
       "recommended": true,
-      "dependencies": ["light_manager"],
-      "maturity": "stable"
+      "dependencies": ["light_manager"]
     },
     {
       "id": "lightflow_environment",
@@ -50,13 +48,12 @@
       "title": "Lightflow Environment",
       "description": "Sky, sun, moon, clouds, reflections, and environment lighting.",
       "description_es": "Cielo, sol, luna, nubes, reflejos e iluminación ambiental.",
-      "version": "1.5.1",
+      "version": "1.9.0",
       "min_blockbench": "4.9.0",
       "icon": "wb_twilight",
       "group": "essential",
       "recommended": true,
-      "dependencies": ["light_manager"],
-      "maturity": "stable"
+      "dependencies": ["light_manager"]
     },
     {
       "id": "lightflow_atmosphere",
@@ -64,13 +61,12 @@
       "title": "Lightflow Atmosphere",
       "description": "Local fog, light shafts, dust, and procedural volumes.",
       "description_es": "Niebla local, haces de luz, polvo y volúmenes procedurales.",
-      "version": "1.2.0",
+      "version": "2.0.0",
       "min_blockbench": "4.9.0",
       "icon": "blur_on",
       "group": "essential",
       "recommended": true,
-      "dependencies": ["light_manager"],
-      "maturity": "stable"
+      "dependencies": ["light_manager"]
     },
     {
       "id": "studio_render",
@@ -78,13 +74,82 @@
       "title": "Studio Render",
       "description": "High-resolution scene composition and supersampled image export.",
       "description_es": "Composición y exportación de imágenes con alta resolución y supersampling.",
-      "version": "1.9.0",
+      "version": "1.9.10",
       "min_blockbench": "4.9.0",
       "icon": "photo_camera_back",
       "group": "essential",
       "recommended": true,
-      "dependencies": [],
-      "maturity": "stable"
+      "dependencies": []
+    },
+    {
+      "id": "lightflow_cinematic",
+      "file": "lightflow_cinematic.js",
+      "title": "Lightflow Cinematic",
+      "description": "Deterministic sequences, physical cameras, and animation rendering.",
+      "description_es": "Secuencias deterministas, cámaras físicas y render de animación.",
+      "version": "0.1.0",
+      "min_blockbench": "4.9.0",
+      "icon": "movie_creation",
+      "group": "creative",
+      "recommended": false,
+      "maturity": "experimental",
+      "dependencies": ["studio_render"]
+    },
+    {
+      "id": "visual_shader_graph",
+      "file": "visual_shader_graph.js",
+      "title": "Visual Shader Graph",
+      "description": "A visual shader editor connected to Shader Architect.",
+      "description_es": "Editor visual de shaders conectado con Shader Architect.",
+      "version": "1.2.0",
+      "min_blockbench": "4.9.0",
+      "icon": "schema",
+      "group": "creative",
+      "recommended": false,
+      "maturity": "beta",
+      "dependencies": ["light_manager", "shader_architect"]
+    },
+    {
+      "id": "bedrock_structure_studio",
+      "file": "bedrock_structure_studio.js",
+      "title": "Bedrock Structure Studio",
+      "description": "Open, edit, and export Bedrock .mcstructure files.",
+      "description_es": "Abrir, editar y exportar estructuras .mcstructure de Bedrock.",
+      "version": "2.5.0",
+      "min_blockbench": "5.0.0",
+      "icon": "view_in_ar",
+      "group": "specialized",
+      "recommended": false,
+      "maturity": "beta",
+      "dependencies": ["light_manager"]
+    },
+    {
+      "id": "lightflow_test_lab",
+      "file": "lightflow_test_lab.js",
+      "title": "Lightflow Test Lab",
+      "description": "Renderer diagnostics and benchmarks for development.",
+      "description_es": "Diagnósticos y benchmarks del renderer para desarrollo.",
+      "version": "2.0.0",
+      "min_blockbench": "4.9.0",
+      "icon": "speed",
+      "group": "developer",
+      "recommended": false,
+      "maturity": "developer",
+      "dependencies": ["light_manager", "shader_architect"]
+    },
+    {
+      "id": "lightflow_ui_diagnostics",
+      "file": "lightflow_ui_diagnostics.js",
+      "title": "Lightflow UI Diagnostics",
+      "description": "Visual and accessibility auditing for panels and dialogs.",
+      "description_es": "Auditoría visual y de accesibilidad de paneles y diálogos.",
+      "version": "1.1.0",
+      "min_blockbench": "4.9.0",
+      "icon": "troubleshoot",
+      "group": "developer",
+      "recommended": false,
+      "maturity": "developer",
+      "dependencies": ["light_manager"]
     }
   ]
 }

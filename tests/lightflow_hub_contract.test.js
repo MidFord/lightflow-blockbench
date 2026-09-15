@@ -148,6 +148,7 @@ for (const module of cleanManifest.modules) {
 registration.data.onunload();
 assert.strictEqual(context.LightflowHub, undefined, 'Hub API must be removed on unload');
 
+// Re-load once to exercise the UI controller and the GitHub installation path.
 registration.data.onload();
 context.LightflowHub.open();
 assert(lastDialogConfig?.component?.template.includes('lfhub-module'), 'Hub dialog must expose the module list');
