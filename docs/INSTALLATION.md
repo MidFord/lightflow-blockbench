@@ -1,6 +1,6 @@
 # Installing Lightflow
 
-Lightflow is currently a **manual development preview**. It has not yet been published in the official Blockbench Plugin Marketplace.
+Lightflow is currently a development preview and has not yet been published in the official Blockbench Plugin Marketplace. **Lightflow Hub** is the recommended installer and update manager; manual installation remains available as a fallback.
 
 ## Before you install
 
@@ -12,7 +12,26 @@ Lightflow is currently a **manual development preview**. It has not yet been pub
 
 > **Current maturity:** Light Manager, Shader Architect, and Studio Render are the most complete and polished modules. Lightflow Atmosphere and Lightflow Environment are still in a more active beta stage, so their interfaces and behavior may change more frequently.
 
-## Install directly from URLs
+## Install with Lightflow Hub
+
+1. Open Blockbench.
+2. Open **File → Plugins → Load Plugin from URL**.
+3. Install this URL:
+
+```text
+https://raw.githubusercontent.com/MidFord/lightflow-blockbench/refs/heads/main/lightflow_hub.js
+```
+
+4. Open **Tools → Lightflow Hub**.
+5. Choose the channel you want:
+   - **Stable** uses an immutable GitHub Release snapshot that contains a Lightflow manifest.
+   - **Main** follows the public `main` branch.
+   - **Experimental** follows the configurable experimental branch (`experimental` by default).
+6. Install the recommended modules or individual modules from the Hub.
+
+The Hub resolves dependencies, checks versions, supports updates and enable/disable/reload/uninstall operations, and asks before replacing installations that came from another source.
+
+## Install directly from URLs (manual fallback)
 
 This is the fastest installation method and does not require downloading the repository first.
 
