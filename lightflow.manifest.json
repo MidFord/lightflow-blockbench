@@ -12,7 +12,7 @@
   "hub": {
     "id": "lightflow_hub",
     "file": "lightflow_hub.js",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "min_blockbench": "4.9.0"
   },
   "modules": [
