@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "suite": "Lightflow",
-  "generated_at": "2026-09-14",
+  "generated_at": "2026-10-05",
   "repository": {
     "owner": "MidFord",
     "name": "lightflow-blockbench",
@@ -12,7 +12,7 @@
   "hub": {
     "id": "lightflow_hub",
     "file": "lightflow_hub.js",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "min_blockbench": "4.9.0"
   },
   "modules": [
@@ -41,7 +41,9 @@
       "icon": "architecture",
       "group": "essential",
       "recommended": true,
-      "dependencies": ["light_manager"],
+      "dependencies": [
+        "light_manager"
+      ],
       "maturity": "stable"
     },
     {
@@ -55,7 +57,9 @@
       "icon": "wb_twilight",
       "group": "essential",
       "recommended": true,
-      "dependencies": ["light_manager"],
+      "dependencies": [
+        "light_manager"
+      ],
       "maturity": "stable"
     },
     {
@@ -69,7 +73,9 @@
       "icon": "blur_on",
       "group": "essential",
       "recommended": true,
-      "dependencies": ["light_manager"],
+      "dependencies": [
+        "light_manager"
+      ],
       "maturity": "stable"
     },
     {
@@ -86,5 +92,6 @@
       "dependencies": [],
       "maturity": "stable"
     }
-  ]
+  ],
+  "artwork": "assets/hub/copper-golem.png"
 }
