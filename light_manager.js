@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @typedef {Object} IconOptions
  * @property {string} [fontFamily='Material Icons'] - The CSS font-family name for the icons.
  * @property {string}[color='rgba(0, 0, 0, 1)'] - CSS color string (hex, rgb, rgba).
@@ -6,10 +6,732 @@
  * @property {number} [quality=1.0] - Image quality for lossy formats (0.0 to 1.0).
  */
 
+// LIGHTFLOW_MENU_ORGANIZER_START
+function createLightflowMenuOrganizer({menuBar, items, checkCondition = () => true, text = value => value[0]}) {
+    const owners = new Set(['lightflow_hub','light_manager','shader_architect','lightflow_environment','lightflow_atmosphere','studio_render','lightflow_scene_links','lightflow_cinematic','perspective_matcher','visual_shader_graph','bedrock_structure_studio','lightflow_test_lab','lightflow_ui_lab','lightflow_ui_diagnostics']);
+    // Only primary menu placements are routed. Context menus, toolbars, native
+    // actions and the action registry retain their original objects and IDs.
+    const group = (id, en, es, icon, children) => ({id, title:[en,es], icon, children});
+    // Primary locations follow the task. Object editing stays in the inspector
+    // and object context menu; creation never needs a chain of brand folders.
+    const direct = (host, ids, parent = '') => ids.map(node => ({host, parent, node}));
+    const trees = [
+        ...direct('view', ['studio_render_toggle_frame','studio_render_camera_presets','lightflow_cinematic_record_frame','lightflow_cinematic_workspace','lightflow_toggle_wide_canvas','toggle_light_area_gizmos']),
+        {host:'view',parent:'',node:group('lf_view_camera','Perspective matching','Ajustar perspectiva','perspective',['perspective_matcher_toggle','perspective_matcher_apply','perspective_matcher_reset','perspective_matcher_restore'])},
+        {host:'view',parent:'',node:group('lf_view_terrain','Terrain preview','Vista de terreno','view_in_ar',['bedrock_structure_frame','bedrock_structure_toggle_secondary','bedrock_structure_toggle_optimized'])},
+        ...direct('filter', ['sa_open_studio','open_visual_shader_graph','bedrock_structure_pack_library','lightflow_environment_local_resources','sa_open_performance','open_lightflow_hub']),
+        {host:'filter',parent:'',node:group('lf_tools_terrain','Terrain','Terreno','view_in_ar',['bedrock_structure_settings','bedrock_structure_bake_mesh','bedrock_structure_info','bedrock_structure_validate_export'])},
+        {host:'filter',parent:'',node:group('lf_tools_developer','Developer tools','Herramientas de desarrollo','code',[
+                group('lf_developer_ui','UI tests','Pruebas de interfaz','widgets',['lightflow_ui_lab_panel_open','lightflow_ui_lab_dialog_open','open_lightflow_ui_diagnostics']),
+                group('lf_developer_render','Render tests','Pruebas de render','photo_camera',['lightflow_test_lab_run_full','lightflow_test_lab_run_everything','lightflow_test_lab_run_performance_baseline','lightflow_test_lab_run_studio_post_quality','lightflow_test_lab_run_studio_post_benchmark']),
+                group('lf_developer_scene','Scene benchmarks','Benchmarks de escena','speed',['lightflow_test_lab_run_scene_scalability','lightflow_test_lab_run_scene_culling','lightflow_test_lab_run_scene_cpu','lightflow_test_lab_run_scene_traversal','lightflow_test_lab_run_project_switching','lightflow_test_lab_run_animation']),
+                group('lf_developer_domains','Atmosphere & terrain tests','Pruebas de atmósfera y terreno','blur_on',['lightflow_test_lab_run_atmosphere_v2','lightflow_test_lab_run_volume_complete','lightflow_test_lab_run_bedrock_structure']),
+                group('lf_developer_capture','Capture diagnostics','Capturar diagnósticos','bug_report',['lightflow_test_lab_arm_project','lightflow_test_lab_export'])
+            ])},
+        {host:'edit',parent:'',node:group('lightflow_menu_create','Add light or effect','Añadir luz o efecto','auto_awesome',[
+            'add_light','add_spot_light','add_directional_light','add_art_key','add_lightflow_volume','add_lightflow_god_ray','lightflow_particle_create','lightflow_scene_link_add'
+        ])},
+        {host:'edit',parent:'',node:group('lf_edit_terrain','Terrain','Terreno','view_in_ar',[
+                'bedrock_structure_inventory','bedrock_structure_add_block','bedrock_structure_edit_block','bedrock_structure_fill_region','bedrock_structure_replace_blocks',
+                group('lf_edit_terrain_selection','Selection','Selección','select_all',['bedrock_structure_select_region','bedrock_structure_select_connected','bedrock_structure_select_same_block','bedrock_structure_select_same_state','bedrock_structure_find_blocks','bedrock_structure_expand_selection','bedrock_structure_shrink_selection','bedrock_structure_invert_selection']),
+                group('lf_edit_terrain_transform','Transform','Transformar','transform',['bedrock_structure_move_selection','bedrock_structure_transform_selection','bedrock_structure_duplicate_selection']),
+                group('lf_edit_terrain_clipboard','Clipboard & delete','Portapapeles y borrar','content_copy',['bedrock_structure_copy_cells','bedrock_structure_paste_cells','bedrock_structure_delete_selection']),
+                group('lf_edit_terrain_entities','Entities','Entidades','person',['bedrock_structure_add_entity','bedrock_structure_edit_entity']),
+                'bedrock_structure_go_to','bedrock_structure_position_data'
+            ])},
+        ...direct('transform', ['light_manager_free_move','lightflow_block_snap']),
+        {host:'animation',parent:'',node:group('lightflow_menu_animation','Cinematic','Cinemática','movie',[
+            'lightflow_cinematic_open','lightflow_cinematic_camera_from_view','lightflow_cinematic_camera_keyframe','lightflow_cinematic_preview_frame','lightflow_cinematic_render_png_sequence','lightflow_cinematic_cancel_render'
+        ])},
+        {host:'file',parent:'import',node:group('lightflow_menu_import','Terrain','Terreno','view_in_ar',['bedrock_structure_open','bedrock_structure_import_terrain','bedrock_structure_import_texture_palette'])},
+        ...direct('file', ['studio_render_export','bedrock_structure_export'], 'export')
+    ];
+    const destinations = new Map(), records = new Map(), hooks = [], roots = [];
+    let alive = true;
+    const index = (node, path) => {
+        if (typeof node === 'string') { if (!destinations.has(node)) destinations.set(node,[]); destinations.get(node).push(path); return; }
+        for (const child of node.children) index(child, path.concat(text(node.title)));
+    };
+    for (const tree of trees) index(tree.node,[tree.host, ...(tree.parent?[tree.parent]:[])]);
+    // The project-specific legacy action opens the same pack manager. Keep its
+    // keybinding/palette/toolbar identity, with one canonical primary menu entry.
+    destinations.set('bedrock_structure_resource_pack',[]);
+    // These legacy dialogs duplicate the Render inspectors or the viewport
+    // frame. Keep their registered IDs for shortcuts and integrations only.
+    for (const id of ['studio_render_quick','lightflow_scene_composer','lightflow_environment_composer','lightflow_atmosphere_settings','edit_light_properties','fit_light_bounds_to_selection','light_manager_reset_gizmo','edit_lightflow_volume','lightflow_cinematic_lens_tool','lightflow_atmosphere_add_vfx','lightflow_particle_import']) destinations.set(id,[]);
+    const isOwned = action => !!action && owners.has(action.plugin);
+    const actionFor = id => { const action=items[id], record=records.get(id); return isOwned(action) && (!record || action.plugin===record.owner) ? action : null; };
+    const visible = action => { try { return !!action && checkCondition(action.condition); } catch { return false; } };
+    const children = node => node.children.flatMap(child => {
+        if (typeof child === 'string') { const action=actionFor(child); return visible(action)?[action]:[]; }
+        const result=children(child);
+        return result.length?[{id:child.id,name:text(child.title),icon:child.icon,children:result}]:[];
+    });
+    const remember = (action, host, path, position) => {
+        let record=records.get(action.id);
+        if (!record || record.owner!==action.plugin) records.set(action.id,record={id:action.id,owner:action.plugin,placements:[]});
+        // Numeric insert positions are not part of the semantic menu path.
+        const segments=String(path||'').split('.').filter(Boolean), tail=segments[segments.length-1];
+        const numeric=tail!==undefined&&/^\d+$/.test(tail);
+        const parent=(numeric?segments.slice(0,-1):segments).join('.');
+        if (!record.placements.some(place=>place.host===host&&place.parent===parent)) record.placements.push({host,parent,position:numeric?Number(tail):position});
+    };
+    const menus = new Map();
+    for (const host of ['file','edit','transform','view','filter','animation']) {
+        const menu=menuBar.menus[host] || (host==='filter'?menuBar.menus.tools:null);
+        if (menu && ![...menus.values()].includes(menu)) menus.set(host,menu);
+    }
+    const directTrees = new Map(trees.filter(tree=>typeof tree.node==='string').map(tree=>[tree.node,tree]));
+    const mountDirect = action => {
+        const tree=directTrees.get(action.id), menu=tree && menus.get(tree.host);
+        if (!menu || roots.some(entry=>entry.root===action && entry.menu===menu)) return;
+        const original=hooks.find(hook=>hook.menu===menu)?.original || menu.addAction;
+        original.call(menu,action,tree.parent);
+        roots.push({menu,parent:tree.parent,root:action});
+    };
+    // Import placements from modules that loaded before Light Manager. Native
+    // removal updates each Action's menu bookkeeping instead of splicing arrays.
+    for (const [host,menu] of menus) {
+        const placements=[];
+        const walk=(list,parent='')=>{ if (!Array.isArray(list)) return; list.forEach((item,position)=>{
+            const id=typeof item==='string'?item:item?.id, action=items[id];
+            if (isOwned(action)) {remember(action,host,parent,position);if(destinations.has(id))placements.push({id,parent});}
+            if (Array.isArray(item?.children)) walk(item.children,parent?parent+'.'+id:id);
+        });};
+        walk(menu.structure);
+        for (const placement of placements) menu.removeAction(placement.parent?placement.parent+'.'+placement.id:placement.id);
+    }
+    for (const [host,menu] of menus) {
+        const original=menu.addAction, own=Object.prototype.hasOwnProperty.call(menu,'addAction');
+        const wrapper=function(action,path='') {
+            const resolved=typeof action==='string'?items[action.id||action]:action;
+            if (alive && isOwned(resolved)) {
+                remember(resolved,host,path,menu.structure.length);
+                const inherited=(parent,base)=>{if(!Array.isArray(parent.children))return;parent.children.forEach((child,index)=>{const action=typeof child==='string'?items[child]:child;if(!isOwned(action))return;remember(action,host,base,index);inherited(action,base+'.'+action.id);});};
+                const parent=String(path||'').split('.').filter(segment=>segment&&!/^\d+$/.test(segment)).join('.');inherited(resolved,(parent?parent+'.':'')+resolved.id);
+                if(destinations.has(resolved.id)){if(directTrees.has(resolved.id))mountDirect(resolved);return;}
+            }
+            return original.apply(this,arguments);
+        };
+        menu.addAction=wrapper;hooks.push({menu,original,wrapper,own});
+    }
+    for (const tree of trees) {
+        const menu=menus.get(tree.host);if(!menu)continue;
+        if(typeof tree.node==='string'){const action=actionFor(tree.node);if(action)mountDirect(action);continue;}
+        const root={id:tree.node.id,name:text(tree.node.title),icon:tree.node.icon,condition:()=>alive&&children(tree.node).length>0,children:()=>children(tree.node)};
+        menu.addAction(root,tree.parent);roots.push({menu,parent:tree.parent,root});
+    }
+    return {
+        inventory() { return [...records.values()].map(record=>{
+            const action=actionFor(record.id);let paths=destinations.get(record.id),inherited=false;
+            if(!paths){paths=record.placements.flatMap(place=>{const parentId=place.parent.split('.').pop();return (destinations.get(parentId)||[]).map(path=>path.concat(items[parentId]?.name||parentId));});inherited=paths.length>0;if(!inherited)paths=null;}
+            return {id:record.id,owner:record.owner,name:action?.name||'',loaded:!!action,original:record.placements.map(place=>place.host+(place.parent?'.'+place.parent:'')),destinations:paths,inherited,suppressed:destinations.has(record.id)&&!destinations.get(record.id).length};
+        }); },
+        tree() {return trees.map(tree=>({host:tree.host,parent:tree.parent,id:typeof tree.node==='string'?tree.node:tree.node.id,children:typeof tree.node==='string'?(visible(actionFor(tree.node))?[actionFor(tree.node)]:[]):children(tree.node)}));},
+        delete() {
+            if (!alive) return;alive=false;
+            for (const {menu,parent,root} of roots) {if(root.plugin && items[root.id] && items[root.id]!==root)continue;if(menu.node?.isConnected&&menu.node.querySelector('[menu_item="'+root.id+'"]'))menu.hide?.();menu.removeAction(parent?parent+'.'+root.id:root.id);}
+            for (const hook of hooks) if (hook.menu.addAction===hook.wrapper) {if(hook.own)hook.menu.addAction=hook.original;else delete hook.menu.addAction;}
+            // Restore surviving independently installed plugins when the shared
+            // organizer unloads. Deleted actions never reappear.
+            for (const record of records.values()) {
+                const action=actionFor(record.id);if(!action||!destinations.has(record.id))continue;
+                for (const place of record.placements) {
+                    const menu=menus.get(place.host);if(!menu)continue;
+                    const path=place.parent+(place.position===undefined?'':(place.parent?'.':'')+place.position);
+                    menu.addAction(action,path);
+                }
+            }
+            records.clear();hooks.length=0;roots.length=0;
+        }
+    };
+}
+// LIGHTFLOW_MENU_ORGANIZER_END
+
+// Remove both hydrated and pending legacy placements. Toolbar.remove alone
+// misses postload IDs, which Blockbench can insert on the next toolbar update.
+function removeLightflowToolbarAction(action, toolbarIds = ['tools', 'main_tools']) {
+    for (const id of toolbarIds) {
+        const toolbar = window.Toolbars?.[id];
+        if (!toolbar || !action) continue;
+        let changed = false;
+        if (Array.isArray(toolbar.postload)) {
+            const pending = toolbar.postload.filter(entry => entry[0] !== action.id);
+            changed = pending.length !== toolbar.postload.length;
+            toolbar.postload = pending.length ? pending : null;
+        }
+        while (toolbar.children?.some(item => item === action || item?.id === action.id || item === action.id)) {
+            const index = toolbar.children.findIndex(item => item === action || item?.id === action.id || item === action.id);
+            if (typeof toolbar.children[index] === 'string') toolbar.children.splice(index, 1);
+            else toolbar.remove(action.id, false);
+            changed = true;
+        }
+        // A disabled toolbar may not have hydrated its saved items yet.
+        const stored = window.BARS?.stored?.[id];
+        if (Array.isArray(stored) && stored.includes(action.id)) {
+            for (let i = stored.length - 1; i >= 0; i--) if (stored[i] === action.id) stored.splice(i, 1);
+            changed = true;
+        }
+        if (changed) {
+            toolbar.update?.(true);
+            if (Array.isArray(stored)) {
+                // Native save() serializes only hydrated children and would
+                // discard pending entries belonging to unloaded plugins.
+                try { window.localStorage?.setItem('toolbars', JSON.stringify(window.BARS.stored)); } catch (_) {}
+            } else toolbar.save?.();
+        }
+    }
+}
+
 const lightManagerOwnedWindowBindings = new Map();
 const lightManagerScheduledTaskCancellations = new Set();
 const lightManagerReportedWarnings = new Set();
 let ownedThreeLightsGroup = null;
+let lightflowControlInstance = 0;
+const lightflowMediaViewers = new Set();
+
+function mountLightflowFinishedImageViewer(root, media, options = {}) {
+    const text=(en,es)=>String(window.Language?.code||'').startsWith('es')?es:en;
+    const stage=document.createElement('div'),dock=document.createElement('div'),surface=document.createElement('div'),tip=document.createElement('div'),errorMessage=document.createElement('p'),style=document.createElement('style');
+    root.classList.add('lf-media-viewer','lf-image-viewer','lf-controls');stage.className='lf-media-stage';stage.tabIndex=0;stage.setAttribute('role','region');stage.setAttribute('aria-label',text('Image preview. Plus/minus zoom; 0 fits; 1 actual size; Space and drag to pan.','Imagen. Más/menos amplía; 0 ajusta; 1 tamaño real; Espacio y arrastre para desplazar.'));
+    surface.className='lf-media-surface';dock.className='lf-media-toolbar';dock.setAttribute('role','toolbar');dock.setAttribute('aria-label',text('Image inspection tools','Herramientas de inspección'));tip.className='lf-media-tip';tip.hidden=true;tip.setAttribute('role','tooltip');tip.id='lf_media_tip_'+(++lightflowControlInstance);
+    style.textContent=`
+    .lf-media-viewer.lf-image-viewer{display:flex;flex-direction:column;gap:12px;min-width:0;min-height:0;height:min(52vh,520px);}
+    .lf-image-result .lf-image-viewer{height:min(760px,calc(100dvh - 112px));}
+    .lf-image-result{max-width:calc(100vw - 24px)!important;max-height:calc(100dvh - 24px)!important;min-width:min(400px,calc(100vw - 24px))!important;border-radius:12px!important;overflow:hidden;}
+    .lf-image-result .dialog_handle{height:48px!important;box-sizing:border-box;padding-inline:16px!important;display:flex;align-items:center;}
+    .lf-image-result .dialog_title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;font-weight:500;}
+    .lf-image-result .dialog_close_button{position:static!important;display:flex;align-items:center;justify-content:center;flex:0 0 34px;width:34px;height:34px;margin-left:12px;border-radius:8px;color:var(--color-text);}
+    .lf-image-result .dialog_close_button:hover{background:color-mix(in srgb,var(--color-text) 10%,transparent);}
+    .lf-image-result .dialog_close_button:focus-visible{outline:2px solid var(--color-text);outline-offset:-3px;}
+    .lf-image-result .dialog_content{padding:16px!important;margin:0!important;overflow:hidden;max-height:none!important;}
+    .lf-image-result .dialog_bar.button_bar{display:none!important;}
+    .lf-image-viewer .lf-media-stage{position:relative;overflow:hidden;flex:1;min-height:0;height:auto;background:var(--color-dark);border:1px solid color-mix(in srgb,var(--color-text) 10%,transparent);border-radius:0;touch-action:none;user-select:none;cursor:default;}
+    .lf-image-viewer .lf-media-error{position:absolute;inset:16px;margin:0;display:grid;place-items:center;color:var(--color-text);pointer-events:none;overflow-wrap:anywhere;}
+    .lf-image-viewer .lf-media-stage.can-pan{cursor:grab;}.lf-image-viewer .lf-media-stage.is-panning{cursor:grabbing;}
+    .lf-image-viewer .lf-media-stage:focus-visible{outline:1px dashed var(--color-text);outline-offset:-2px;}
+    .lf-image-viewer .lf-media-surface{position:absolute;transform-origin:center;background:var(--color-dark);outline:1px dashed color-mix(in srgb,var(--color-text) 24%,transparent);border-radius:0;box-shadow:none;pointer-events:none;will-change:transform;}
+    .lf-image-viewer .lf-media-surface.checker{--lf-checker-a:color-mix(in srgb,var(--color-dark) 94%,var(--color-text));--lf-checker-b:color-mix(in srgb,var(--color-dark) 88%,var(--color-text));background-image:conic-gradient(var(--lf-checker-a) 25%,var(--lf-checker-b) 0 50%,var(--lf-checker-a) 0 75%,var(--lf-checker-b) 0);background-size:28px 28px;}
+    .lf-image-viewer .lf-media-surface img{position:static!important;display:block;max-width:none!important;max-height:none!important;width:100%;height:100%;user-select:none;pointer-events:none;}
+    .lf-image-viewer .lf-media-toolbar{position:absolute;bottom:16px;left:50%;transform:translateX(-50%);display:flex;align-items:center;justify-content:center;gap:4px;flex-wrap:wrap;width:max-content;max-width:calc(100% - 24px);box-sizing:border-box;padding:5px;background:var(--color-ui);border:1px solid var(--color-border);border-radius:8px;box-shadow:none;z-index:2;}
+    .lf-image-viewer .lf-media-toolgroup{display:flex;align-items:center;gap:4px;flex:0 0 auto;}
+    .lf-image-viewer .lf-media-toolbar button{display:flex;align-items:center;justify-content:center;flex:0 0 34px;width:34px;height:34px;min-width:34px;min-height:34px;margin:0;padding:0;border:0;border-radius:8px;background:transparent;color:var(--color-text);box-shadow:none!important;}
+    .lf-image-viewer .lf-media-toolbar button :is(i,svg){width:22px;height:22px;font-size:22px;line-height:22px;display:block;}
+    .lf-image-viewer .lf-media-toolbar button:hover:not(:disabled){background:color-mix(in srgb,var(--color-text) 10%,transparent);}
+    .lf-image-viewer .lf-media-toolbar button:active:not(:disabled){background:color-mix(in srgb,var(--color-text) 18%,transparent);}
+    .lf-image-viewer .lf-media-toolbar button[aria-pressed=true]{color:var(--color-accent);background:color-mix(in srgb,var(--color-accent) 15%,transparent);}
+    .lf-image-viewer button:focus-visible{outline:2px solid var(--color-text);outline-offset:-3px;}
+    .lf-image-viewer button:disabled{opacity:.4;cursor:default;}
+    .lf-image-viewer .lf-media-status{margin:0;flex:0 0 52px;min-width:52px;text-align:center;font-variant-numeric:tabular-nums;font-size:12px;color:var(--color-text);}
+    .lf-media-separator{width:1px;height:20px;flex:0 0 1px;margin-inline:2px;background:color-mix(in srgb,var(--color-text) 16%,transparent);}
+    .lf-image-footer{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-width:0;}
+    .lf-image-info{flex:1 1 160px;min-width:0;color:var(--color-subtle_text);font-size:12px;overflow-wrap:anywhere;}
+    .lf-image-feedback{display:block;color:var(--color-text);min-height:0;}
+    .lf-image-actions{display:flex;gap:8px;margin-left:auto;}
+    .lf-image-actions button{display:flex;align-items:center;justify-content:center;gap:6px;min-height:34px;padding:6px 12px;margin:0;border:0;border-radius:8px;background:var(--color-button);color:var(--color-text);font:inherit;box-shadow:none!important;}
+    .lf-image-actions button.primary{background:var(--color-accent);color:var(--color-accent_text,#fff);}
+    .lf-image-actions button:hover:not(:disabled){filter:brightness(1.1);}
+    .lf-image-actions button i{font-size:18px;}
+    .lf-media-tip{position:fixed;z-index:100001;max-width:240px;padding:6px 8px;border:1px solid var(--color-border);border-radius:8px;background:var(--color-ui);color:var(--color-text);box-shadow:none;font-size:12px;pointer-events:none;}
+    .lf-image-viewer:fullscreen,.lf-image-viewer.lf-media-expanded{box-sizing:border-box;background:var(--color-back);padding:16px;width:100%;height:100%;max-height:none;}
+    .lf-image-viewer.lf-media-expanded{position:fixed;inset:0;z-index:100000;}
+    .lf-image-viewer [hidden]{display:none!important;}
+    @media(max-width:480px){.lf-image-result .dialog_content{padding:12px!important;}.lf-image-actions button{padding-inline:8px;}.lf-image-viewer .lf-media-toolbar{bottom:12px;gap:3px;}.lf-image-viewer .lf-media-separator{display:none;}.lf-image-viewer .lf-media-toolbar button{width:32px;flex-basis:32px;height:32px;min-width:32px;min-height:32px;}}
+    `;
+    errorMessage.className='lf-media-error';errorMessage.hidden=true;errorMessage.setAttribute('role','alert');root.append(style,stage,tip);stage.append(surface,dock,errorMessage);surface.append(media);media.removeAttribute('style');media.draggable=false;
+    const status=document.createElement('span');status.className='lf-media-status';status.textContent='…';status.setAttribute('aria-live','polite');
+    let scale=1,x=0,y=0,fitting=true,disposed=false,drag=null,space=false,frame=null,escapedFullscreen=false;
+    const listeners=[];const listen=(node,type,fn,opts)=>{node.addEventListener(type,fn,opts);listeners.push(()=>node.removeEventListener(type,fn,opts));};
+    const area=()=>{const reserve=dock.offsetHeight+32;return{width:Math.max(1,stage.clientWidth-32),height:Math.max(1,stage.clientHeight-reserve-16),cx:stage.clientWidth/2,cy:Math.max(1,stage.clientHeight-reserve)/2};};
+    const loaded=()=>media.naturalWidth>0&&media.naturalHeight>0;
+    const clampPan=()=>{const a=area(),maxX=Math.max(0,(media.naturalWidth*scale-a.width)/2),maxY=Math.max(0,(media.naturalHeight*scale-a.height)/2);x=Math.max(-maxX,Math.min(maxX,x));y=Math.max(-maxY,Math.min(maxY,y));return{maxX,maxY};};
+    const draw=()=>{if(disposed||!loaded())return;const a=area(),bounds=clampPan();surface.style.width=media.naturalWidth+'px';surface.style.height=media.naturalHeight+'px';surface.style.left=a.cx+'px';surface.style.top=a.cy+'px';surface.style.transform=`translate(calc(-50% + ${x}px),calc(-50% + ${y}px)) scale(${scale})`;surface.style.backgroundSize=28/scale+'px '+28/scale+'px';surface.style.outlineWidth=1/scale+'px';status.textContent=(scale*100<10?Number((scale*100).toFixed(1)):Math.round(scale*100))+'%';stage.classList.toggle('can-pan',bounds.maxX>0||bounds.maxY>0);fitButton.setAttribute('aria-pressed',String(fitting));actualButton.setAttribute('aria-pressed',String(!fitting&&Math.abs(scale-1)<.000001));outButton.disabled=scale<=Math.min(.01,fitScale())*1.001;inButton.disabled=scale>=Math.max(32,fitScale())*.999;};
+    const fitScale=()=>{const a=area();return Math.min(a.width/media.naturalWidth,a.height/media.naturalHeight);};
+    const fit=()=>{if(!loaded()||disposed)return;scale=fitScale();x=y=0;fitting=true;draw();};
+    const setScale=(next,ax=0,ay=0)=>{if(!loaded())return;const bounded=Math.max(Math.min(.01,fitScale()),Math.min(Math.max(32,fitScale()),next)),ratio=bounded/scale;x=ax-(ax-x)*ratio;y=ay-(ay-y)*ratio;scale=bounded;fitting=false;draw();};
+    const zoom=(factor,ax=0,ay=0)=>setScale(scale*factor,ax,ay);
+    const actual=(ax=0,ay=0)=>setScale(1,ax,ay);
+    const hideTip=()=>{tip.hidden=true;};
+    const showTip=node=>{tip.textContent=node.getAttribute('aria-label');tip.hidden=false;const r=node.getBoundingClientRect(),t=tip.getBoundingClientRect();tip.style.left=Math.max(8,Math.min(innerWidth-t.width-8,r.left+r.width/2-t.width/2))+'px';tip.style.top=Math.max(8,r.top-t.height-8)+'px';};
+    let toolGroup=dock;const group=label=>{toolGroup=document.createElement('span');toolGroup.className='lf-media-toolgroup';toolGroup.setAttribute('role','group');toolGroup.setAttribute('aria-label',label);dock.append(toolGroup);};
+    const button=(label,icon,action)=>{const b=document.createElement('button');b.type='button';b.setAttribute('aria-label',label);b.setAttribute('aria-describedby',tip.id);b.append(Blockbench.getIconNode(icon));listen(b,'click',()=>{hideTip();action();});listen(b,'mouseenter',()=>showTip(b));listen(b,'mouseleave',hideTip);listen(b,'focus',()=>showTip(b));listen(b,'blur',hideTip);toolGroup.append(b);return b;};
+    const separator=()=>{const s=document.createElement('span');s.className='lf-media-separator';s.setAttribute('role','separator');dock.append(s);};
+    group(text('Zoom','Zoom'));
+    const outButton=button(text('Zoom out (−)','Alejar (−)'),'zoom_out',()=>zoom(1/1.25));toolGroup.append(status);
+    const inButton=button(text('Zoom in (+)','Acercar (+)'),'zoom_in',()=>zoom(1.25));separator();group(text('Image framing','Encuadre de imagen'));
+    const fitButton=button(text('Fit to view (0)','Ajustar a la vista (0)'),'fit_screen',fit);
+    const actualButton=button(text('Actual size · 1 image pixel = 1 CSS pixel (1)','Tamaño real · 1 píxel de imagen = 1 píxel CSS (1)'),'looks_one',()=>actual());actualButton.textContent='1:1';separator();group(text('Display','Visualización'));
+    const alphaButton=button(text('Transparency background','Fondo de transparencia'),'texture',()=>{surface.classList.toggle('checker');alphaButton.setAttribute('aria-pressed',String(surface.classList.contains('checker')));});surface.classList.add('checker');alphaButton.setAttribute('aria-pressed','true');
+    const isFullscreen=()=>document.fullscreenElement===root||root.classList.contains('lf-media-expanded');
+    const syncFullscreen=()=>{fullscreenButton.setAttribute('aria-pressed',String(isFullscreen()));fullscreenButton.firstChild?.remove();fullscreenButton.prepend(Blockbench.getIconNode(isFullscreen()?'fullscreen_exit':'fullscreen'));fullscreenButton.setAttribute('aria-label',isFullscreen()?text('Exit fullscreen (Escape)','Salir de pantalla completa (Escape)'):text('Fullscreen','Pantalla completa'));if(fitting)fit();else draw();};
+    const leaveFullscreen=()=>{if(document.fullscreenElement===root)document.exitFullscreen().catch(()=>{});root.classList.remove('lf-media-expanded');syncFullscreen();fullscreenButton.focus();};
+    const fullscreenButton=button(text('Fullscreen','Pantalla completa'),'fullscreen',async()=>{if(isFullscreen()){leaveFullscreen();return;}hideTip();try{if(!root.requestFullscreen)throw Error('Unavailable');await root.requestFullscreen();}catch{if(!disposed)root.classList.add('lf-media-expanded');}if(!disposed)syncFullscreen();});
+    listen(document,'fullscreenchange',syncFullscreen);
+    const ready=()=>{if(disposed)return;media.hidden=false;errorMessage.hidden=true;for(const b of [outButton,inButton,fitButton,actualButton,alphaButton])b.disabled=false;options.onMetadata?.({width:media.naturalWidth,height:media.naturalHeight});fit();};listen(media,'load',ready);
+    listen(media,'error',()=>{media.hidden=true;status.textContent='—';errorMessage.textContent=text('Unable to display this image','No se puede mostrar esta imagen');errorMessage.hidden=false;for(const b of [outButton,inButton,fitButton,actualButton,alphaButton])b.disabled=true;options.onError?.(text('Unable to display this image','No se puede mostrar esta imagen'));});
+    const anchor=event=>{const r=stage.getBoundingClientRect(),a=area();return{x:event.clientX-r.left-stage.clientLeft-a.cx,y:event.clientY-r.top-stage.clientTop-a.cy};};
+    listen(stage,'wheel',event=>{if(!loaded()||event.deltaY===0||event.target.closest('button'))return;event.preventDefault();event.stopPropagation();stage.focus({preventScroll:true});const a=anchor(event),delta=event.deltaY*(event.deltaMode===1?16:event.deltaMode===2?stage.clientHeight:1);zoom(Math.exp(-Math.max(-240,Math.min(240,delta))*.002),a.x,a.y);},{passive:false});
+    listen(stage,'dblclick',event=>{if(event.target.closest('.lf-media-toolbar')||!loaded())return;event.preventDefault();stage.focus();const a=anchor(event);if(fitting)actual(a.x,a.y);else fit();});
+    listen(stage,'pointerdown',event=>{if(event.target.closest('.lf-media-toolbar'))return;stage.focus();hideTip();if(!loaded()||(event.button!==0&&event.button!==1))return;const bounds=clampPan();if(!bounds.maxX&&!bounds.maxY)return;event.preventDefault();event.stopPropagation();fitting=false;drag={id:event.pointerId,x:event.clientX,y:event.clientY};stage.classList.add('is-panning');try{stage.setPointerCapture(event.pointerId);}catch{};});
+    listen(stage,'pointermove',event=>{if(drag?.id!==event.pointerId)return;event.preventDefault();x+=event.clientX-drag.x;y+=event.clientY-drag.y;drag.x=event.clientX;drag.y=event.clientY;draw();});
+    const endDrag=()=>{if(drag)try{if(stage.hasPointerCapture(drag.id))stage.releasePointerCapture(drag.id);}catch{}drag=null;stage.classList.remove('is-panning');};
+    for(const type of ['pointerup','pointercancel','lostpointercapture'])listen(stage,type,endDrag);listen(stage,'auxclick',e=>{if(e.button===1)e.preventDefault();});listen(window,'blur',()=>{space=false;endDrag();});
+    listen(root,'keydown',event=>{if(event.key==='Escape'&&isFullscreen()){event.preventDefault();event.stopImmediatePropagation();escapedFullscreen=true;leaveFullscreen();return;}if((event.key==='Enter'||event.key===' ')&&event.target.closest('button')){event.preventDefault();event.stopImmediatePropagation();if(!event.repeat)event.target.closest('button').click();return;}if(event.target.closest('input,textarea,select')||event.ctrlKey||event.metaKey||event.altKey)return;if(!stage.contains(event.target)||!loaded())return;if(event.key===' '){if(event.target!==stage)return;space=true;event.preventDefault();event.stopPropagation();return;}if(['+','='].includes(event.key))zoom(1.25);else if(event.key==='-')zoom(1/1.25);else if(event.key==='0'||event.key.toLowerCase()==='f')fit();else if(event.key==='1')actual();else if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key)){x+=event.key==='ArrowLeft'?32:event.key==='ArrowRight'?-32:0;y+=event.key==='ArrowUp'?32:event.key==='ArrowDown'?-32:0;fitting=false;draw();}else return;event.preventDefault();event.stopPropagation();hideTip();},true);
+    listen(root,'keyup',event=>{if((event.key==='Enter'||event.key===' ')&&event.target.closest('button')){event.preventDefault();event.stopImmediatePropagation();space=false;return;}if(event.key==='Escape'&&escapedFullscreen){escapedFullscreen=false;event.preventDefault();event.stopImmediatePropagation();return;}if(event.key===' '&&space){space=false;event.preventDefault();event.stopPropagation();}},true);
+    const observer=new ResizeObserver(()=>{if(frame)return;frame=requestAnimationFrame(()=>{frame=null;if(disposed)return;hideTip();if(fitting)fit();else draw();});});observer.observe(stage);observer.observe(dock);
+    for(const b of [outButton,inButton,fitButton,actualButton,alphaButton])b.disabled=!loaded();syncFullscreen();if(loaded())ready();
+    const dispose=()=>{if(disposed)return;disposed=true;endDrag();observer.disconnect();listeners.forEach(remove=>remove());if(frame)cancelAnimationFrame(frame);if(document.fullscreenElement===root)document.exitFullscreen().catch(()=>{});root.classList.remove('lf-media-expanded','lf-media-viewer','lf-image-viewer','lf-controls');media.removeAttribute('src');style.remove();stage.remove();tip.remove();lightflowMediaViewers.delete(dispose);};
+    dispose.getState=()=>({scale,x,y,fitting,disposed,area:area()});dispose.fit=fit;dispose.exitFullscreen=leaveFullscreen;dispose.actual=actual;dispose.zoom=zoom;lightflowMediaViewers.add(dispose);return dispose;
+}
+
+// Finished media only: transforms the existing image/video; never renders the scene.
+function mountLightflowMediaViewer(root, media, options = {}) {
+    if (root && media?.tagName === 'IMG') return mountLightflowFinishedImageViewer(root, media, options);
+    if (!root || !media) return () => {};
+    const es = window.Language?.code === 'es';
+    const text = (en, spanish) => es ? spanish : en;
+    const video = media.tagName === 'VIDEO';
+    const stage = document.createElement('div'), toolbar = document.createElement('div');
+    root.classList.add('lf-media-viewer', 'lf-controls');
+    stage.className = 'lf-media-stage'; stage.tabIndex = 0;
+    stage.setAttribute('role', 'region');
+    stage.setAttribute('aria-label', text('Preview. Plus/minus zoom; arrows pan; F fits; 0 shows actual size.', 'Vista previa. Más/menos amplía; flechas desplazan; F ajusta; 0 muestra tamaño real.'));
+    toolbar.className = 'lf-media-toolbar'; toolbar.setAttribute('role', 'toolbar');
+    toolbar.setAttribute('aria-label', text('Preview controls', 'Controles de vista previa'));
+    const style = document.createElement('style');
+    style.textContent = `.lf-media-viewer{min-width:0;display:flex;flex-direction:column;gap:8px}.lf-media-toolbar{display:flex;flex-wrap:wrap;gap:4px;align-items:center}.lf-media-toolbar button{min-width:30px;min-height:30px;height:auto;margin:0}.lf-media-stage{position:relative;overflow:hidden;height:min(52vh,520px);min-height:120px;background:var(--color-dark);border:1px solid var(--color-border);border-radius:8px;touch-action:none}.lf-media-stage:focus-visible{outline:2px solid var(--color-text);outline-offset:2px}.lf-media-stage img{position:absolute;max-width:none!important;max-height:none!important;left:50%;top:50%;transform-origin:center;user-select:none;pointer-events:none}.lf-media-stage video{display:block;width:100%;height:100%;object-fit:contain}.lf-media-viewer:fullscreen,.lf-media-viewer.lf-media-expanded{background:var(--color-back);padding:12px;width:100%;height:100%;box-sizing:border-box}.lf-media-viewer.lf-media-expanded{position:fixed;inset:0;z-index:100000}.lf-media-viewer:fullscreen .lf-media-stage,.lf-media-viewer.lf-media-expanded .lf-media-stage{height:auto;flex:1;min-height:0}.lf-media-status{margin-inline-start:auto;max-width:100%;overflow-wrap:anywhere;white-space:normal;font-variant-numeric:tabular-nums}.lf-media-error{color:var(--color-text);padding:8px}`;
+    const status = document.createElement('span'); status.className = 'lf-media-status';
+    status.setAttribute('aria-live', 'polite');
+    root.append(style, toolbar, stage); stage.append(media); toolbar.append(status);
+    media.removeAttribute('style'); media.draggable = false;
+    if (video) {media.controls = true; media.playsInline = true;}
+    let scale = 1, x = 0, y = 0, fitting = true, disposed = false, drag, fitFrame;
+    const listeners = [];
+    const listen = (node, type, fn, options) => {node.addEventListener(type, fn, options); listeners.push(() => node.removeEventListener(type, fn, options));};
+    const draw = () => {
+        if (video) return;
+        media.style.width = media.naturalWidth + 'px'; media.style.height = media.naturalHeight + 'px';
+        media.style.transform = `translate(calc(-50% + ${x}px),calc(-50% + ${y}px)) scale(${scale})`;
+        status.textContent = Math.round(scale * 100) + '%';
+    };
+    const fit = () => {
+        if (video || !media.naturalWidth) return;
+        media.style.removeProperty('display'); status.classList.remove('lf-media-error');
+        scale = Math.min(stage.clientWidth / media.naturalWidth, stage.clientHeight / media.naturalHeight);
+        x = y = 0; fitting = true; draw();
+    };
+    const zoom = (factor, anchorX = 0, anchorY = 0) => {
+        if (!media.naturalWidth) return;
+        const fitScale=Math.min(stage.clientWidth/media.naturalWidth,stage.clientHeight/media.naturalHeight);
+        const next = Math.max(Math.min(.05,fitScale), Math.min(Math.max(16,fitScale), scale * factor)), ratio = next / scale;
+        x = anchorX - (anchorX - x) * ratio; y = anchorY - (anchorY - y) * ratio;
+        scale = next; fitting = false; draw();
+    };
+    const button = (label, icon, action) => {
+        const node = document.createElement('button'); node.type = 'button'; node.title = label;
+        node.setAttribute('aria-label', label); node.append(Blockbench.getIconNode(icon));
+        listen(node, 'click', action); toolbar.insertBefore(node, status); return node;
+    };
+    if (!video) {
+        button(text('Zoom out', 'Alejar'), 'zoom_out', () => zoom(1 / 1.25));
+        button(text('Zoom in', 'Acercar'), 'zoom_in', () => zoom(1.25));
+        button(text('Fit to view', 'Ajustar a la vista'), 'fit_screen', fit);
+        button(text('Actual size (1:1)', 'Tamaño real (1:1)'), 'crop_free', () => {if(!media.naturalWidth)return;scale = 1; x = y = 0; fitting = false; draw();});
+        listen(media, 'load', fit);
+        listen(stage, 'wheel', event => {if(!media.naturalWidth)return;event.preventDefault(); const r = stage.getBoundingClientRect(); zoom(event.deltaY < 0 ? 1.1 : 1 / 1.1, event.clientX - r.left - r.width / 2, event.clientY - r.top - r.height / 2);}, {passive:false});
+        listen(stage, 'pointerdown', event => {if (event.button !== 0 || !media.naturalWidth) return; stage.focus(); fitting = false; drag = {id:event.pointerId, x:event.clientX, y:event.clientY}; stage.setPointerCapture(event.pointerId);});
+        listen(stage, 'pointermove', event => {if (drag?.id !== event.pointerId) return; x += event.clientX-drag.x; y += event.clientY-drag.y; drag.x=event.clientX; drag.y=event.clientY; draw();});
+        listen(stage, 'pointerup', () => {drag = null;}); listen(stage, 'lostpointercapture', () => {drag = null;});
+    } else {
+        const seek = amount => {if (Number.isFinite(media.duration)) media.currentTime = Math.max(0, Math.min(media.duration, media.currentTime + amount));};
+        button(text('Back five seconds', 'Retroceder cinco segundos'), 'replay_5', () => seek(-5));
+        button(text('Forward five seconds', 'Avanzar cinco segundos'), 'forward_5', () => seek(5));
+        const speed = document.createElement('select'); speed.setAttribute('aria-label', text('Playback speed', 'Velocidad de reproducción'));
+        [.25,.5,1,1.5,2].forEach(rate => {const option=document.createElement('option'); option.value=rate; option.textContent=rate+'×'; option.selected=rate===1; speed.append(option);});
+        listen(speed,'change',()=>{media.playbackRate=Number(speed.value);}); toolbar.insertBefore(speed,status);
+        listen(media,'loadedmetadata',()=>{media.style.removeProperty('display');status.classList.remove('lf-media-error');status.textContent=media.videoWidth+' × '+media.videoHeight;});
+    }
+    const fullscreen = button(text('Full screen / return', 'Pantalla completa / volver'), 'fullscreen', async () => {
+        if (document.fullscreenElement === root) {await document.exitFullscreen(); return;}
+        if (root.classList.contains('lf-media-expanded')) {root.classList.remove('lf-media-expanded'); fullscreen.setAttribute('aria-pressed','false'); fit(); return;}
+        try {if (!root.requestFullscreen) throw new Error('Fullscreen unavailable'); await root.requestFullscreen();}
+        catch (_) {root.classList.add('lf-media-expanded'); fullscreen.setAttribute('aria-pressed','true'); fit();}
+    });
+    const syncFullscreen = () => {fullscreen.setAttribute('aria-pressed', String(document.fullscreenElement===root || root.classList.contains('lf-media-expanded'))); if(fitting) fit();};
+    listen(document, 'fullscreenchange', syncFullscreen);
+    syncFullscreen();
+    listen(root, 'keydown', event => {
+        if (event.key==='Escape' && (document.fullscreenElement===root || root.classList.contains('lf-media-expanded'))) {
+            event.preventDefault(); event.stopPropagation(); if(document.fullscreenElement===root) document.exitFullscreen(); root.classList.remove('lf-media-expanded'); fullscreen.focus(); fit(); return;
+        }
+        if (event.target!==stage || video || !media.naturalWidth) return;
+        if (event.key==='+' || event.key==='=') zoom(1.25);
+        else if(event.key==='-') zoom(1/1.25);
+        else if(event.key.toLowerCase()==='f') fit();
+        else if(event.key==='0') {scale=1;x=y=0;fitting=false;draw();}
+        else if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key)) {x += event.key==='ArrowLeft'?32:event.key==='ArrowRight'?-32:0;y += event.key==='ArrowUp'?32:event.key==='ArrowDown'?-32:0;fitting=false;draw();}
+        else return;
+        event.preventDefault(); event.stopPropagation();
+    }, true);
+    listen(media,'error',()=>{media.style.display='none';status.textContent=text('Unable to display this media', 'No se puede mostrar este contenido'); status.classList.add('lf-media-error');});
+    const observer = new ResizeObserver(() => {
+        if(fitting && !fitFrame)fitFrame=requestAnimationFrame(()=>{fitFrame=null;if(!disposed)fit();});
+    }); observer.observe(stage); fit();
+    const dispose = () => {
+        if(disposed) return; disposed=true;
+        observer.disconnect(); listeners.forEach(remove=>remove());
+        if(fitFrame)cancelAnimationFrame(fitFrame);
+        if(document.fullscreenElement===root) document.exitFullscreen().catch(()=>{});
+        root.classList.remove('lf-media-expanded');
+        if(video) {media.pause(); media.removeAttribute('src'); media.load();}
+        style.remove(); toolbar.remove(); stage.remove();
+        root.classList.remove('lf-media-viewer','lf-controls');
+        lightflowMediaViewers.delete(dispose);
+    };
+    lightflowMediaViewers.add(dispose); return dispose;
+}
+
+function openLightflowImageViewer({src, name = 'Lightflow', save, copy, format} = {}) {
+    const root=document.createElement('div'),image=document.createElement('img'),footer=document.createElement('div'),info=document.createElement('div'),details=document.createElement('span'),feedback=document.createElement('span'),actions=document.createElement('div');image.alt=name;
+    const text=(en,es)=>String(window.Language?.code||'').startsWith('es')?es:en;
+    footer.className='lf-image-footer';info.className='lf-image-info';feedback.className='lf-image-feedback';feedback.setAttribute('role','status');feedback.setAttribute('aria-live','polite');actions.className='lf-image-actions';details.textContent=text('Loading image…','Cargando imagen…');info.append(details,feedback);footer.append(info,actions);
+    const mime=String(format||src?.match(/^data:(image\/[^;,]+)/)?.[1]||'');const formatLabel=({'image/png':'PNG','image/jpeg':'JPEG','image/webp':'WebP','image/gif':'GIF','image/avif':'AVIF'})[mime]||'';
+    let alphaChannel=false;
+    if(mime==='image/png'&&src?.startsWith('data:image/png;base64,'))try{const header=atob(src.slice(src.indexOf(',')+1,src.indexOf(',')+1+48));alphaChannel=header.charCodeAt(25)===4||header.charCodeAt(25)===6;}catch{}
+    let dispose,closed=false,closeObserver;
+    const previousFocus=document.activeElement;
+    const close=()=>{if(closed)return;closed=true;closeObserver?.disconnect();dispose?.();save=copy=null;src='';dialog.hide();dialog.delete();lightflowMediaViewers.delete(close);if(previousFocus?.isConnected)previousFocus.focus?.();};
+    const action=(label,icon,kind,run)=>{const button=document.createElement('button');button.type='button';button.className=kind||'';button.append(Blockbench.getIconNode(icon),document.createTextNode(label));button.disabled=typeof run!=='function';button.addEventListener('click',async()=>{if(closed||button.disabled)return;button.disabled=true;feedback.textContent='';try{const result=await (kind==='primary'?save:copy)?.();if(!closed&&result!==false)feedback.textContent=kind==='primary'?text('Image prepared for saving','Imagen preparada para guardar'):text('Image copied','Imagen copiada');}catch(error){if(!closed)feedback.textContent=error?.message||text('Action failed','No se pudo completar la acción');}finally{if(!closed)button.disabled=false;}});actions.append(button);return button;};
+    const copyButton=action(text('Copy Image','Copiar imagen'),'content_copy','',copy),saveButton=action(text('Save Image','Guardar imagen'),'save','primary',save);
+    const cancel=()=>{if(document.fullscreenElement===root||root.classList.contains('lf-media-expanded')){dispose?.exitFullscreen();return false;}close();return false;};
+    const dialog=new Dialog('lightflow_image_result',{title:name,width:1100,lines:[root],buttons:[],onCancel:cancel,onButton:cancel});
+    dialog.show();dialog.object.classList.add('lf-image-result');
+    const closeButton=dialog.object.querySelector('.dialog_close_button'),handle=dialog.object.querySelector('.dialog_handle');
+    if(closeButton&&handle){handle.append(closeButton);closeButton.setAttribute('role','button');closeButton.tabIndex=0;closeButton.setAttribute('aria-label',text('Close image preview','Cerrar vista previa'));closeButton.addEventListener('pointerdown',event=>event.stopPropagation());closeButton.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopImmediatePropagation();close();}});}
+    dispose=mountLightflowMediaViewer(root,image,{onMetadata:meta=>{details.textContent=[`${meta.width} × ${meta.height} px`,formatLabel,alphaChannel?text('Alpha channel','Canal alpha'):''].filter(Boolean).join(' · ');},onError:message=>{feedback.textContent=message;copyButton.disabled=saveButton.disabled=true;}});root.append(footer);image.src=src;
+    closeObserver=new MutationObserver(()=>{if(!closed&&(!dialog.object.isConnected||dialog.object.style.display==='none'))close();});closeObserver.observe(dialog.object,{attributes:true,attributeFilter:['style']});if(dialog.object.parentElement)closeObserver.observe(dialog.object.parentElement,{childList:true});
+    lightflowMediaViewers.add(close);
+    return {dialog,dispose:close,view:dispose};
+}
+
+/* LIGHTFLOW_NUMBER_EDIT_CORE_START */
+function createLightflowNumberEditCore({ read, write, begin = () => { }, finish = () => { } }) {
+    let active = false, initial;
+    return {
+        get active() { return active; },
+        begin(event) { if (!active) { initial = read(); active = true; begin(event); } },
+        input(text, event) {
+            const value = String(text).trim() === '' ? NaN : Number(text);
+            if (!Number.isFinite(value)) return false;
+            this.begin(event); write(value, event); return true;
+        },
+        commit(event) { if (active) { active = false; finish(event, false); } },
+        cancel(event) { if (active) { active = false; write(initial, event); finish(event, true); } },
+        dispose() { if (active) { active = false; finish({ type: 'dispose' }, true); } }
+    };
+}
+/* LIGHTFLOW_NUMBER_EDIT_CORE_END */
+
+function bindLightflowNumberEdit(input, options) {
+    const core = createLightflowNumberEditCore({
+        read: options.read, write: options.write,
+        begin: event => options.onBegin?.(event),
+        finish: (event, cancelled) => cancelled && options.onCancel
+            ? options.onCancel(event) : options.onCommit?.(event)
+    });
+    const listeners = [];
+    const listen = (type, callback) => { input.addEventListener(type, callback, !!options.capture); listeners.push([type, callback]); };
+    const invalid = value => {
+        input.setAttribute('aria-invalid', value ? 'true' : 'false');
+        input.classList.toggle('lf-input-invalid', value);
+        input.setCustomValidity?.(value ? (typeof tl === 'function' ? tl('light_manager.ui.invalid_number') : 'Enter a valid number') : '');
+    };
+    const commit = event => {
+        if (options.tearingDown?.()) { core.dispose(); return; }
+        if (options.disabled?.()) return;
+        if (!core.active) return;
+        if (!core.input(input.value, event)) {
+            invalid(true);
+            if (options.capture) event.stopImmediatePropagation?.();
+            input.reportValidity?.(); return;
+        }
+        invalid(false); core.commit(event); input.value = options.read();
+    };
+    listen('focus', event => { if (!options.disabled?.()) core.begin(event); });
+    listen('input', event => {
+        if (options.suppress?.() || options.disabled?.()) return;
+        const valid = core.input(input.value, event); invalid(!valid);
+        if (!valid && options.capture) event.stopImmediatePropagation();
+    });
+    listen('change', commit);
+    listen('blur', event => {
+        if (options.tearingDown?.()) { core.dispose(); return; }
+        if (input.getAttribute('aria-invalid') === 'true') {
+            core.cancel(event); invalid(false); input.value = options.read();
+        } else if (core.active) commit(event);
+    });
+    listen('keydown', event => {
+        if (event.key !== 'Escape' && event.key !== 'Enter') return;
+        event.preventDefault(); event.stopPropagation();
+        if (event.key === 'Escape') {
+            core.cancel(event); invalid(false); input.value = options.read(); input.blur();
+        } else {
+            commit(event);
+            if (input.getAttribute('aria-invalid') !== 'true') { input.blur(); options.close?.(); }
+        }
+    });
+    input.classList.add('lf-number-input');
+    return { core, dispose() { core.dispose(); for (const [type, callback] of listeners) input.removeEventListener(type, callback, !!options.capture); } };
+}
+
+function mountLightflowNumberEditors(root) {
+    const editors = new Map(); let disposed = false, queued = false;
+    root.classList.add('lf-controls');
+    const scan = () => {
+        if (disposed) return;
+        for (const [input, editor] of editors) if (!root.contains(input)) { editor.dispose(); editors.delete(input); }
+        root.querySelectorAll('input[type=range]').forEach(input => input.classList.add('lf-slider-track'));
+        root.querySelectorAll('.sa-uniform-row').forEach(row => {
+            const label = row.firstElementChild?.querySelector('span')?.textContent?.trim();
+            if (label) row.querySelectorAll('input,select').forEach((input, index) => {
+                if (!input.getAttribute('aria-label')) input.setAttribute('aria-label', `${label}${index > 1 ? ` ${index}` : ''}`);
+            });
+        });
+        for (const input of root.querySelectorAll('input[type=number]')) {
+            if (editors.has(input)) continue;
+            let dispatching = false;
+            const editor = bindLightflowNumberEdit(input, {
+                capture: true, disabled: () => input.disabled, suppress: () => dispatching,
+                read: () => Number(input.value),
+                write: (value, event) => {
+                    if (event?.type === 'input' || input.value === String(value)) return;
+                    dispatching = true; input.value = value;
+                    try {
+                        // Restore input-driven Vue models. Leave change to native
+                        // commits: dispatching it on Escape adds an Undo entry in
+                        // consumers that intentionally commit only on change.
+                        input.dispatchEvent(new Event('input', { bubbles: true }));
+                    } finally { dispatching = false; }
+                }
+            });
+            editors.set(input, editor);
+        }
+    };
+    const observer = new MutationObserver(() => {
+        if (queued || disposed) return; queued = true;
+        queueMicrotask(() => { queued = false; scan(); });
+    });
+    observer.observe(root, { childList: true, subtree: true }); scan();
+    return { dispose() { disposed = true; observer.disconnect(); for (const editor of editors.values()) editor.dispose(); editors.clear(); } };
+}
+
+function positionLightflowOverlay(trigger, popup, options = {}) {
+    const margin = 8, rect = trigger.getBoundingClientRect();
+    popup.style.maxWidth = `calc(100vw - ${margin * 2}px)`;
+    popup.style.maxHeight = `${Math.max(0,Math.min(window.innerHeight-margin*2,Number(options.maxHeight)||Infinity))}px`;
+    popup.style.overflowY = 'auto';
+    const size = popup.getBoundingClientRect();
+    const below = rect.bottom + 4;
+    const top = below + size.height <= window.innerHeight - margin ? below : rect.top - size.height - 4;
+    popup.style.top = `${Math.max(margin, Math.min(top, window.innerHeight - size.height - margin))}px`;
+    popup.style.left = `${Math.max(margin, Math.min(rect.left, window.innerWidth - size.width - margin))}px`;
+}
+
+function installLightflowControlStyles() {
+    return Blockbench.addCSS(`
+        .lf-controls, .combo_slider_popup, .lightflow-spectrum, .lf-ui-lab,
+        #sa_material_studio_dialog, #panel_visual_shader_graph_inspector,
+        #lightflow_hub, #studio_render, #studio_render_camera_presets {
+            --lf-radius-control:8px; --lf-radius-inset:6px; --lf-radius-detail:4px;
+            --lf-radius-surface:12px; --lf-radius-envelope:16px;
+            --lf-space-1:4px; --lf-space-2:8px; --lf-space-3:12px; --lf-space-4:16px;
+            --lf-control-h:30px; --lf-input-h:28px; --lf-icon-action:18px;
+            --lf-on-accent:var(--color-accent_text,var(--color-text));
+            --lf-focus-color:var(--color-text);
+            --lf-accent-indicator:var(--color-text);
+        }
+        @supports (color:color-mix(in srgb,red,blue)) {
+            .lf-controls { --lf-accent-indicator:color-mix(in srgb,var(--color-accent) 80%,var(--color-text)); }
+        }
+        .lf-controls :is(button,[role=button],[role=checkbox],[role=switch],input,select):focus-visible,
+        input.lf-slider-track:focus-visible, .lf-tabs > button:focus-visible,
+        .lf-grid-select > button:focus-visible, .lf-outliner-row:focus-visible {
+            outline:2px solid var(--lf-focus-color,var(--color-text)); outline-offset:2px;
+        }
+        .lf-controls .lf-tabs > button:focus-visible { outline:2px solid var(--lf-focus-color,var(--color-text))!important; outline-offset:2px; }
+        .lf-controls :is(input:not([type=range]),textarea,select):focus-visible { outline-offset:-2px!important; }
+        .lf-controls .lf-slider-compact .combo_slider_label { justify-content:flex-start!important; text-align:left!important; display:flex!important; color:var(--color-text)!important; }
+        .lf-controls .lf-slider-compact { gap:0!important; padding:2px 4px!important; }
+        .lf-slider-compact:not(.light_manager_full_track_slider):not(.light_manager_marked_slider) > .combo_slider_label { flex:0 0 auto; max-width:30%; overflow:hidden; text-overflow:ellipsis; display:block!important; }
+        .lf-slider-compact > .slider_input_combo { flex:1 1 0!important; }
+        .lf-slider-compact > .material-icons { flex:none; }
+        .lf-control-help { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+        .lf-controls :is(input:not([type=range]):not([type=checkbox]),select),
+        .lf-dropdown { border-radius:var(--lf-radius-control,8px); min-height:var(--lf-input-h,28px); }
+        .lf-dropdown { gap:6px; line-height:1.3; border:1px solid var(--color-border); }
+        .lf-dropdown .dropdown_arrow { margin-left:auto; flex:0 0 auto; }
+        .lf-code-editor {width:100%;min-width:0;border:1px solid var(--color-border);border-radius:var(--lf-radius-control,8px);background:var(--color-back);overflow:hidden;}
+        .lf-code-label {display:block;padding:8px;font-weight:600;overflow-wrap:anywhere;}
+        .lf-code-toolbar {display:flex;align-items:center;gap:4px;padding:4px;border-bottom:1px solid var(--color-border);flex-wrap:wrap;}
+        .lf-code-toolbar > button {min-height:28px;padding:4px 8px;border-radius:6px;background:transparent;color:var(--color-text);}
+        .lf-code-toolbar > button[aria-pressed=true] {background:var(--color-button);box-shadow:inset 0 -2px var(--color-accent);}
+        .lf-code-toolbar > .form {flex:1 1 160px;min-width:0;margin:0;}
+        .lf-code-toolbar > .form > .dialog_bar {margin:0;padding:0;}
+        .lf-code-toolbar > span {margin-left:auto;color:var(--color-subtle_text);font-size:11px;}
+        .lf-code-source {position:relative;display:grid;grid-template-columns:40px minmax(0,1fr);min-width:0;}
+        .lf-code-source pre,.lf-code-source textarea {font-family:var(--font-code,monospace);font-size:13px;line-height:20px;tab-size:2;letter-spacing:normal;padding:8px;margin:0;border:0;box-sizing:border-box;white-space:pre;}
+        .lf-code-source .lf-code-gutter {position:absolute;inset:0 auto 0 0;width:40px;overflow:hidden;text-align:right;color:var(--color-subtle_text);background:var(--color-ui);user-select:none;}
+        .lf-code-source .lf-code-highlight {position:absolute;inset:0 0 0 40px;overflow:auto;scrollbar-width:none;pointer-events:none;color:var(--color-text);}
+        .lf-code-source textarea.lf-code-input {grid-column:2;width:100%;min-width:0;min-height:100px;max-height:min(480px,60vh);position:relative;background:transparent;color:transparent;caret-color:var(--color-text);resize:vertical;overflow:auto;outline-offset:-2px;}
+        @media (forced-colors:active) { .lf-code-source textarea.lf-code-input {color:CanvasText;caret-color:CanvasText;} .lf-code-highlight {visibility:hidden;} }
+        .lf-code-input::selection {background:color-mix(in srgb,var(--color-accent) 35%,transparent);}
+        .lf-code-key {color:var(--color-text);font-weight:600;}.lf-code-string {color:var(--color-subtle_text);}.lf-code-number {color:var(--color-text);font-weight:600;}
+        .lf-code-properties {padding:8px;max-height:min(480px,60vh);overflow:auto;min-width:0;}
+        .lf-code-properties details {min-width:0;margin-bottom:4px;}.lf-code-properties summary {padding:6px 4px;cursor:pointer;overflow-wrap:anywhere;}.lf-code-properties details > div {padding-left:8px;border-left:1px solid var(--color-border);min-width:0;}
+        .lf-code-properties .form_bar {min-width:0;}.lf-code-status {padding:6px 8px;font-size:12px;line-height:1.4;color:var(--color-subtle_text);overflow-wrap:anywhere;border-top:1px solid var(--color-border);}.lf-code-status.invalid {color:var(--color-error);}
+        .lf-code-editor [hidden] {display:none !important;}
+        .lf-controls .lf-block-bar {display:flex;flex-wrap:wrap;gap:4px;min-width:0;}
+        .lf-block-label {flex:0 0 100%;min-width:0;font-size:13px;line-height:1.4;overflow-wrap:anywhere;}
+        .lf-block-select {display:flex;align-items:center;gap:4px;width:100%;min-width:0;border-radius:var(--lf-radius-control,8px);background:var(--color-back);border:1px solid var(--color-border);padding:2px 4px;}
+        .lf-block-select > input {flex:1;min-width:0;width:0;border:0;background:transparent;color:var(--color-text);height:28px;}
+        .lf-block-icon {flex:none;display:grid;place-items:center;width:24px;height:24px;}.lf-block-icon :is(img,canvas,i,.icon) {width:22px;height:22px;max-width:22px;object-fit:contain;}
+        .lf-block-inventory {flex:none;width:28px;min-width:28px;height:28px;padding:2px;border-radius:6px;background:var(--color-button);}
+        .lf-block-options {position:fixed;z-index:10001;padding:4px;background:var(--color-ui);border:1px solid var(--color-border);border-radius:8px;box-shadow:0 4px 16px #0004;}
+        .lf-block-options > button {display:flex;width:100%;min-width:0;align-items:center;gap:8px;min-height:36px;text-align:left;padding:4px 8px;border-radius:6px;background:transparent;color:var(--color-text);}
+        .lf-block-options > button > :is(img,canvas,i,.icon,span:first-child:not(:last-child)) {width:24px;height:24px;object-fit:contain;flex:none;}
+        .lf-block-options > button > span:last-child {min-width:0;white-space:pre-line;overflow-wrap:anywhere;font-size:12px;}
+        .lf-block-options > button:is(:hover,[aria-selected=true]) {background:var(--color-button);}
+        .lf-controls .light_manager_action_button { min-height:var(--lf-control-h); }
+        .lf-input-invalid { border-color:var(--color-error)!important; }
+        .lf-number-input { font-variant-numeric:tabular-nums; }
+        input[type=range].lf-slider-track {
+            -webkit-appearance:none; appearance:none; min-width:0; height:28px;
+            background:transparent; padding:0; border:0; cursor:ew-resize;
+        }
+        input[type=range].lf-slider-track::-webkit-slider-runnable-track {
+            height:4px; border-radius:4px; background:var(--color-track,var(--color-grid));
+        }
+        input[type=range].lf-slider-track::-webkit-slider-thumb {
+            -webkit-appearance:none; width:18px; height:18px; margin-top:-7px;
+            border:2px solid var(--color-thumb,var(--color-accent)); border-radius:50%;
+            background:var(--color-ui); box-shadow:0 0 0 1px var(--color-text);
+        }
+        .lf-tabs { display:flex; gap:2px; min-width:0; width:100%; }
+        .lf-tabs > button { min-width:0; min-height:30px; white-space:normal; line-height:1.3; padding:4px 8px; }
+        .lf-tabs > button { height:auto!important; }
+        .lf-tabs .horizontal_select_label { white-space:normal!important; overflow:visible!important; overflow-wrap:anywhere; line-height:1.3; }
+        .lf-tabs[data-presentation=flat] {
+            background:var(--color-frame,var(--color-back)); border:0!important;
+            border-radius:0!important; padding:4px 4px 0; gap:2px;
+            min-height:33.6px; height:auto!important;
+        }
+        .lf-tabs[data-presentation=flat] > button {
+            background:var(--color-back); border:0!important; border-top:2px solid transparent!important;
+            border-radius:0!important; color:var(--color-text)!important;
+        }
+        .lf-tabs[data-presentation=flat] > button.selected {
+            background:var(--color-ui)!important; border-top-color:var(--lf-accent-indicator,var(--color-accent))!important;
+        }
+
+        .lf-controls .lf-tabs > button.selected,
+        .lf-controls .lf-tabs > button.selected :is(i, svg, .icon, .horizontal_select_icon, .horizontal_select_label) {
+            color: var(--color-text) !important;
+            fill: currentColor !important;
+        }
+
+        .lf-tabs-spacer {
+            display: block;
+            width: 100%;
+            min-width: 0;
+            flex: 0 0 auto;
+            margin: 0;
+            padding: 0;
+            border: 0;
+            pointer-events: none;
+        }
+
+        .lf-controls .horizontal_select_widget[data-presentation=inline] { padding:2px; gap:2px; border-radius:8px!important; }
+        .lf-controls .horizontal_select_widget[data-presentation=inline] > button { border-radius:6px!important; border:0!important; }
+        .lf-controls .horizontal_select_widget:not(.lf-tabs) > button.selected {
+            color:var(--lf-on-accent)!important;
+            outline:1px solid var(--lf-accent-indicator,var(--color-text)); outline-offset:-1px;
+        }
+        .lf-controls .horizontal_select_widget > button:focus-visible { outline:2px solid var(--lf-focus-color,var(--color-text))!important; outline-offset:2px; }
+        .lf-tab-content { min-width:0; }
+        .lf-controls .lf-dropdown-row { min-height:30px; height:auto!important; min-width:0; }
+        .lf-controls .lf-dropdown-row > .lf-dropdown-label { min-width:0; max-width:40%; flex:0 1 40%; white-space:normal!important; overflow-wrap:anywhere; line-height:1.3; }
+        .lf-controls .lf-dropdown-row > .lf-dropdown { min-width:64px!important; flex:1 1 0!important; }
+        .lf-controls .bar_display_paragraph .bar_display_main { flex-wrap:wrap; }
+        .lf-controls .bar_display_label { min-width:0; max-width:100%; overflow-wrap:anywhere; }
+        .lf-controls .combo_slider_label { min-width:0; flex:0 1 auto; overflow:hidden; text-overflow:ellipsis; display:block!important; }
+        .lf-controls .slider_input_combo { min-width:102px!important; }
+        .lf-controls .lf-slider-reset { width:24px!important; min-width:24px!important; height:24px!important; flex-shrink:0; justify-content:center; }
+        .lf-grid-select { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,112px),1fr)); gap:8px; width:100%; }
+        .lf-grid-select > button {
+            display:flex; flex-direction:column; align-items:center; gap:6px; min-width:0;
+            height:auto!important; min-height:0!important; width:100%!important; max-width:100%;
+            padding:8px; border:1px solid var(--color-border); border-radius:8px;
+            background:var(--color-back); color:var(--color-text); text-align:center;
+        }
+        .lf-grid-select > button[aria-checked=true] { border-color:var(--lf-accent-indicator,var(--color-text)); background:var(--color-selected); }
+        .lf-grid-select img { width:100%; height:64px; object-fit:contain; }
+        .lf-grid-select span { overflow-wrap:anywhere; }
+        .lf-grid-preview { display:block; width:100%; height:28px; border-radius:3px; }
+        .lf-grid-detail { font-size:11px; color:var(--color-subtle_text); white-space:pre-line; }
+        .lf-image-preview { margin:0; display:flex; flex-direction:column; gap:8px; width:100%; min-width:0; }
+        .lf-image-preview img { width:100%; max-height:var(--lf-preview-height,150px); object-fit:contain; background:var(--color-back); border-radius:8px; }
+        .lf-image-preview figcaption { color:var(--color-subtle_text); line-height:1.4; }
+        .lf-switch .lf-switch-track {
+            position:relative; width:32px!important; height:18px!important;
+            border-radius:9px!important; background:var(--color-button)!important; border:1px solid var(--color-border);
+        }
+        .lf-switch[aria-checked=true] .lf-switch-track { background:var(--color-accent)!important; border-color:var(--color-accent); }
+        .lf-switch .lf-switch-track > i { display:none!important; }
+        .lf-switch .lf-switch-track::after {
+            content:''; position:absolute; left:2px; top:2px; width:12px; height:12px;
+            border-radius:50%; background:var(--color-text); transition:transform 90ms ease;
+        }
+        .lf-switch[aria-checked=true] .lf-switch-track::after { transform:translateX(14px); background:var(--lf-on-accent); }
+        .lf-switch > span { white-space:normal; line-height:1.3; }
+        .lf-controls .custom_checkbox.lf-checkbox-option-row {
+            height:auto!important; min-height:52px; padding:8px 10px!important; gap:10px;
+            border:1px solid var(--color-border); border-radius:8px; background:var(--color-back);
+            text-align:left; white-space:normal; transition:border-color 90ms ease, background-color 90ms ease;
+        }
+        .lf-controls .custom_checkbox.lf-checkbox-option-row:hover:not(.disabled) { border-color:var(--color-accent); background:var(--color-button); }
+        .lf-controls .custom_checkbox.lf-checkbox-option-row[aria-checked=true] { border-color:var(--color-accent); }
+        .lf-controls .custom_checkbox.lf-checkbox-option-row > span:not(.lf-checkbox-option-summary) {
+            min-width:0; flex:1 1 auto!important; flex-direction:column; align-items:flex-start!important; gap:2px!important;
+        }
+        .lf-controls .custom_checkbox.lf-checkbox-option-row > span:not(.lf-checkbox-option-summary) > span:first-child {
+            min-width:0; max-width:100%; white-space:normal!important; overflow:visible; overflow-wrap:anywhere; text-overflow:clip; line-height:1.3;
+        }
+        .lf-checkbox-option-support { color:var(--color-subtle_text); font-size:12px; line-height:1.35; overflow-wrap:anywhere; }
+        .lf-controls .custom_checkbox.lf-checkbox-option-row > .lf-checkbox-option-summary {
+            flex:0 0 auto; min-width:0; margin-left:auto; padding-left:8px; color:var(--color-subtle_text);
+            font-size:12px; font-variant-numeric:tabular-nums; white-space:nowrap;
+        }
+        .lf-outliner-select { width:100%; min-width:0; display:flex; flex-direction:column; gap:8px; }
+        .lf-outliner-search { width:100%; min-width:0; }
+        .lf-outliner-tree { max-height:min(400px,calc(100vh - 240px)); overflow:auto; padding:2px; }
+        .lf-outliner-row { display:grid; grid-template-columns:24px minmax(0,1fr) 118px; align-items:center; gap:4px; min-height:32px; padding:2px 4px; border-bottom:1px solid var(--color-border); }
+        .lf-outliner-row > span { min-width:0; overflow-wrap:anywhere; }
+        .lf-outliner-row select { min-width:0; width:100%; height:28px; }
+        .lf-controls .lf-outliner-row button { width:24px!important; min-width:0!important; max-width:24px!important; height:24px!important; padding:0!important; background:transparent; border:0; box-shadow:none; }
+        .lf-outliner-footer { color:var(--color-subtle_text); line-height:1.4; }
+        .lf-controls .form_row_group > .form_bar { min-width:0; }
+        .lf-controls .form_bar[form_type] > .numeric_input > input { width:100%; min-width:0; }
+        .lf-controls .form_bar[form_type]:has(>label.name_space_left) { height:auto; min-height:30px; }
+        .lf-controls .form_bar[form_type] > label.name_space_left {
+            min-width:0!important; max-width:40%; flex:0 1 40%;
+            white-space:normal; overflow-wrap:anywhere; line-height:1.3;
+        }
+        .lf-controls .form_bar[form_type] > :is(input:not([type=checkbox]),.numeric_input,.bb-select) {
+            flex:1 1 0; width:auto; min-width:64px; max-width:100%;
+        }
+        @media(prefers-reduced-motion:reduce) { .lf-switch .lf-switch-track::after { transition:none; } }
+    `);
+}
 
 function warnLightManagerOnce(key, message, error) {
     if (lightManagerReportedWarnings.has(key)) return;
@@ -86,6 +808,516 @@ async function generateIconBase64(iconName, size, {
 window.generateIconBase64 = generateIconBase64;
 
 /*
+ * Shared Lightflow icon registry.
+ *
+ * Blockbench routes Actions, menus, toolbars, panels and most other native UI
+ * through Blockbench.getIconNode(). The bridge below keeps all existing icon
+ * formats working while allowing Lightflow plugins to register named SVGs,
+ * sprite frames, or custom DOM factories once and then reuse the same string in
+ * any regular `icon:` field.
+ */
+const lightManagerCustomIconRegistry = new Map();
+let lightManagerOriginalGetIconNode = null;
+let lightManagerPatchedGetIconNode = null;
+let lightManagerIconStyleNode = null;
+let lightManagerIconBridgeState = null;
+
+function normalizeLightManagerIconName(name) {
+    const normalized = String(name || '').trim();
+    if (!normalized || !/^[a-z0-9][a-z0-9._:-]*$/i.test(normalized)) {
+        throw new Error(`Invalid Light Manager icon name "${name}". Use letters, numbers, dots, dashes, underscores, or colons.`);
+    }
+    return normalized;
+}
+
+function normalizeLightManagerIconDefinition(definition) {
+    if (typeof definition === 'string') {
+        return { type: 'svg', svg: definition };
+    }
+    if (typeof definition === 'function') {
+        return { type: 'factory', factory: definition };
+    }
+    if (!definition || typeof definition !== 'object') {
+        throw new Error('Light Manager icon definitions must be an SVG string, factory function, or definition object.');
+    }
+
+    const normalized = { ...definition };
+    normalized.type = String(normalized.type || normalized.kind || '').toLowerCase();
+    if (!normalized.type) {
+        if (typeof normalized.svg === 'string') normalized.type = 'svg';
+        else if (typeof normalized.factory === 'function') normalized.type = 'factory';
+        else if (typeof normalized.src === 'string' || typeof normalized.source === 'string') normalized.type = 'sprite';
+    }
+
+    if (normalized.type === 'svg') {
+        if (typeof normalized.svg !== 'string' || !normalized.svg.trim()) {
+            throw new Error('SVG icon definitions require a non-empty `svg` string.');
+        }
+    } else if (normalized.type === 'sprite') {
+        normalized.src = String(normalized.src || normalized.source || '');
+        if (!normalized.src) throw new Error('Sprite icon definitions require a `src` image URL or data URL.');
+        ['x', 'y'].forEach(key => {
+            const value = Number(normalized[key] ?? 0);
+            if (!Number.isFinite(value) || value < 0) throw new Error(`Sprite icon \`${key}\` must be a non-negative number.`);
+            normalized[key] = value;
+        });
+        ['width', 'height'].forEach(key => {
+            const value = Number(normalized[key]);
+            if (!Number.isFinite(value) || value <= 0) throw new Error(`Sprite icon \`${key}\` must be greater than zero.`);
+            normalized[key] = value;
+        });
+        normalized.sheetWidth = Number(normalized.sheetWidth ?? normalized.width);
+        normalized.sheetHeight = Number(normalized.sheetHeight ?? normalized.height);
+        if (!Number.isFinite(normalized.sheetWidth) || normalized.sheetWidth <= 0 || normalized.sheetWidth < normalized.x + normalized.width) {
+            throw new Error('Sprite icon `sheetWidth` must contain the requested frame.');
+        }
+        if (!Number.isFinite(normalized.sheetHeight) || normalized.sheetHeight <= 0 || normalized.sheetHeight < normalized.y + normalized.height) {
+            throw new Error('Sprite icon `sheetHeight` must contain the requested frame.');
+        }
+    } else if (normalized.type === 'factory') {
+        if (typeof normalized.factory !== 'function') {
+            throw new Error('Factory icon definitions require a `factory` function.');
+        }
+    } else {
+        throw new Error(`Unsupported Light Manager icon type "${normalized.type || 'unknown'}".`);
+    }
+    return normalized;
+}
+
+function applyLightManagerIconColor(node, color) {
+    if (!color) return node;
+    if (['x', 'y', 'z', 'u', 'v', 'w'].includes(color)) {
+        node.classList.add(`color_${color}`);
+    } else if (typeof color === 'string') {
+        node.style.color = color;
+    }
+    return node;
+}
+
+function getLightManagerIconAssetClass(name) {
+    let hash = 2166136261;
+    for (let index = 0; index < name.length; index++) {
+        hash ^= name.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+    }
+    return `light_manager_icon_asset_${(hash >>> 0).toString(36)}`;
+}
+
+function createLightManagerIconWrapper(name, color, extraClass) {
+    const wrapper = document.createElement('i');
+    wrapper.classList.add('icon', 'light_manager_custom_icon', getLightManagerIconAssetClass(name));
+    if (extraClass) wrapper.classList.add(extraClass);
+    wrapper.dataset.lightManagerIcon = name;
+    wrapper.setAttribute('aria-hidden', 'true');
+    wrapper.style.display = 'inline-flex';
+    wrapper.style.alignItems = 'center';
+    wrapper.style.justifyContent = 'center';
+    wrapper.style.width = '1em';
+    wrapper.style.height = '1em';
+    wrapper.style.flex = '0 0 auto';
+    wrapper.style.lineHeight = '1';
+    return applyLightManagerIconColor(wrapper, color);
+}
+
+function parseLightManagerSvg(svgSource) {
+    const template = document.createElement('template');
+    template.innerHTML = String(svgSource || '').trim();
+    const svg = template.content.firstElementChild;
+    if (!svg || String(svg.tagName || '').toLowerCase() !== 'svg') {
+        throw new Error('Light Manager SVG icons must contain one root <svg> element.');
+    }
+
+    const sanitized = svg.cloneNode(true);
+    sanitized.querySelectorAll('script, foreignObject').forEach(node => node.remove());
+    [sanitized, ...sanitized.querySelectorAll('*')].forEach(node => {
+        Array.from(node.attributes || []).forEach(attribute => {
+            const attributeName = attribute.name.toLowerCase();
+            const attributeValue = String(attribute.value || '').trim().toLowerCase();
+            if (attributeName.startsWith('on') || ((attributeName === 'href' || attributeName === 'xlink:href') && attributeValue.startsWith('javascript:'))) {
+                node.removeAttribute(attribute.name);
+            }
+        });
+    });
+    sanitized.setAttribute('aria-hidden', 'true');
+    sanitized.setAttribute('focusable', 'false');
+    sanitized.style.width = '100%';
+    sanitized.style.height = '100%';
+    sanitized.style.display = 'block';
+    return sanitized;
+}
+
+function getLightManagerSvgDataUrl(svgSource) {
+    const svg = parseLightManagerSvg(svgSource);
+    return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg.outerHTML)}`;
+}
+
+function getLightManagerIconAssetCss(name, definition) {
+    const selector = `.${getLightManagerIconAssetClass(name)}`;
+    if (definition.type === 'svg') {
+        const imageCss = `url(${JSON.stringify(getLightManagerSvgDataUrl(definition.svg))})`;
+        const monochrome = definition.monochrome ?? /\bcurrentColor\b/i.test(definition.svg);
+        if (monochrome) {
+            return `${selector}{background-color:currentColor;background-image:none;-webkit-mask-image:${imageCss};mask-image:${imageCss};-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;-webkit-mask-position:center;mask-position:center;-webkit-mask-size:contain;mask-size:contain;}`;
+        }
+        return `${selector}{background-image:${imageCss};background-repeat:no-repeat;background-position:center;background-size:contain;}`;
+    }
+    if (definition.type === 'sprite') {
+        const imageCss = `url(${JSON.stringify(definition.src)})`;
+        const size = `${definition.sheetWidth / definition.width}em ${definition.sheetHeight / definition.height}em`;
+        const position = `${-definition.x / definition.width}em ${-definition.y / definition.height}em`;
+        const pixelated = definition.pixelated === true ? 'image-rendering:pixelated;' : '';
+        if (definition.monochrome === true) {
+            return `${selector}{background-color:currentColor;background-image:none;-webkit-mask-image:${imageCss};mask-image:${imageCss};-webkit-mask-repeat:no-repeat;mask-repeat:no-repeat;-webkit-mask-size:${size};mask-size:${size};-webkit-mask-position:${position};mask-position:${position};${pixelated}}`;
+        }
+        return `${selector}{background-image:${imageCss};background-repeat:no-repeat;background-size:${size};background-position:${position};${pixelated}}`;
+    }
+    return '';
+}
+
+function ensureLightManagerIconStyleNode() {
+    if (lightManagerIconStyleNode?.isConnected) return lightManagerIconStyleNode;
+    if (typeof document === 'undefined' || !document.head || typeof document.createElement !== 'function') return null;
+    const style = document.createElement('style');
+    style.dataset.lightManagerIconRegistry = 'true';
+    document.head.append(style);
+    lightManagerIconStyleNode = style;
+    return style;
+}
+
+function refreshLightManagerIconStyles() {
+    const style = ensureLightManagerIconStyleNode();
+    if (!style) return;
+    const rules = [
+        '.light_manager_custom_icon{display:inline-flex!important;align-items:center;justify-content:center;width:1em;height:1em;min-width:1em;min-height:1em;flex:0 0 auto;vertical-align:middle!important;line-height:1;font-style:normal;background-origin:border-box;}',
+        'li[menu_item]>.light_manager_custom_icon,.context_menu li>.light_manager_custom_icon,.menu_item>.light_manager_custom_icon,.select_menu li>.light_manager_custom_icon{width:22px!important;height:21px!important;min-width:22px!important;min-height:21px!important;}',
+        '.outliner_object>.light_manager_custom_icon{display:inline-flex!important;align-items:center;justify-content:center;width:20px!important;height:24px!important;min-width:20px!important;min-height:24px!important;line-height:24px!important;vertical-align:middle!important;}',
+        '.bar_select.icon_mode .select_option>.light_manager_custom_icon{width:22px!important;height:22px!important;min-width:22px!important;min-height:22px!important;}',
+        '#mode_selector>li>.light_manager_custom_icon{display:inline-flex!important;align-items:center;justify-content:center;width:22px!important;height:22px!important;min-width:22px!important;min-height:22px!important;line-height:22px!important;vertical-align:top!important; margin-top: 2px; }',
+        '.preview_menu .preview_view_mode_menu>.light_manager_custom_icon{width:22px!important;height:22px!important;min-width:22px!important;min-height:22px!important;}'
+    ];
+    lightManagerCustomIconRegistry.forEach((definition, name) => {
+        if (definition.type !== 'svg' && definition.type !== 'sprite') return;
+        try {
+            rules.push(getLightManagerIconAssetCss(name, definition));
+        } catch (error) {
+            warnLightManagerOnce(`custom-icon-css-${name}`, `[Light Manager] Could not prepare custom icon "${name}".`, error);
+        }
+    });
+    style.textContent = rules.join('\n');
+}
+
+function disposeLightManagerIconStyles() {
+    lightManagerIconStyleNode?.remove?.();
+    lightManagerIconStyleNode = null;
+}
+
+function createLightManagerCustomIconNode(name, color) {
+    const definition = lightManagerCustomIconRegistry.get(name);
+    if (!definition) return null;
+
+    if (definition.type === 'svg') {
+        const wrapper = createLightManagerIconWrapper(name, color, 'light_manager_custom_icon_svg');
+        const imageCss = `url(${JSON.stringify(getLightManagerSvgDataUrl(definition.svg))})`;
+        const monochrome = definition.monochrome ?? /\bcurrentColor\b/i.test(definition.svg);
+        if (monochrome) {
+            wrapper.style.backgroundColor = 'currentColor';
+            wrapper.style.webkitMaskImage = imageCss;
+            wrapper.style.maskImage = imageCss;
+            wrapper.style.webkitMaskRepeat = wrapper.style.maskRepeat = 'no-repeat';
+            wrapper.style.webkitMaskPosition = wrapper.style.maskPosition = 'center';
+            wrapper.style.webkitMaskSize = wrapper.style.maskSize = 'contain';
+        } else {
+            wrapper.style.backgroundImage = imageCss;
+            wrapper.style.backgroundRepeat = 'no-repeat';
+            wrapper.style.backgroundPosition = 'center';
+            wrapper.style.backgroundSize = 'contain';
+        }
+        return wrapper;
+    }
+
+    if (definition.type === 'sprite') {
+        const wrapper = createLightManagerIconWrapper(name, color, 'light_manager_custom_icon_sprite');
+        const imageCss = `url(${JSON.stringify(definition.src)})`;
+        const size = `${definition.sheetWidth / definition.width}em ${definition.sheetHeight / definition.height}em`;
+        const position = `${-definition.x / definition.width}em ${-definition.y / definition.height}em`;
+        wrapper.style.backgroundRepeat = 'no-repeat';
+        wrapper.style.backgroundSize = size;
+        wrapper.style.backgroundPosition = position;
+        if (definition.monochrome === true) {
+            wrapper.style.backgroundColor = 'currentColor';
+            wrapper.style.webkitMaskImage = imageCss;
+            wrapper.style.maskImage = imageCss;
+            wrapper.style.webkitMaskRepeat = wrapper.style.maskRepeat = 'no-repeat';
+            wrapper.style.webkitMaskSize = wrapper.style.maskSize = size;
+            wrapper.style.webkitMaskPosition = wrapper.style.maskPosition = position;
+        } else {
+            wrapper.style.backgroundImage = imageCss;
+        }
+        if (definition.pixelated === true) wrapper.style.imageRendering = 'pixelated';
+        return wrapper;
+    }
+
+    const wrapper = createLightManagerIconWrapper(name, color, 'light_manager_custom_icon_factory');
+    const content = definition.factory({
+        name,
+        color,
+        definition: { ...definition },
+        createElement: (...args) => document.createElement(...args)
+    });
+    if (!content || content.nodeType !== 1) {
+        throw new Error(`Light Manager icon factory "${name}" must return a DOM element.`);
+    }
+    wrapper.append(content);
+    return wrapper;
+}
+
+function registerLightManagerIcon(name, definition) {
+    const normalizedName = normalizeLightManagerIconName(name);
+    lightManagerCustomIconRegistry.set(normalizedName, normalizeLightManagerIconDefinition(definition));
+    if (lightManagerIconStyleNode) refreshLightManagerIconStyles();
+    return normalizedName;
+}
+
+function installLightManagerIconBridge() {
+    if (typeof Blockbench === 'undefined' || typeof Blockbench.getIconNode !== 'function') return false;
+    if (Blockbench.getIconNode === lightManagerPatchedGetIconNode && lightManagerIconBridgeState?.active) return true;
+
+    const currentGetIconNode = Blockbench.getIconNode;
+    let previousGetIconNode = currentGetIconNode;
+    if (currentGetIconNode.__lightManagerIconBridge === true && currentGetIconNode.__lightManagerIconBridgeState) {
+        currentGetIconNode.__lightManagerIconBridgeState.active = false;
+        previousGetIconNode = currentGetIconNode.__lightManagerIconBridgeState.previous || currentGetIconNode.__lightManagerOriginalGetIconNode || currentGetIconNode;
+    }
+    lightManagerOriginalGetIconNode = previousGetIconNode;
+    const bridgeState = {
+        active: true,
+        previous: previousGetIconNode
+    };
+    lightManagerIconBridgeState = bridgeState;
+
+    lightManagerPatchedGetIconNode = function lightManagerGetIconNode(icon, color) {
+        if (!bridgeState.active) {
+            return previousGetIconNode.call(this, icon, color);
+        }
+        let resolvedIcon = icon;
+        if (typeof resolvedIcon === 'function') resolvedIcon = resolvedIcon();
+
+        if (typeof resolvedIcon === 'string' && lightManagerCustomIconRegistry.has(resolvedIcon)) {
+            try {
+                return createLightManagerCustomIconNode(resolvedIcon, color);
+            } catch (error) {
+                warnLightManagerOnce(`custom-icon-${resolvedIcon}`, `[Light Manager] Could not render custom icon "${resolvedIcon}"; using its fallback.`, error);
+                const fallback = lightManagerCustomIconRegistry.get(resolvedIcon)?.fallback || 'help_outline';
+                return previousGetIconNode.call(this, fallback, color);
+            }
+        }
+        return previousGetIconNode.call(this, resolvedIcon, color);
+    };
+    lightManagerPatchedGetIconNode.__lightManagerIconBridge = true;
+    lightManagerPatchedGetIconNode.__lightManagerIconBridgeState = bridgeState;
+    lightManagerPatchedGetIconNode.__lightManagerOriginalGetIconNode = previousGetIconNode;
+    Blockbench.getIconNode = lightManagerPatchedGetIconNode;
+    refreshLightManagerIconStyles();
+    return true;
+}
+
+function restoreLightManagerIconBridge() {
+    if (lightManagerIconBridgeState) lightManagerIconBridgeState.active = false;
+    if (
+        typeof Blockbench !== 'undefined' &&
+        lightManagerPatchedGetIconNode &&
+        Blockbench.getIconNode === lightManagerPatchedGetIconNode &&
+        lightManagerOriginalGetIconNode
+    ) {
+        Blockbench.getIconNode = lightManagerOriginalGetIconNode;
+    }
+    disposeLightManagerIconStyles();
+    lightManagerPatchedGetIconNode = null;
+    lightManagerOriginalGetIconNode = null;
+    lightManagerIconBridgeState = null;
+}
+
+const lightManagerIconsApi = {
+    apiVersion: 1,
+    register(name, definition) {
+        return registerLightManagerIcon(name, definition);
+    },
+    registerSVG(name, svg, options = {}) {
+        return registerLightManagerIcon(name, { ...options, type: 'svg', svg });
+    },
+    registerSprite(name, src, frame = {}, options = {}) {
+        if (src && typeof src === 'object') {
+            return registerLightManagerIcon(name, { ...src, type: 'sprite' });
+        }
+        return registerLightManagerIcon(name, { ...options, ...frame, type: 'sprite', src });
+    },
+    registerFactory(name, factory, options = {}) {
+        return registerLightManagerIcon(name, { ...options, type: 'factory', factory });
+    },
+    unregister(name) {
+        const deleted = lightManagerCustomIconRegistry.delete(String(name || '').trim());
+        if (deleted && lightManagerIconStyleNode) refreshLightManagerIconStyles();
+        return deleted;
+    },
+    has(name) {
+        return lightManagerCustomIconRegistry.has(String(name || '').trim());
+    },
+    get(name) {
+        const definition = lightManagerCustomIconRegistry.get(String(name || '').trim());
+        return definition ? { ...definition } : null;
+    },
+    list() {
+        return Array.from(lightManagerCustomIconRegistry.keys());
+    },
+    icon(name) {
+        const normalizedName = String(name || '').trim();
+        return () => createLightManagerCustomIconNode(normalizedName) || normalizedName;
+    },
+    node(name, color) {
+        const normalizedName = String(name || '').trim();
+        const customNode = createLightManagerCustomIconNode(normalizedName, color);
+        if (customNode) return customNode;
+        if (typeof Blockbench !== 'undefined' && typeof Blockbench.getIconNode === 'function') {
+            return Blockbench.getIconNode(normalizedName, color);
+        }
+        return null;
+    }
+};
+
+/*
+ * Reuse examples for other Lightflow modules:
+ *
+ * const myIcon = LightManagerIcons.registerSVG('lightflow:my-tool', '<svg ...>...</svg>');
+ * new Action('my_tool', { icon: myIcon, ... });
+ *
+ * // For UI that may have cached Blockbench.getIconNode before Light Manager loaded,
+ * // pass a native function-icon reference. Blockbench will receive a fresh HTMLElement.
+ * new Action('my_cached_ui_tool', { icon: LightManagerIcons.icon(myIcon), ... });
+ *
+ * LightManagerIcons.registerSprite('lightflow:atlas-tool', spriteUrl, {
+ *     x: 32, y: 0, width: 16, height: 16, sheetWidth: 128, sheetHeight: 128
+ * }, { pixelated: true });
+ *
+ * Factory icons are intended for direct DOM/native getIconNode surfaces. SVG and
+ * sprite registrations are preferred when the icon must survive dynamic-icon
+ * reconstruction, cloning, and outerHTML serialization across Blockbench UI.
+ */
+
+// Built-in example: this is a real SVG icon registered once and then consumed
+// by name through Blockbench's normal `icon:` API below.
+const LIGHT_MANAGER_PLUGIN_ICON = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABUAAAAVCAYAAACpF6WWAAABcElEQVR4AbSSzytEURTHv142MlmwmJXdMAslRfazkA2lLG2sNBbsZS1/gJTsLZWFspBsLKTZivEjNsqPzIaRRKPPq3N73e4zb8Krzzs/7jnfe7qdqFDoa/w1kTJ81eqcIENpXJJJNK5s4edEmQRCvcXipiB0Ru50qyTABydK4ENhEi41/Npk7ESZBJKH+GPLzzImpi8E5JMMzBwKLOdELYGtLBQE+EZnrtvc2P40cVCUrtGNBw2Xz3R/d0Oo+msttvxK48cC/BCpoqHirLlU0cGOJy3O54Wd7LoW7G73C/BB3mdPkirq1QfDz8plMB/ZyvinH/V3fd0+CvtWexEgAvjg97A98KtJfVGLI/YLLGH2POrV+l5D2IP2IcHUakOAD1br2/+Z1L/F4pNyXkezOWH3V3oEO0ttAnywWt8GJx1Zu1ISnicNX5DYidqOkWwVv9eJNhNKW71QnxNlvyBU1CxHH1idE7VEmrU3TTtP5r8BAAD//xoLiVwAAAAGSURBVAMAh6vDB21yRkMAAAAASUVORK5CYII=';
+
+const LIGHTFLOW_BLOCK_ICON = lightManagerIconsApi.registerSVG(
+    'lightflow:block',
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="M16 21.96v-5.08m0 0-6.11-3.49M16 16.88l6.11-3.49M16 2.04l12.09 6.98v13.96L16 29.96 3.91 22.98V9.02z" style="fill:none;stroke:#000;stroke-linecap:round;stroke-linejoin:round;stroke-width:2.91px"/></svg>`,
+    {
+        monochrome: true,
+        fallback: 'deployment_code'
+    }
+);
+
+const LIGHTFLOW_GRASSBLOCK_ICON = lightManagerIconsApi.registerSVG(
+    'lightflow:grassblock',
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="m16 29.96 12.09-6.98V9.02L16 2.04 3.91 9.02v13.96z" style="fill:none;stroke:#000;stroke-linecap:round;stroke-linejoin:round;stroke-width:2.91px"/><path d="M16 2.04 3.91 9.02v13.96L16 29.96l12.09-6.98V9.02zm8.94 13.95c0 .81-.01 1.61-.02 2.42-1.48.81-2.97 1.62-4.45 2.42 0-.8-.01-1.59-.02-2.39-.74.39-1.47.79-2.21 1.18 0 .81-.01 1.61-.02 2.42-.74.41-1.48.82-2.21 1.22l-.03-2.42c-.73-.4-1.47-.81-2.2-1.21l-.06 2.39c-1.47-.8-2.93-1.59-4.4-2.39l-.06-2.45c-.73-.4-1.45-.8-2.18-1.2-.01.8-.03 1.6-.04 2.4-.73-.4-1.46-.79-2.19-1.19 0-2.38-.01-4.77-.02-7.15 3.72-2.3 7.44-4.6 11.17-6.91 3.71 2.25 7.42 4.51 11.13 6.76 0 1.62.01 3.24.02 4.85-.74.41-1.48.81-2.21 1.22Z" style="stroke-width:0"/></svg>
+    `,
+    {
+        monochrome: true,
+        fallback: 'deployment_code'
+    }
+);
+const LIGHTFLOW_GODRAY_ICON = lightManagerIconsApi.registerSVG(
+    'lightflow:godray',
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="M25.6 23.13c-.39 0-.77-.15-1.07-.44l-.52-.53c-.59-.59-.59-1.54 0-2.13s1.54-.59 2.13 0l.52.53a1.503 1.503 0 0 1-1.06 2.57m3.16-7.64h-.74c-.83 0-1.51-.67-1.51-1.51s.67-1.51 1.51-1.51h.74c.83 0 1.51.67 1.51 1.51s-.67 1.51-1.51 1.51M10.85 8.38c-.39 0-.77-.15-1.06-.44l-.53-.53c-.59-.59-.59-1.54 0-2.13s1.54-.59 2.13 0l.53.53a1.503 1.503 0 0 1-1.06 2.57Zm14.22 0A1.503 1.503 0 0 1 24 5.81l.53-.53c.59-.59 1.54-.59 2.13 0s.59 1.54 0 2.13l-.53.53c-.29.29-.68.44-1.06.44m-7.11-2.94c-.83 0-1.51-.67-1.51-1.51v-.75c0-.83.67-1.51 1.51-1.51s1.51.67 1.51 1.51v.75c0 .83-.67 1.51-1.51 1.51m1.74 16.64c-.53.1-1.08.16-1.61.16s-1.08-.06-1.63-.16c-.53-.11-1.05-.27-1.55-.47-.5-.21-.98-.47-1.43-.77s-.87-.65-1.25-1.02c-.39-.39-.74-.81-1.04-1.26-.29-.45-.56-.93-.75-1.43-.21-.5-.38-1.02-.48-1.55-.11-.53-.15-1.07-.15-1.61s.05-1.08.15-1.63c.05-.23.11-.45.17-.67l-6.14-.03c-.6 0-1.17.27-1.59.69-.43.42-.67 1.03-.67 1.64 0 9.02 7.34 16.35 16.41 16.35.6 0 1.18-.24 1.6-.66s.66-1 .66-1.6l-.02-6.14c-.22.06-.45.13-.67.17Z" style="stroke-width:0"/><path d="M18.09 19.24a5.3 5.3 0 0 1-3.73-1.55 4.6 4.6 0 0 1-.65-.8c-.2-.29-.36-.59-.5-.9a6 6 0 0 1-.29-.99c-.08-.33-.11-.68-.11-1.02s.03-.69.11-1.04c.06-.33.17-.66.29-.98.14-.32.3-.63.5-.9.18-.3.41-.57.65-.81.98-.98 2.33-1.54 3.73-1.54s2.74.56 3.72 1.54c.24.24.47.51.66.81.18.27.35.59.48.9.14.32.22.65.3.98.06.35.11.69.11 1.04s-.05.69-.11 1.02c-.07.33-.16.66-.3.99q-.21.48-.48.9a5.3 5.3 0 0 1-4.38 2.35" style="stroke-width:0"/></svg>
+    `,
+    {
+        monochrome: true,
+        fallback: 'flare'
+    }
+);
+
+const LIGHTFLOW_KEY_LIGHT_RIM_ICON = lightManagerIconsApi.registerSVG(
+    'lightflow:key-light-rim',
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><circle cx="12.5" cy="19.5" r="7.6" style="stroke-width:0"/><path d="M12.50 6.50A13.0 13.0 0 0 1 25.50 19.50" style="fill:none;stroke:#000;stroke-linecap:round;stroke-width:3.9px"/></svg>
+    `,
+    {
+        monochrome: true,
+        fallback: 'highlight'
+    }
+);
+
+// Minecraft Creeper Face: Cuadrícula nativa de 16x16 (2px por cada píxel de Minecraft),
+// trazo cerrado continuo, sin subpíxeles, nítido (crispEdges) y centrado simétrico.
+const LIGHTFLOW_CREEPER_FACE_ICON = lightManagerIconsApi.registerSVG(
+    'lightflow:creeper-face',
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="4 1 16 16"><path fill="currentColor" fill-rule="evenodd" d="M5 2h14v14H5zm2 3h3v3H7zm7 0h3v3h-3zm-4 3h4v2h2v4h-2v-2h-4v2H8v-4h2z"/></svg>
+`,
+    {
+        monochrome: true,
+        fallback: 'mood_bad'
+    }
+);
+
+const LIGHTFLOW_CLASSIC_ICON = lightManagerIconsApi.registerSVG(
+    'lightflow:classic',
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="m16 29.96 12.09-6.98V9.02L16 2.04 3.91 9.02v13.96zm0 0V16.87m0 0L4.65 9.89M16 16.87l11.35-6.98" style="fill:none;stroke:#000;stroke-linecap:round;stroke-linejoin:round;stroke-width:2.91px"/></svg>
+    `,
+    {
+        monochrome: true,
+        fallback: 'grid_view'
+    }
+);
+
+const LIGHTFLOW_MATERIAL_ICON = lightManagerIconsApi.registerSVG(
+    'lightflow:material',
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="M16 2.86v-.97m0 28.22v-.97M29.14 16h.97M1.89 16h.97m22.43-9.29.69-.69M6.02 25.98l.69-.69m18.58 0 .69.69M6.02 6.02l.69.69" style="fill:none;stroke:#000;stroke-linecap:round;stroke-width:3.5px"/><path d="M16 19.87v-3.3m0 0-3.97-2.27M16 16.57l3.97-2.27M16 6.93l7.86 4.54v9.08L16 25.09l-7.86-4.54v-9.08z" style="fill:none;stroke:#000;stroke-linecap:round;stroke-linejoin:round;stroke-width:2.91px"/></svg>
+    `, {
+    monochrome: true,
+    fallback: 'wb_sunny'
+}
+);
+
+const LIGHTFLOW_PBR_ICON = lightManagerIconsApi.registerSVG(
+    'lightflow:lightflow-pbr',
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="M16 2.86v-.97m0 28.22v-.97M29.14 16h.97m-4.82-9.29.69-.69M6.02 25.98l.69-.69m18.58 0 .69.69" style="fill:none;stroke:#000;stroke-linecap:round;stroke-width:3.5px"/><path d="M8.14 17.96c-1.71 0-3.39-.69-4.6-1.9a6.55 6.55 0 0 1-1.9-4.6c0-.42.04-.85.13-1.27.08-.41.21-.82.37-1.21.16-.4.36-.77.59-1.13.24-.35.51-.68.81-.98s.63-.58.99-.81c.35-.24.73-.44 1.12-.6.4-.16.8-.29 1.22-.37.84-.17 1.7-.17 2.54 0 .41.08.82.21 1.22.37.39.16.77.36 1.12.6.35.23.69.51.99.81.29.3.57.63.8.98.24.36.44.73.6 1.13.16.39.29.8.37 1.21.09.42.13.85.13 1.27 0 1.71-.69 3.39-1.9 4.6s-2.89 1.9-4.6 1.9" style="stroke-width:0"/><path d="m24.59 10.2-7.86-4.54c-.45-.26-1.01-.26-1.45 0l-1.06.61a7.5 7.5 0 0 1 1.31 2.13c.05.13.09.26.14.39L16 8.6l6.41 3.7v7.4L16 23.4l-6.41-3.7v-.38c-.48.09-.96.14-1.45.14s-.98-.05-1.46-.14v1.22c0 .52.28 1 .73 1.26l7.86 4.54c.23.13.48.19.73.19s.5-.06.73-.19l7.86-4.54c.45-.26.73-.74.73-1.26v-9.08c0-.52-.28-1-.73-1.26" style="stroke-width:0"/><path d="M14.55 17.41v2.46a1.451 1.451 0 0 0 2.9 0v-2.46l3.24-1.85c.7-.4.94-1.29.54-1.98-.4-.7-1.29-.94-1.98-.54L16 14.9l-.51-.29c-.38.9-.93 1.73-1.61 2.43l.66.38Z" style="stroke-width:0"/></svg>
+    `,
+    {
+        monochrome: true,
+        fallback: 'hexagon'
+    }
+);
+
+const LIGHTFLOW_VIBRANT_VISUALS_ICON = lightManagerIconsApi.registerSVG(
+    'lightflow:vibrant-visuals',
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="M16 2.86v-.97M29.14 16h.97M1.89 16h.97m22.43-9.29.69-.69m-19.96 0 .69.69" style="fill:none;stroke:#000;stroke-linecap:round;stroke-width:3.5px"/><path d="M16 19.87v-3.3m0 0-3.97-2.27M16 16.57l3.97-2.27M8.14 20.54v-9.08L16 6.92l7.86 4.54v9.08l-.08.05" style="fill:none;stroke:#000;stroke-linecap:round;stroke-linejoin:round;stroke-width:2.91px"/><path style="fill:none;stroke:#000;stroke-linecap:round;stroke-width:2.91px" d="M1.89 21.47h28.22M8.94 26.26h14.11"/></svg>
+    `,
+    {
+        monochrome: true,
+        fallback: 'landscape_2'
+    }
+);
+
+const LIGHTFLOW_RENDERCRAFT_ICON = lightManagerIconsApi.registerSVG(
+    'lightflow:rendercraft',
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="M9.11 9.11h13.78v13.78H9.11zm1.97 2.95h2.95v2.95h-2.95zm6.89 0h2.95v2.95h-2.95zm-3.94 2.95h3.94v1.97h1.97v3.94h-1.97v-1.97h-3.94v1.97h-1.97v-3.94h1.97z" style="fill-rule:evenodd;stroke-width:0"/><path d="M12.09 4.27H6.88c-1.44 0-2.61 1.17-2.61 2.61v5.21m7.82 15.64H6.88c-1.44 0-2.61-1.17-2.61-2.61v-5.21M19.91 4.27h5.21c1.44 0 2.61 1.17 2.61 2.61v5.21m0 7.82v5.21c0 1.44-1.17 2.61-2.61 2.61h-5.21" style="fill:none;stroke:#000;stroke-linecap:round;stroke-width:2.67px"/><path d="M13.76 9.27h-2.99c-.83 0-1.5.67-1.5 1.5v2.99m4.49 8.97h-2.99c-.83 0-1.5-.67-1.5-1.5v-2.99m8.97-8.97h2.99c.83 0 1.5.67 1.5 1.5v2.99m0 4.49v2.99c0 .83-.67 1.5-1.5 1.5h-2.99" style="fill:none;stroke:#000;stroke-linecap:round;stroke-linejoin:round;stroke-width:2.67px"/></svg>
+    `,
+    {
+        monochrome: true,
+        fallback: 'mood_bad'
+    }
+);
+
+const LIGHTFLOW_PREVIEWMODE_ICON = lightManagerIconsApi.registerSVG(
+    'lightflow:preview_mode',
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="m10.76 13.76 3.74-2.65 8.23-6.32M16 10.03l11.22 7.48m-5.98-2.99L17.5 27.24m1.5-6.73H4.78m8.23 0L7.02 4.78m2.99 23.19h11.97c3.3 0 5.98-2.68 5.98-5.98V10.02c0-3.3-2.68-5.98-5.98-5.98H10.01c-3.3 0-5.98 2.68-5.98 5.98v11.97c0 3.3 2.68 5.98 5.98 5.98" style="fill:none;stroke:#000;stroke-linecap:round;stroke-linejoin:round;stroke-width:2.67px"/></svg>
+    `,
+    {
+        monochrome: true,
+        fallback: 'photo_camera_back'
+    }
+);
+
+
+/*
  * Shared project lifecycle for the Lightflow suite.
  *
  * Blockbench only deserializes properties and custom outliner types that are
@@ -107,6 +1339,7 @@ function createLightflowLifecycleRuntime() {
     let geometryReadyFrame = null;
     let hydrationFrame = null;
     let hydrationQueue = [];
+    let hydrationQueueRevision = 0;
     let geometrySelectionRevision = 0;
     let geometryQuietFrames = 0;
     let disposed = false;
@@ -142,12 +1375,24 @@ function createLightflowLifecycleRuntime() {
     const captureModel = (project, model) => {
         if (!project || !model || typeof model !== 'object') return null;
         modelByProject.set(project, model);
+        // Plain recovery data survives a suite reload without retaining render resources.
+        try { Object.defineProperty(project, '_lightflowRecoveryModel', { value: model, writable: true, configurable: true }); } catch (_) { }
         return model;
+    };
+
+    const preserveLiveElements = (project, types) => {
+        if (!project || !Array.isArray(project.elements)) return;
+        const model = modelByProject.get(project) || project._lightflowRecoveryModel;
+        if (!model || !Array.isArray(model.elements)) return;
+        const ownedTypes = new Set(types);
+        const live = project.elements.filter(element => ownedTypes.has(element.type) && typeof element.getSaveCopy === 'function')
+            .map(element => element.getSaveCopy());
+        captureModel(project, { ...model, elements: [...model.elements.filter(element => !ownedTypes.has(element.type)), ...live] });
     };
 
     const readProjectModel = project => {
         if (!project) return Promise.resolve(null);
-        const captured = modelByProject.get(project);
+        const captured = modelByProject.get(project) || project._lightflowRecoveryModel;
         if (captured) return Promise.resolve(captured);
         const pending = modelRequestByProject.get(project);
         if (pending) return pending;
@@ -189,7 +1434,7 @@ function createLightflowLifecycleRuntime() {
         const runGeneration = generation;
         const project = activeProject;
         entry.lastGeneration = runGeneration;
-        let model = project ? (modelByProject.get(project) || null) : null;
+        let model = project ? (modelByProject.get(project) || project._lightflowRecoveryModel || null) : null;
         if (project && !model && (project.save_path || project.path)) {
             model = await readProjectModel(project);
         }
@@ -218,6 +1463,7 @@ function createLightflowLifecycleRuntime() {
     };
 
     const cancelHydrationQueue = () => {
+        hydrationQueueRevision++;
         if (typeof hydrationFrame === 'number' && typeof cancelAnimationFrame === 'function') {
             cancelAnimationFrame(hydrationFrame);
         } else if (hydrationFrame?.type === 'timeout') {
@@ -241,6 +1487,8 @@ function createLightflowLifecycleRuntime() {
     const hydrateAll = reason => {
         cancelHydrationQueue();
         const hydrateGeneration = generation;
+        const queueRevision = hydrationQueueRevision;
+        let sliceStartedAt = lifecycleNow();
         lifecycleMetrics.hydrationStartedAt = lifecycleNow();
         lifecycleMetrics.lastReason = reason || '';
         hydrationQueue = Array.from(hydrators.values())
@@ -248,6 +1496,7 @@ function createLightflowLifecycleRuntime() {
             .sort((left, right) => getHydratorPriority(left) - getHydratorPriority(right));
 
         const runNext = () => {
+            if (queueRevision !== hydrationQueueRevision) return;
             hydrationFrame = null;
             if (disposed || hydrateGeneration !== generation) {
                 hydrationQueue.length = 0;
@@ -263,6 +1512,7 @@ function createLightflowLifecycleRuntime() {
                 return;
             }
             Promise.resolve(runHydrator(entry, reason)).finally(() => {
+                if (queueRevision !== hydrationQueueRevision) return;
                 if (disposed || hydrateGeneration !== generation || !hydrationQueue.length) {
                     hydrationQueue.length = 0;
                     if (!disposed && hydrateGeneration === generation) {
@@ -274,10 +1524,19 @@ function createLightflowLifecycleRuntime() {
                     }
                     return;
                 }
-                if (typeof requestAnimationFrame === 'function') {
-                    hydrationFrame = requestAnimationFrame(runNext);
+                // Cheap hydrators share a frame; expensive ones yield before the next.
+                if (lifecycleNow() - sliceStartedAt < 6) {
+                    runNext();
+                } else if (typeof requestAnimationFrame === 'function') {
+                    hydrationFrame = requestAnimationFrame(() => {
+                        sliceStartedAt = lifecycleNow();
+                        runNext();
+                    });
                 } else {
-                    const id = setTimeout(runNext, 0);
+                    const id = setTimeout(() => {
+                        sliceStartedAt = lifecycleNow();
+                        runNext();
+                    }, 0);
                     hydrationFrame = { type: 'timeout', id };
                 }
             });
@@ -406,10 +1665,19 @@ function createLightflowLifecycleRuntime() {
             const parentArray = existing?.getParentArray?.() || (parent === 'root' ? Outliner.root : parent?.children);
             const index = Array.isArray(parentArray) ? parentArray.indexOf(existing) : -1;
             const wasSelected = !!existing?.selected;
+            const children = Array.isArray(existing?.children) ? existing.children.slice() : [];
+            const isOpen = existing?.isOpen;
+            // Replacing a custom parent during hydration must not destroy its
+            // already restored children through native recursive remove().
+            if (children.length) existing.children.length = 0;
             existing?.remove?.();
 
             const replacement = new ElementType(template, template.uuid).init();
             replacement.addTo(parent, index >= 0 ? index : -1);
+            if (Array.isArray(replacement.children)) {
+                for (const child of children) child.addTo(replacement);
+                if (isOpen !== undefined) replacement.isOpen = isOpen;
+            }
             replacement.preview_controller?.updateTransform?.(replacement);
             if (wasSelected) replacement.markAsSelected?.();
             restored += 1;
@@ -491,6 +1759,7 @@ function createLightflowLifecycleRuntime() {
         if (disposed) return;
         disposed = true;
         generation += 1;
+        cancelHydrationQueue();
         if (typeof geometryReadyFrame === 'number' && typeof cancelAnimationFrame === 'function') {
             cancelAnimationFrame(geometryReadyFrame);
         }
@@ -524,6 +1793,8 @@ function createLightflowLifecycleRuntime() {
             };
         },
         captureModel,
+        preserveLiveElements,
+        liveCheckpointVersion: 2,
         readProjectModel,
         isCurrent,
         registerHydrator,
@@ -541,7 +1812,10 @@ function createLightflowLifecycleRuntime() {
 }
 
 const LIGHT_MANAGER_STORAGE_KEYS = {
-    areaGizmos: 'light_manager_show_area_gizmos'
+    areaGizmos: 'light_manager_show_area_gizmos',
+    workspaceWidths: 'lightflow_workspace_sidebar_widths_v1',
+    wideCanvas: 'lightflow_workspace_wide_canvas_v1',
+    autoFoldOutliner: 'lightflow_workspace_auto_fold_outliner_v1'
 };
 
 const LIGHT_MANAGER_SHADOW_RESOLUTIONS = [256, 512, 1024, 2048, 4096];
@@ -555,9 +1829,9 @@ const LIGHT_MANAGER_SHADOW_NORMAL_BIAS_DEFAULTS = {
 };
 const LIGHT_MANAGER_SHADOW_NORMAL_BIAS_LEGACY_DEFAULTS = [0.012, 0.008];
 // Three.js normalBias is expressed in world units. Voxel faces and grazing
-// directional light need several texels of separation to eliminate acne
-// reliably; the previous 0.72-texel calibration was consistently too small.
-const LIGHT_MANAGER_NORMAL_BIAS_TEXEL_FACTOR = 4.4;
+// directional light need a footprint-scaled offset. Detail maps additionally
+// correct depth at each sampled receiver plane, so large offsets detach contacts.
+const LIGHT_MANAGER_NORMAL_BIAS_TEXEL_FACTOR = 0.8;
 const LIGHT_MANAGER_LEGACY_NORMAL_BIAS_TEXEL_FACTOR = 0.72;
 const LIGHT_MANAGER_AUTO_NORMAL_BIAS_PROPERTIES = [
     'light_type',
@@ -572,8 +1846,13 @@ const LIGHT_MANAGER_AUTO_NORMAL_BIAS_PROPERTIES = [
 const DEFAULT_SHADOW_BIAS = -0.0005;
 const DEFAULT_SHADOW_NORMAL_BIAS = 0.01;
 const DEFAULT_SHADOW_SOFTNESS = 1.75;
+const SHADOW_SOFTNESS_MODEL_LEGACY = 'legacy';
+const SHADOW_SOFTNESS_MODEL_DISTANCE = 'distance';
+const SHADOW_SOFTNESS_MODEL_ARTISTIC = 'artistic';
+const DEFAULT_SHADOW_BLUR = 8;
 
 const LIGHT_MANAGER_ACTION_IDS = [
+    'light_manager_add_light_menu',
     'add_art_key',
     'add_light',
     'add_spot_light',
@@ -582,7 +1861,9 @@ const LIGHT_MANAGER_ACTION_IDS = [
     'fit_light_bounds_to_selection',
     'light_manager_edit_tool',
     'light_manager_free_move',
-    'toggle_light_area_gizmos'
+    'toggle_light_area_gizmos',
+    'light_manager_reset_gizmo',
+    'lightflow_toggle_wide_canvas'
 ];
 
 // These IDs belonged to the pre-form Light Properties toolbars. Keep them only
@@ -842,6 +2123,7 @@ function resetLightManagerShadowState() {
 }
 
 function markLightManagerShadowsDirty(options = {}) {
+    LightManagerCameraShadows.invalidate(options);
     LIGHT_MANAGER_SHADOW_STATE.dirty = true;
     LIGHT_MANAGER_SHADOW_STATE.dirtyRenderers.clear();
     if (options.scene) LIGHT_MANAGER_SHADOW_STATE.sceneDirty = true;
@@ -911,10 +2193,13 @@ function isLightManagerElementHierarchyVisible(element) {
 
 function getLightManagerPreviewPointShadowSet(options = {}) {
     const renderOptions = normalizeLightManagerUpdateOptions(options);
+    const allowStudioRestore = options.allowStudioRestore === true || options.source === 'studio_render_restore';
     if (
         renderOptions.studio ||
-        window.LightManagerStudioRenderSession ||
-        window.LightManagerStudioRenderActive
+        (!allowStudioRestore && (
+            window.LightManagerStudioRenderSession ||
+            window.LightManagerStudioRenderActive
+        ))
     ) return null;
     const elements = window.LightElement && Array.isArray(LightElement.all)
         ? LightElement.all
@@ -956,7 +2241,7 @@ function getLightManagerPreviewPointShadowSet(options = {}) {
     return allowed;
 }
 
-function applyLightManagerPreviewShadowBudget(options = {}) {
+function applyLightManagerPreviewShadowBudget(options = {}, changesOut = null) {
     const allowedPointShadows = getLightManagerPreviewPointShadowSet(options);
     let changed = false;
     const suppressed = [];
@@ -973,6 +2258,8 @@ function applyLightManagerPreviewShadowBudget(options = {}) {
             allowedPointShadows && element.light_type === 'point' && requested &&
             !allowedPointShadows.has(element.uuid)
         );
+        const beforeSuppressed = light.userData.lightManagerPreviewShadowSuppressed === true;
+        const beforeCastShadow = light.castShadow === true;
         if (light.userData.lightManagerPreviewShadowSuppressed !== budgetSuppressed) {
             light.userData.lightManagerPreviewShadowSuppressed = budgetSuppressed;
             changed = true;
@@ -982,9 +2269,28 @@ function applyLightManagerPreviewShadowBudget(options = {}) {
             light.castShadow = desiredCastShadow;
             changed = true;
         }
-        if (light.shadow && budgetSuppressed) {
+        if (light.shadow) {
             light.shadow.autoUpdate = false;
-            light.shadow.needsUpdate = false;
+            if (budgetSuppressed) {
+                light.shadow.needsUpdate = false;
+            } else if (!beforeCastShadow && desiredCastShadow) {
+                // Re-entering the realtime budget needs this light's own map once.
+                // Do not dirty unrelated surviving shadow lights.
+                light.shadow.needsUpdate = true;
+            }
+        }
+        if (
+            Array.isArray(changesOut) &&
+            (beforeSuppressed !== budgetSuppressed || beforeCastShadow !== desiredCastShadow)
+        ) {
+            changesOut.push({
+                element,
+                beforeSuppressed,
+                suppressed: budgetSuppressed,
+                beforeCastShadow,
+                castShadow: desiredCastShadow,
+                needsShadowRedraw: !beforeCastShadow && desiredCastShadow
+            });
         }
         if (budgetSuppressed) suppressed.push(element.uuid);
     });
@@ -1014,54 +2320,50 @@ function getLightManagerShadowSignatures() {
     const elements = window.LightElement && Array.isArray(LightElement.all) ? LightElement.all : [];
     const signatures = new Map();
     elements.forEach(element => {
-            if (!element) return null;
+        if (!element) return null;
 
-            const mesh = element.mesh;
-            const position = new THREE.Vector3();
-            const quaternion = new THREE.Quaternion();
+        const mesh = element.mesh;
+        const position = new THREE.Vector3();
+        const quaternion = new THREE.Quaternion();
 
-            if (mesh) {
-                mesh.updateMatrixWorld?.(true);
-                mesh.getWorldPosition(position);
-                mesh.getWorldQuaternion(quaternion);
-            } else {
-                position.fromArray(Array.isArray(element.position) ? element.position : [0, 0, 0]);
-                const rotation = Array.isArray(element.render_rotation) ? element.render_rotation : element.rotation;
-                if (Array.isArray(rotation)) {
-                    const euler = new THREE.Euler(
-                        THREE.MathUtils.degToRad(rotation[0] || 0),
-                        THREE.MathUtils.degToRad(rotation[1] || 0),
-                        THREE.MathUtils.degToRad(rotation[2] || 0)
-                    );
-                    quaternion.setFromEuler(euler);
-                }
+        if (mesh) {
+            mesh.updateMatrixWorld?.(true);
+            mesh.getWorldPosition(position);
+            mesh.getWorldQuaternion(quaternion);
+        } else {
+            position.fromArray(Array.isArray(element.position) ? element.position : [0, 0, 0]);
+            const rotation = Array.isArray(element.render_rotation) ? element.render_rotation : element.rotation;
+            if (Array.isArray(rotation)) {
+                const euler = new THREE.Euler(
+                    THREE.MathUtils.degToRad(rotation[0] || 0),
+                    THREE.MathUtils.degToRad(rotation[1] || 0),
+                    THREE.MathUtils.degToRad(rotation[2] || 0)
+                );
+                quaternion.setFromEuler(euler);
             }
+        }
 
-            signatures.set(element.uuid, [
-                element.uuid || element.name || '',
-                isLightManagerElementHierarchyVisible(element) ? 1 : 0,
-                element.has_shadow !== false ? 1 : 0,
-                element.light_type || 'point',
-                lightManagerShadowVector(position.toArray()),
-                [
-                    lightManagerShadowValue(quaternion.x),
-                    lightManagerShadowValue(quaternion.y),
-                    lightManagerShadowValue(quaternion.z),
-                    lightManagerShadowValue(quaternion.w)
-                ].join(','),
-                lightManagerShadowValue(element.distance),
-                lightManagerShadowValue(element.angle),
-                lightManagerShadowValue(element.penumbra),
-                lightManagerShadowValue(element.shadow_resolution),
-                lightManagerShadowValue(element.studio_shadow_resolution),
-                lightManagerShadowValue(element.shadow_bias),
-                lightManagerShadowValue(element.shadow_normal_bias),
-                lightManagerShadowValue(element.shadow_softness),
-                lightManagerShadowValue(element.shadow_near),
-                lightManagerShadowValue(element.shadow_far),
-                lightManagerShadowValue(element.shadow_bounds)
-            ].join('|'));
-        });
+        signatures.set(element.uuid, [
+            element.uuid || element.name || '',
+            isLightManagerElementHierarchyVisible(element) ? 1 : 0,
+            element.has_shadow !== false ? 1 : 0,
+            element.light_type || 'point',
+            lightManagerShadowVector(position.toArray()),
+            [
+                lightManagerShadowValue(quaternion.x),
+                lightManagerShadowValue(quaternion.y),
+                lightManagerShadowValue(quaternion.z),
+                lightManagerShadowValue(quaternion.w)
+            ].join(','),
+            lightManagerShadowValue(element.distance),
+            lightManagerShadowValue(element.angle),
+            lightManagerShadowValue(element.shadow_resolution),
+            lightManagerShadowValue(element.studio_shadow_resolution),
+            lightManagerShadowValue(element.shadow_near),
+            lightManagerShadowValue(element.shadow_far),
+            lightManagerShadowValue(element.shadow_bounds)
+        ].join('|'));
+    });
     return signatures;
 }
 
@@ -1077,6 +2379,7 @@ function rememberLightManagerRendererShadowSettings(renderer) {
 }
 
 function restoreLightManagerRendererShadowSettings() {
+    LightManagerCameraShadows.dispose();
     LIGHT_MANAGER_SHADOW_STATE.configuredRenderers.forEach(renderer => {
         const previous = LIGHT_MANAGER_SHADOW_STATE.previousRendererShadowSettings.get(renderer);
         if (!renderer || !renderer.shadowMap || !previous) return;
@@ -1101,6 +2404,7 @@ const LIGHT_MANAGER_PROFILES = {
         shadow_bias: DEFAULT_SHADOW_BIAS,
         shadow_normal_bias: DEFAULT_SHADOW_NORMAL_BIAS,
         shadow_softness: 2.25,
+        shadow_softness_mode: 'hard',
         shadow_near: 0.05,
         shadow_far: 24,
         shadow_bounds: 35
@@ -1116,6 +2420,7 @@ const LIGHT_MANAGER_PROFILES = {
         shadow_bias: DEFAULT_SHADOW_BIAS,
         shadow_normal_bias: DEFAULT_SHADOW_NORMAL_BIAS,
         shadow_softness: 2,
+        shadow_softness_mode: 'hard',
         shadow_near: 0.1,
         shadow_far: 32,
         shadow_bounds: 35
@@ -1131,6 +2436,7 @@ const LIGHT_MANAGER_PROFILES = {
         shadow_bias: DEFAULT_SHADOW_BIAS,
         shadow_normal_bias: DEFAULT_SHADOW_NORMAL_BIAS,
         shadow_softness: DEFAULT_SHADOW_SOFTNESS,
+        shadow_softness_mode: 'hard',
         shadow_near: 0.1,
         shadow_far: 240,
         shadow_bounds: 48
@@ -1146,6 +2452,7 @@ const LIGHT_MANAGER_PROFILES = {
         shadow_bias: -0.00035,
         shadow_normal_bias: 0.008,
         shadow_softness: 1.35,
+        shadow_softness_mode: 'hard',
         shadow_near: 0.1,
         shadow_far: 200,
         shadow_bounds: 48
@@ -1155,10 +2462,10 @@ const LIGHT_MANAGER_PROFILES = {
 const LIGHT_MANAGER_SHADOW_PRESETS = {
     custom: null,
     off: { has_shadow: false },
-    preview: { has_shadow: true, shadow_resolution: 512, shadow_bias: -0.0005, shadow_normal_bias: 0.05, shadow_softness: 2.5 },
-    balanced: { has_shadow: true, shadow_resolution: 1024, shadow_bias: -0.0005, shadow_normal_bias: 0.01, shadow_softness: 2 },
-    crisp: { has_shadow: true, shadow_resolution: 4096, shadow_bias: -0.00035, shadow_normal_bias: 0.008, shadow_softness: 1.35 },
-    minecraft: { has_shadow: true, shadow_resolution: 4096, shadow_bias: -0.00035, shadow_normal_bias: 0.008, shadow_softness: 1.35, shadow_near: 0.1, shadow_far: 200, shadow_bounds: 48 },
+    preview: { has_shadow: true, shadow_resolution: 512, shadow_bias: -0.0005, shadow_normal_bias: 0.05, shadow_softness: 2.5, shadow_softness_mode: 'hard' },
+    balanced: { has_shadow: true, shadow_resolution: 1024, shadow_bias: -0.0005, shadow_normal_bias: 0.01, shadow_softness: 2, shadow_softness_mode: 'hard' },
+    crisp: { has_shadow: true, shadow_resolution: 4096, shadow_bias: -0.00035, shadow_normal_bias: 0.008, shadow_softness: 1.35, shadow_softness_mode: 'hard' },
+    minecraft: { has_shadow: true, shadow_resolution: 4096, shadow_bias: -0.00035, shadow_normal_bias: 0.008, shadow_softness: 1.35, shadow_softness_mode: 'hard', shadow_near: 0.1, shadow_far: 200, shadow_bounds: 48 },
 };
 
 function lightManagerSafeGet(key, fallback) {
@@ -1225,7 +2532,7 @@ const LightManagerUtils = {
 
         return {
             light_type: this.lightType(context.light_type),
-            shadow_resolution: this.shadowResolution(context.shadow_resolution),
+            shadow_resolution: this.num(context.shadow_resolution, 1024, 128, 16384),
             shadow_bounds: this.num(context.shadow_bounds, 35, 0.001, 100000),
             distance: this.num(context.distance, 0, 0, 100000),
             angle: this.num(context.angle, 45, 0.1, 89.9),
@@ -1281,14 +2588,11 @@ const LightManagerUtils = {
 
     defaultShadowBias(source, overrides = {}) {
         const context = this.shadowNormalBiasContext(source, overrides);
-        const resolutionFactor = Math.pow(1024 / Math.max(256, context.shadow_resolution), 0.72);
         const depthRange = Math.max(0.001, context.shadow_far - context.shadow_near);
-        const depthFactor = Math.max(0.35, Math.min(2.5, depthRange / 200));
-        const boundsFactor = context.light_type === 'directional'
-            ? Math.max(0.4, Math.min(3.0, context.shadow_bounds / 35))
-            : 1.0;
-        const bias = -0.0005 * resolutionFactor * depthFactor * boundsFactor;
-        return Math.round(Math.max(-0.005, Math.min(-0.00002, bias)) * 1000000) / 1000000;
+        // Normalized depth changes with the camera interval. Keeping a fixed
+        // normalized offset makes long frusta detach contacts in world space.
+        const worldBias = this.calculateShadowNormalBias(context, {}, 0.15);
+        return -Math.max(1e-8, Math.min(0.005, worldBias / depthRange));
     },
 
     shadowBias(value, source) {
@@ -1313,6 +2617,7 @@ const LightManagerUtils = {
             // Migrate values produced by Light Manager <= 1.6.0 instead of
             // mistaking them for intentional manual overrides.
             defaults.push(this.legacyShadowNormalBias(source));
+            defaults.push(this.calculateShadowNormalBias(source, {}, 4.4));
         }
         return defaults.some(defaultValue => (
             Math.abs(parsed - defaultValue) <= 0.000001
@@ -1326,11 +2631,20 @@ const LightManagerUtils = {
     },
 
     applyAutomaticShadowNormalBias(light, previousContext = light) {
-        if (!light || !this.isAutomaticShadowNormalBiasValue(light.shadow_normal_bias, previousContext)) return false;
+        if (!light || light.shadow_normal_bias_auto === false ||
+            (light.shadow_normal_bias_auto !== true && !this.isAutomaticShadowNormalBiasValue(light.shadow_normal_bias, previousContext))) return false;
         const nextBias = this.defaultShadowNormalBias(light);
         if (Math.abs(Number(light.shadow_normal_bias) - nextBias) <= 0.000001) return false;
         light.shadow_normal_bias = nextBias;
         return true;
+    },
+
+    shadowSoftnessMode(value) {
+        return ['legacy', 'distance', 'artistic', 'hard'].includes(value) ? value : 'hard';
+    },
+
+    shadowBlur(value) {
+        return this.num(value, DEFAULT_SHADOW_BLUR, 0, 64);
     },
 
     shadowSoftness(value) {
@@ -1417,9 +2731,19 @@ const LightManagerUtils = {
             has_shadow: formResult.has_shadow,
             shadow_resolution: formResult.shadow_resolution,
             studio_shadow_resolution: formResult.studio_shadow_resolution,
+            shadow_camera_quality: formResult.shadow_camera_quality ?? currentLight?.shadow_camera_quality ?? 'balanced',
+            shadow_camera_distance: formResult.shadow_camera_distance ?? currentLight?.shadow_camera_distance ?? 256,
+            shadow_scene_fit: formResult.shadow_scene_fit ?? currentLight?.shadow_scene_fit ?? false,
+            shadow_region_locked: formResult.shadow_region_locked ?? currentLight?.shadow_region_locked ?? false,
+            shadow_region_bounds: currentLight?.shadow_region_bounds || [],
             shadow_bias: formResult.shadow_bias,
             shadow_normal_bias: formResult.shadow_normal_bias,
+            shadow_normal_bias_auto: formResult.shadow_normal_bias_auto ??
+                (currentLight && formResult.shadow_normal_bias !== undefined && Number(formResult.shadow_normal_bias) !== Number(currentLight.shadow_normal_bias)
+                    ? false : currentLight?.shadow_normal_bias_auto),
             shadow_softness: formResult.shadow_softness,
+            shadow_softness_mode: formResult.shadow_softness_mode ?? currentLight?.shadow_softness_mode ?? 'hard',
+            shadow_blur: formResult.shadow_blur ?? currentLight?.shadow_blur ?? DEFAULT_SHADOW_BLUR,
             shadow_near: formResult.shadow_near,
             shadow_far: formResult.shadow_far,
             shadow_bounds: formResult.shadow_bounds
@@ -1428,18 +2752,32 @@ const LightManagerUtils = {
         const profile = LIGHT_MANAGER_PROFILES[formResult.profile];
         const shadowPreset = LIGHT_MANAGER_SHADOW_PRESETS[formResult.shadow_preset];
 
-        return this.sanitizeConfig({
+        const merged = {
             ...base,
             ...(profile || {}),
             ...(shadowPreset || {}),
             color: base.color
-        });
+        };
+        const explicitSoftnessPreset = !!(
+            (profile && Object.prototype.hasOwnProperty.call(profile, 'shadow_softness')) ||
+            (shadowPreset && Object.prototype.hasOwnProperty.call(shadowPreset, 'shadow_softness'))
+        );
+        if (
+            explicitSoftnessPreset ||
+            (!Object.prototype.hasOwnProperty.call(formResult, 'shadow_softness_mode') &&
+                base.shadow_softness_mode === SHADOW_SOFTNESS_MODEL_LEGACY &&
+                Number(merged.shadow_softness) !== Number(currentLight?.shadow_softness))
+        ) {
+            merged.shadow_softness_mode = shadowPreset?.shadow_softness_mode ?? profile?.shadow_softness_mode ?? SHADOW_SOFTNESS_MODEL_DISTANCE;
+        }
+        return this.sanitizeConfig(merged);
     },
 
     sanitizeConfig(config = {}) {
         const lightType = this.lightType(config.light_type);
         const shadowNear = this.num(config.shadow_near, 0.1, 0, 99999);
         const shadowFar = Math.max(shadowNear + 0.001, this.num(config.shadow_far, 200, 0.001, 100000));
+        const keyLightWeight = this.num(config.key_light_weight, 1, 0, 100);
 
         const shadowResolution = this.shadowResolution(config.shadow_resolution);
         const studioShadowResolution = this.studioShadowResolution(config.studio_shadow_resolution);
@@ -1457,17 +2795,27 @@ const LightManagerUtils = {
             light_type: lightType,
             color: this.colorArray(config.color),
             intensity: this.num(config.intensity, 1, 0, 100000),
-            key_light_enabled: this.bool(config.key_light_enabled, true),
-            key_light_weight: this.num(config.key_light_weight, 1, 0, 100),
+            key_light_enabled: this.bool(config.key_light_enabled, true) && keyLightWeight > 0,
+            key_light_weight: keyLightWeight,
             distance: this.num(config.distance, 0, 0, 100000),
             angle: this.num(config.angle, 45, 0.1, 89.9),
             penumbra: this.num(config.penumbra, 0, 0, 1),
             has_shadow: lightType !== 'art_key' && this.bool(config.has_shadow, true),
             shadow_resolution: shadowResolution,
             studio_shadow_resolution: studioShadowResolution,
+            shadow_camera_quality: ['off', 'balanced', 'high'].includes(config.shadow_camera_quality) ? config.shadow_camera_quality : 'balanced',
+            shadow_camera_distance: this.num(config.shadow_camera_distance, 256, 8, 100000),
+            shadow_scene_fit: this.bool(config.shadow_scene_fit, false),
+            shadow_region_locked: this.bool(config.shadow_region_locked, false),
+            shadow_region_bounds: Array.isArray(config.shadow_region_bounds) && config.shadow_region_bounds.length === 6 &&
+                config.shadow_region_bounds.every(Number.isFinite) ? config.shadow_region_bounds.slice() : [],
             shadow_bias: this.num(config.shadow_bias, DEFAULT_SHADOW_BIAS, -1, 1),
-            shadow_normal_bias: this.shadowNormalBias(config.shadow_normal_bias, shadowContext),
+            shadow_normal_bias: this.num(config.shadow_normal_bias, this.defaultShadowNormalBias(shadowContext), -1, 1),
+            shadow_normal_bias_auto: config.shadow_normal_bias_auto === undefined
+                ? this.isAutomaticShadowNormalBiasValue(config.shadow_normal_bias, shadowContext) : !!config.shadow_normal_bias_auto,
             shadow_softness: this.shadowSoftness(config.shadow_softness),
+            shadow_softness_mode: this.shadowSoftnessMode(config.shadow_softness_mode),
+            shadow_blur: this.shadowBlur(config.shadow_blur),
             shadow_near: shadowNear,
             shadow_far: shadowFar,
             shadow_bounds: shadowBounds
@@ -1482,6 +2830,9 @@ const LightManagerUtils = {
         light.render_intensity = this.num(light.render_intensity ?? light.intensity, config.intensity, 0, 100000);
         if (!Array.isArray(light.rotation)) light.rotation = [0, 0, 0];
         if (!Array.isArray(light.render_rotation)) light.render_rotation = light.rotation.slice();
+        const validTarget = Array.isArray(light.aim_target) && light.aim_target.length === 3 && light.aim_target.every(value => Number.isFinite(Number(value)));
+        light.aim_target_enabled = validTarget && this.bool(light.aim_target_enabled, false);
+        light.aim_target = validTarget ? light.aim_target.map(Number) : [0, 0, 0];
         return light;
     },
 
@@ -1492,8 +2843,8 @@ const LightManagerUtils = {
         element.render_color = this.colorArray(element.render_color || element.color, element.color);
         element.intensity = this.num(element.intensity, 1, 0, 100000);
         element.render_intensity = this.num(element.render_intensity ?? element.intensity, element.intensity, 0, 100000);
-        element.key_light_enabled = this.bool(element.key_light_enabled, true);
         element.key_light_weight = this.num(element.key_light_weight, 1, 0, 100);
+        element.key_light_enabled = this.bool(element.key_light_enabled, true) && element.key_light_weight > 0;
         element.art_mode = element.art_mode === 'direction' ? 'direction' : 'point';
         element.art_scope = element.art_scope === 'include' ? 'include' : 'box';
         element.art_include = Array.isArray(element.art_include) ? element.art_include.filter(Boolean) : [];
@@ -1529,7 +2880,7 @@ window.LightManagerArtKeys = {
     beginFrame() {
         const previous = this.frameState;
         this.frameState = this.frameCacheEnabled
-            ? { prepared: null, meshes: new WeakMap() } : null;
+            ? { active: null, prepared: null, meshes: new WeakMap() } : null;
         this.performance.frames++;
         return previous;
     },
@@ -1538,6 +2889,7 @@ window.LightManagerArtKeys = {
     },
     invalidateFrame() {
         if (this.frameState) {
+            this.frameState.active = null;
             this.frameState.prepared = null;
             this.frameState.meshes = new WeakMap();
         }
@@ -1576,11 +2928,17 @@ window.LightManagerArtKeys = {
         return [0, 1, 2].map(i => LightManagerUtils.num(element.art_size?.[i], 32, 0.01, 100000));
     },
     active() {
-        const nativeKeys = Array.isArray(window.ArtKeyElement?.all) ? window.ArtKeyElement.all : [];
+        if (this.frameState?.active) return this.frameState.active;
+        // Native Type.all scans the reactive project element list. Share that scan
+        // across all objects in a draw/batch operation, including an empty result.
+        const nativeElements = window.ArtKeyElement?.all;
+        const nativeKeys = Array.isArray(nativeElements) ? nativeElements : [];
         const legacyKeys = (window.LightElement?.all || []).filter(element => element.light_type === 'art_key');
-        return [...nativeKeys, ...legacyKeys].filter(element =>
+        const active = [...nativeKeys, ...legacyKeys].filter(element =>
             element.mesh && element.key_light_enabled !== false && Number(element.key_light_weight) > 0 &&
             isLightManagerElementHierarchyVisible(element));
+        if (this.frameState) this.frameState.active = active;
+        return active;
     },
     boxVertices(element) {
         const half = this.size(element).map(v => v / 2), vertices = [];
@@ -1675,8 +3033,927 @@ window.LightManagerArtKeys = {
 
 window.three_lights = window.three_lights || {};
 
+/* Camera-centred directional cascades. The authored shadow is the far layer;
+ * two private depth maps refine it without adding illumination or native light
+ * slots. Enter through WebGLShadowMap.render, after Three has updated matrices,
+ * clipping and its render state, and before any beauty material samples depth.
+ */
+const LightManagerCameraShadows = {
+    renderers: new Map(),
+    materials: new Map(),
+    revision: 0,
+    lightRevisions: new Map(),
+    uniforms: null,
+    getFilterFeatures() {
+        // A retained native shadow slot must keep its filter family at zero intensity.
+        const environment = typeof window !== 'undefined' ? window.LightflowEnvironment?.getVirtualLight?.({ includeInactiveShadowSlot: true }) : null;
+        const elements = typeof window !== 'undefined' ? window.LightElement?.all || [] : [];
+        let features = 0;
+        for (const element of environment ? [...elements, environment] : elements) {
+            if (element.has_shadow === false || element.visibility === false) continue;
+            const mode = element.shadow_softness_mode || 'legacy';
+            if (mode === 'artistic') features |= 1;
+            if (mode === 'distance') features |= 2;
+            if (mode === 'legacy') features |= 4;
+        }
+        return features;
+    },
+    invalidate(options = {}) {
+        const lights = options.elements || (options.element ? [options.element] : []);
+        if (!lights.length || options.scene || options.all) this.revision++;
+        else lights.forEach(light => this.lightRevisions.set(light.uuid, (this.lightRevisions.get(light.uuid) || 0) + 1));
+    },
+    getUniforms() {
+        if (!this.uniforms) this.uniforms = {
+            lfCameraShadowOwner: { value: -1 },
+            lfCameraShadowEnabled: { value: new THREE.Vector2() },
+            lfCameraShadowNormalBias: { value: 0 },
+            lfCameraShadowDetailNormalBias: { value: new THREE.Vector2() },
+            lfCameraShadowBaseMatrix: { value: new THREE.Matrix4() },
+            lfCameraShadowWorldMatrix0: { value: new THREE.Matrix4() }, lfCameraShadowWorldMatrix1: { value: new THREE.Matrix4() },
+            lfCameraShadowMap0: { value: null }, lfCameraShadowMap1: { value: null },
+            lfCameraShadowMatrix0: { value: new THREE.Matrix4() }, lfCameraShadowMatrix1: { value: new THREE.Matrix4() },
+            // resolution, normalized bias, PCF radius, distance-softness scale
+            lfCameraShadowParams0: { value: new THREE.Vector4() }, lfCameraShadowParams1: { value: new THREE.Vector4() }
+        };
+        this.uniforms.uLightShadowDisk ||= {
+            value: Array.from({ length: 12 }, (_, i) => {
+                const area = (i + 0.5) / 12, radius = Math.sqrt(area), angle = i * 2.399963229728653;
+                // Reciprocal sum of the twelve Gaussian weights; normalize once in CPU.
+                return new THREE.Vector3(Math.cos(angle) * radius, Math.sin(angle) * radius, Math.exp(-2 * area) * 0.19297611161525652);
+            })
+        };
+        for (const type of ['Directional', 'Spot', 'Point']) {
+            this.uniforms['lfNativeShadowStyle' + type] ||= { value: Array(16).fill(-1) };
+        }
+        return this.uniforms;
+    },
+    updateNativeStyles(lights) {
+        const uniforms = this.getUniforms();
+        const environment = window.LightflowEnvironment?.getVirtualLight?.();
+        let authored = false;
+        for (const type of ['Directional', 'Spot', 'Point']) {
+            const values = uniforms['lfNativeShadowStyle' + type].value;
+            values.fill(-1);
+            let index = 0;
+            for (const light of lights) {
+                if (!light['is' + type + 'Light'] || !light.castShadow || !light.shadow) continue;
+                if (index >= values.length) break;
+                const element = light.uuid === environment?.uuid ? environment :
+                    window.LightElement?.all?.find(item => item.uuid === (light.userData?.lightManagerElementUuid || light.uuid));
+                if (element?.shadow_softness_mode === 'hard') values[index] = 0;
+                else if (element?.shadow_softness_mode === 'artistic') {
+                    const radius = Math.min(64, Math.max(0, Number(element.shadow_blur) || 0));
+                    const resolution = Math.max(1, Math.min(light.shadow.mapSize.x, light.shadow.mapSize.y));
+                    values[index] = radius > 0 ? -2 - radius * resolution / 1024 : 0;
+                }
+                authored ||= values[index] !== -1;
+                index++;
+            }
+        }
+        return authored;
+    },
+    artisticModule: `
+#ifndef LF_ARTISTIC_SHADOW_MODULE
+#define LF_ARTISTIC_SHADOW_MODULE
+#ifndef LF_ARTISTIC_FILTER_ENABLED
+#define LF_ARTISTIC_FILTER_ENABLED 1
+#endif
+#ifndef LF_DISTANCE_FILTER_ENABLED
+#define LF_DISTANCE_FILTER_ENABLED 1
+#endif
+#ifndef LF_LEGACY_FILTER_ENABLED
+#define LF_LEGACY_FILTER_ENABLED 1
+#endif
+#ifdef USE_SHADOWMAP
+// CPU-precomputed disk offsets and Gaussian weights, shared by all receivers.
+uniform vec3 uLightShadowDisk[12];
+// Bilinear interpolation of comparisons, never of packed RGBA depth.
+float lfArtisticProjectedCompare(sampler2D shadowMap, vec2 uv, vec2 mapSize, float compareDepth, bool smoothTap) {
+    if (!smoothTap) return texture2DCompare(shadowMap, clamp(uv, vec2(0.5) / mapSize, vec2(1.0) - vec2(0.5) / mapSize), compareDepth);
+    vec2 pixel = uv * mapSize - 0.5;
+    vec2 fraction = fract(pixel);
+    vec2 baseUv = (floor(pixel) + 0.5) / mapSize;
+    vec2 texel = 1.0 / mapSize;
+    vec2 low = texel * 0.5, high = vec2(1.0) - low;
+    float a = texture2DCompare(shadowMap, clamp(baseUv, low, high), compareDepth);
+    float b = texture2DCompare(shadowMap, clamp(baseUv + vec2(texel.x, 0.0), low, high), compareDepth);
+    float c = texture2DCompare(shadowMap, clamp(baseUv + vec2(0.0, texel.y), low, high), compareDepth);
+    float d = texture2DCompare(shadowMap, clamp(baseUv + texel, low, high), compareDepth);
+    return mix(mix(a, b, fraction.x), mix(c, d, fraction.x), fraction.y);
+}
+// A small stable rotation breaks repeated bands without grainy full rotations.
+vec2 lfArtisticRotation(vec2 position) {
+    vec2 cell = floor(position * 2048.0);
+    float angle = fract(sin(dot(cell, vec2(12.9898, 78.233))) * 43758.5453) * 0.8;
+    return vec2(cos(angle), sin(angle));
+}
+float lfGetArtisticProjectedShadow(sampler2D shadowMap, vec2 shadowMapSize, float shadowBias,
+    vec4 shadowCoord, float encodedRadius) {
+    if (shadowCoord.w <= 1e-5) return 1.0;
+    vec3 p = shadowCoord.xyz / shadowCoord.w;
+    if (any(lessThan(p, vec3(0.0))) || any(greaterThan(p, vec3(1.0)))) return 1.0;
+    vec2 centerUv = p.xy;
+    vec2 mapSize = max(shadowMapSize, vec2(1.0));
+    float compareDepth = p.z + shadowBias;
+    float radius = max(0.0, -encodedRadius - 2.0);
+    // Crisp means no artistic penumbra; interpolate comparisons at texel edges.
+    if (radius <= 1e-5) return lfArtisticProjectedCompare(shadowMap, centerUv, mapSize, compareDepth, true);
+    #if LF_ARTISTIC_FILTER_ENABLED == 0
+    return texture2DCompare(shadowMap, centerUv, compareDepth);
+    #else
+    vec2 filterStep = vec2(radius) / mapSize;
+    vec2 direction = lfArtisticRotation(centerUv);
+    float visibility = 0.0;
+    // Two simple constant kernels: no per-tap branch or transcendental math.
+    // Cached receivers pass their map directly, without nested sampler dispatch.
+    // Separate smooth/nearest loops make each tap's read budget compile-time fixed.
+    mat2 rotation = mat2(direction.x, direction.y, -direction.y, direction.x);
+    #pragma unroll_loop_start
+    for ( int i = 0; i < 4; i ++ ) {
+      {
+        vec3 tap = uLightShadowDisk[i];
+        visibility += lfArtisticProjectedCompare(shadowMap,
+            centerUv + rotation * tap.xy * filterStep, mapSize, compareDepth, true) * tap.z;
+      }
+    }
+    #pragma unroll_loop_end
+    #pragma unroll_loop_start
+    for ( int i = 4; i < 12; i ++ ) {
+      {
+        vec3 tap = uLightShadowDisk[i];
+        visibility += lfArtisticProjectedCompare(shadowMap,
+            centerUv + rotation * tap.xy * filterStep, mapSize, compareDepth, false) * tap.z;
+      }
+    }
+    #pragma unroll_loop_end
+    return visibility;
+    #endif
+}
+// Offset in a tangent frame and remap every point-light tap through cubeToUV.
+// This preserves atlas face seams instead of blurring unrelated atlas tiles.
+float lfGetArtisticPointShadow(sampler2D shadowMap, vec2 shadowMapSize, float shadowBias,
+    vec4 shadowCoord, float shadowCameraNear, float shadowCameraFar, float encodedRadius) {
+    float distanceToLight = length(shadowCoord.xyz);
+    float depthRange = shadowCameraFar - shadowCameraNear;
+    if (distanceToLight <= 1e-5 || depthRange <= 1e-5) return 1.0;
+    float compareDepth = (distanceToLight - shadowCameraNear) / depthRange + shadowBias;
+    float resolution = max(shadowMapSize.y, 1.0);
+    float texelSizeY = 0.5 / resolution;
+    vec3 center = shadowCoord.xyz / distanceToLight;
+    float radius = max(0.0, -encodedRadius - 2.0);
+    if (radius <= 1e-5) {
+        // Remap each direction separately so the cube atlas never bleeds tiles.
+        vec3 tangentAA = normalize(cross(abs(center.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0), center));
+        vec3 dxAA = tangentAA * texelSizeY * 0.5;
+        vec3 dyAA = cross(center, tangentAA) * texelSizeY * 0.5;
+        return 0.25 * (texture2DCompare(shadowMap, cubeToUV(center - dxAA - dyAA, texelSizeY), compareDepth)
+            + texture2DCompare(shadowMap, cubeToUV(center + dxAA - dyAA, texelSizeY), compareDepth)
+            + texture2DCompare(shadowMap, cubeToUV(center - dxAA + dyAA, texelSizeY), compareDepth)
+            + texture2DCompare(shadowMap, cubeToUV(center + dxAA + dyAA, texelSizeY), compareDepth));
+    }
+    #if LF_ARTISTIC_FILTER_ENABLED == 0
+    return texture2DCompare(shadowMap, cubeToUV(center, texelSizeY), compareDepth);
+    #else
+    vec3 tangent = normalize(cross(abs(center.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0), center));
+    vec3 bitangent = cross(center, tangent);
+    vec2 direction = lfArtisticRotation(center.xy + center.z);
+    float visibility = 0.0;
+    mat2 rotation = mat2(direction.x, direction.y, -direction.y, direction.x);
+    vec3 dx = tangent * texelSizeY * 0.5, dy = bitangent * texelSizeY * 0.5;
+    #pragma unroll_loop_start
+    for ( int i = 0; i < 4; i ++ ) {
+      {
+        vec3 tap = uLightShadowDisk[i];
+        vec2 offset = rotation * tap.xy * radius * texelSizeY;
+        vec3 sampleDirection = center + tangent * offset.x + bitangent * offset.y;
+        float sampleVisibility = texture2DCompare(shadowMap, cubeToUV(sampleDirection - dx - dy, texelSizeY), compareDepth);
+        sampleVisibility += texture2DCompare(shadowMap, cubeToUV(sampleDirection + dx - dy, texelSizeY), compareDepth);
+        sampleVisibility += texture2DCompare(shadowMap, cubeToUV(sampleDirection - dx + dy, texelSizeY), compareDepth);
+        sampleVisibility += texture2DCompare(shadowMap, cubeToUV(sampleDirection + dx + dy, texelSizeY), compareDepth);
+        visibility += sampleVisibility * 0.25 * tap.z;
+      }
+    }
+    #pragma unroll_loop_end
+    #pragma unroll_loop_start
+    for ( int i = 4; i < 12; i ++ ) {
+      {
+        vec3 tap = uLightShadowDisk[i];
+        vec2 offset = rotation * tap.xy * radius * texelSizeY;
+        vec3 sampleDirection = center + tangent * offset.x + bitangent * offset.y;
+        visibility += texture2DCompare(shadowMap, cubeToUV(sampleDirection, texelSizeY), compareDepth) * tap.z;
+      }
+    }
+    #pragma unroll_loop_end
+    return visibility;
+    #endif
+}
+#endif
+#endif
+`,
+    patchFragment(fragment, cameraDetail = true) {
+        if (!fragment.includes('#include <shadowmap_pars_fragment>')) return fragment;
+        // Expand only the two native receiver chunks. Leave shared ShaderChunk
+        // untouched, and preserve custom RenderCraft/pixelated shader bodies.
+        ['lights_fragment_begin', 'shadowmask_pars_fragment'].forEach(name => {
+            fragment = fragment.replace('#include <' + name + '>', () => THREE.ShaderChunk[name] || '');
+        });
+        const distanceFilter = fragment.includes('float lfGetProjectedDistanceShadow(');
+        let distanceModule = '';
+        if (distanceFilter) {
+            const from = fragment.indexOf('float lfGetProjectedDistanceShadow(');
+            const body = fragment.indexOf('{', from);
+            let end = body + 1, depth = 1;
+            while (end < fragment.length && depth) {
+                if (fragment[end] === '{') depth++;
+                if (fragment[end] === '}') depth--;
+                end++;
+            }
+            // Reuse SA's bounded 4-probe/6-sample distance filter; specialize
+            // only depth reads for receiver-plane correction in detail maps.
+            distanceModule = fragment.slice(from, end)
+                .replace('lfGetProjectedDistanceShadow(', 'lfCameraDistanceShadow(')
+                .replace(/float sourceScale\s*\)/, 'float sourceScale, vec2 receiverSlope)')
+                .replace('lfShadowStoredDepth(shadowMap, centerUv)', 'lfCameraPlaneDepth(shadowMap, centerUv, centerUv, shadowMapSize.x, receiverSlope)')
+                .replace(/lfAccumulateProjectedBlocker\(/g, 'lfCameraAccumulatePlaneBlocker(')
+                .replace(/compareDepth,\s*blockerDepthSum,\s*blockerCount\)/g, 'compareDepth, blockerDepthSum, blockerCount, centerUv, shadowMapSize.x, receiverSlope)')
+                .replace(/texture2DCompare\(/g, 'lfCameraPlaneCompare(')
+                .replace(/,\s*compareDepth\)/g, ', compareDepth, centerUv, shadowMapSize.x, receiverSlope)');
+            const constants = new Map(Array.from(fragment.matchAll(/^#define\s+(LF_SHADOW_\w+)\s+([^\r\n]+)/gm), match => [match[1], match[2]]));
+            distanceModule = distanceModule.replace(/\bLF_SHADOW_\w+\b/g, name => constants.get(name) || name);
+            // lfCameraFilter dispatches authored styles before entering this
+            // positive-source distance path; do not clone the artistic call graph.
+            distanceModule = distanceModule.replace(/if \(sourceScale <= -2\.0 \|\| sourceScale == 0\.0\)\s*return lfGetArtisticProjectedShadow\([^;]+;/, '');
+        }
+        // Specialize the shared artistic filter to the detail map receiver plane.
+        // All four bilinear comparisons use the original receiver's plane.
+        const artisticProjected = this.artisticModule.slice(
+            this.artisticModule.indexOf('float lfArtisticProjectedCompare('),
+            this.artisticModule.indexOf('// Offset in a tangent frame'))
+            .replaceAll('lfArtisticProjectedCompare', 'lfCameraArtisticCompare')
+            .replaceAll('lfArtisticRotation', 'lfCameraArtisticRotation')
+            .replaceAll('lfGetArtisticProjectedShadow', 'lfCameraArtisticProjectedShadow')
+            .replace('vec2 mapSize, float compareDepth, bool smoothTap)', 'vec2 mapSize, float compareDepth, bool smoothTap, vec2 origin, vec2 receiverSlope)')
+            .replace('vec4 shadowCoord, float encodedRadius)', 'vec4 shadowCoord, float encodedRadius, vec2 receiverSlope)')
+            .replaceAll('centerUv, mapSize, compareDepth, true)', 'centerUv, mapSize, compareDepth, true, centerUv, receiverSlope)')
+            .replaceAll('filterStep, mapSize, compareDepth, true)', 'filterStep, mapSize, compareDepth, true, centerUv, receiverSlope)')
+            .replaceAll('filterStep, mapSize, compareDepth, false)', 'filterStep, mapSize, compareDepth, false, centerUv, receiverSlope)')
+            .replace(/texture2DCompare\(shadowMap, (clamp\([^;]+?\)), compareDepth\)/g,
+                'lfCameraPlaneCompare(shadowMap, $1, compareDepth, origin, mapSize.x, receiverSlope)')
+            .replace('texture2DCompare(shadowMap, centerUv, compareDepth)',
+                'lfCameraPlaneCompare(shadowMap, centerUv, compareDepth, centerUv, mapSize.x, receiverSlope)');
+        // Native spot/point receivers need the same authored hard/artistic style.
+        // The original sampler index stays literal after Three's loop unrolling.
+        const pixelFrom = fragment.indexOf('vec3 lfpsGetRawShadowByType(');
+        const pixelTo = fragment.indexOf('float lfpsQuantizeShadow(', pixelFrom);
+        const localCalls = /\b(getShadow|getPointShadow)\(\s*(spotShadowMap|pointShadowMap)\[\s*(\w+)\s*\]/g;
+        fragment = fragment.replace(localCalls, (call, fn, map, index, begin) => {
+            const type = map === 'spotShadowMap' ? 'Spot' : 'Point';
+            const unrolled = fragment.lastIndexOf('#pragma unroll_loop_start', begin) > fragment.lastIndexOf('#pragma unroll_loop_end', begin);
+            const styleIndex = index === 'i' && unrolled ? 'UNROLLED_LOOP_INDEX' : index;
+            const pixel = pixelFrom >= 0 && begin >= pixelFrom && begin < pixelTo;
+            return `lfNative${type}${pixel ? 'Pixel' : ''}Shadow(lfNativeShadowStyle${type}[${styleIndex}], ${map}[${index}]`;
+        });
+        const calls = /\b(getShadow|lfGetProjectedDistanceShadow|lfGetRegularProjectedShadowWithMap)\(\s*directionalShadowMap\[\s*(\w+)\s*\]/g;
+        const replacements = [];
+        let match;
+        while ((match = calls.exec(fragment))) {
+            let end = calls.lastIndex, depth = 1;
+            while (end < fragment.length && depth) {
+                const char = fragment[end++];
+                if (char === '(') depth++;
+                if (char === ')') depth--;
+            }
+            const args = fragment.slice(fragment.indexOf('(', match.index) + 1, end - 1).split(',').map(arg => arg.trim());
+            const directMap = match[1] === 'lfGetRegularProjectedShadowWithMap';
+            if (args.length !== (directMap ? 6 : 5)) continue;
+            const coord = args[match[1] === 'getShadow' || directMap ? 4 : 3];
+            // Three's unroller rewrites [i] and UNROLLED_LOOP_INDEX, but leaves
+            // a bare function argument i untouched after removing the loop.
+            const unrolled = fragment.lastIndexOf('#pragma unroll_loop_start', match.index) > fragment.lastIndexOf('#pragma unroll_loop_end', match.index);
+            const index = match[2] === 'i' && unrolled ? 'UNROLLED_LOOP_INDEX' : match[2];
+            const scale = match[1] === 'getShadow' ? `lfNativeShadowStyleDirectional[${index}]` : args[directMap ? 5 : 4];
+            const snapped = coord.includes('vDirectionalShadowCoord') ? 'false' : 'true';
+            const radius = match[1] === 'getShadow' || directMap ? args[3] : `directionalLightShadows[${match[2]}].shadowRadius`;
+            replacements.push([match.index, end, `lfCameraDirectionalShadow(${index}, ${args[0]}, ${args[1]}, ${args[2]}, ${radius}, ${coord}, ${scale}, ${snapped})`]);
+            calls.lastIndex = end;
+        }
+        replacements.reverse().forEach(([start, end, text]) => { fragment = fragment.slice(0, start) + text + fragment.slice(end); });
+        let module = `
+#ifndef LF_CAMERA_SHADOWS
+#define LF_CAMERA_SHADOWS
+uniform float lfNativeShadowStyleDirectional[16];
+uniform float lfNativeShadowStyleSpot[16];
+uniform float lfNativeShadowStylePoint[16];
+${this.artisticModule}
+uniform int lfCameraShadowOwner;
+uniform vec2 lfCameraShadowEnabled;
+uniform mat4 lfCameraShadowBaseMatrix;
+uniform mat4 lfCameraShadowWorldMatrix0;
+uniform mat4 lfCameraShadowWorldMatrix1;
+varying vec3 lfCameraShadowWorldPosition;
+varying vec3 lfCameraShadowWorldNormal;
+uniform float lfCameraShadowNormalBias;
+uniform vec2 lfCameraShadowDetailNormalBias;
+uniform sampler2D lfCameraShadowMap0;
+uniform sampler2D lfCameraShadowMap1;
+uniform mat4 lfCameraShadowMatrix0;
+uniform mat4 lfCameraShadowMatrix1;
+uniform vec4 lfCameraShadowParams0;
+uniform vec4 lfCameraShadowParams1;
+#ifdef USE_SHADOWMAP
+#if NUM_DIR_LIGHT_SHADOWS > 0
+vec3 lfCameraBaseDx[NUM_DIR_LIGHT_SHADOWS], lfCameraBaseDy[NUM_DIR_LIGHT_SHADOWS];
+#endif
+void lfPrepareShadowEdgeDerivatives() {
+    #pragma unroll_loop_start
+    for ( int i = 0; i < NUM_DIR_LIGHT_SHADOWS; i ++ ) {
+      {
+        vec3 p = vDirectionalShadowCoord[i].xyz / vDirectionalShadowCoord[i].w;
+        lfCameraBaseDx[i] = dFdx(p);
+        lfCameraBaseDy[i] = dFdy(p);
+      }
+    }
+    #pragma unroll_loop_end
+}
+vec3 lfCameraNearDx, lfCameraNearDy, lfCameraMidDx, lfCameraMidDy;
+void lfPrepareCameraShadowDerivatives() {
+    lfPrepareShadowEdgeDerivatives();
+    vec4 world = vec4(lfCameraShadowWorldPosition, 1.0);
+    vec3 nearPosition = (lfCameraShadowWorldMatrix0 * (world + vec4(lfCameraShadowWorldNormal * (lfCameraShadowDetailNormalBias.x - lfCameraShadowNormalBias), 0.0))).xyz;
+    vec3 midPosition = (lfCameraShadowWorldMatrix1 * (world + vec4(lfCameraShadowWorldNormal * (lfCameraShadowDetailNormalBias.y - lfCameraShadowNormalBias), 0.0))).xyz;
+    lfCameraNearDx = dFdx(nearPosition);
+    lfCameraNearDy = dFdy(nearPosition);
+    lfCameraMidDx = dFdx(midPosition);
+    lfCameraMidDy = dFdy(midPosition);
+}
+${distanceFilter ? 'float lfGetProjectedDistanceShadow(sampler2D shadowMap, vec2 mapSize, float bias, vec4 coord, float sourceScale);' : ''}
+float lfCameraPlaneDepth(sampler2D map, vec2 uv, vec2 origin, float resolution, vec2 slope) {
+    vec2 texelCenter = (floor(clamp(uv, vec2(0.5 / resolution), vec2(1.0 - 0.5 / resolution)) * resolution) + 0.5) / resolution;
+    float depth = unpackRGBAToDepth(texture2D(map, texelCenter));
+    if (depth >= 1.0 - 1e-6) return 1.0;
+    return depth - dot(slope, texelCenter - origin);
+}
+float lfCameraPlaneCompare(sampler2D map, vec2 uv, float compareDepth, vec2 origin, float resolution, vec2 slope) {
+    return step(compareDepth, lfCameraPlaneDepth(map, uv, origin, resolution, slope));
+}
+void lfCameraAccumulatePlaneBlocker(sampler2D map, vec2 uv, float compareDepth,
+    inout float sum, inout float count, vec2 origin, float resolution, vec2 slope) {
+    float depth = lfCameraPlaneDepth(map, uv, origin, resolution, slope);
+    if (depth < compareDepth) { sum += depth; count += 1.0; }
+}
+${artisticProjected}
+${distanceModule}
+float lfCameraCrispShadow(sampler2D map, vec3 p, vec4 params, vec3 dx, vec3 dy, vec2 slope) {
+    vec2 size = vec2(params.x);
+    float depth = p.z + params.y;
+    float footprint = max(length(dx.xy * size), length(dy.xy * size));
+    if (footprint <= 1.0) return lfCameraArtisticCompare(map, p.xy, size, depth, true, p.xy, slope);
+    // Integrate a screen pixel with a fixed 2x2 grid. Derivatives were prepared
+    // before lighting/coverage branches; no divergent derivative instructions.
+    vec2 a = dx.xy * 0.25, b = dy.xy * 0.25;
+    return 0.25 * (lfCameraArtisticCompare(map, p.xy - a - b, size, depth, true, p.xy, slope)
+        + lfCameraArtisticCompare(map, p.xy + a - b, size, depth, true, p.xy, slope)
+        + lfCameraArtisticCompare(map, p.xy - a + b, size, depth, true, p.xy, slope)
+        + lfCameraArtisticCompare(map, p.xy + a + b, size, depth, true, p.xy, slope));
+}
+float lfCameraFilter(sampler2D map, vec4 coord, vec4 params, float sourceScale, vec3 dx, vec3 dy, bool snapped) {
+    // Compare each sample at the receiver plane's depth at that texel. Unlike
+    // a large constant slope bias, this preserves contacts at grazing angles.
+    vec3 p = coord.xyz / coord.w;
+    float determinant = dx.x * dy.y - dx.y * dy.x;
+    vec2 slope = vec2(0.0);
+    float derivativeScale = max(dot(dx.xy, dx.xy) * dot(dy.xy, dy.xy), 1e-30);
+    if (determinant * determinant > derivativeScale * 1e-8) slope = vec2(dy.y * dx.z - dx.y * dy.z, dx.x * dy.z - dy.x * dx.z) / determinant;
+    // Decode, scale, then encode; scaling the -2 sentinel would change the mode.
+    if (sourceScale <= -2.0) return lfCameraArtisticProjectedShadow(map, vec2(params.x), params.y, coord, -2.0 - (-sourceScale - 2.0) * params.w, slope);
+    if (sourceScale == 0.0) return snapped ? lfCameraPlaneCompare(map, p.xy, p.z + params.y, p.xy, params.x, slope) : lfCameraCrispShadow(map, p, params, dx, dy, slope);
+    ${distanceFilter ? 'if (sourceScale > 0.0) return lfCameraDistanceShadow(map, vec2(params.x), params.y, coord, sourceScale * params.w, slope);' : ''}
+    float compareDepth = p.z + params.y;
+    float shadow = lfCameraPlaneCompare(map, p.xy, compareDepth, p.xy, params.x, slope);
+#if defined(SHADOWMAP_TYPE_BASIC) || LF_LEGACY_FILTER_ENABLED == 0
+    return shadow;
+#else
+    vec2 stepUv = vec2(max(params.z, 0.0) / params.x);
+    if (params.z <= 0.0) return shadow;
+    shadow += lfCameraPlaneCompare(map, p.xy + vec2(-stepUv.x, -stepUv.y), compareDepth, p.xy, params.x, slope);
+    shadow += lfCameraPlaneCompare(map, p.xy + vec2(0.0, -stepUv.y), compareDepth, p.xy, params.x, slope);
+    shadow += lfCameraPlaneCompare(map, p.xy + vec2(stepUv.x, -stepUv.y), compareDepth, p.xy, params.x, slope);
+    shadow += lfCameraPlaneCompare(map, p.xy + vec2(-stepUv.x, 0.0), compareDepth, p.xy, params.x, slope);
+    shadow += lfCameraPlaneCompare(map, p.xy + vec2(stepUv.x, 0.0), compareDepth, p.xy, params.x, slope);
+    shadow += lfCameraPlaneCompare(map, p.xy + vec2(-stepUv.x, stepUv.y), compareDepth, p.xy, params.x, slope);
+    shadow += lfCameraPlaneCompare(map, p.xy + vec2(0.0, stepUv.y), compareDepth, p.xy, params.x, slope);
+    shadow += lfCameraPlaneCompare(map, p.xy + vec2(stepUv.x, stepUv.y), compareDepth, p.xy, params.x, slope);
+    return shadow / 9.0;
+#endif
+}
+float lfCameraCoverage(vec4 coord, float resolution) {
+    vec3 p = coord.xyz / coord.w;
+    if (p.z <= 0.0 || p.z >= 1.0) return 0.0;
+    float edge = min(min(p.x, 1.0 - p.x), min(p.y, 1.0 - p.y));
+    return smoothstep(max(3.0 / resolution, 0.015), 0.12, edge);
+}
+float lfCameraRawProjectedShadow(sampler2D map, float bias, vec4 coord) {
+    if (coord.w <= 1e-5) return 1.0;
+    vec3 p = coord.xyz / coord.w;
+    if (any(lessThan(p, vec3(0.0))) || any(greaterThan(p, vec3(1.0)))) return 1.0;
+    return texture2DCompare(map, p.xy, p.z + bias);
+}
+float lfCameraCrispBaseShadow(int index, sampler2D map, vec2 size, float bias, vec4 coord) {
+    if (coord.w <= 1e-5) return 1.0;
+    vec3 p = coord.xyz / coord.w;
+    if (any(lessThan(p, vec3(0.0))) || any(greaterThan(p, vec3(1.0)))) return 1.0;
+    #if NUM_DIR_LIGHT_SHADOWS > 0
+    vec3 dx = lfCameraBaseDx[index], dy = lfCameraBaseDy[index];
+    float determinant = dx.x * dy.y - dx.y * dy.x;
+    float derivativeScale = max(dot(dx.xy, dx.xy) * dot(dy.xy, dy.xy), 1e-30);
+    vec2 slope = determinant * determinant > derivativeScale * 1e-8
+        ? vec2(dy.y * dx.z - dx.y * dy.z, dx.x * dy.z - dy.x * dx.z) / determinant : vec2(0.0);
+    return lfCameraCrispShadow(map, p, vec4(size.x, bias, 0.0, 0.0), dx, dy, slope);
+    #else
+    return 1.0;
+    #endif
+}
+float lfCameraBaseShadow(sampler2D map, vec2 size, float bias, float radius, vec4 coord, float sourceScale) {
+    if (sourceScale <= -2.0 || sourceScale == 0.0) return lfGetArtisticProjectedShadow(map, size, bias, coord, sourceScale == 0.0 ? -2.0 : sourceScale);
+    ${distanceFilter ? 'if (sourceScale > 0.0) return lfGetProjectedDistanceShadow(map, size, bias, coord, sourceScale);' : ''}
+    #if LF_LEGACY_FILTER_ENABLED == 1
+    return getShadow(map, size, bias, radius, coord);
+    #else
+    return lfGetArtisticProjectedShadow(map, size, bias, coord, -2.0);
+    #endif
+}
+// Keep the two shared detail samplers outside the sampler-parameter wrapper.
+// ANGLE specializes that wrapper for every base map; sharing this body avoids
+// cloning both complete detail filters once for every directional shadow.
+vec2 lfCameraDirectionalDetail(vec4 coord, float sourceScale, bool snapped) {
+    // Respect the user's authored region, including fitted/gizmo bounds.
+    vec3 p = coord.xyz / coord.w;
+    // Derivatives were prepared at main entry, before light-facing/range and
+    // coverage branches. Moving only the coverage branches was insufficient:
+    // a surface light loop can itself diverge between adjacent fragments.
+    vec4 world = vec4(lfCameraShadowWorldPosition, 1.0);
+    // Project world coordinates directly. Reconstructing them from a huge far
+    // map amplifies float error precisely where the near map needs precision.
+    vec4 nearCoord = lfCameraShadowWorldMatrix0 * (world + vec4(lfCameraShadowWorldNormal * (lfCameraShadowDetailNormalBias.x - lfCameraShadowNormalBias), 0.0));
+    vec4 midCoord = lfCameraShadowWorldMatrix1 * (world + vec4(lfCameraShadowWorldNormal * (lfCameraShadowDetailNormalBias.y - lfCameraShadowNormalBias), 0.0));
+    vec3 nearDx = lfCameraNearDx, nearDy = lfCameraNearDy;
+    vec3 midDx = lfCameraMidDx, midDy = lfCameraMidDy;
+    if (snapped) {
+        vec4 delta = coord - lfCameraShadowBaseMatrix * world;
+        nearCoord += lfCameraShadowMatrix0 * delta;
+        midCoord += lfCameraShadowMatrix1 * delta;
+    }
+    if (any(lessThan(p, vec3(0.0))) || any(greaterThan(p, vec3(1.0)))) return vec2(1.0, 0.0);
+    float nearWeight = lfCameraCoverage(nearCoord, lfCameraShadowParams0.x) * lfCameraShadowEnabled.x;
+    // Keep one filter call site. ANGLE inlines the PCF/distance filter; two
+    // identical sites inflated cold compilation without changing the result.
+    float nearShadow = 1.0;
+    if (nearWeight > 0.0) nearShadow = lfCameraFilter(lfCameraShadowMap0, nearCoord, lfCameraShadowParams0, sourceScale, nearDx, nearDy, snapped);
+    if (nearWeight >= 1.0) return vec2(nearShadow, 0.0);
+    float midWeight = lfCameraCoverage(midCoord, lfCameraShadowParams1.x) * lfCameraShadowEnabled.y;
+    float midShadow = 1.0;
+    if (midWeight > 0.0) midShadow = lfCameraFilter(lfCameraShadowMap1, midCoord, lfCameraShadowParams1, sourceScale, midDx, midDy, snapped);
+    // Premultiplied detail contribution and the remaining base contribution.
+    return vec2(midShadow * midWeight * (1.0 - nearWeight) + nearShadow * nearWeight,
+        (1.0 - midWeight) * (1.0 - nearWeight));
+}
+float lfCameraDirectionalShadow(int index, sampler2D baseMap, vec2 baseSize, float baseBias, float baseRadius, vec4 coord, float sourceScale, bool snapped) {
+    vec2 detail = vec2(0.0, 1.0);
+    if (index == lfCameraShadowOwner) detail = lfCameraDirectionalDetail(coord, sourceScale, snapped);
+    float baseShadow = 1.0;
+    if (detail.y > 0.0) {
+        if (sourceScale == 0.0) baseShadow = snapped ? lfCameraRawProjectedShadow(baseMap, baseBias, coord)
+            : lfCameraCrispBaseShadow(index, baseMap, baseSize, baseBias, coord);
+        else baseShadow = lfCameraBaseShadow(baseMap, baseSize, baseBias, baseRadius, coord, sourceScale);
+    }
+    return detail.x + baseShadow * detail.y;
+}
+#else
+float lfCameraDirectionalShadow(int index, sampler2D baseMap, vec2 baseSize, float baseBias, float baseRadius, vec4 coord, float sourceScale, bool snapped) { return 1.0; }
+#endif
+#ifdef USE_SHADOWMAP
+float lfNativeSpotShadow(float style, sampler2D map, vec2 size, float bias, float radius, vec4 coord) {
+    if (style <= -2.0 || style == 0.0) return lfGetArtisticProjectedShadow(map, size, bias, coord, style == 0.0 ? -2.0 : style);
+    #if LF_LEGACY_FILTER_ENABLED == 0
+    return lfGetArtisticProjectedShadow(map, size, bias, coord, -2.0);
+    #else
+    return getShadow(map, size, bias, radius, coord);
+    #endif
+}
+float lfNativePointShadow(float style, sampler2D map, vec2 size, float bias, float radius, vec4 coord, float nearPlane, float farPlane) {
+    if (style <= -2.0 || style == 0.0) return lfGetArtisticPointShadow(map, size, bias, coord, nearPlane, farPlane, style == 0.0 ? -2.0 : style);
+    #if LF_LEGACY_FILTER_ENABLED == 0
+    return lfGetArtisticPointShadow(map, size, bias, coord, nearPlane, farPlane, -2.0);
+    #else
+    return getPointShadow(map, size, bias, radius, coord, nearPlane, farPlane);
+    #endif
+}
+float lfNativeSpotPixelShadow(float style, sampler2D map, vec2 size, float bias, float radius, vec4 coord) {
+    if (style != 0.0) return lfNativeSpotShadow(style, map, size, bias, radius, coord);
+    vec3 p = coord.xyz / coord.w;
+    return coord.w > 0.0 && all(greaterThanEqual(p, vec3(0.0))) && all(lessThanEqual(p, vec3(1.0)))
+        ? texture2DCompare(map, p.xy, p.z + bias) : 1.0;
+}
+float lfNativePointPixelShadow(float style, sampler2D map, vec2 size, float bias, float radius, vec4 coord, float nearPlane, float farPlane) {
+    if (style != 0.0) return lfNativePointShadow(style, map, size, bias, radius, coord, nearPlane, farPlane);
+    float distanceToLight = length(coord.xyz);
+    return distanceToLight > 1e-5 && farPlane > nearPlane
+        ? texture2DCompare(map, cubeToUV(coord.xyz / distanceToLight, 0.5 / max(size.y, 1.0)), (distanceToLight - nearPlane) / (farPlane - nearPlane) + bias) : 1.0;
+}
+#endif
+#endif
+`;
+        if (!cameraDetail) {
+            const signature = 'float lfCameraDirectionalShadow(int index, sampler2D baseMap, vec2 baseSize, float baseBias, float baseRadius, vec4 coord, float sourceScale, bool snapped)';
+            const start = module.indexOf(signature + ' {');
+            const end = module.indexOf('\n#else', start);
+            module = module.slice(0, start) +
+                signature + ' { if (sourceScale == 0.0) return snapped ? lfCameraRawProjectedShadow(baseMap, baseBias, coord) : lfCameraCrispBaseShadow(index, baseMap, baseSize, baseBias, coord); return lfCameraBaseShadow(baseMap, baseSize, baseBias, baseRadius, coord, sourceScale); }' +
+                module.slice(end);
+        }
+        return fragment
+            .replace('#include <shadowmap_pars_fragment>', () => '#include <shadowmap_pars_fragment>\n' + module)
+            .replace(/void\s+main\s*\(\s*\)\s*\{/, cameraDetail ? '$&\n#ifdef USE_SHADOWMAP\n    lfPrepareCameraShadowDerivatives();\n#endif\n' : '$&\n#ifdef USE_SHADOWMAP\n    lfPrepareShadowEdgeDerivatives();\n#endif\n');
+    },
+    patchVertex(vertex) {
+        const declarations = 'uniform float lfCameraShadowNormalBias;\nvarying vec3 lfCameraShadowWorldPosition;\nvarying vec3 lfCameraShadowWorldNormal;\n';
+        if (vertex.includes('lfVPixelatedShadowFaceUv = normalizedFaceUv;')) {
+            return declarations + vertex.replace('lfVPixelatedShadowFaceUv = normalizedFaceUv;',
+                'lfCameraShadowWorldNormal = lfSafeShadowNormal(worldNormal); lfCameraShadowWorldPosition = worldPosition.xyz + lfCameraShadowWorldNormal * lfCameraShadowNormalBias;\n    lfVPixelatedShadowFaceUv = normalizedFaceUv;');
+        }
+        if (vertex.includes('#include <shadowmap_vertex>')) return declarations + vertex.replace('#include <shadowmap_vertex>',
+            '#include <shadowmap_vertex>\n#if defined(USE_SHADOWMAP) && (NUM_DIR_LIGHT_SHADOWS > 0 || NUM_SPOT_LIGHT_SHADOWS > 0 || NUM_POINT_LIGHT_SHADOWS > 0)\nlfCameraShadowWorldNormal = shadowWorldNormal; lfCameraShadowWorldPosition = worldPosition.xyz + shadowWorldNormal * lfCameraShadowNormalBias;\n#endif');
+        return vertex;
+    },
+    getWarmupOwner(renderer, scene, camera) {
+        if (!renderer?.shadowMap?.enabled ||
+            renderer.shadowMap.type === THREE.VSMShadowMap || !scene ||
+            scene.overrideMaterial || this.renderers.get(renderer)?.contextLost) return null;
+        const lights = [];
+        scene.traverseVisible?.(object => {
+            if (object.isLight && (!camera?.layers || camera.layers.test(object.layers))) lights.push(object);
+        });
+        const owner = this.chooseOwner(lights);
+        if (owner && owner.mode !== 'off') return owner;
+        const environment = typeof window !== 'undefined' ? window.LightflowEnvironment?.getVirtualLight?.() : null;
+        const styled = lights.find(light => {
+            if (!light.castShadow) return false;
+            const element = light.uuid === environment?.uuid ? environment :
+                (typeof window !== 'undefined' ? window.LightElement?.all?.find(item => item.uuid === (light.userData?.lightManagerElementUuid || light.uuid)) : null);
+            return ['hard', 'artistic'].includes(element?.shadow_softness_mode);
+        });
+        return styled ? { light: styled, mode: 'receiver_filter' } : null;
+    },
+    prepareSceneMaterials(scene) {
+        scene.traverseVisible?.(object => {
+            if (!object.receiveShadow) return;
+            (Array.isArray(object.material) ? object.material : [object.material])
+                .forEach(material => this.patchMaterial(material));
+        });
+    },
+    patchMaterial(material) {
+        if (!material || material.isRawShaderMaterial || material.isMeshDepthMaterial || material.isMeshDistanceMaterial) return;
+        if (!(material.lights || material.isMeshPhongMaterial || material.isMeshLambertMaterial || material.isMeshStandardMaterial || material.isShadowMaterial)) return;
+        const existing = this.materials.get(material);
+        const features = this.getFilterFeatures();
+        const chain = new Set();
+        for (let hook = material.onBeforeCompile; typeof hook === 'function' && !chain.has(hook); hook = hook.lightflowPreviousOnBeforeCompile) {
+            chain.add(hook);
+        }
+        if (existing && chain.has(existing.hook)) {
+            if (existing.features !== features) { existing.features = features; material.needsUpdate = true; }
+            return;
+        }
+        const original = material.onBeforeCompile;
+        const originalKey = existing && material.customProgramCacheKey === existing.key ? existing.originalKey : material.customProgramCacheKey;
+        const manager = this;
+        const hook = function (shader, renderer) {
+            original?.call(this, shader, renderer);
+            if (renderer?.capabilities?.isWebGL2 === false && renderer.extensions?.has?.('OES_standard_derivatives') === false) return;
+            // Reserve two samplers, falling back per material on constrained
+            // GPUs rather than failing an otherwise valid textured program.
+            const nativeMaps = (shader.numDirLightShadows || 0) + (shader.numSpotLightShadows || 0) + (shader.numPointLightShadows || 0);
+            const customMaps = material.isShaderMaterial ? Object.entries(shader.uniforms).reduce((count, [name, uniform]) => {
+                if (['directionalShadowMap', 'spotShadowMap', 'pointShadowMap'].includes(name)) return count;
+                if (!shader.fragmentShader.includes(name) && !shader.vertexShader.includes(name)) return count;
+                const values = Array.isArray(uniform.value) ? uniform.value : [uniform.value];
+                return count + values.filter(value => value?.isTexture).length;
+            }, 0) : ['map', 'alphaMap', 'lightMap', 'aoMap', 'emissiveMap', 'bumpMap', 'normalMap', 'displacementMap', 'roughnessMap', 'metalnessMap', 'envMap', 'specularMap', 'clearcoatMap', 'clearcoatNormalMap', 'clearcoatRoughnessMap', 'transmissionMap'].filter(name => material[name]?.isTexture).length;
+            const cameraDetail = nativeMaps + customMaps + 2 <= (renderer?.capabilities?.maxTextures || 16);
+            let fragment = manager.patchFragment(shader.fragmentShader, cameraDetail);
+            fragment = fragment.replace(/^#define LF_(?:ARTISTIC|DISTANCE|LEGACY)_FILTER_ENABLED [01]\s*$/gm, '');
+            const activeFeatures = manager.getFilterFeatures();
+            fragment = `#define LF_ARTISTIC_FILTER_ENABLED ${activeFeatures & 1 ? 1 : 0}\n#define LF_DISTANCE_FILTER_ENABLED ${activeFeatures & 2 ? 1 : 0}\n#define LF_LEGACY_FILTER_ENABLED ${activeFeatures & 4 ? 1 : 0}\n` + fragment;
+            if (fragment !== shader.fragmentShader) {
+                const vertex = manager.patchVertex(shader.vertexShader);
+                if (vertex === shader.vertexShader) return;
+                shader.vertexShader = vertex;
+                shader.fragmentShader = fragment;
+                // Do not put manager-owned textures in ShaderMaterial.uniforms:
+                // UniformsUtils.clone would duplicate them when SA builds slots.
+                shader.uniforms = { ...shader.uniforms, ...manager.getUniforms() };
+            }
+        };
+        const key = function () {
+            const baseKey = originalKey === THREE.Material.prototype.customProgramCacheKey ? String(original || '') : (originalKey?.call(this) || '');
+            return baseKey + '|lf_camera_shadows_v9_edge_aa:' + manager.getFilterFeatures();
+        };
+        const dispose = () => {
+            const state = manager.materials.get(material);
+            if (state) manager.restoreMaterial(material, state);
+            manager.materials.delete(material);
+        };
+        if (existing) material.removeEventListener?.('dispose', existing.dispose);
+        this.materials.set(material, { original, originalKey, hook, key, dispose, features, derivatives: material.extensions?.derivatives });
+        hook.lightflowPreviousOnBeforeCompile = original;
+        material.onBeforeCompile = hook;
+        material.customProgramCacheKey = key;
+        material.extensions = material.extensions || {};
+        material.extensions.derivatives = true;
+        material.addEventListener?.('dispose', dispose);
+        material.needsUpdate = true;
+    },
+    chooseOwner(lights) {
+        const sun = window.LightflowEnvironment?.getVirtualLight?.();
+        const candidates = lights.filter(light => light.isDirectionalLight && light.visible && light.intensity > 0 && light.castShadow);
+        const environment = sun?.has_shadow ? candidates.find(light => light.uuid === sun.uuid) : null;
+        if (environment) {
+            const config = window.LightflowEnvironment.settings;
+            return { light: environment, mode: config.shadow_camera_quality || 'balanced', distance: Number(config.shadow_camera_distance) || 256,
+                style: config.pixelated_shadows ? 'hard' : config.shadow_softness_mode };
+        }
+        const light = candidates.filter(item => !item.userData?.lightflowEnvironmentVirtual)
+            .sort((a, b) => b.intensity - a.intensity || a.uuid.localeCompare(b.uuid))[0];
+        if (!light) return null;
+        const element = window.LightElement?.all?.find(item => item.uuid === (light.userData?.lightManagerElementUuid || light.uuid));
+        return { light, mode: element?.shadow_camera_quality || 'balanced', distance: Number(element?.shadow_camera_distance) || 256, style: element?.shadow_softness_mode };
+    },
+    install(renderer) {
+        if (!renderer?.shadowMap?.render) return;
+        const previous = this.renderers.get(renderer);
+        if (previous?.shadowMap === renderer.shadowMap) return;
+        if (previous) this.releaseRenderer(renderer, previous);
+        const original = renderer.shadowMap.render;
+        const state = { original, shadowMap: renderer.shadowMap, cascades: [], signature: '', redraws: 0, owner: null, contextLost: false, materialRevision: -1, restoreNative: false };
+        const manager = this;
+        state.hook = function (lights, scene, camera) {
+            LightManagerGroundShadows.updateLights(lights);
+            // Auxiliary depth/normal scenes and foreign cameras must not retarget
+            // the maps while Studio owns the shared light state.
+            const studioPreview = window.LightManagerStudioRenderPreview;
+            const foreign = window.LightManagerStudioRenderSession && studioPreview && renderer !== studioPreview.renderer;
+            if (foreign && manager.uniforms) manager.uniforms.lfCameraShadowOwner.value = -1;
+            if (scene !== window.Canvas?.scene || scene.overrideMaterial || foreign || !this.enabled || state.contextLost) {
+                return original.apply(this, arguments);
+            }
+            if (state.restoreNative) {
+                lights.forEach(light => { if (light.shadow) light.shadow.needsUpdate = true; });
+                this.needsUpdate = true;
+                state.restoreNative = false;
+            }
+            const owner = manager.chooseOwner(lights);
+            const uniforms = manager.getUniforms();
+            const authoredStyles = manager.updateNativeStyles(lights);
+            uniforms.lfCameraShadowOwner.value = -1;
+            if ((authoredStyles || (owner && owner.mode !== 'off')) &&
+                (state.materialRevision !== manager.revision || !state.receiversPrepared || state.filterFeatures !== manager.getFilterFeatures())) {
+                manager.prepareSceneMaterials(scene);
+                state.materialRevision = manager.revision;
+                state.receiversPrepared = true;
+                state.filterFeatures = manager.getFilterFeatures();
+            }
+            if (!owner || owner.mode === 'off' || this.type === THREE.VSMShadowMap) {
+                manager.releaseMaps(state);
+                return original.apply(this, arguments);
+            }
+            const helpers = manager.fit(state, owner, camera, renderer);
+            if (helpers.some(light => light.shadow.needsUpdate)) this.needsUpdate = true;
+            const result = original.call(this, lights.concat(helpers.filter(light => light.userData.cameraShadowUseful)), scene, camera);
+            const directional = lights.filter(light => light.isDirectionalLight);
+            if (helpers.length === 2 && helpers.every(light => !light.userData.cameraShadowUseful || light.shadow.map)) {
+                uniforms.lfCameraShadowOwner.value = directional.indexOf(owner.light);
+                uniforms.lfCameraShadowNormalBias.value = owner.light.shadow.normalBias;
+                uniforms.lfCameraShadowDetailNormalBias.value.set(...helpers.map(light => light.userData.cameraShadowNormalBias));
+                uniforms.lfCameraShadowBaseMatrix.value.copy(owner.light.shadow.matrix);
+                uniforms.lfCameraShadowEnabled.value.set(...helpers.map(light => light.userData.cameraShadowUseful ? 1 : 0));
+                const inverse = owner.light.shadow.matrix.clone().invert();
+                helpers.forEach((light, index) => {
+                    uniforms['lfCameraShadowMap' + index].value = light.shadow.map?.texture || owner.light.shadow.map?.texture;
+                    uniforms['lfCameraShadowMatrix' + index].value.multiplyMatrices(light.shadow.matrix, inverse);
+                    uniforms['lfCameraShadowWorldMatrix' + index].value.copy(light.shadow.matrix);
+                    const base = owner.light.shadow;
+                    const texel = (light.shadow.camera.right - light.shadow.camera.left) / light.shadow.mapSize.x;
+                    const range = light.shadow.camera.far - light.shadow.camera.near;
+                    // Convert authored bias to world units, then bound it by
+                    // the local texel size instead of the huge far-map footprint.
+                    const worldBias = base.bias * (base.camera.far - base.camera.near);
+                    const bias = Math.sign(worldBias || -1) * Math.max(texel * 0.15, Math.min(Math.abs(worldBias), texel * 0.75)) / range;
+                    const baseWidth = base.camera.right - base.camera.left;
+                    const scale = (range / (base.camera.far - base.camera.near)) * baseWidth / (2 * light.userData.cameraShadowRadius) * light.shadow.mapSize.x / base.mapSize.x;
+                    uniforms['lfCameraShadowParams' + index].value.set(light.shadow.mapSize.x, bias, base.radius, scale);
+                });
+            }
+            return result;
+        };
+        state.lost = () => {
+            state.contextLost = true;
+            // Release context-owned targets while GL is lost. Disposing old
+            // handles after restoration can delete objects from a dead context.
+            manager.releaseMaps(state);
+        };
+        state.restored = () => {
+            // r129 replaces renderer.shadowMap during context restoration.
+            // Reattach to that new map, not to its obsolete native closure.
+            manager.releaseRenderer(renderer, state);
+            manager.install(renderer);
+            const restored = manager.renderers.get(renderer);
+            if (restored) restored.restoreNative = true;
+        };
+        renderer.domElement?.addEventListener('webglcontextlost', state.lost);
+        renderer.domElement?.addEventListener('webglcontextrestored', state.restored);
+        renderer.shadowMap.render = state.hook;
+        state.originalDispose = renderer.dispose;
+        state.disposeHook = function () {
+            manager.releaseRenderer(renderer, state);
+            return state.originalDispose.apply(this, arguments);
+        };
+        renderer.dispose = state.disposeHook;
+        this.renderers.set(renderer, state);
+    },
+    fit(state, owner, camera, renderer) {
+        const base = owner.light.shadow;
+        if (!camera?.isPerspectiveCamera && !camera?.isOrthographicCamera) return [];
+        if (state.owner !== owner.light) { this.releaseMaps(state); state.owner = owner.light; }
+        // Use the unjittered full frame, not the current Studio tile. All samples
+        // and tiles then share exactly the same light-space coverage.
+        const preview = window.LightManagerStudioRenderPreview;
+        const studioFullProjection = preview?.renderer === renderer && preview.camera === camera
+            ? preview.lightflow_shadow_full_projection : null;
+        const fullCamera = camera.clone();
+        if (studioFullProjection) fullCamera.projectionMatrix.copy(studioFullProjection);
+        else {
+            if (fullCamera.view) fullCamera.view.enabled = false;
+            fullCamera.updateProjectionMatrix();
+        }
+        fullCamera.matrixWorld.copy(camera.matrixWorld);
+        // Empty space before the first receiver must not consume both detail maps.
+        let near = Math.max(0.001, camera.near);
+        const receiverBounds = window.LightManagerShadowRegions?.sceneBox?.();
+        if (receiverBounds && !receiverBounds.isEmpty()) {
+            const cameraBounds = receiverBounds.clone().applyMatrix4(camera.matrixWorld.clone().invert());
+            near = Math.max(near, Math.min(camera.far - 0.01, -cameraBounds.max.z));
+        }
+        const distance = Math.max(0.01, Math.min(Math.max(8, owner.distance), camera.far - near));
+        const maxSize = renderer.capabilities?.maxTextureSize || 2048;
+        const studio = !!window.LightManagerStudioRenderSession;
+        const cap = owner.mode === 'high' ? (studio ? 8192 : 4096) : 2048;
+        const resolution = Math.max(128, Math.min(maxSize, cap));
+        const signature = [this.revision, this.lightRevisions.get(owner.light.userData?.lightManagerElementUuid || owner.light.uuid) || 0, owner.light.uuid, owner.style, resolution, near, distance,
+        ...fullCamera.projectionMatrix.elements, ...camera.matrixWorld.elements,
+        ...owner.light.matrixWorld.elements, ...owner.light.target.matrixWorld.elements,
+        base.camera.left, base.camera.right, base.camera.top, base.camera.bottom, base.camera.near, base.camera.far,
+        camera.layers.mask].join('|');
+        if (signature === state.signature && state.cascades.length === 2) {
+            this.updateDetailBias(state, base, owner.light.userData?.lightflowAutoNormalBias);
+            return state.cascades;
+        }
+        base.updateMatrices(owner.light);
+        const inverseProjection = fullCamera.projectionMatrix.clone().invert();
+        const lightWorld = base.camera.matrixWorld;
+        const lightView = base.camera.matrixWorldInverse;
+        const splits = [near + Math.max(0.0025, distance * 0.25), near + distance];
+        splits.forEach((far, index) => {
+            const points = [];
+            [-1, 1].forEach(x => [-1, 1].forEach(y => {
+                const start = new THREE.Vector3(x, y, -1).applyMatrix4(inverseProjection);
+                const end = new THREE.Vector3(x, y, 1).applyMatrix4(inverseProjection);
+                [near, far].forEach(depth => {
+                    const t = (-depth - start.z) / (end.z - start.z);
+                    points.push(start.clone().lerp(end, t).applyMatrix4(camera.matrixWorld));
+                });
+            }));
+            const center = points.reduce((sum, point) => sum.add(point), new THREE.Vector3()).multiplyScalar(1 / points.length);
+            // A sphere keeps the extent independent of view rotation. Quantize
+            // its radius and snap XY to texels to prevent swimming during pans.
+            let radius = Math.ceil(Math.max(...points.map(point => point.distanceTo(center))) * 1.04 * 16) / 16;
+            const receiverBox = new THREE.Box3().setFromPoints(points.map(point => point.clone().applyMatrix4(lightView)));
+            const minX = Math.max(base.camera.left, receiverBox.min.x), maxX = Math.min(base.camera.right, receiverBox.max.x);
+            const minY = Math.max(base.camera.bottom, receiverBox.min.y), maxY = Math.min(base.camera.top, receiverBox.max.y);
+            const intersectsRegion = maxX > minX && maxY > minY && receiverBox.max.z >= -base.camera.far && receiverBox.min.z <= -base.camera.near;
+            // Physical/artistic kernels assume equal world texel sizes on X/Y.
+            const cropped = !['distance', 'artistic'].includes(owner.style) && intersectsRegion && ((maxX - minX) < radius || (maxY - minY) < radius);
+            let halfWidth = radius, halfHeight = radius;
+            if (cropped) {
+                halfWidth = Math.ceil(Math.max(0.01, (maxX - minX) * 0.52) * 16) / 16;
+                halfHeight = Math.ceil(Math.max(0.01, (maxY - minY) * 0.52) * 16) / 16;
+                center.set((minX + maxX) / 2, (minY + maxY) / 2, 0).applyMatrix4(lightWorld);
+                radius = Math.max(halfWidth, halfHeight);
+            }
+            const size = Math.max(128, Math.floor(resolution / (index + 1)));
+            const texel = 2 * radius / size;
+            const baseTexel = Math.max(base.camera.right - base.camera.left, base.camera.top - base.camera.bottom) / base.mapSize.x;
+            const localCenter = center.clone().applyMatrix4(lightView);
+            const texelX = 2 * halfWidth / size, texelY = 2 * halfHeight / size;
+            localCenter.x = Math.round(localCenter.x / texelX) * texelX;
+            localCenter.y = Math.round(localCenter.y / texelY) * texelY;
+            // Keep the entire authored caster depth interval, including casters
+            // upstream and outside the camera frustum; only tighten XY.
+            localCenter.z = 0;
+            const position = localCenter.applyMatrix4(lightWorld);
+            let helper = state.cascades[index];
+            if (!helper) {
+                helper = new THREE.DirectionalLight(0xffffff, 0);
+                helper.name = 'Lightflow Camera Shadow ' + index;
+                helper.castShadow = true;
+                helper.shadow.autoUpdate = false;
+                state.cascades[index] = helper;
+            }
+            if (helper.shadow.mapSize.x !== size) {
+                helper.shadow.map?.dispose(); helper.shadow.map = null;
+                helper.shadow.mapSize.set(size, size);
+            }
+            helper.position.copy(position);
+            const direction = new THREE.Vector3(0, 0, -1).transformDirection(lightWorld);
+            helper.target.position.copy(position).add(direction);
+            helper.shadow.camera.up.copy(base.camera.up);
+            helper.updateMatrixWorld(true); helper.target.updateMatrixWorld(true);
+            Object.assign(helper.shadow.camera, { left: -halfWidth, right: halfWidth, top: halfHeight, bottom: -halfHeight, near: base.camera.near, far: base.camera.far });
+            helper.shadow.camera.updateProjectionMatrix();
+            helper.userData.cameraShadowRadius = radius;
+            helper.userData.cameraShadowUseful = intersectsRegion && texel < baseTexel * 0.85;
+            const fitSignature = [this.revision, this.lightRevisions.get(owner.light.userData?.lightManagerElementUuid || owner.light.uuid) || 0, size, halfWidth, halfHeight,
+            ...position.toArray(), ...direction.toArray(), base.camera.near, base.camera.far, camera.layers.mask].join('|');
+            helper.shadow.needsUpdate = helper.userData.cameraShadowUseful && (helper.userData.cameraShadowSignature !== fitSignature || !helper.shadow.map);
+            helper.userData.cameraShadowSignature = fitSignature;
+            helper.shadow.updateMatrices(helper);
+            if (!helper.userData.cameraShadowUseful && helper.shadow.map) {
+                helper.shadow.map.dispose(); helper.shadow.map = null;
+            }
+        });
+        state.signature = signature;
+        this.updateDetailBias(state, base, owner.light.userData?.lightflowAutoNormalBias);
+        if (state.cascades.some(light => light.shadow.needsUpdate)) state.redraws++;
+        return state.cascades;
+    },
+    updateDetailBias(state, base, automatic) {
+        for (const helper of state.cascades) {
+            const camera = helper.shadow.camera;
+            const texel = Math.min(camera.right - camera.left, camera.top - camera.bottom) / helper.shadow.mapSize.x;
+            helper.userData.cameraShadowNormalBias = automatic
+                ? Math.min(base.normalBias, Math.max(0.00025, texel * 0.5)) : base.normalBias;
+        }
+    },
+    releaseMaps(state) {
+        const textures = new Set(state.cascades.map(light => light.shadow.map?.texture).filter(Boolean));
+        if (this.uniforms && [0, 1].some(index => textures.has(this.uniforms['lfCameraShadowMap' + index].value))) {
+            this.uniforms.lfCameraShadowOwner.value = -1;
+            this.uniforms.lfCameraShadowEnabled.value.set(0, 0);
+            this.uniforms.lfCameraShadowMap0.value = null;
+            this.uniforms.lfCameraShadowMap1.value = null;
+        }
+        state.cascades.forEach(light => { light.shadow.map?.dispose(); light.shadow.mapPass?.dispose(); });
+        state.cascades.length = 0;
+        state.signature = '';
+        state.owner = null;
+    },
+    diagnostics() {
+        return Array.from(this.renderers.values(), state => ({
+            owner: state.owner?.name || null, redraws: state.redraws,
+            cascades: state.cascades.map(light => ({ allocated: !!light.shadow.map, resolution: light.shadow.mapSize.x, texelWorldSize: 2 * light.userData.cameraShadowRadius / light.shadow.mapSize.x }))
+        }));
+    },
+    getShadowTargets() {
+        return Array.from(this.renderers.values()).flatMap(state => state.cascades.map(light => ({ light, target: light.shadow.map })).filter(entry => entry.target));
+    },
+    releaseRenderer(renderer, state) {
+        if (state.shadowMap.render === state.hook) state.shadowMap.render = state.original;
+        if (renderer.dispose === state.disposeHook) renderer.dispose = state.originalDispose;
+        renderer.domElement?.removeEventListener('webglcontextlost', state.lost);
+        renderer.domElement?.removeEventListener('webglcontextrestored', state.restored);
+        this.releaseMaps(state);
+        this.renderers.delete(renderer);
+    },
+    restoreMaterial(material, state) {
+        if (material.onBeforeCompile === state.hook) material.onBeforeCompile = state.original;
+        if (material.customProgramCacheKey === state.key) material.customProgramCacheKey = state.originalKey;
+        if (material.extensions) material.extensions.derivatives = state.derivatives;
+        material.removeEventListener?.('dispose', state.dispose);
+        material.needsUpdate = true;
+    },
+    dispose() {
+        this.renderers.forEach((state, renderer) => {
+            this.releaseRenderer(renderer, state);
+        });
+        this.materials.forEach((state, material) => this.restoreMaterial(material, state));
+        this.renderers.clear(); this.materials.clear(); this.lightRevisions.clear(); this.uniforms = null;
+    }
+};
+
 function configureLightManagerRendererShadows(renderer) {
     if (!renderer || !renderer.shadowMap) return false;
+
+    LightManagerCameraShadows.install(renderer);
 
     let changed = false;
     const hasShadowLights = lightManagerHasActiveShadowLights();
@@ -2335,12 +4612,19 @@ function logLightManagerShadowDebugIssues(preview, options = {}, extra = {}) {
 
 function syncLightManagerThreeLightShadowFlags(options = {}) {
     const repairs = [];
+    const budgetChanges = [];
+    const dirtyShadowElements = [];
 
     if (!window.LightElement || !Array.isArray(LightElement.all)) return false;
 
     const budgetChanged = typeof applyLightManagerPreviewShadowBudget === 'function'
-        ? applyLightManagerPreviewShadowBudget(options)
+        ? applyLightManagerPreviewShadowBudget(options, budgetChanges)
         : false;
+    budgetChanges.forEach(change => {
+        if (change?.needsShadowRedraw && change.element?.uuid) {
+            dirtyShadowElements.push(change.element);
+        }
+    });
 
     LightElement.all.forEach(element => {
         if (!element || !element.uuid) return;
@@ -2377,9 +4661,14 @@ function syncLightManagerThreeLightShadowFlags(options = {}) {
         }
 
         if (light.castShadow !== desiredCastShadow) {
+            const beforeCastShadow = light.castShadow === true;
             light.castShadow = desiredCastShadow;
             if (light.shadow && requestedCastShadow) {
-                light.shadow.needsUpdate = true;
+                light.shadow.autoUpdate = false;
+                if (!beforeCastShadow && desiredCastShadow) {
+                    light.shadow.needsUpdate = true;
+                    dirtyShadowElements.push(element);
+                }
             }
             repaired = true;
         }
@@ -2413,9 +4702,17 @@ function syncLightManagerThreeLightShadowFlags(options = {}) {
 
     if (!repairs.length && !budgetChanged) return false;
 
-    markLightManagerShadowsDirty();
+    const uniqueDirtyShadowElements = Array.from(new Map(
+        dirtyShadowElements
+            .filter(element => element?.uuid)
+            .map(element => [element.uuid, element])
+    ).values());
+    if (uniqueDirtyShadowElements.length) {
+        markLightManagerShadowsDirty({ elements: uniqueDirtyShadowElements });
+    }
     logLightManagerShadowDebug('shadow-flag-repair', null, options, {
         repairs,
+        shadowRedraws: uniqueDirtyShadowElements.map(element => element.uuid),
         previewShadowBudget: window.LightManagerPreviewShadowBudget || null
     });
     return true;
@@ -2438,6 +4735,7 @@ function syncLightManagerRenderShadowResolution(options = {}) {
     const allowStudioRestore = options.allowStudioRestore === true || options.source === 'studio_render_restore';
     let changed = false;
     const resolutionChanges = [];
+    const changedElements = [];
 
     if (!window.LightElement || !Array.isArray(LightElement.all)) return false;
     if (
@@ -2468,21 +4766,232 @@ function syncLightManagerRenderShadowResolution(options = {}) {
             mode: renderOptions.studio ? 'studio' : 'preview',
             ...resize
         });
+        changedElements.push(element);
         changed = true;
     });
 
     if (changed) {
-        markLightManagerShadowsDirty();
+        markLightManagerShadowsDirty({ elements: changedElements });
         logLightManagerShadowDebug('resolution-change', preview, renderOptions, { resolutionChanges });
     }
     return changed;
 }
+
+const LightManagerShadowRegions = {
+    revision: 0, cache: new WeakMap(), wrappers: new Map(),
+    invalidate() { this.revision++; },
+    sceneBox() {
+        const project = window.Project;
+        if (!project) return null;
+        const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+        const previous = this.cache.get(project);
+        if (previous && previous.revision === this.revision && now - previous.time < 250) return previous.box;
+        const box = new THREE.Box3(), visited = new Set();
+        const excluded = new Set(window.Canvas?.gizmos || []);
+        for (const Type of [window.LightElement, window.ArtKeyElement])
+            for (const element of Type?.all || []) if (element.mesh) excluded.add(element.mesh);
+        const visit = object => {
+            if (!object || visited.has(object) || excluded.has(object) || object.visible === false) return;
+            visited.add(object);
+            if (object.userData?.lightflowGroundShadowReceiver || object.isLine || object.isSprite) return;
+            if (object.isMesh && object.geometry?.attributes?.position) {
+                let parent = object;
+                while (parent && parent.visible !== false) parent = parent.parent;
+                if (parent) return;
+                object.updateWorldMatrix(true, false);
+                const geometry = object.geometry;
+                // Animated/deformed geometry may update its position attribute.
+                const version = geometry.attributes.position.version || 0;
+                if (!geometry.boundingBox || geometry.userData?.lfShadowBoundsVersion !== version) {
+                    geometry.computeBoundingBox();
+                    geometry.userData = geometry.userData || {};
+                    geometry.userData.lfShadowBoundsVersion = version;
+                }
+                if (geometry.boundingBox && !geometry.boundingBox.isEmpty()) {
+                    box.union(geometry.boundingBox.clone().applyMatrix4(object.matrixWorld));
+                }
+            }
+            object.children?.forEach(visit);
+        };
+        const walk = node => {
+            if (!node || node.visibility === false || node.type === 'light' || node.type === 'art_key') return;
+            if (node.mesh) visit(node.mesh);
+            node.children?.forEach(walk);
+        };
+        (window.Outliner?.root || []).forEach(walk);
+        window.ShaderEngine?.externalIntegratedMeshes?.forEach(mesh => { if (mesh.parent) visit(mesh); });
+        const result = box.isEmpty() ? null : box;
+        this.cache.set(project, { revision: this.revision, time: now, box: result });
+        return result;
+    },
+    corners(box) {
+        if (!box || box.isEmpty()) return [];
+        const result = [];
+        for (const x of [box.min.x, box.max.x]) for (const y of [box.min.y, box.max.y])
+            for (const z of [box.min.z, box.max.z]) result.push(new THREE.Vector3(x, y, z));
+        return result;
+    },
+    sceneCorners(preview = window.LightManagerStudioRenderPreview || window.Preview?.selected || window.main_preview) {
+        const box = this.sceneBox();
+        if (!box) return [];
+        const center = box.getCenter(new THREE.Vector3());
+        const size = box.getSize(new THREE.Vector3());
+        const span = Math.max(1, size.length());
+        const camera = preview?.camera;
+        const distance = camera ? camera.getWorldPosition(new THREE.Vector3()).distanceTo(center) : span;
+        // Full-scene coverage remains independent of selection and camera frustum.
+        // Camera distance adds a small, quantized guard band; detail maps retain
+        // their existing near/far splits and full caster depth interval.
+        const margin = size.clone();
+        for (const axis of ['x', 'y', 'z']) margin[axis] = Math.ceil(Math.max(0.01,
+            size[axis] * 0.005, Math.min(size[axis] * 0.0075, distance / 50000)) * 256) / 256;
+        return this.corners(box.clone().expandByVector(margin));
+    },
+    validBounds(values) {
+        return Array.isArray(values) && values.length === 6 && values.every(Number.isFinite) &&
+            values.slice(0, 3).every((value, i) => value <= values[i + 3]);
+    },
+    capture(light) {
+        const camera = light?.shadow?.camera;
+        if (!camera) return [];
+        light.shadow.updateMatrices(light);
+        const box = new THREE.Box3();
+        for (const x of [-1, 1]) for (const y of [-1, 1]) for (const z of [-1, 1])
+            box.expandByPoint(new THREE.Vector3(x, y, z).unproject(camera));
+        return [...box.min.toArray(), ...box.max.toArray()];
+    },
+    captureRegion(light, element, preview) {
+        const points = element?.shadow_scene_fit && !element.shadow_region_locked ? this.sceneCorners(preview) : [];
+        if (!points.length) return this.capture(light);
+        const box = new THREE.Box3().setFromPoints(points);
+        return [...box.min.toArray(), ...box.max.toArray()];
+    },
+    fit(light, element, preview) {
+        if (!light?.isDirectionalLight || (!element.shadow_scene_fit && !element.shadow_region_locked)) {
+            this.release(light); return null;
+        }
+        let corners;
+        if (element.shadow_region_locked) {
+            if (!this.validBounds(element.shadow_region_bounds)) {
+                const scene = element.shadow_scene_fit ? this.sceneBox() : null;
+                element.shadow_region_bounds = scene ? [...scene.min.toArray(), ...scene.max.toArray()] : this.capture(light);
+            }
+            const values = element.shadow_region_bounds;
+            if (!this.validBounds(values)) return null;
+            corners = this.corners(new THREE.Box3(new THREE.Vector3(...values.slice(0, 3)), new THREE.Vector3(...values.slice(3))));
+        } else corners = this.sceneCorners(preview);
+        if (!corners.length) return null;
+        const box = new THREE.Box3().setFromPoints(corners), center = box.getCenter(new THREE.Vector3());
+        const direction = light.getWorldPosition(new THREE.Vector3()).sub(light.target.getWorldPosition(new THREE.Vector3()));
+        if (direction.lengthSq() < 1e-8) direction.set(0, 1, 0);
+        direction.normalize();
+        const distance = Math.max(1, box.getSize(new THREE.Vector3()).length() + 1);
+        const position = center.clone().addScaledVector(direction, distance);
+        const view = new THREE.Matrix4().lookAt(position, center, light.shadow.camera.up);
+        const inverse = new THREE.Quaternion().setFromRotationMatrix(view).invert();
+        let area = 0, halfWidth = 0, halfHeight = 0, near = Infinity, far = -Infinity;
+        for (const corner of corners) {
+            const local = corner.clone().sub(position).applyQuaternion(inverse);
+            halfWidth = Math.max(halfWidth, Math.abs(local.x));
+            halfHeight = Math.max(halfHeight, Math.abs(local.y));
+            area = Math.max(halfWidth, halfHeight);
+            near = Math.min(near, -local.z); far = Math.max(far, -local.z);
+        }
+        let state = this.wrappers.get(light);
+        if (!state || state.shadow !== light.shadow) {
+            this.release(light);
+            const shadow = light.shadow, original = shadow.updateMatrices;
+            state = { shadow, original, proxy: { matrixWorld: new THREE.Matrix4(), target: { matrixWorld: new THREE.Matrix4() } } };
+            state.hook = function () { return original.call(this, state.proxy); };
+            shadow.updateMatrices = state.hook;
+            this.wrappers.set(light, state);
+        }
+        state.proxy.matrixWorld.makeTranslation(position.x, position.y, position.z);
+        state.proxy.target.matrixWorld.makeTranslation(center.x, center.y, center.z);
+        let width = halfWidth + Math.max(0.005, halfWidth * 0.01);
+        let height = halfHeight + Math.max(0.005, halfHeight * 0.01);
+        if (['distance', 'artistic'].includes(element.shadow_softness_mode)) width = height = Math.max(width, height);
+        const depthPadding = Math.max(0.01, (far - near) * 0.01);
+        return { area: Math.max(width, height), halfWidth: width, halfHeight: height,
+            near: Math.max(0.001, near - depthPadding), far: far + depthPadding };
+    },
+    release(light) {
+        const state = this.wrappers.get(light);
+        if (state && state.shadow.updateMatrices === state.hook) state.shadow.updateMatrices = state.original;
+        this.wrappers.delete(light);
+    },
+    dispose() { for (const light of this.wrappers.keys()) this.release(light); this.cache = new WeakMap(); }
+};
+
+const LightManagerGroundShadows = {
+    mesh: null,
+    uniforms: null,
+    updateLights(lights) {
+        if (!this.mesh?.visible || !this.uniforms) return;
+        const environment = window.LightflowEnvironment?.getVirtualLight?.();
+        const elements = new Map((window.LightElement?.all || []).map(element => [element.uuid, element]));
+        for (const type of ['Directional', 'Spot', 'Point']) {
+            const values = this.uniforms['lfGroundShadow' + type].value;
+            values.fill(0); let index = 0;
+            for (const light of lights) {
+                if (!light['is' + type + 'Light'] || !light.castShadow || !light.shadow) continue;
+                const element = light.userData?.lightflowEnvironmentVirtual ? environment
+                    : elements.get(light.userData?.lightManagerElementUuid || light.uuid);
+                const enabled = element ? element.has_shadow !== false && isLightManagerElementHierarchyVisible(element)
+                    : !light.userData?.lightflowEnvironmentVirtual;
+                if (index < values.length) values[index] = enabled && light.intensity > 0 ? 1 : 0;
+                index++;
+            }
+        }
+    },
+    sync() {
+        const ground = window.Canvas?.ground_plane;
+        const mode = window.ShaderEngine?.getActiveViewMode?.() || window.BarItems?.view_mode?.get?.();
+        const enabled = mode === 'lightflow';
+        if (this.mesh && this.mesh.parent !== ground) this.dispose();
+        if (enabled && ground?.geometry && !this.mesh) {
+            const material = new THREE.ShadowMaterial({ opacity: 0.35, depthWrite: false,
+                polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
+            const uniforms = this.uniforms = Object.fromEntries(['Directional', 'Spot', 'Point']
+                .map(type => ['lfGroundShadow' + type, { value: Array(16).fill(0) }]));
+            material.onBeforeCompile = shader => {
+                Object.assign(shader.uniforms, uniforms);
+                let mask = THREE.ShaderChunk.shadowmask_pars_fragment;
+                for (const [type, map, fn] of [['Directional', 'directionalShadowMap', 'getShadow'],
+                    ['Spot', 'spotShadowMap', 'getShadow'], ['Point', 'pointShadowMap', 'getPointShadow']]) {
+                    mask = mask.replace('receiveShadow ? ' + fn + '( ' + map,
+                        '( receiveShadow && lfGroundShadow' + type + '[ i ] > 0.5 ) ? ' + fn + '( ' + map);
+                }
+                shader.fragmentShader = 'uniform float lfGroundShadowDirectional[16];\nuniform float lfGroundShadowSpot[16];\nuniform float lfGroundShadowPoint[16];\n' +
+                    shader.fragmentShader.replace('#include <shadowmask_pars_fragment>', mask);
+            };
+            material.customProgramCacheKey = () => 'lightflow_ground_shadow_mask_v1';
+            const mesh = this.mesh = new THREE.Mesh(ground.geometry, material);
+            mesh.name = 'Lightflow Ground Shadows';
+            mesh.userData.lightflowGroundShadowReceiver = true;
+            mesh.receiveShadow = true; mesh.castShadow = false;
+            mesh.layers.mask = ground.layers.mask;
+            mesh.raycast = () => {};
+            mesh.renderOrder = (ground.renderOrder || 0) + 1;
+            ground.add(mesh);
+        }
+        if (this.mesh) this.mesh.visible = enabled;
+    },
+    dispose() {
+        if (!this.mesh) return;
+        this.mesh.removeFromParent();
+        this.mesh.material.dispose(); // Native ground geometry belongs to Blockbench.
+        this.mesh = null;
+        this.uniforms = null;
+    }
+};
 
 function syncLightManagerSingleShadowSettings(light, element, options = {}) {
     if (!light || !light.shadow || !element) return false;
 
     const shadow = light.shadow;
     const camera = shadow.camera;
+    const fittedRegion = LightManagerShadowRegions.fit(light, element, options.preview);
     let changed = false;
     let cameraChanged = false;
 
@@ -2499,15 +5008,18 @@ function syncLightManagerSingleShadowSettings(light, element, options = {}) {
         element,
         options
     );
+    const distanceClipped = ['point', 'spot'].includes(element.light_type) && Number(element.distance) > 0;
+    const effectiveFar = distanceClipped ? Number(element.distance) : LightManagerUtils.num(element.shadow_far, 200, 0.001, 100000);
+    const effectiveNear = Math.min(LightManagerUtils.num(element.shadow_near, 0.1, 0, 99999), Math.max(0.000001, effectiveFar - 0.000001));
     // These are the only inputs used by automatic bias. An OutlinerElement
     // also contains reactive UI/animation data, which must not be copied on
     // every shadow preparation pass.
     const shadowContext = {
         light_type: element.light_type,
         shadow_resolution: activeResolution,
-        shadow_bounds: element.shadow_bounds,
-        shadow_near: element.shadow_near,
-        shadow_far: element.shadow_far,
+        shadow_bounds: fittedRegion?.area ?? element.shadow_bounds,
+        shadow_near: fittedRegion?.near ?? effectiveNear,
+        shadow_far: fittedRegion?.far ?? effectiveFar,
         distance: element.distance,
         angle: element.angle
     };
@@ -2517,7 +5029,12 @@ function syncLightManagerSingleShadowSettings(light, element, options = {}) {
         changed = true;
     }
 
-    const normalBias = LightManagerUtils.shadowNormalBias(element.shadow_normal_bias, shadowContext);
+    const automaticNormalBias = element.shadow_normal_bias_auto !== false &&
+        (element.shadow_normal_bias_auto === true || LightManagerUtils.isAutomaticShadowNormalBiasValue(element.shadow_normal_bias, element));
+    light.userData ||= {};
+    light.userData.lightflowAutoNormalBias = automaticNormalBias;
+    const normalBias = automaticNormalBias ? LightManagerUtils.defaultShadowNormalBias(shadowContext)
+        : LightManagerUtils.num(element.shadow_normal_bias, 0.01, -1, 1);
     if (shadow.normalBias !== normalBias) {
         shadow.normalBias = normalBias;
         changed = true;
@@ -2539,8 +5056,8 @@ function syncLightManagerSingleShadowSettings(light, element, options = {}) {
     }
 
     if (camera) {
-        const near = LightManagerUtils.num(element.shadow_near, 0.1, 0, 99999);
-        const far = Math.max(near + 0.001, LightManagerUtils.num(element.shadow_far, 200, 0.001, 100000));
+        const near = fittedRegion?.near ?? effectiveNear;
+        const far = fittedRegion?.far ?? Math.max(near + 0.000001, effectiveFar);
 
         if (camera.near !== near || camera.far !== far) {
             camera.near = near;
@@ -2549,17 +5066,11 @@ function syncLightManagerSingleShadowSettings(light, element, options = {}) {
         }
 
         if (element.light_type === 'directional') {
-            const bounds = LightManagerUtils.num(element.shadow_bounds, 35, 0.001, 100000);
-            if (
-                camera.top !== bounds ||
-                camera.bottom !== -bounds ||
-                camera.left !== -bounds ||
-                camera.right !== bounds
-            ) {
-                camera.top = bounds;
-                camera.bottom = -bounds;
-                camera.left = -bounds;
-                camera.right = bounds;
+            const bounds = fittedRegion?.area ?? LightManagerUtils.num(element.shadow_bounds, 35, 0.001, 100000);
+            const width = fittedRegion?.halfWidth ?? bounds, height = fittedRegion?.halfHeight ?? bounds;
+            if (camera.top !== height || camera.bottom !== -height || camera.left !== -width || camera.right !== width) {
+                camera.top = height; camera.bottom = -height;
+                camera.left = -width; camera.right = width;
                 cameraChanged = true;
             }
         }
@@ -2569,17 +5080,17 @@ function syncLightManagerSingleShadowSettings(light, element, options = {}) {
         }
     }
 
-    if (changed || cameraChanged) {
+    if (cameraChanged) {
         shadow.needsUpdate = true;
-        return true;
+        if (Array.isArray(options.shadowMapChanges)) options.shadowMapChanges.push(element);
     }
-
-    return false;
+    return changed || cameraChanged;
 }
 
 function syncLightManagerShadowQuality(options = {}) {
     let changed = false;
     const qualityChanges = [];
+    const shadowMapChanges = [];
 
     if (!window.LightElement || !Array.isArray(LightElement.all)) return false;
 
@@ -2588,7 +5099,10 @@ function syncLightManagerShadowQuality(options = {}) {
         const light = window.three_lights && window.three_lights[element.uuid];
         if (!light || !light.shadow) return;
 
-        if (!syncLightManagerSingleShadowSettings(light, element, options)) return;
+        if (!syncLightManagerSingleShadowSettings(light, element, {
+            ...options,
+            shadowMapChanges
+        })) return;
 
         qualityChanges.push({
             name: element.name || element.uuid,
@@ -2604,7 +5118,14 @@ function syncLightManagerShadowQuality(options = {}) {
     });
 
     if (changed) {
-        markLightManagerShadowsDirty();
+        const uniqueShadowMapChanges = Array.from(new Map(
+            shadowMapChanges
+                .filter(element => element?.uuid)
+                .map(element => [element.uuid, element])
+        ).values());
+        if (uniqueShadowMapChanges.length) {
+            markLightManagerShadowsDirty({ elements: uniqueShadowMapChanges });
+        }
         logLightManagerShadowDebug('shadow-quality-change', options.preview || null, options, { qualityChanges });
     }
 
@@ -2615,6 +5136,20 @@ function invalidateLightManagerShadowMaps(options = {}) {
     if (typeof options === 'boolean') options = { force: options };
     const force = !!options.force;
     const preview = options.preview || null;
+
+    /*
+     * LightShadow.needsUpdate belongs to the shared THREE.Light, while each
+     * WebGLRenderer owns an independent WebGLShadowMap gate/context. Three r129
+     * clears LightShadow.needsUpdate after the first renderer draws it, so a
+     * force invalidation must remain pending for every renderer that still has
+     * to consume the change.
+     */
+    if (force) {
+        LIGHT_MANAGER_SHADOW_STATE.dirty = true;
+        LIGHT_MANAGER_SHADOW_STATE.allLightsDirty = true;
+        LIGHT_MANAGER_SHADOW_STATE.dirtyLightUuids.clear();
+        LIGHT_MANAGER_SHADOW_STATE.dirtyRenderers.clear();
+    }
 
     if (!force && !LIGHT_MANAGER_SHADOW_STATE.dirty) return false;
 
@@ -2672,17 +5207,21 @@ function invalidateLightManagerShadowMaps(options = {}) {
             LIGHT_MANAGER_SHADOW_STATE.dirtyLightUuids.clear();
         }
     } else {
+        // A broadcast arms every renderer immediately, but it must not consume
+        // the shared per-light dirty state. Each renderer reasserts those flags
+        // in its own prepare pass before rendering because r129 clears them after
+        // another renderer/context draws the same THREE.Light.
+        prepareLightManagerDirtyRenderers();
         invalidateDirtyLights();
 
-        forEachLightManagerPreview(candidate => {
-            if (candidate?.renderer?.shadowMap) {
-                candidate.renderer.shadowMap.needsUpdate = true;
-            }
+        LIGHT_MANAGER_SHADOW_STATE.dirtyRenderers.forEach(renderer => {
+            if (renderer?.shadowMap) renderer.shadowMap.needsUpdate = true;
         });
-        LIGHT_MANAGER_SHADOW_STATE.dirtyRenderers.clear();
-        LIGHT_MANAGER_SHADOW_STATE.dirty = false;
-        LIGHT_MANAGER_SHADOW_STATE.allLightsDirty = false;
-        LIGHT_MANAGER_SHADOW_STATE.dirtyLightUuids.clear();
+        if (LIGHT_MANAGER_SHADOW_STATE.dirtyRenderers.size === 0) {
+            LIGHT_MANAGER_SHADOW_STATE.dirty = false;
+            LIGHT_MANAGER_SHADOW_STATE.allLightsDirty = false;
+            LIGHT_MANAGER_SHADOW_STATE.dirtyLightUuids.clear();
+        }
     }
 
     return true;
@@ -2831,7 +5370,10 @@ window.LightManagerSyncLights = function LightManagerSyncLights(options = {}) {
     const resolutionChanged = syncLightManagerRenderShadowResolution(updateOptions);
     const qualityChanged = syncLightManagerShadowQuality(updateOptions);
     invalidateLightManagerShadowMaps({
-        force: lightObjectsChanged || shadowFlagsChanged || resolutionChanged || qualityChanged
+        // Resolution/camera/budget helpers already record the exact dirty light
+        // UUIDs. Only a missing or recreated THREE.Light lacks an established map
+        // identity and keeps the conservative full invalidation boundary.
+        force: lightObjectsChanged
     });
     if (lightObjectsChanged || shadowFlagsChanged) {
         notifyLightManagerShadowStateRepaired(updateOptions);
@@ -2848,6 +5390,7 @@ window.LightManagerSyncLights = function LightManagerSyncLights(options = {}) {
 };
 
 window.LightManagerPrepareRender = function LightManagerPrepareRender(preview, options = {}) {
+    LightManagerGroundShadows.sync();
     const studioPreview = window.LightManagerStudioRenderPreview || null;
     const allowStudioRestore = options.allowStudioRestore === true || options.source === 'studio_render_restore';
 
@@ -2933,6 +5476,7 @@ window.LightManagerPrepareRender = function LightManagerPrepareRender(preview, o
     }
 
     if (renderPreview?.renderer) {
+        window.LightflowEnvironment?.prepareShadowRegion?.(renderPreview, renderOptions);
         configureLightManagerRendererShadows(renderPreview.renderer);
     } else {
         configureLightManagerRenderers();
@@ -2956,7 +5500,9 @@ window.LightManagerPrepareRender = function LightManagerPrepareRender(preview, o
         preview: renderPreview
     });
     invalidateLightManagerShadowMaps({
-        force: force || lightObjectsChanged || shadowFlagsChanged || resolutionChanged || qualityChanged,
+        // Keep the per-light dirty set produced by the repair helpers. Only an
+        // explicit force or missing/recreated THREE.Light needs every shadow map.
+        force: force || lightObjectsChanged,
         preview: renderPreview
     });
     if (lightObjectsChanged || shadowFlagsChanged) {
@@ -3027,6 +5573,32 @@ function unregisterLightManagerCanvasGizmo(object) {
     if (index >= 0) Canvas.gizmos.splice(index, 1);
 }
 
+function getLightManagerScreenWorldSize(object, camera, renderer, pixels = 120) {
+    if (!object || !camera) return 1;
+    const viewportHeight = Math.max(
+        1,
+        Number(renderer?.domElement?.clientHeight) ||
+        Number(renderer?.domElement?.height) ||
+        Number(window.Preview?.selected?.canvas?.clientHeight) ||
+        720
+    );
+    if (camera.isOrthographicCamera) {
+        const zoom = Math.max(0.0001, Number(camera.zoom) || 1);
+        return Math.abs(Number(camera.top) - Number(camera.bottom)) / zoom * (pixels / viewportHeight);
+    }
+    const worldPosition = new THREE.Vector3();
+    object.getWorldPosition(worldPosition);
+    camera.updateWorldMatrix?.(true, false);
+    const distance = Math.max(0.001, Math.abs(worldPosition.applyMatrix4(camera.matrixWorldInverse).z));
+    const fov = THREE.MathUtils.degToRad(Number(camera.fov) || 45);
+    return 2 * distance * Math.tan(fov * 0.5) * (pixels / viewportHeight);
+}
+
+function getLightManagerScreenScale(object, camera, renderer, logicalExtent = 1, pixels = 120) {
+    const safeExtent = Math.max(0.0001, Number(logicalExtent) || 1);
+    return getLightManagerScreenWorldSize(object, camera, renderer, pixels) / safeExtent;
+}
+
 if (window.LightManagerAreaGizmos && typeof window.LightManagerAreaGizmos.clear === 'function') {
     window.LightManagerAreaGizmos.clear();
 }
@@ -3049,7 +5621,9 @@ function notifyLightflowGizmoVisibilityChanged(source = 'light_manager') {
 }
 
 window.LightManagerAreaGizmos = {
-    enabled: lightManagerSafeGet(LIGHT_MANAGER_STORAGE_KEYS.areaGizmos, 'true') !== 'false',
+    // Bounds are secondary context, not the primary manipulation affordance.
+    // New profiles therefore start clean; existing users keep their saved state.
+    enabled: lightManagerSafeGet(LIGHT_MANAGER_STORAGE_KEYS.areaGizmos, 'false') === 'true',
     helpers: new Map(),
     group: null,
 
@@ -3095,6 +5669,20 @@ window.LightManagerAreaGizmos = {
     },
 
     buildDirectionalVertices(element) {
+        const light = window.three_lights?.[element.uuid];
+        if ((element.shadow_scene_fit || element.shadow_region_locked) && light?.shadow?.camera && element.mesh) {
+            const camera = light.shadow.camera;
+            light.shadow.updateMatrices(light);
+            const origin = element.mesh.getWorldPosition(new THREE.Vector3());
+            const inverse = element.mesh.getWorldQuaternion(new THREE.Quaternion()).invert();
+            const corners = [];
+            for (const z of [-1, 1]) for (const y of [-1, 1]) for (const x of [-1, 1])
+                corners.push(new THREE.Vector3(x, y, z).unproject(camera).sub(origin).applyQuaternion(inverse));
+            const vertices = [];
+            for (let i = 0; i < 8; i++) for (const bit of [1, 2, 4]) if (!(i & bit))
+                vertices.push(...corners[i].toArray(), ...corners[i | bit].toArray());
+            return vertices;
+        }
         const bounds = Math.max(0.001, this.num(element.shadow_bounds, 35));
         const near = Math.max(0, this.num(element.shadow_near, 0.1));
         const far = Math.max(near + 0.001, this.num(element.shadow_far, 200));
@@ -3178,8 +5766,13 @@ window.LightManagerAreaGizmos = {
     },
 
     getSignature(element) {
+        const shadowCamera = (element.shadow_scene_fit || element.shadow_region_locked)
+            ? window.three_lights?.[element.uuid]?.shadow?.camera : null;
         return [
             element.light_type || 'point',
+            !!element.shadow_scene_fit, !!element.shadow_region_locked, ...(element.shadow_region_bounds || []),
+            ...(shadowCamera?.matrixWorld?.elements || []), ...(shadowCamera?.projectionMatrix?.elements || []),
+            ...(element.position || []), ...(element.rotation || []),
             ...(element.art_size || []), ...(element.art_point || []), element.art_mode,
             this.num(element.distance, 0),
             this.num(element.angle, 45),
@@ -3211,8 +5804,9 @@ window.LightManagerAreaGizmos = {
 
         const material = new THREE.LineBasicMaterial({
             color: 0xffffff,
+            vertexColors: true,
             transparent: true,
-            opacity: 0.28,
+            opacity: 0.1,
             // Draw after opaque scene geometry, but still let its depth buffer
             // occlude the directional shadow-bounds frustum normally.
             depthTest: true,
@@ -3222,10 +5816,40 @@ window.LightManagerAreaGizmos = {
         const line = new THREE.LineSegments(new THREE.BufferGeometry(), material);
         line.name = `light_area_lines_${element.uuid}`;
         line.raycast = () => { };
+        line.renderOrder = 998;
         root.add(line);
         group.add(root);
 
-        const helper = { root, line, material, signature: '' };
+        const helper = { root, line, material, signature: '', logicalExtent: 1, element };
+        line.onBeforeRender = (renderer, _scene, camera) => {
+            const targetPixels = helper.element?.selected ? 156 : 112;
+            const scale = ['directional', 'spot'].includes(helper.element?.light_type) && helper.element?.has_shadow !== false
+                ? 1 : getLightManagerScreenScale(root, camera, renderer, helper.logicalExtent, targetPixels);
+            root.scale.setScalar(scale);
+            const position = line.geometry.getAttribute('position');
+            if (!position || !camera) return;
+            let colors = line.geometry.getAttribute('color');
+            if (!colors || colors.count !== position.count) {
+                colors = new THREE.Float32BufferAttribute(new Float32Array(position.count * 3), 3);
+                line.geometry.setAttribute('color', colors);
+            }
+            root.updateWorldMatrix?.(true, true);
+            const center = root.getWorldPosition(new THREE.Vector3());
+            const centerDistance = camera.position.distanceToSquared(center);
+            const midpoint = new THREE.Vector3();
+            for (let index = 0; index < position.count; index += 2) {
+                midpoint.set(
+                    (position.getX(index) + position.getX(index + 1)) * 0.5,
+                    (position.getY(index) + position.getY(index + 1)) * 0.5,
+                    (position.getZ(index) + position.getZ(index + 1)) * 0.5
+                );
+                line.localToWorld(midpoint);
+                const weight = camera.position.distanceToSquared(midpoint) > centerDistance ? 0.34 : 1;
+                colors.setXYZ(index, weight, weight, weight);
+                colors.setXYZ(index + 1, weight, weight, weight);
+            }
+            colors.needsUpdate = true;
+        };
         this.helpers.set(element.uuid, helper);
         return helper;
     },
@@ -3241,22 +5865,38 @@ window.LightManagerAreaGizmos = {
         const worldQuat = new THREE.Quaternion();
         element.mesh.getWorldPosition(worldPos);
         element.mesh.getWorldQuaternion(worldQuat);
-        helper.root.position.copy(worldPos);
-        helper.root.quaternion.copy(worldQuat);
+        // `group` is itself a child of Blockbench's model scene. Formats with
+        // `centered_grid: false` translate that scene by -8 on X/Z, so copying
+        // world coordinates directly into this child applied the scene offset a
+        // second time. That produced a visibly duplicated/shifted range gizmo
+        // even though the LightElement, Transformer and physical THREE.Light
+        // were aligned. Store the helper transform in its actual parent space.
+        setLightManagerObjectWorldPosition(helper.root, worldPos);
+        if (group?.getWorldQuaternion) {
+            group.updateWorldMatrix?.(true, false);
+            const parentWorldQuat = new THREE.Quaternion();
+            group.getWorldQuaternion(parentWorldQuat);
+            helper.root.quaternion.copy(parentWorldQuat.invert()).multiply(worldQuat);
+        } else {
+            helper.root.quaternion.copy(worldQuat);
+        }
         helper.root.scale.setScalar(1);
-        helper.root.visible = window.LightManagerUI?.workspace?.helperVisible({visible: element.visibility !== false, selected: !!element.selected}) ?? element.visibility !== false;
+        helper.root.visible = window.LightManagerUI?.workspace?.helperVisible({ visible: element.visibility !== false, selected: !!element.selected }) ?? element.visibility !== false;
 
         const color = this.getColor01(element);
         helper.material.color.setRGB(color[0], color[1], color[2]);
-        helper.material.opacity = element.selected ? 0.5 : 0.16;
+        helper.element = element;
+        helper.material.opacity = element.selected ? 0.38 : 0.1;
         helper.material.needsUpdate = true;
 
         const signature = this.getSignature(element);
         if (helper.signature !== signature) {
             const geometry = new THREE.BufferGeometry();
             geometry.setAttribute('position', new THREE.Float32BufferAttribute(this.buildVertices(element), 3));
+            geometry.computeBoundingSphere();
             helper.line.geometry.dispose();
             helper.line.geometry = geometry;
+            helper.logicalExtent = Math.max(0.001, (geometry.boundingSphere?.radius || 0.5) * 2);
             helper.signature = signature;
         }
     },
@@ -3327,11 +5967,14 @@ window.LightManagerViewportControls = {
     drag: null,
     pendingFreeMove: false,
     installed: false,
+    disposed: false,
     listeners: [],
     materials: [],
     handleGeometry: null,
+    handleGeometries: new Map(),
     lineGeometry: null,
     moveIndicator: null,
+    hoveredHandle: null,
     boundPointerDown: null,
     boundPointerMove: null,
     boundPointerUp: null,
@@ -3356,10 +5999,11 @@ window.LightManagerViewportControls = {
 
     install() {
         if (this.installed || typeof document === 'undefined') return;
+        this.disposed = false;
         this.boundPointerDown = event => this.onPointerDown(event);
         this.boundPointerMove = event => this.onPointerMove(event);
         this.boundPointerUp = event => this.onPointerUp(event);
-        this.boundPointerCancel = () => { this.pendingFreeMove = false; this.cancelDrag(true); };
+        this.boundPointerCancel = () => { this.pendingFreeMove = false; this.setHoveredHandle(null); this.cancelDrag(true); };
         this.boundKeyDown = event => this.onKeyDown(event);
         document.addEventListener('pointerdown', this.boundPointerDown, true);
         document.addEventListener('pointermove', this.boundPointerMove, true);
@@ -3378,6 +6022,8 @@ window.LightManagerViewportControls = {
     },
 
     dispose() {
+        // Native tool teardown can still dispatch selection updates during unload.
+        this.disposed = true;
         if (typeof document !== 'undefined') {
             if (this.boundPointerDown) document.removeEventListener('pointerdown', this.boundPointerDown, true);
             if (this.boundPointerMove) document.removeEventListener('pointermove', this.boundPointerMove, true);
@@ -3389,9 +6035,14 @@ window.LightManagerViewportControls = {
         this.listeners.forEach(listener => listener && typeof listener.delete === 'function' && listener.delete());
         this.listeners = [];
         this.cancelDrag(true);
+        this.setHoveredHandle(null);
         this.clearMoveIndicator();
         this.clear();
+        this.targetDialog?.delete?.();
+        this.targetDialog = null;
         if (this.handleGeometry) this.handleGeometry.dispose();
+        this.handleGeometries.forEach(geometry => geometry.dispose());
+        this.handleGeometries.clear();
         if (this.lineGeometry) this.lineGeometry.dispose();
         this.materials.forEach(material => material && material.dispose && material.dispose());
         this.materials = [];
@@ -3401,7 +6052,7 @@ window.LightManagerViewportControls = {
     },
 
     getGroup() {
-        if (!window.scene) return null;
+        if (this.disposed || !window.scene) return null;
         if (!this.group || this.group.parent !== window.scene) {
             if (this.group && this.group.parent) this.group.parent.remove(this.group);
             this.group = new THREE.Group();
@@ -3474,7 +6125,22 @@ window.LightManagerViewportControls = {
         this.moveIndicator = null;
     },
 
-    getHandleGeometry() {
+    getHandleGeometry(type = '') {
+        if (type) {
+            if (!this.handleGeometries.has(type)) {
+                let geometry;
+                if (type === 'aim') {
+                    geometry = new THREE.ConeGeometry(0.9, 2.2, 4);
+                    geometry.rotateX(-Math.PI / 2);
+                } else if (type === 'cone_angle') geometry = new THREE.TorusGeometry(0.85, 0.25, 6, 20);
+                else if (type === 'penumbra' || type === 'target' || type === 'art_point') geometry = new THREE.OctahedronGeometry(1);
+                else if (type.startsWith('target_')) geometry = new THREE.ConeGeometry(0.7, 2, 8);
+                else if (type === 'shadow_near' || type === 'shadow_far') geometry = new THREE.BoxGeometry(1.8, 1.8, 0.45);
+                else geometry = new THREE.BoxGeometry(1.4, 1.4, 1.4);
+                this.handleGeometries.set(type, geometry);
+            }
+            return this.handleGeometries.get(type);
+        }
         if (!this.handleGeometry) this.handleGeometry = new THREE.SphereGeometry(1, 16, 8);
         return this.handleGeometry;
     },
@@ -3504,7 +6170,8 @@ window.LightManagerViewportControls = {
     },
 
     createHandle(element, type, color, extra = {}) {
-        const mesh = new THREE.Mesh(this.getHandleGeometry(), this.createMaterial(color));
+        const mesh = new THREE.Mesh(this.getHandleGeometry(type), this.createMaterial(color));
+        if (type === 'shadow_bounds' || type === 'art_size') mesh.material.wireframe = true;
         mesh.name = `light_manager_handle_${type}_${element.uuid}`;
         mesh.renderOrder = 1003;
         mesh.userData.lightManagerHandle = { uuid: element.uuid, type, ...extra };
@@ -3519,6 +6186,7 @@ window.LightManagerViewportControls = {
 
         const lineMaterial = this.createLineMaterial(0xffffff, 0.28, true);
         const guideLine = new THREE.LineSegments(new THREE.BufferGeometry(), lineMaterial);
+        guideLine.frustumCulled = false;
         guideLine.name = `light_manager_control_guides_${element.uuid}`;
         guideLine.raycast = () => { };
         root.add(guideLine);
@@ -3542,7 +6210,85 @@ window.LightManagerViewportControls = {
         Object.values(handles).forEach(handle => root.add(handle));
         group.add(root);
 
-        const helper = { root, guideLine, lineMaterial, handles };
+        const helper = { root, guideLine, lineMaterial, handles, logicalExtent: 1, element };
+        const targetRoot = new THREE.Object3D();
+        targetRoot.name = `light_manager_target_${element.uuid}`;
+        targetRoot.raycast = () => { };
+        group.add(targetRoot);
+        helper.targetRoot = targetRoot;
+        helper.targetHandles = { target: this.createHandle(element, 'target', this.colors.aim) };
+        ['x', 'y', 'z'].forEach((axis, index) => {
+            const handle = this.createHandle(element, 'target_' + axis, ['#f56b6b', '#7bd572', '#659dff'][index], { axis });
+            handle.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), this.axisVectors[axis]);
+            helper.targetHandles[axis] = handle;
+        });
+        Object.values(helper.targetHandles).forEach(handle => targetRoot.add(handle));
+        // Establish attributes before the first draw. Three r129 can cache an
+        // empty binding if position is first added from onBeforeRender.
+        const targetGeometry = new THREE.BufferGeometry();
+        targetGeometry.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(24), 3));
+        const axisColors = [this.colors.aim, '#f56b6b', '#7bd572', '#659dff'].flatMap(color => {
+            const c = new THREE.Color(color); return [c.r, c.g, c.b, c.r, c.g, c.b];
+        });
+        targetGeometry.setAttribute('color', new THREE.Float32BufferAttribute(axisColors, 3));
+        const targetMaterial = this.createLineMaterial(0xffffff, 0.7);
+        targetMaterial.vertexColors = true;
+        const targetLines = new THREE.LineSegments(targetGeometry, targetMaterial);
+        targetLines.frustumCulled = false;
+        targetLines.raycast = () => { };
+        targetLines.renderOrder = 1002;
+        targetRoot.add(targetLines);
+        helper.targetLines = targetLines;
+        const updateTargetScale = (renderer, _scene, camera) => {
+            if (!targetRoot.visible) return;
+            const size = getLightManagerScreenWorldSize(targetRoot, camera, renderer, 8);
+            const length = size * 5;
+            const start = helper.root.position.clone().sub(targetRoot.position);
+            const signature = [size, start.x, start.y, start.z].join('|');
+            if (helper.targetScaleSignature === signature) return;
+            helper.targetScaleSignature = signature;
+            helper.targetHandles.target.scale.setScalar(size);
+            const vertices = [start.x, start.y, start.z, 0, 0, 0];
+            ['x', 'y', 'z'].forEach(axis => {
+                const handle = helper.targetHandles[axis];
+                handle.position.copy(this.axisVectors[axis]).multiplyScalar(length);
+                handle.scale.setScalar(size * 0.7);
+                const end = handle.position;
+                vertices.push(0, 0, 0, end.x, end.y, end.z);
+            });
+            this.setGuideVertices({ guideLine: targetLines }, vertices);
+            targetRoot.updateWorldMatrix?.(true, true);
+        };
+        targetLines.onBeforeRender = updateTargetScale;
+        Object.values(helper.targetHandles).forEach(handle => { handle.onBeforeRender = updateTargetScale; });
+        const applyScreenSpaceScale = (renderer, _scene, camera) => {
+            const displayScale = helper.worldShadowRegion ? 1 : this.drag?.light === helper.element && this.drag.displayScale
+                ? this.drag.displayScale : getLightManagerScreenScale(
+                    root,
+                    camera,
+                    renderer,
+                    helper.logicalExtent,
+                    helper.element?.selected ? 172 : 120
+                );
+            root.scale.setScalar(displayScale);
+            // Shadow coverage must never shrink the primary direction control.
+            if (helper.element?.light_type === 'directional' && handles.aim.visible) {
+                const aimDepth = getLightManagerScreenWorldSize(root, camera, renderer, 172) / Math.max(0.0001, displayScale);
+                handles.aim.position.z = -aimDepth;
+                const position = guideLine.geometry.getAttribute('position');
+                if (position?.count >= 2) {
+                    position.setZ(1, -aimDepth);
+                    position.needsUpdate = true;
+                }
+            }
+            Object.values(handles).forEach(handle => {
+                const desiredWorldScale = Number(handle.userData?.lightflowScreenHandleScale) || 0;
+                handle.scale.setScalar(desiredWorldScale / Math.max(0.0001, displayScale));
+            });
+            root.updateWorldMatrix?.(true, true);
+        };
+        guideLine.onBeforeRender = applyScreenSpaceScale;
+        Object.values(handles).forEach(handle => { handle.onBeforeRender = applyScreenSpaceScale; });
         this.helpers.set(element.uuid, helper);
         return helper;
     },
@@ -3553,13 +6299,60 @@ window.LightManagerViewportControls = {
 
     canShowViewportGizmos() {
         if (window.Canvas && Canvas.show_gizmos === false) return false;
-        if (window.LightManagerAreaGizmos && LightManagerAreaGizmos.enabled === false) return false;
         return true;
     },
 
     isHandleToolAllowed() {
         const id = window.Toolbox && Toolbox.selected && Toolbox.selected.id;
-        return id === 'light_manager_edit_tool';
+        return id === 'light_manager_edit_tool' || id === 'light_manager_target_tool' || (id === 'move_tool' && !!window.Modes?.edit);
+    },
+
+    supportsAimTarget(light) {
+        return !!light && ['spot', 'directional'].includes(light.light_type);
+    },
+
+    hasAimTarget(light) {
+        return this.supportsAimTarget(light) && light.aim_target_enabled === true;
+    },
+
+    setAimTargetEnabled(light, enabled) {
+        if (!this.supportsAimTarget(light) || !light.mesh || light.locked) return false;
+        Undo.initEdit({ elements: [light] });
+        if (enabled && !this.hasAimTarget(light)) {
+            const position = light.mesh.getWorldPosition(new THREE.Vector3());
+            const quaternion = light.mesh.getWorldQuaternion(new THREE.Quaternion());
+            light.aim_target = new THREE.Vector3(0, 0, -Math.max(8, Math.min(this.getRange(light, 16), 48)))
+                .applyQuaternion(quaternion).add(position).toArray();
+        } else if (!enabled && this.hasAimTarget(light)) {
+            // Keep the effective direction when returning to manual rotation.
+            window.LightManagerFitTool?.setLightLookAt(light, new THREE.Vector3().fromArray(light.aim_target));
+        }
+        light.aim_target_enabled = !!enabled;
+        this.refreshLight(light, 'rotation');
+        Undo.finishEdit(translateLightManager('light_manager.target.undo'));
+        updateSelection();
+        Blockbench.dispatchEvent('lightflow_aim_target_changed');
+        return true;
+    },
+
+    editAimTargetPosition() {
+        const light = this.getSelectedLights().find(light => this.hasAimTarget(light));
+        if (!light) return;
+        this.targetDialog?.delete?.();
+        this.targetDialog = new Dialog({
+            id: 'light_manager_target_position', title: translateLightManager('light_manager.target.position'),
+            width: 380, form: (window.LightManagerUI?.prepareForm || (form => form))({
+                position: { type: 'vector', label: 'property.position', value: light.aim_target.slice(), dimensions: 3, step: 1 },
+                hint: { type: 'info', text: translateLightManager('light_manager.target.hint') }
+            }), onConfirm: result => {
+                if (!window.LightElement?.all?.includes(light) || light.locked) return;
+                const position = result.position?.map(Number);
+                if (!position || position.length !== 3 || !position.every(Number.isFinite)) return;
+                Undo.initEdit({ elements: [light] }); light.aim_target = position;
+                this.refreshLight(light, 'aim_target'); Undo.finishEdit(translateLightManager('light_manager.target.undo'));
+            }
+        });
+        this.targetDialog.show();
     },
 
     getSelectedLights() {
@@ -3588,6 +6381,7 @@ window.LightManagerViewportControls = {
         if (!handle) return;
         handle.visible = !!visible;
         if (position) handle.position.copy(position);
+        handle.userData.lightflowScreenHandleScale = scale;
         handle.scale.setScalar(scale);
     },
 
@@ -3618,10 +6412,14 @@ window.LightManagerViewportControls = {
         element.mesh.updateMatrixWorld(true);
         element.mesh.getWorldPosition(worldPos);
         element.mesh.getWorldQuaternion(worldQuat);
-        helper.root.position.copy(worldPos);
-        helper.root.quaternion.copy(worldQuat);
+        setLightManagerObjectWorldPosition(helper.root, worldPos);
+        const parentQuaternion = group.getWorldQuaternion(new THREE.Quaternion());
+        helper.root.quaternion.copy(parentQuaternion.invert()).multiply(worldQuat);
         helper.root.scale.setScalar(1);
         helper.root.visible = element.visibility !== false;
+        if (helper.targetRoot.parent !== group) group.add(helper.targetRoot);
+        helper.targetRoot.visible = helper.root.visible && this.hasAimTarget(element);
+        helper.targetRoot.position.fromArray(element.aim_target || [0, 0, 0]);
 
         Object.values(helper.handles).forEach(handle => {
             if (handle.userData && handle.userData.lightManagerHandle) {
@@ -3634,6 +6432,7 @@ window.LightManagerViewportControls = {
         const lightType = element.light_type || 'point';
         ['artPoint', 'artX', 'artY', 'artZ'].forEach(key => this.setHandle(helper, key, false, new THREE.Vector3(), 0));
         if (lightType === 'art_key') {
+            helper.guideLine.visible = true;
             Object.values(helper.handles).forEach(handle => { handle.visible = false; });
             const half = window.LightManagerArtKeys.size(element).map(value => value / 2);
             this.setHandle(helper, 'artPoint', true, new THREE.Vector3().fromArray(element.art_point), scale);
@@ -3643,6 +6442,8 @@ window.LightManagerViewportControls = {
             });
             helper.handles.artPoint.material.color.setRGB(...LightManagerUtils.colorArray(element.color).map(c => c / 255));
             this.setGuideVertices(helper, window.LightManagerArtKeys.boxVertices(element));
+            helper.element = element;
+            helper.logicalExtent = Math.max(1, ...window.LightManagerArtKeys.size(element).map(value => Math.abs(Number(value) || 0)));
             return;
         }
         const hasShadow = element.has_shadow !== false;
@@ -3655,10 +6456,10 @@ window.LightManagerViewportControls = {
         const far = Math.max(near + 0.001, this.num(element.shadow_far, lightType === 'directional' ? 200 : range));
         const bounds = Math.max(0.001, this.num(element.shadow_bounds, 35));
         const aimDistance = lightType === 'directional'
-            ? Math.max(4, Math.min(far, 24))
+            ? 16
             : Math.max(4, Math.min(range, 48));
 
-        this.setHandle(helper, 'aim', lightType === 'directional' || lightType === 'spot', new THREE.Vector3(0, 0, -aimDistance), scale);
+        this.setHandle(helper, 'aim', !this.hasAimTarget(element) && (lightType === 'directional' || lightType === 'spot'), new THREE.Vector3(0, 0, -aimDistance), scale);
         if (lightType === 'directional' || lightType === 'spot') {
             vertices.push(0, 0, 0, 0, 0, -aimDistance);
         }
@@ -3675,7 +6476,9 @@ window.LightManagerViewportControls = {
         }
 
         const midDepth = -(near + far) * 0.5;
-        const showDirectionalBounds = lightType === 'directional' && hasShadow;
+        const showAreaBounds = window.LightManagerAreaGizmos?.enabled !== false || Toolbox.selected?.id === 'light_manager_edit_tool';
+        helper.worldShadowRegion = hasShadow && showAreaBounds && ['directional', 'spot'].includes(lightType);
+        const showDirectionalBounds = lightType === 'directional' && hasShadow && showAreaBounds;
         this.setHandle(helper, 'boundPX', showDirectionalBounds, new THREE.Vector3(bounds, 0, midDepth), scale);
         this.setHandle(helper, 'boundNX', showDirectionalBounds, new THREE.Vector3(-bounds, 0, midDepth), scale);
         this.setHandle(helper, 'boundPY', showDirectionalBounds, new THREE.Vector3(0, bounds, midDepth), scale);
@@ -3685,18 +6488,62 @@ window.LightManagerViewportControls = {
             vertices.push(0, -bounds, midDepth, 0, bounds, midDepth);
         }
 
-        const showClip = hasShadow && (lightType === 'directional' || lightType === 'spot');
+        const showClip = hasShadow && showAreaBounds && (lightType === 'directional' || lightType === 'spot');
         this.setHandle(helper, 'near', showClip, new THREE.Vector3(0, 0, -near), scale * 0.75);
         this.setHandle(helper, 'far', showClip, new THREE.Vector3(0, 0, -far), scale * 0.75);
         if (showClip) vertices.push(0, 0, -near, 0, 0, -far);
 
+        if (lightType === 'directional' && (element.shadow_scene_fit || element.shadow_region_locked) && showAreaBounds) {
+            const values = element.shadow_region_locked && LightManagerShadowRegions.validBounds(element.shadow_region_bounds)
+                ? element.shadow_region_bounds : null;
+            const box = values ? new THREE.Box3(new THREE.Vector3(...values.slice(0, 3)), new THREE.Vector3(...values.slice(3)))
+                : new THREE.Box3().setFromPoints(LightManagerShadowRegions.sceneCorners());
+            if (!box.isEmpty()) {
+                const center = box.getCenter(new THREE.Vector3()), half = box.getSize(new THREE.Vector3()).multiplyScalar(0.5);
+                const inverse = worldQuat.clone().invert();
+                const local = world => world.clone().sub(worldPos).applyQuaternion(inverse);
+                vertices.length = 0;
+                vertices.push(0, 0, 0, 0, 0, -aimDistance);
+                const corners = LightManagerShadowRegions.corners(box).map(local);
+                for (let i = 0; i < 8; i++) for (const bit of [1, 2, 4]) if (!(i & bit)) vertices.push(...corners[i].toArray(), ...corners[i | bit].toArray());
+                for (const [key, axis, sign] of [['boundPX','x',1],['boundNX','x',-1],['boundPY','y',1],['boundNY','y',-1],['near','z',1],['far','z',-1]]) {
+                    const position = center.clone(); position[axis] += half[axis] * sign;
+                    this.setHandle(helper, key, true, local(position), scale);
+                    helper.handles[key].userData.lightManagerHandle.regionAxis = axis;
+                    helper.handles[key].userData.lightManagerHandle.regionSign = sign;
+                }
+            }
+        } else {
+            Object.values(helper.handles).forEach(handle => { if (handle.userData.lightManagerHandle) delete handle.userData.lightManagerHandle.regionAxis; });
+        }
         this.setGuideVertices(helper, vertices.length ? vertices : [0, 0, 0, 0, 0, 0]);
+        helper.element = element;
+        helper.logicalExtent = lightType === 'directional'
+            ? (showAreaBounds ? Math.max(aimDistance, bounds * 2, far) : aimDistance)
+            : lightType === 'spot'
+                ? Math.max(1, range, radius * 2)
+                : Math.max(1, range * 2);
+        if (Toolbox.selected?.id === 'light_manager_target_tool') {
+            Object.values(helper.handles).forEach(handle => { handle.visible = false; });
+            helper.guideLine.visible = false;
+        } else helper.guideLine.visible = true;
     },
 
     destroyHelper(uuid) {
         const helper = this.helpers.get(uuid);
         if (!helper) return;
+        if (this.hoveredHandle && (Object.values(helper.handles).includes(this.hoveredHandle) || Object.values(helper.targetHandles).includes(this.hoveredHandle))) this.setHoveredHandle(null);
         if (helper.root && helper.root.parent) helper.root.parent.remove(helper.root);
+        helper.targetRoot?.removeFromParent?.();
+        if (helper.targetRoot?.parent) helper.targetRoot.parent.remove(helper.targetRoot);
+        helper.targetRoot?.traverse(object => {
+            if (object.material) {
+                const index = this.materials.indexOf(object.material);
+                if (index >= 0) this.materials.splice(index, 1);
+                object.material.dispose();
+            }
+        });
+        helper.targetLines?.geometry?.dispose();
         if (helper.root) {
             helper.root.traverse(object => {
                 const materials = Array.isArray(object.material) ? object.material : (object.material ? [object.material] : []);
@@ -3713,7 +6560,7 @@ window.LightManagerViewportControls = {
     },
 
     updateAll() {
-        if (!this.isEditMode() || !this.canShowViewportGizmos() || !this.isHandleToolAllowed()) {
+        if (this.disposed || !this.isEditMode() || !this.canShowViewportGizmos() || !this.isHandleToolAllowed()) {
             this.clearHelpersOnly();
             return;
         }
@@ -3770,12 +6617,31 @@ window.LightManagerViewportControls = {
         const ray = this.getRayFromEvent(event, preview);
         if (!ray) return null;
         const objects = [];
-        group.traverse(object => {
-            if (object.visible !== false && object.userData && object.userData.lightManagerHandle) objects.push(object);
-        });
+        const collect = object => {
+            if (!object.visible) return;
+            if (object.userData?.lightManagerHandle) objects.push(object);
+            object.children.forEach(collect);
+        };
+        collect(group);
         if (!objects.length) return null;
         const intersects = this.raycaster.intersectObjects(objects, false);
         return intersects.find(hit => hit.object?.userData?.lightManagerHandle) || null;
+    },
+
+    setHoveredHandle(handle) {
+        if (this.hoveredHandle === handle) return;
+        if (this.hoveredHandle?.material) this.hoveredHandle.material.opacity = 0.9;
+        this.hoveredHandle = handle || null;
+        if (this.hoveredHandle?.material) this.hoveredHandle.material.opacity = 1;
+        if (this.hoveredHandle) {
+            const type = this.hoveredHandle.userData.lightManagerHandle.type;
+            const text = type.startsWith('target') ? translateLightManager('light_manager.target.move') : this.getHandleUndoLabel(type);
+            this.hoverStatus = text;
+            Blockbench.setStatusBarText(text);
+        } else if (this.hoverStatus) {
+            if (window.Prop?.file_name === this.hoverStatus) Blockbench.setStatusBarText();
+            this.hoverStatus = null;
+        }
     },
 
     createCameraPlane(preview, point) {
@@ -3809,9 +6675,15 @@ window.LightManagerViewportControls = {
             mode: 'light_handle',
             light,
             handle: handleData.type,
+            regionAxis: handleData.regionAxis,
+            regionSign: handleData.regionSign,
+            regionBox: handleData.regionAxis ? (light.shadow_region_locked && LightManagerShadowRegions.validBounds(light.shadow_region_bounds)
+                ? new THREE.Box3(new THREE.Vector3(...light.shadow_region_bounds.slice(0, 3)), new THREE.Vector3(...light.shadow_region_bounds.slice(3)))
+                : new THREE.Box3().setFromPoints(LightManagerShadowRegions.sceneCorners(preview))) : null,
             axis: handleData.axis || null,
             sign: handleData.sign || 1,
             preview,
+            displayScale: this.helpers.get(light.uuid)?.root.scale.x || 1,
             plane: this.createCameraPlane(preview, hitPoint),
             label: this.getHandleUndoLabel(handleData.type),
             startPoint: hitPoint.clone(),
@@ -3822,15 +6694,28 @@ window.LightManagerViewportControls = {
                 shadow_near: light.shadow_near,
                 shadow_far: light.shadow_far,
                 shadow_bounds: light.shadow_bounds,
+                aim_target: (light.aim_target || [0, 0, 0]).slice(),
                 rotation: Array.isArray(light.rotation) ? light.rotation.slice() : [0, 0, 0]
             }
         };
+        if (handleData.type.startsWith('target')) {
+            const target = new THREE.Vector3().fromArray(light.aim_target);
+            let normal = preview.camera.getWorldDirection(new THREE.Vector3());
+            const axis = this.axisVectors[handleData.axis];
+            if (axis) {
+                normal.addScaledVector(axis, -normal.dot(axis));
+                if (normal.lengthSq() < 1e-8) normal.crossVectors(axis, this.axisVectors[handleData.axis === 'y' ? 'x' : 'y']);
+            }
+            this.drag.plane = new THREE.Plane().setFromNormalAndCoplanarPoint(normal.normalize(), target);
+            this.drag.startPoint = this.projectEventToPlane(event, preview, this.drag.plane) || target;
+        }
         this.stopEvent(event);
         this.updateHandleDrag(event);
     },
 
     getHandleUndoLabel(handle) {
         if (handle.startsWith('art_')) return translateLightManager('light_manager.art.edit');
+        if (handle.startsWith('target')) return translateLightManager('light_manager.target.undo');
         if (handle === 'aim') return translateLightManager('light_manager.undo.aim_light');
         if (handle === 'range') return translateLightManager('light_manager.undo.adjust_range');
         if (handle === 'cone_angle') return translateLightManager('light_manager.undo.change_cone_angle');
@@ -3853,6 +6738,24 @@ window.LightManagerViewportControls = {
         const point = this.projectEventToPlane(event, drag.preview, drag.plane);
         if (!point) return;
         const light = drag.light;
+        if (drag.regionAxis && drag.regionBox && !drag.regionBox.isEmpty()) {
+            const box = drag.regionBox.clone(), axis = drag.regionAxis, edge = drag.regionSign > 0 ? 'max' : 'min';
+            const delta = point[axis] - drag.startPoint[axis];
+            box[edge][axis] += delta;
+            box.min[axis] = Math.min(box.min[axis], box.max[axis] - 0.01);
+            box.max[axis] = Math.max(box.max[axis], box.min[axis] + 0.01);
+            light.shadow_scene_fit = false; light.shadow_region_locked = true;
+            light.shadow_region_bounds = [...box.min.toArray(), ...box.max.toArray()];
+            this.refreshLight(light, 'shadow_bounds'); return;
+        }
+        if (drag.handle.startsWith('target')) {
+            const delta = point.clone().sub(drag.startPoint);
+            if (drag.axis) delta.copy(this.axisVectors[drag.axis]).multiplyScalar(point.clone().sub(drag.startPoint).dot(this.axisVectors[drag.axis]));
+            this.snapFreeMoveDelta(delta, event);
+            light.aim_target = new THREE.Vector3().fromArray(drag.start.aim_target).add(delta).toArray();
+            this.refreshLight(light, 'aim_target');
+            return;
+        }
         const local = this.getLocalDragPoint(light, point);
         if (!local) return;
 
@@ -3926,10 +6829,13 @@ window.LightManagerViewportControls = {
         }
     },
 
-    getLightUpdateOptions(property) {
+    getLightUpdateOptions(property, light = null) {
         if (property.startsWith('art_')) return { shadows: false, scene: false, gizmos: true };
-        if (property === 'distance') return { shadows: false, scene: false, gizmos: true };
-        if (['angle', 'penumbra', 'rotation', 'shadow_bounds', 'shadow_near', 'shadow_far'].includes(property)) {
+        if (property === 'distance') {
+            // Both native point and spot shadow cameras use light.distance as far.
+            return { shadows: ['spot', 'point'].includes(light?.light_type), scene: false, gizmos: true };
+        }
+        if (['aim_target', 'angle', 'penumbra', 'position', 'rotation', 'shadow_bounds', 'shadow_near', 'shadow_far'].includes(property)) {
             return { shadows: true, scene: false, gizmos: true };
         }
         return {};
@@ -3947,7 +6853,7 @@ window.LightManagerViewportControls = {
             LightElement.preview_controller.updateSelection(light, { gizmos: false });
         }
         window.update_light_element_callback?.({
-            ...this.getLightUpdateOptions(property),
+            ...this.getLightUpdateOptions(property, light),
             elements: [light],
             cleanup: false,
             artKey: light.light_type === 'art_key' || property.startsWith('art_')
@@ -4178,7 +7084,19 @@ window.LightManagerViewportControls = {
     },
 
     onPointerMove(event) {
-        if (!this.drag) return;
+        if (!this.drag) {
+            if (!this.isEditMode() || !this.canShowViewportGizmos() || !this.isHandleToolAllowed()) {
+                this.setHoveredHandle(null);
+                return;
+            }
+            const preview = this.getPreviewFromEvent(event);
+            if (!preview?.canvas || event.target !== preview.canvas) {
+                this.setHoveredHandle(null);
+                return;
+            }
+            this.setHoveredHandle(this.raycastHandles(event, preview)?.object || null);
+            return;
+        }
         this.stopEvent(event);
         if (this.drag.mode === 'light_handle') this.updateHandleDrag(event);
         else if (this.drag.mode === 'free_move') this.applyFreeMoveDrag(event);
@@ -4199,7 +7117,7 @@ window.LightManagerViewportControls = {
             this.stopEvent(event);
             return;
         }
-        if (!this.drag || this.drag.mode !== 'free_move') return;
+        if (!this.drag || (this.drag.mode !== 'free_move' && !this.drag.handle?.startsWith('target'))) return;
         if (['x', 'y', 'z'].includes(key)) {
             this.drag.axis = this.drag.axis === key ? null : key;
             const message = this.drag.axis
@@ -4367,7 +7285,7 @@ window.LightManagerFitTool = {
         };
     },
 
-    setLightLookAt(light, target) {
+    setLightLookAt(light, target, options = {}) {
         if (!light.mesh) return false;
 
         const position = new THREE.Vector3();
@@ -4390,12 +7308,15 @@ window.LightManagerFitTool = {
 
         const order = Format.euler_order || 'ZYX';
         const euler = new THREE.Euler().setFromQuaternion(localQuaternion, order);
-        light.rotation = [
-            THREE.MathUtils.radToDeg(euler.x),
-            THREE.MathUtils.radToDeg(euler.y),
-            THREE.MathUtils.radToDeg(euler.z)
-        ];
-        light.render_rotation = light.rotation.slice();
+        if (!options.transient) {
+            light.rotation = [
+                THREE.MathUtils.radToDeg(euler.x),
+                THREE.MathUtils.radToDeg(euler.y),
+                THREE.MathUtils.radToDeg(euler.z)
+            ];
+            light.render_rotation = light.rotation.slice();
+            if (light.aim_target_enabled) light.aim_target = target.toArray();
+        }
         light.mesh.rotation.copy(euler);
         light.mesh.updateMatrixWorld(true);
         return true;
@@ -4574,20 +7495,38 @@ window.LightManagerFitTool = {
             return;
         }
 
-        new Dialog('fit_light_bounds_dialog', {
+        if (this.dialog) { this.dialog.show(); return; }
+        const lights = this.getSelectedLights();
+        const targets = this.getSelectedTargets();
+        const hasSpot = lights.some(light => light.light_type === 'spot');
+        const hasAim = lights.some(light => ['spot', 'directional'].includes(light.light_type));
+        const size = this.getPointsBox(this.collectTargetPoints(targets)).getSize(new THREE.Vector3());
+        const close = () => { this.dialog?.delete(); this.dialog = null; };
+        this.dialog = new Dialog('fit_light_bounds_dialog', {
             title: translateLightManager('light_manager.dialog.fit.title'),
-            form: {
+            width: 460,
+            form: (window.LightManagerUI?.prepareForm || (form => form))({
+                selection: {
+                    type: 'bar_display', icon: 'fit_screen', paragraph: true, expand: true,
+                    value: formatLightManagerMessage('light_manager.dialog.fit.selection', {
+                        lights: formatLightManagerCount(lights.length, 'light_manager.count.light.one', 'light_manager.count.light.many'),
+                        targets: formatLightManagerCount(targets.length, 'light_manager.count.target.one', 'light_manager.count.target.many'),
+                        size: size.toArray().map(value => Number(value.toFixed(2))).join(' × ')
+                    })
+                },
                 margin: {
                     label: translateLightManager('light_manager.dialog.fit.margin'),
-                    type: 'number',
+                    type: 'combo_slider', icon: 'padding', full_track: true, allow_higher: true,
                     value: 0,
                     min: 0,
+                    max: 16,
                     step: 0.1,
                     description: translateLightManager('light_manager.dialog.fit.margin.desc')
                 },
                 angle_margin: {
                     label: translateLightManager('light_manager.dialog.fit.angle_margin'),
-                    type: 'number',
+                    type: 'combo_slider', icon: 'wifi_tethering', full_track: true,
+                    condition: () => hasSpot,
                     value: 0,
                     min: 0,
                     max: 45,
@@ -4596,14 +7535,19 @@ window.LightManagerFitTool = {
                 },
                 aim_to_center: {
                     label: translateLightManager('light_manager.dialog.fit.aim_to_center'),
-                    type: 'checkbox',
+                    type: 'custom_checkbox', layout: 'space_between',
+                    icon_on: 'check_box', icon_off: 'check_box_outline_blank',
+                    icon_color_on: 'var(--color-accent)', label_color: 'var(--color-text)',
+                    condition: () => hasAim,
                     value: true,
                     description: translateLightManager('light_manager.dialog.fit.aim_to_center.desc')
                 }
-            },
+            }),
             onConfirm: form => {
                 this.fit(form);
-            }
+                close();
+            },
+            onCancel: close
         }).show();
     }
 };
@@ -4618,6 +7562,25 @@ window.LightManagerFitTool = {
 
 if (typeof window.on_light_element_updated !== 'function') {
     window.on_light_element_updated = () => { };
+}
+
+function setLightManagerObjectWorldPosition(object, worldPosition) {
+    if (!object?.position || !worldPosition) return false;
+
+    object.position.copy(worldPosition);
+    const parent = object.parent;
+    if (parent && typeof parent.worldToLocal === 'function') {
+        // LightElement preview meshes live in Blockbench's model scene, so
+        // getWorldPosition() already includes scene/grid transforms. THREE
+        // lights are parented under light_manager_group in that same scene;
+        // assigning the world coordinates directly as their local position
+        // applies a translated scene twice (notably the -8 X/Z offset used by
+        // non-centered Bedrock grids). Convert back into the actual parent's
+        // local space instead of assuming the scene transform is identity.
+        parent.updateWorldMatrix?.(true, false);
+        parent.worldToLocal(object.position);
+    }
+    return true;
 }
 
 function runLightManagerElementUpdate(options = LIGHT_MANAGER_DEFAULT_UPDATE_OPTIONS) {
@@ -4648,6 +7611,7 @@ function runLightManagerElementUpdate(options = LIGHT_MANAGER_DEFAULT_UPDATE_OPT
     const targetLights = updateOptions.elements
         ? updateOptions.elements.filter(element => allLights.includes(element))
         : allLights;
+    const repairedShadowMapElements = [];
 
     // Keep track of active UUIDs to remove deleted lights on full updates.
     const activeUuids = LIGHT_MANAGER_UPDATE_STATE.activeUuids;
@@ -4719,13 +7683,9 @@ function runLightManagerElementUpdate(options = LIGHT_MANAGER_DEFAULT_UPDATE_OPT
             if (requestedCastShadow) light.userData.lightManagerRetainShadowSlot = true;
             light.castShadow = requestedCastShadow ||
                 light.userData.lightManagerRetainShadowSlot === true;
-            if (light.shadow) {
-                if (updateOptions.shadows && requestedCastShadow) {
-                    light.shadow.needsUpdate = true;
-                } else if (light.castShadow) {
-                    light.shadow.autoUpdate = false;
-                    if (!requestedCastShadow) light.shadow.needsUpdate = false;
-                }
+            if (light.shadow && light.castShadow) {
+                light.shadow.autoUpdate = false;
+                if (!requestedCastShadow) light.shadow.needsUpdate = false;
             }
 
             // Sync dynamic shadow properties
@@ -4753,9 +7713,10 @@ function runLightManagerElementUpdate(options = LIGHT_MANAGER_DEFAULT_UPDATE_OPT
                     });
                 }
 
-                if (syncLightManagerSingleShadowSettings(light, element, updateOptions)) {
-                    markLightManagerShadowsDirty({ elements: [element] });
-                }
+                syncLightManagerSingleShadowSettings(light, element, {
+                    ...updateOptions,
+                    shadowMapChanges: repairedShadowMapElements
+                });
                 if (!requestedCastShadow && light.castShadow) {
                     light.shadow.autoUpdate = false;
                     light.shadow.needsUpdate = false;
@@ -4776,21 +7737,37 @@ function runLightManagerElementUpdate(options = LIGHT_MANAGER_DEFAULT_UPDATE_OPT
 
             // Sync Position and Rotation
             if (element.mesh) {
+                if (window.LightManagerViewportControls?.hasAimTarget(element)) {
+                    window.LightManagerFitTool?.setLightLookAt(element, new THREE.Vector3().fromArray(element.aim_target), { transient: true });
+                }
                 const worldPos = LIGHT_MANAGER_UPDATE_STATE.worldPosition;
                 const worldQuat = LIGHT_MANAGER_UPDATE_STATE.worldQuaternion;
                 element.mesh.getWorldPosition(worldPos);
                 element.mesh.getWorldQuaternion(worldQuat);
 
-                light.position.copy(worldPos);
+                setLightManagerObjectWorldPosition(light, worldPos);
 
                 if (light.target) {
                     const direction = LIGHT_MANAGER_UPDATE_STATE.worldDirection.set(0, 0, -1);
                     direction.applyQuaternion(worldQuat);
-                    light.target.position.copy(worldPos).add(direction);
+                    const targetWorldPosition = light.target.position.copy(worldPos).add(direction);
+                    if (window.LightManagerViewportControls?.hasAimTarget(element) && new THREE.Vector3().fromArray(element.aim_target).distanceToSquared(worldPos) > 1e-8) targetWorldPosition.fromArray(element.aim_target);
+                    setLightManagerObjectWorldPosition(light.target, targetWorldPosition);
                     light.target.updateMatrixWorld(true);
                 }
             }
         });
+    }
+
+    if (repairedShadowMapElements.length) {
+        const uniqueRepairedShadowMapElements = Array.from(new Map(
+            repairedShadowMapElements
+                .filter(element => element?.uuid)
+                .map(element => [element.uuid, element])
+        ).values());
+        if (uniqueRepairedShadowMapElements.length) {
+            markLightManagerShadowsDirty({ elements: uniqueRepairedShadowMapElements });
+        }
     }
 
     // Cleanup deleted lights only when the caller requested a registry pass.
@@ -4821,7 +7798,14 @@ function runLightManagerElementUpdate(options = LIGHT_MANAGER_DEFAULT_UPDATE_OPT
     // observes the bounded preview topology instead of compiling a transient
     // all-point-shadows variant.
     if (typeof applyLightManagerPreviewShadowBudget === 'function') {
-        applyLightManagerPreviewShadowBudget(updateOptions);
+        const budgetChanges = [];
+        applyLightManagerPreviewShadowBudget(updateOptions, budgetChanges);
+        const budgetShadowRedrawElements = budgetChanges
+            .filter(change => change?.needsShadowRedraw && change.element?.uuid)
+            .map(change => change.element);
+        if (budgetShadowRedrawElements.length) {
+            markLightManagerShadowsDirty({ elements: budgetShadowRedrawElements });
+        }
     }
 
     if (updateOptions.shadows) {
@@ -4980,6 +7964,8 @@ const lightIconSources = {};
     'LightManagerDebugShadows',
     'LightManagerSyncLights',
     'LightManagerPrepareRender',
+    'LightManagerCameraShadows',
+    'LightManagerShadowRegions',
     'LightManagerFlushAnimatedLights',
     'LightManagerAreaGizmos',
     'LightManagerArtKeys',
@@ -4995,18 +7981,140 @@ const lightIconSources = {};
  * @description Adds animatable point, spot, directional lights, and render-only Art Keys to the Blockbench outliner.
  */
 
+function installLightflowOutlinerColors() {
+    // Semantic inks are independent of Blockbench marker colors and light emission.
+    const palette = {
+        point: ['#E9C47A', '#76520A'],
+        spot: ['#EDAA87', '#854323'],
+        directional: ['#86D6D1', '#17645F'],
+        key: ['#C3B5F1', '#645097'],
+        ray: ['#A5CDEB', '#356084'],
+        particle: ['#D7B4CE', '#80516F'],
+        volume: ['#B4CFB4', '#4D6B4D']
+    };
+    const semanticType = node => {
+        if (node?.type === 'art_key' || (node?.type === 'light' && node.light_type === 'art_key')) return 'key';
+        if (node?.type === 'light') return palette[node.light_type] ? node.light_type : 'point';
+        return ({ lightflow_god_ray: 'ray', lightflow_particle_effect: 'particle', lightflow_volume: 'volume' })[node?.type];
+    };
+    const event = Blockbench.on('get_outliner_node_classes', ({ node, classes }) => {
+        const type = semanticType(node);
+        if (type) classes.push('lightflow-semantic-' + type);
+    });
+    const css = Blockbench.addCSS(Object.keys(palette).map(type => `
+        #panel_outliner .outliner_object.lightflow-semantic-${type} > .cube_name,
+        #panel_outliner .outliner_object.lightflow-semantic-${type} > .icon,
+        #panel_outliner .outliner_object.lightflow-semantic-${type} > .dynamic-icon {
+            color:var(--lf-outliner-${type})!important;
+        }
+        #panel_outliner .outliner_object.lightflow-semantic-${type}.selected > .cube_name,
+        #panel_outliner .outliner_object.lightflow-semantic-${type}.selected > .icon,
+        #panel_outliner .outliner_object.lightflow-semantic-${type}.selected > .dynamic-icon {
+            color:var(--lf-outliner-${type}-selected)!important;
+        }
+    `).join('\n'));
+    const parse = color => {
+        if (/^#[\da-f]{6}$/i.test(color)) return [1, 3, 5].map(offset => parseInt(color.slice(offset, offset + 2), 16));
+        const channels = color.match(/[\d.]+/g);
+        return channels?.length >= 3 ? channels.slice(0, 3).map(Number) : [32, 34, 38];
+    };
+    const luminance = rgb => rgb.map(value => { value /= 255; return value <= .04045 ? value / 12.92 : ((value + .055) / 1.055) ** 2.4; }).reduce((sum, value, index) => sum + value * [.2126, .7152, .0722][index], 0);
+    const ink = (pair, background) => {
+        const base = parse(pair[luminance(background) > .35 ? 1 : 0]);
+        const target = luminance(background) > .179 ? 0 : 255;
+        let result = base;
+        for (let step = 0; step <= 100; step++) {
+            result = base.map(channel => Math.round(channel + (target - channel) * step / 100));
+            const a = luminance(result), b = luminance(background);
+            if ((Math.max(a, b) + .05) / (Math.min(a, b) + .05) >= 4.5) break;
+        }
+        return '#' + result.map(channel => channel.toString(16).padStart(2, '0')).join('');
+    };
+    const style = document.createElement('style'); document.head.appendChild(style);
+    let signature = '';
+    const sync = () => {
+        const theme = getComputedStyle(document.body);
+        const background = theme.getPropertyValue('--color-ui').trim();
+        const selected = theme.getPropertyValue('--color-selected').trim();
+        const next = background + '|' + selected; if (next === signature) return; signature = next;
+        style.textContent = ':root{' + Object.entries(palette).map(([type, pair]) => `--lf-outliner-${type}:${ink(pair, parse(background))};--lf-outliner-${type}-selected:${ink(pair, parse(selected))};`).join('') + '}';
+    };
+    sync();
+    const timer = setInterval(sync, 500);
+    return { delete() { clearInterval(timer); event.delete(); css.delete(); style.remove(); } };
+}
+
 function initializeLightManagerPlugin() {
+    window.LightManagerIcons = lightManagerIconsApi;
+    installLightManagerIconBridge();
     Language.addTranslations('en', {
         'light_manager.ui.filter_all': 'All',
         'light_manager.ui.filter_active': 'Active',
         'light_manager.ui.filter_modified': 'Modified',
+        'light_manager.ui.filter_favorites': 'Favorites',
+        'light_manager.ui.favorites': 'Pinned properties stay visible across sections',
+        'light_manager.ui.favorites_empty': 'No favorites yet. Right-click a property and choose Pin property.',
+        'light_manager.ui.pin_property': 'Pin property',
+        'light_manager.ui.unpin_property': 'Unpin property',
+        'light_manager.ui.sections': 'Property sections',
+        'light_manager.ui.basic': 'Basic',
+        'light_manager.ui.shape': 'Shape',
+        'light_manager.ui.shadows': 'Shadows',
+        'light_manager.ui.advanced': 'Advanced',
+        'light_manager.ui.starting_point': 'Starting point',
+        'light_manager.ui.current_values': 'Current values',
+        'light_manager.ui.warm_sunset': 'Warm sunset',
+        'light_manager.ui.guide_light': '1. Choose a starting point. 2. Adjust color and intensity; see the result in the viewport. 3. Drag the direction handle or open Shape / Shadows for precise editing.',
+        'light_manager.ui.guide_volume': '1. Choose a starting point. 2. Adjust density and color; see the result in the viewport. 3. Use Shape to place the effect and Quality to refine it.',
+        'light_manager.ui.guide_light_short': 'Start with color and intensity.',
+        'light_manager.ui.guide_volume_short': 'Start with density and color.',
+        'light_manager.ui.guide_dismiss': 'Continue in the editor · dismiss guide',
         'light_manager.ui.filter_label': 'Filter settings',
         'light_manager.ui.filter_empty': 'No matching settings. Clear the search or choose All.',
         'light_manager.ui.search': 'Find setting',
+        'light_manager.ui.value': 'value',
+        'light_manager.ui.invalid_number': 'Enter a valid number',
+        'light_manager.ui.sections': 'Sections',
+        'light_manager.ui.search_objects': 'Find element or group',
+        'light_manager.ui.expand_group': 'Expand group',
+        'light_manager.ui.collapse_group': 'Collapse group',
+        'light_manager.ui.objects': 'objects visible',
+        'light_manager.ui.preview_empty': 'No preview available',
+        'light_manager.ui.preview_error': 'Unable to load preview',
+        'light_manager.ui.loading': 'Loading preview…',
+
+        'light_manager.ui.search_shortcut': 'Find setting · Ctrl+Shift+F',
+        'light_manager.ui.viewport_tools': 'Lightflow scene tools',
+        'light_manager.ui.camera_view': 'Look through camera',
+        'light_manager.ui.camera_keyframe': 'Save camera pose at playhead',
+        'light_manager.ui.camera_fly': 'Fly camera · Enter saves, Esc cancels',
+        'light_manager.ui.camera_monitor': 'Camera monitor',
+        'light_manager.ui.cinematic_sequences': 'Sequences · switch, add and edit',
+        'light_manager.ui.cinematic_cameras': 'Cameras',
+        'light_manager.ui.edit_scene_gizmos': 'Edit selection in the viewport',
+        'light_manager.ui.selection_actions': 'Selection actions',
+        'light_manager.ui.clear_search': 'Clear search and filters',
         'light_manager.ui.collapse': 'Collapse all',
+        'light_manager.ui.light_sections': 'Light sections',
+        'light_manager.ui.edit_gizmos': 'Edit light gizmos',
+        'light_manager.ui.focus_selection': 'Focus selection',
+        'light_manager.ui.fit_lights': 'Fit lights to selection',
+        'light_manager.ui.toggle_bounds': 'Show or hide light bounds',
         'light_manager.ui.scene': 'Scene',
+        'light_manager.ui.scene_view': 'Workspace',
+        'light_manager.ui.scene_particles': 'Particles',
+        'light_manager.ui.scene_ray': 'God ray',
+        'light_manager.ui.scene_volume': 'Volume',
+        'light_manager.ui.scene_light': 'Light',
+        'light_manager.ui.scene_hint_short': 'Select an object in the viewport or Outliner to edit it.',
+        'light_manager.ui.scene_create': 'Create in scene',
+        'light_manager.ui.left_sections': 'Lightflow sections',
+        'light_manager.ui.nav_output': 'Output',
+        'light_manager.ui.nav_material': 'Material',
+        'light_manager.ui.nav_environment': 'Environment',
         'light_manager.ui.inspector': 'Properties',
         'light_manager.ui.camera_output': 'Camera & output',
+        'light_manager.ui.render_frame': 'Show / hide render frame',
         'light_manager.ui.helpers': 'Viewport helpers',
         'light_manager.ui.helpers_contextual': 'Contextual',
         'light_manager.ui.helpers_all': 'All helpers',
@@ -5016,15 +8124,55 @@ function initializeLightManagerPlugin() {
         'light_manager.ui.scene_hint': 'Adjust the scene here. Select an object in the viewport or Outliner to edit its properties.',
         'light_manager.ui.camera_hint': 'Use the current view, save a camera, or configure the output in Studio Render.',
         'light_manager.ui.layout': 'Lightflow workspace layout',
-        'light_manager.ui.layout_apply': 'Use recommended layout',
-        'light_manager.ui.layout_restore': 'Restore previous layout',
+        'light_manager.ui.layout_apply': 'Apply layout',
+        'light_manager.ui.layout_restore': 'Restore layout',
         'light_manager.ui.layout_description': 'Keep Material and scene settings on the left; lights and volumes on the right. Your previous Lightflow layout is kept for restoration.',
+        'light_manager.ui.wide_canvas': 'Wide canvas',
+        'light_manager.ui.wide_canvas_desc': 'Collapse the left controls to a compact rail while keeping the Outliner available. The selected Lightflow inspector stays on the right only when it is useful.',
+        'light_manager.ui.wide_canvas_exit': 'Exit wide canvas and restore sidebar widths',
+        'light_manager.ui.wide_canvas_exit_short': 'Exit wide canvas',
+        'light_manager.ui.auto_fold_outliner': 'Active inspector only',
+        'light_manager.ui.scene_filter': 'Filter the scene tree',
+        'light_manager.ui.collapse_inspector': 'Collapse inspector',
+        'light_manager.ui.expand_inspector': 'Expand inspector',
+        'light_manager.ui.outliner_auto_fit': 'Fit tree height to content',
+        'light_manager.ui.texture_choose': 'Choose texture…', 'light_manager.ui.texture_import': 'Import image…',
+        'light_manager.ui.texture_embedded': 'Embedded image (base64)', 'light_manager.ui.texture_clear': 'Clear texture',
+        'light_manager.ui.custom_icon': 'Custom icon', 'light_manager.ui.current_icon': 'Current icon',
+        'light_manager.ui.search_options': 'Search options',
+        'light_manager.ui.no_options': 'No matching options',
+        'light_manager.ui.icon_texture': 'Texture', 'light_manager.ui.icon_object': 'Object', 'light_manager.ui.icon_star': 'Star',
+        'light_manager.ui.icon_water': 'Water', 'light_manager.ui.icon_plants': 'Plants', 'light_manager.ui.icon_fire': 'Fire', 'light_manager.ui.icon_snow': 'Snow',
+        'light_manager.ui.all_elements': 'All',
+        'light_manager.ui.shadow_preview_short': 'View',
+        'light_manager.ui.shadow_studio_short': 'Studio',
+        'light_manager.ui.particle_player': 'Particle preview', 'light_manager.ui.player_play': 'Play preview', 'light_manager.ui.player_pause': 'Pause preview',
+        'light_manager.ui.player_restart': 'Restart preview', 'light_manager.ui.player_loop': 'Repeat preview', 'light_manager.ui.player_time': 'Preview time',
+        'light_manager.ui.player_minimize': 'Minimize particle player', 'light_manager.ui.player_expand': 'Open particle player',
+        'light_manager.ui.effects': 'FX',
+        'light_manager.ui.auto_fold_outliner_desc': 'Fold the Outliner while editing a Lightflow light or volume; restore it when editing ends.',
+        'light_manager.ui.resize_sidebar': 'Drag to resize sidebar',
+        'light_manager.ui.left_rail': 'Lightflow left panel rail',
+        'light_manager.ui.right_rail': 'Lightflow right panel rail',
+        'light_manager.ui.wide_open_panel': 'Open {panel} over the wide canvas',
+        'light_manager.ui.wide_close_panel': 'Close {panel}',
         'light_manager.ui.sun_region': 'Edit sun shadow region',
+        'light_manager.ui.sun_region_hint': 'Enable the environment, sun shadows and automatic shadow fitting to edit the region.',
         'light_manager.ui.light_details': 'Light & shadow details',
         'light_manager.ui.selected_scope': 'Changes apply to the selected lights.',
         'light_manager.ui.no_light': 'Select a light in the viewport or Outliner to edit it.',
         'light_manager.ui.saved_cameras': 'Saved cameras',
+        'light_manager.ui.ao_settings': 'Ambient occlusion settings',
+        'light_manager.ui.attached_ray': 'Create attached God Ray',
+        'light_manager.ui.transform_selection': 'Transform selection · Move / Rotate',
+        'light_manager.ui.art_source_section': 'Source & reach',
+        'light_manager.ui.art_scope_section': 'Influence & targets',
+        'light_manager.ui.world_shading': 'Shading',
+        'light_manager.ui.world_ao': 'Ambient occlusion',
+        'light_manager.ui.world_grid': 'Grid',
+        'light_manager.ui.world_ground': 'Ground',
         'light_manager.ui.add_light': 'Add light',
+        'light_manager.action.add_light_menu': 'Add Light',
         'light_manager.ui.add_volume': 'Add volume',
         'light_manager.ui.create': 'Add to scene',
         'mode.render': 'Render',
@@ -5084,6 +8232,17 @@ function initializeLightManagerPlugin() {
         'property.shadow_near': 'Shadow Near',
         'property.shadow_far': 'Shadow Far',
         'property.shadow_bounds': 'Shadow Bounds',
+        'property.shadow_camera_quality': 'Camera Shadow Detail',
+        'property.shadow_scene_fit': 'Automatically cover the whole scene',
+        'property.shadow_scene_fit.desc': 'Directional shadows cover visible scene geometry, including Scene Links. Camera detail maps keep nearby shadows sharp.',
+        'property.shadow_region_locked': 'Lock shadow region in world space',
+        'property.shadow_region_locked.desc': 'Capture the current world region. Moving or rotating this directional light refits its shadow camera around the same region.',
+        'property.shadow_camera_quality.desc': 'Two detail maps follow the camera for the principal directional light. Environment takes priority when its sun is active.',
+        'property.shadow_camera_distance': 'Camera Detail Distance',
+        'property.shadow_camera_distance.desc': 'Depth covered from the nearest part of the scene; reduce it for finer nearby shadows. Empty space before the scene does not consume detail. The original bounds retain far coverage.',
+        'property.camera_shadow.off': 'Off',
+        'property.camera_shadow.balanced': 'Balanced',
+        'property.camera_shadow.high': 'High',
         'property.shadow_bounds.desc': 'Size of the shadow area for directional lights. Adjust to reduce shadow artifacts.',
         'property.shadow_clip': 'Shadow Clip',
         'property.shadow_clip.desc': 'Distance from the light where shadows start to be rendered. Adjust to reduce shadow artifacts.',
@@ -5093,10 +8252,19 @@ function initializeLightManagerPlugin() {
         'property.shadow_resolution.desc': 'Shadow map resolution. Higher values produce sharper shadows but may reduce performance.',
         'property.studio_shadow_resolution': 'Studio Shadow',
         'property.studio_shadow_resolution.desc': 'Shadow size used only while Studio Render captures. Same keeps the viewport resolution.',
-        'property.shadow_softness': 'Softness',
-        'property.shadow_softness.desc': 'Softens shadow edges in shadow-map texels. Higher values reduce jagged edges; 0 keeps hard shadows.',
+        'property.shadow_softness_mode': "Shadow Style",
+        'property.shadow_softness_mode.desc': "Crisp: antialiased edge without penumbra. Artistic: constant blur. Distance: physical penumbra. Classic: preserves the filter of older projects.",
+        'property.shadow_mode.hard': "Crisp (AA)",
+        'property.shadow_mode.artistic': "Artistic",
+        'property.shadow_mode.distance': "Distance",
+        'property.shadow_mode.legacy': "Classic",
+        'property.shadow_blur': "Blur Radius",
+        'property.shadow_blur.desc': "Constant blur, including contacts. 0 = hard; 8 = soft; 32–64 = broad. Preserves size across resolutions.",
+        'property.shadow_softness': 'Source Size',
+        'property.shadow_softness.desc': 'Controls blocker-aware penumbra size. Point/spot lights use source diameter in scene units; directional lights use angular diameter in degrees. Contacts stay sharp; 0 keeps hard shadows.',
         'property.shadow_bias': 'Bias',
-        'property.shadow_bias.desc': 'Adjusts shadow depth to reduce artifacts. Positive values can reduce shadow acne but may cause peter-panning. Default: -0.0005',
+        'property.shadow_bias.desc': 'Depth offset. Automatic defaults follow texel size and the shadow depth range. More negative values reduce acne but can detach shadows; positive values increase self-shadowing.',
+        'property.shadow_normal_bias_auto': 'Automatic Normal Bias',
         'property.shadow_normal_bias': 'Normal Bias',
         'property.shadow_normal_bias.desc': 'Adjusts bias based on surface normal. Auto default follows shadow resolution, directional bounds, and the near/far shadow range.',
         'action.edit_light_properties': 'Edit Light Properties',
@@ -5109,12 +8277,29 @@ function initializeLightManagerPlugin() {
         'light_manager.action.add_spot.desc': 'Add an aimable cone light for key lighting.',
         'light_manager.action.add_directional': 'Add Directional Light',
         'light_manager.action.add_directional.desc': 'Add a sun-style light for broad scene lighting.',
-        'light_manager.action.show_area_gizmos': 'Show Light Area Gizmos',
-        'light_manager.action.hide_area_gizmos': 'Hide Light Area Gizmos',
+        'light_manager.action.show_area_gizmos': 'Show bounds',
+        'light_manager.action.hide_area_gizmos': 'Hide bounds',
+        'light_manager.action.focus_selection': 'Focus selection',
+        'light_manager.action.focus_selection.desc': 'Center the viewport on the selected light.',
+        'light_manager.action.reset_gizmo': 'Reset light bounds',
+        'light_manager.action.reset_gizmo.desc': 'Reset range, cone and shadow-bound controls for the selected light.',
+        'light_manager.undo.reset_gizmo': 'Reset light gizmo',
+        'light_manager.name.point': 'Point light',
+        'light_manager.name.directional': 'Directional light',
+        'light_manager.name.spot': 'Spotlight',
         'light_manager.action.fit_to_selection': 'Fit Lights to Selection...',
         'light_manager.action.fit_to_selection.desc': 'Fit selected lights to the selected objects or groups.',
         'light_manager.tool.edit_gizmos': 'Light Edit Gizmos',
         'light_manager.tool.edit_gizmos.desc': 'Drag viewport handles for aim, range, cone angle, penumbra, shadow clip, and shadow bounds.',
+        'light_manager.target.edit': 'Move aim target',
+        'light_manager.target.create': 'Create aim target',
+        'light_manager.target.move': 'Aim target · drag freely or constrain with X / Y / Z; Shift / Ctrl adjust the grid',
+        'light_manager.target.hint': 'Fixed world position. The light keeps looking here when it moves. Release the target to use manual rotation.',
+        'light_manager.target.release': 'Release aim target',
+        'light_manager.target.position': 'Aim target position',
+        'light_manager.target.fixed': 'Fixed aim target',
+        'light_manager.target.selection': 'Aim at selection',
+        'light_manager.target.undo': 'Edit light aim target',
         'light_manager.action.free_move': 'Free Move From View',
         'light_manager.action.free_move.desc': 'Move the selected elements on a camera-facing plane using Blockbench snapping. Shift, Ctrl/Cmd, or both use their configured snapping resolutions.',
         'light_manager.action.edit_properties': 'Light Properties...',
@@ -5153,6 +8338,12 @@ function initializeLightManagerPlugin() {
         'light_manager.count.target.one': '1 target',
         'light_manager.count.target.many': '{count} targets',
         'light_manager.dialog.fit.title': 'Fit Lights to Selection',
+        'light_manager.dialog.fit.selection': '{lights} · {targets}\nBounds: {size}',
+        'light_manager.texture_mesh.multiple': '{count} textured meshes · enable only the properties to replace.',
+        'light_manager.texture_mesh.apply_texture': 'Replace textures',
+        'light_manager.texture_mesh.apply_rotation': 'Replace rotation',
+        'light_manager.texture_mesh.apply_scale': 'Replace scale',
+        'light_manager.texture_mesh.apply_pivot': 'Replace pivot',
         'light_manager.dialog.fit.margin': 'Extra Margin',
         'light_manager.dialog.fit.margin.desc': 'Adds scene-unit padding to distance, bounds, near/far, and spot cone fitting.',
         'light_manager.dialog.fit.angle_margin': 'Spot Angle Margin',
@@ -5175,7 +8366,7 @@ function initializeLightManagerPlugin() {
         'light_manager.property.brightness': 'Brightness',
         'light_manager.property.key_light_enabled': 'Affect Rendercraft Key Light',
         'light_manager.property.key_light_weight': 'Key influence',
-        'light_manager.property.key_light_weight.desc': 'Priority for Glow and RIM direction/color. 1 is neutral, higher values favor this light, 0 excludes it. Does not change illumination or shadows.',
+        'light_manager.property.key_light_weight.desc': 'Priority for Glow and RIM direction/color. 1 is neutral, higher values favor this light, 0 disables its Key Light participation. Does not change illumination or shadows.',
         'light_manager.property.range': 'Range',
         'light_manager.property.range.desc': 'Point/spot range. 0 means no hard cutoff.',
         'light_manager.property.spot_cone': 'Spot Cone',
@@ -5198,14 +8389,20 @@ function initializeLightManagerPlugin() {
         'light_manager.generic.reset_value': 'Reset value',
         'light_manager.generic.reset': 'Reset',
         'light_manager.gradient.add_stop': 'Add color stop',
+        'light_manager.slider.magnetic_hint': 'Hold Alt while dragging to snap to marks. Alt + arrows jumps between marks.',
         'light_manager.gradient.remove_stop': 'Remove color stop',
         'light_manager.gradient.distribute': 'Distribute stops evenly',
         'light_manager.gradient.reverse': 'Reverse gradient',
         'light_manager.gradient.reset': 'Reset gradient',
         'light_manager.gradient.options': 'Gradient options',
+        'light_manager.gradient.expand': 'Expand sky gradients',
+        'light_manager.gradient.hint': 'Click to select the nearest color. Double-click to add a stop. Right-click for gradient options.',
         'light_manager.gradient.color': 'Selected stop color',
         'light_manager.gradient.hex': 'Hex color',
         'light_manager.gradient.position': 'Stop position',
+        'light_manager.gradient.selected_stop': 'Selected point',
+        'light_manager.gradient.stop': 'Point',
+        'light_manager.gradient.fixed_position': 'Endpoint position is fixed',
         'light_manager.gradient.midpoint': 'Fade midpoint',
         'light_manager.gradient.color_space': 'Color interpolation space',
         'light_manager.gradient.interpolation': 'Transition curve',
@@ -5237,7 +8434,7 @@ function initializeLightManagerPlugin() {
         'light_manager.undo.change_penumbra': 'Change light penumbra',
         'light_manager.undo.change_shadow_clip': 'Change shadow clip',
         'light_manager.undo.change_shadow_bounds': 'Change shadow bounds',
-        'light_manager.undo.change_shadow_softness': 'Change shadow softness',
+        'light_manager.undo.change_shadow_softness': 'Change shadow source size',
         'light_manager.undo.change_shadow_bias': 'Change shadow bias',
         'light_manager.undo.change_shadow_normal_bias': 'Change shadow normal bias',
         'light_manager.undo.edit_texture_mesh': 'Edit textured mesh properties'
@@ -5247,11 +8444,70 @@ function initializeLightManagerPlugin() {
         'light_manager.ui.filter_all': 'Todos',
         'light_manager.ui.filter_active': 'Activos',
         'light_manager.ui.filter_modified': 'Modificados',
+        'light_manager.ui.filter_favorites': 'Favoritos',
+        'light_manager.ui.favorites': 'Las propiedades fijadas permanecen visibles entre secciones',
+        'light_manager.ui.favorites_empty': 'Aún no hay favoritos. Haz clic derecho en una propiedad y elige Fijar propiedad.',
+        'light_manager.ui.pin_property': 'Fijar propiedad',
+        'light_manager.ui.unpin_property': 'Desfijar propiedad',
+        'light_manager.ui.sections': 'Secciones de propiedades',
+        'light_manager.ui.basic': 'Básico',
+        'light_manager.ui.shape': 'Forma',
+        'light_manager.ui.shadows': 'Sombras',
+        'light_manager.ui.advanced': 'Avanzado',
+        'light_manager.ui.starting_point': 'Punto de partida',
+        'light_manager.ui.current_values': 'Valores actuales',
+        'light_manager.ui.warm_sunset': 'Atardecer cálido',
+        'light_manager.ui.guide_light': '1. Elige un punto de partida. 2. Ajusta color e intensidad y observa el resultado en la vista. 3. Arrastra la dirección o abre Forma / Sombras para editar con precisión.',
+        'light_manager.ui.guide_volume': '1. Elige un punto de partida. 2. Ajusta densidad y color y observa el resultado en la vista. 3. Usa Forma para situar el efecto y Calidad para refinarlo.',
+        'light_manager.ui.guide_light_short': 'Empieza con color e intensidad.',
+        'light_manager.ui.guide_volume_short': 'Empieza con densidad y color.',
+        'light_manager.ui.guide_dismiss': 'Continuar en el editor · omitir guía',
         'light_manager.ui.filter_label': 'Filtrar ajustes',
         'light_manager.ui.filter_empty': 'No hay ajustes coincidentes. Limpia la búsqueda o elige Todos.',
+        'light_manager.ui.search': 'Buscar ajuste',
+        'light_manager.ui.value': 'valor',
+        'light_manager.ui.invalid_number': 'Introduce un número válido',
+        'light_manager.ui.sections': 'Apartados',
+        'light_manager.ui.search_objects': 'Buscar elemento o grupo',
+        'light_manager.ui.expand_group': 'Expandir grupo',
+        'light_manager.ui.collapse_group': 'Contraer grupo',
+        'light_manager.ui.objects': 'objetos visibles',
+        'light_manager.ui.preview_empty': 'No hay vista previa',
+        'light_manager.ui.preview_error': 'No se pudo cargar la vista previa',
+        'light_manager.ui.loading': 'Cargando vista previa…',
+
+        'light_manager.ui.search_shortcut': 'Buscar ajuste · Ctrl+Shift+F',
+        'light_manager.ui.viewport_tools': 'Herramientas de escena Lightflow',
+        'light_manager.ui.camera_view': 'Mirar por la cámara',
+        'light_manager.ui.camera_keyframe': 'Guardar pose de cámara en el cursor',
+        'light_manager.ui.camera_fly': 'Volar cámara · Enter guarda, Esc cancela',
+        'light_manager.ui.camera_monitor': 'Monitor de cámara',
+        'light_manager.ui.cinematic_sequences': 'Secuencias · elegir, añadir y editar',
+        'light_manager.ui.cinematic_cameras': 'Cámaras',
+        'light_manager.ui.edit_scene_gizmos': 'Editar selección en el viewport',
+        'light_manager.ui.selection_actions': 'Acciones de selección',
+        'light_manager.ui.clear_search': 'Limpiar búsqueda y filtros',
+        'light_manager.ui.collapse': 'Contraer todo',
+        'light_manager.ui.light_sections': 'Secciones de luz',
+        'light_manager.ui.edit_gizmos': 'Editar gizmos de luz',
+        'light_manager.ui.focus_selection': 'Enfocar selección',
+        'light_manager.ui.fit_lights': 'Ajustar luces a la selección',
+        'light_manager.ui.toggle_bounds': 'Mostrar u ocultar límites de luz',
         'light_manager.ui.scene': 'Escena',
+        'light_manager.ui.scene_view': 'Espacio de trabajo',
+        'light_manager.ui.scene_particles': 'Partículas',
+        'light_manager.ui.scene_ray': 'Rayo de luz',
+        'light_manager.ui.scene_volume': 'Volumen',
+        'light_manager.ui.scene_light': 'Luz',
+        'light_manager.ui.scene_hint_short': 'Selecciona un objeto en la vista o el Outliner para editarlo.',
+        'light_manager.ui.scene_create': 'Crear en la escena',
+        'light_manager.ui.left_sections': 'Apartados de Lightflow',
+        'light_manager.ui.nav_output': 'Salida',
+        'light_manager.ui.nav_material': 'Material',
+        'light_manager.ui.nav_environment': 'Entorno',
         'light_manager.ui.inspector': 'Propiedades',
         'light_manager.ui.camera_output': 'Cámara y salida',
+        'light_manager.ui.render_frame': 'Mostrar / ocultar encuadre de render',
         'light_manager.ui.helpers': 'Ayudas de la vista',
         'light_manager.ui.helpers_contextual': 'Contextuales',
         'light_manager.ui.helpers_all': 'Todas las ayudas',
@@ -5261,17 +8517,57 @@ function initializeLightManagerPlugin() {
         'light_manager.ui.scene_hint': 'Ajusta la escena aquí. Selecciona un objeto en la vista o el Outliner para editar sus propiedades.',
         'light_manager.ui.camera_hint': 'Usa la vista actual, guarda una cámara o configura la salida en Studio Render.',
         'light_manager.ui.layout': 'Layout del espacio Lightflow',
-        'light_manager.ui.layout_apply': 'Usar layout recomendado',
-        'light_manager.ui.layout_restore': 'Restaurar layout anterior',
+        'light_manager.ui.layout_apply': 'Aplicar distribución',
+        'light_manager.ui.layout_restore': 'Restaurar distribución',
         'light_manager.ui.layout_description': 'Mantiene Material y los ajustes de escena a la izquierda; luces y volúmenes a la derecha. Conserva el layout anterior para restaurarlo.',
+        'light_manager.ui.wide_canvas': 'Lienzo ancho',
+        'light_manager.ui.wide_canvas_desc': 'Contrae los controles de la izquierda a un riel compacto y mantiene el Outliner disponible. El inspector Lightflow seleccionado aparece a la derecha sólo cuando hace falta.',
+        'light_manager.ui.wide_canvas_exit': 'Salir de lienzo ancho y restaurar las columnas',
+        'light_manager.ui.wide_canvas_exit_short': 'Salir de lienzo ancho',
+        'light_manager.ui.auto_fold_outliner': 'Sólo inspector activo',
+        'light_manager.ui.scene_filter': 'Filtrar el árbol de la escena',
+        'light_manager.ui.collapse_inspector': 'Contraer inspector',
+        'light_manager.ui.expand_inspector': 'Expandir inspector',
+        'light_manager.ui.outliner_auto_fit': 'Ajustar altura del árbol al contenido',
+        'light_manager.ui.texture_choose': 'Elegir textura…', 'light_manager.ui.texture_import': 'Importar imagen…',
+        'light_manager.ui.texture_embedded': 'Imagen integrada (base64)', 'light_manager.ui.texture_clear': 'Quitar textura',
+        'light_manager.ui.custom_icon': 'Icono personalizado', 'light_manager.ui.current_icon': 'Icono actual',
+        'light_manager.ui.search_options': 'Buscar opciones',
+        'light_manager.ui.no_options': 'No hay opciones que coincidan',
+        'light_manager.ui.icon_texture': 'Textura', 'light_manager.ui.icon_object': 'Objeto', 'light_manager.ui.icon_star': 'Estrella',
+        'light_manager.ui.icon_water': 'Agua', 'light_manager.ui.icon_plants': 'Plantas', 'light_manager.ui.icon_fire': 'Fuego', 'light_manager.ui.icon_snow': 'Nieve',
+        'light_manager.ui.all_elements': 'Todo',
+        'light_manager.ui.shadow_preview_short': 'Vista',
+        'light_manager.ui.shadow_studio_short': 'Studio',
+        'light_manager.ui.particle_player': 'Vista previa de partículas', 'light_manager.ui.player_play': 'Reproducir vista previa', 'light_manager.ui.player_pause': 'Pausar vista previa',
+        'light_manager.ui.player_restart': 'Reiniciar vista previa', 'light_manager.ui.player_loop': 'Repetir vista previa', 'light_manager.ui.player_time': 'Tiempo de vista previa',
+        'light_manager.ui.player_minimize': 'Minimizar reproductor de partículas', 'light_manager.ui.player_expand': 'Abrir reproductor de partículas',
+        'light_manager.ui.effects': 'FX',
+        'light_manager.ui.auto_fold_outliner_desc': 'Pliega el Outliner al editar una luz o volumen Lightflow y lo restaura al terminar.',
+        'light_manager.ui.resize_sidebar': 'Arrastra para redimensionar la columna',
+        'light_manager.ui.left_rail': 'Riel izquierdo de paneles Lightflow',
+        'light_manager.ui.right_rail': 'Riel derecho de paneles Lightflow',
+        'light_manager.ui.wide_open_panel': 'Abrir {panel} sobre el lienzo ancho',
+        'light_manager.ui.wide_close_panel': 'Cerrar {panel}',
         'light_manager.ui.sun_region': 'Editar región de sombras del sol',
+        'light_manager.ui.sun_region_hint': 'Activa el entorno, las sombras del sol y el ajuste automático para editar la región.',
         'light_manager.ui.light_details': 'Detalles de luz y sombras',
         'light_manager.ui.selected_scope': 'Los cambios se aplican a las luces seleccionadas.',
         'light_manager.ui.no_light': 'Selecciona una luz en la vista o el Outliner para editarla.',
         'light_manager.ui.search': 'Buscar ajuste',
         'light_manager.ui.collapse': 'Contraer todo',
         'light_manager.ui.saved_cameras': 'Cámaras guardadas',
+        'light_manager.ui.ao_settings': 'Ajustes de oclusión ambiental',
+        'light_manager.ui.attached_ray': 'Crear rayo de luz vinculado',
+        'light_manager.ui.transform_selection': 'Transformar selección · Mover / Rotar',
+        'light_manager.ui.art_source_section': 'Origen y alcance',
+        'light_manager.ui.art_scope_section': 'Influencia y objetos',
+        'light_manager.ui.world_shading': 'Sombreado',
+        'light_manager.ui.world_ao': 'Oclusión ambiental',
+        'light_manager.ui.world_grid': 'Cuadrícula',
+        'light_manager.ui.world_ground': 'Suelo',
         'light_manager.ui.add_light': 'Añadir luz',
+        'light_manager.action.add_light_menu': 'Añadir luz',
         'light_manager.ui.add_volume': 'Añadir volumen',
         'light_manager.ui.create': 'Añadir a la escena',
         'mode.render': 'Renderizar',
@@ -5331,6 +8627,17 @@ function initializeLightManagerPlugin() {
         'property.shadow_near': 'Recorte Cercano',
         'property.shadow_far': 'Recorte Lejano',
         'property.shadow_bounds': 'Area de sombra',
+        'property.shadow_camera_quality': 'Detalle de sombras por cámara',
+        'property.shadow_scene_fit': 'Abarcar toda la escena automáticamente',
+        'property.shadow_scene_fit.desc': 'Las sombras direccionales cubren la geometría visible, incluidos Scene Links. Los mapas de cámara conservan el detalle cercano.',
+        'property.shadow_region_locked': 'Bloquear región de sombras en el mundo',
+        'property.shadow_region_locked.desc': 'Captura la región actual. Al mover o girar esta luz direccional, la cámara de sombras sigue abarcando esa misma región.',
+        'property.shadow_camera_quality.desc': 'Dos mapas siguen la cámara para la luz direccional principal. Environment tiene prioridad cuando su sol está activo.',
+        'property.shadow_camera_distance': 'Distancia de detalle de cámara',
+        'property.shadow_camera_distance.desc': 'Profundidad cubierta desde la parte más cercana de la escena; redúcela para sombras más finas. El espacio vacío anterior no consume detalle. Los límites originales conservan la cobertura lejana.',
+        'property.camera_shadow.off': 'Desactivado',
+        'property.camera_shadow.balanced': 'Equilibrado',
+        'property.camera_shadow.high': 'Alto',
         'property.shadow_bounds.desc': 'Tamano del area de sombras para luces direccionales. Ajustalo para reducir artefactos.',
         'property.shadow_clip': 'Recorte de sombra',
         'property.shadow_clip.desc': 'Distancia desde la luz donde comienzan a renderizarse las sombras. Ajusta para reducir artefactos de sombra.',
@@ -5340,10 +8647,19 @@ function initializeLightManagerPlugin() {
         'property.shadow_resolution.desc': 'Resolucion del mapa de sombras. Valores mas altos producen sombras mas nítidas pero pueden reducir el rendimiento.',
         'property.studio_shadow_resolution': 'Sombra Studio',
         'property.studio_shadow_resolution.desc': 'Tamano de sombra usado solo durante capturas de Studio Render. Igual conserva la resolucion del preview.',
-        'property.shadow_softness': 'Suavidad',
-        'property.shadow_softness.desc': 'Suaviza los bordes de sombra en texeles del shadow map. Valores mas altos reducen bordes serrados; 0 mantiene sombras duras.',
+        'property.shadow_softness_mode': "Estilo de sombra",
+        'property.shadow_softness_mode.desc': "Nítida: borde con antialiasing, sin penumbra. Artística: desenfoque constante. Por distancia: penumbra física. Clásica: conserva el filtro de proyectos anteriores.",
+        'property.shadow_mode.hard': "Nítida (AA)",
+        'property.shadow_mode.artistic': "Artística",
+        'property.shadow_mode.distance': "Por distancia",
+        'property.shadow_mode.legacy': "Clásica",
+        'property.shadow_blur': "Radio de desenfoque",
+        'property.shadow_blur.desc': "Desenfoque constante, incluso en el contacto. 0 = sombra dura; 8 = suave; 32–64 = amplio. Mantiene el tamaño al cambiar la resolución.",
+        'property.shadow_softness': 'Tamaño de fuente',
+        'property.shadow_softness.desc': 'Controla la penumbra según la distancia al bloqueador. En luces puntuales/spot es el diámetro de la fuente en unidades de escena; en direccionales es el diámetro angular en grados. El contacto se mantiene nítido; 0 deja sombras duras.',
         'property.shadow_bias': 'Bias',
-        'property.shadow_bias.desc': 'Ajusta la profundidad de sombra para reducir artefactos. Valores positivos pueden reducir acne, pero pueden separar sombras. Por defecto: -0.0005',
+        'property.shadow_bias.desc': 'Desplazamiento de profundidad. El valor automático sigue el tamaño del texel y el rango de sombra. Valores más negativos reducen el acné, pero pueden separar las sombras; los positivos aumentan el autosombreado.',
+        'property.shadow_normal_bias_auto': 'Bias normal automático',
         'property.shadow_normal_bias': 'Bias normal',
         'property.shadow_normal_bias.desc': 'Ajusta el bias segun la normal de la superficie. El default automatico sigue la resolucion, el area direccional y el rango near/far de sombra.',
         'action.edit_light_properties': 'Editar propiedades de luz',
@@ -5356,12 +8672,29 @@ function initializeLightManagerPlugin() {
         'light_manager.action.add_spot.desc': 'Agrega una luz de cono orientable para luz principal.',
         'light_manager.action.add_directional': 'Agregar luz direccional',
         'light_manager.action.add_directional.desc': 'Agrega una luz tipo sol para iluminacion amplia de escena.',
-        'light_manager.action.show_area_gizmos': 'Mostrar gizmos de area de luz',
-        'light_manager.action.hide_area_gizmos': 'Ocultar gizmos de area de luz',
+        'light_manager.action.show_area_gizmos': 'Mostrar límites',
+        'light_manager.action.hide_area_gizmos': 'Ocultar límites',
+        'light_manager.action.focus_selection': 'Enfocar selección',
+        'light_manager.action.focus_selection.desc': 'Centra el viewport en la luz seleccionada.',
+        'light_manager.action.reset_gizmo': 'Restablecer límites de luz',
+        'light_manager.action.reset_gizmo.desc': 'Restablece rango, cono y límites de sombra de la luz seleccionada.',
+        'light_manager.undo.reset_gizmo': 'Restablecer gizmo de luz',
+        'light_manager.name.point': 'Luz puntual',
+        'light_manager.name.directional': 'Luz direccional',
+        'light_manager.name.spot': 'Foco',
         'light_manager.action.fit_to_selection': 'Ajustar luces a seleccion...',
         'light_manager.action.fit_to_selection.desc': 'Ajusta las luces seleccionadas a los objetos o grupos seleccionados.',
         'light_manager.tool.edit_gizmos': 'Gizmos de edicion de luz',
         'light_manager.tool.edit_gizmos.desc': 'Arrastra handles en el viewport para apuntar, rango, angulo del cono, penumbra, recorte y area de sombra.',
+        'light_manager.target.edit': 'Mover objetivo de luz',
+        'light_manager.target.create': 'Crear objetivo de luz',
+        'light_manager.target.move': 'Objetivo · arrastra libremente o limita con X / Y / Z; Shift / Ctrl ajustan la cuadrícula',
+        'light_manager.target.hint': 'Posición fija en el mundo. La luz sigue mirando aquí al moverse. Libera el objetivo para usar la rotación manual.',
+        'light_manager.target.release': 'Liberar objetivo de luz',
+        'light_manager.target.position': 'Posición del objetivo',
+        'light_manager.target.fixed': 'Objetivo fijo',
+        'light_manager.target.selection': 'Apuntar a la selección',
+        'light_manager.target.undo': 'Editar objetivo de luz',
         'light_manager.action.free_move': 'Mover libre desde vista',
         'light_manager.action.free_move.desc': 'Mueve los elementos seleccionados en un plano frente a la camara con el ajuste de Blockbench. Shift, Ctrl/Cmd o ambos usan sus resoluciones configuradas.',
         'light_manager.action.edit_properties': 'Propiedades de luz...',
@@ -5400,6 +8733,12 @@ function initializeLightManagerPlugin() {
         'light_manager.count.target.one': '1 objetivo',
         'light_manager.count.target.many': '{count} objetivos',
         'light_manager.dialog.fit.title': 'Ajustar luces a seleccion',
+        'light_manager.dialog.fit.selection': '{lights} · {targets}\nLímites: {size}',
+        'light_manager.texture_mesh.multiple': '{count} mallas con textura · activa solo las propiedades que quieres sustituir.',
+        'light_manager.texture_mesh.apply_texture': 'Sustituir texturas',
+        'light_manager.texture_mesh.apply_rotation': 'Sustituir rotación',
+        'light_manager.texture_mesh.apply_scale': 'Sustituir escala',
+        'light_manager.texture_mesh.apply_pivot': 'Sustituir pivot',
         'light_manager.dialog.fit.margin': 'Margen extra',
         'light_manager.dialog.fit.margin.desc': 'Agrega margen en unidades de escena a distancia, area, near/far y cono spot.',
         'light_manager.dialog.fit.angle_margin': 'Margen del cono spot',
@@ -5421,8 +8760,8 @@ function initializeLightManagerPlugin() {
         'light_manager.property.color': 'Color',
         'light_manager.property.brightness': 'Brillo',
         'light_manager.property.key_light_enabled': 'Participar como Key Light de Rendercraft',
-        'light_manager.property.key_light_weight': 'Influencia Key',
-        'light_manager.property.key_light_weight.desc': 'Prioridad para dirección/color del Glow y RIM. 1 es neutro, valores altos favorecen esta luz y 0 la excluye. No cambia iluminación ni sombras.',
+        'light_manager.property.key_light_weight': 'Aporte a la luz principal',
+        'light_manager.property.key_light_weight.desc': 'Prioridad para dirección/color del Glow y RIM. 1 es neutro, valores altos favorecen esta luz y 0 desactiva su participación como Key Light. No cambia iluminación ni sombras.',
         'light_manager.property.range': 'Rango',
         'light_manager.property.range.desc': 'Rango de punto/spot. 0 significa sin corte duro.',
         'light_manager.property.spot_cone': 'Cono spot',
@@ -5445,14 +8784,20 @@ function initializeLightManagerPlugin() {
         'light_manager.generic.reset_value': 'Reiniciar valor',
         'light_manager.generic.reset': 'Reiniciar',
         'light_manager.gradient.add_stop': 'Agregar punto de color',
+        'light_manager.slider.magnetic_hint': 'Mantén Alt al arrastrar para atraer el valor a las marcas. Alt + flechas salta entre ellas.',
         'light_manager.gradient.remove_stop': 'Eliminar punto de color',
         'light_manager.gradient.distribute': 'Distribuir puntos uniformemente',
         'light_manager.gradient.reverse': 'Invertir gradiente',
         'light_manager.gradient.reset': 'Restablecer gradiente',
         'light_manager.gradient.options': 'Opciones del gradiente',
+        'light_manager.gradient.expand': 'Ampliar degradados del cielo',
+        'light_manager.gradient.hint': 'Clic para seleccionar el color más cercano. Doble clic para añadir un punto. Clic derecho para las opciones del degradado.',
         'light_manager.gradient.color': 'Color del punto seleccionado',
         'light_manager.gradient.hex': 'Color hexadecimal',
         'light_manager.gradient.position': 'Posición del punto',
+        'light_manager.gradient.selected_stop': 'Punto seleccionado',
+        'light_manager.gradient.stop': 'Punto',
+        'light_manager.gradient.fixed_position': 'La posición del extremo es fija',
         'light_manager.gradient.midpoint': 'Centro del desvanecimiento',
         'light_manager.gradient.color_space': 'Espacio de interpolación de color',
         'light_manager.gradient.interpolation': 'Curva de transición',
@@ -5484,7 +8829,7 @@ function initializeLightManagerPlugin() {
         'light_manager.undo.change_penumbra': 'Cambiar penumbra de luz',
         'light_manager.undo.change_shadow_clip': 'Cambiar recorte de sombra',
         'light_manager.undo.change_shadow_bounds': 'Cambiar area de sombra',
-        'light_manager.undo.change_shadow_softness': 'Cambiar suavidad de sombra',
+        'light_manager.undo.change_shadow_softness': 'Cambiar tamaño de la fuente de sombra',
         'light_manager.undo.change_shadow_bias': 'Cambiar bias de sombra',
         'light_manager.undo.change_shadow_normal_bias': 'Cambiar bias normal de sombra',
         'light_manager.undo.edit_texture_mesh': 'Editar propiedades de Textured Mesh'
@@ -5692,6 +9037,7 @@ function initializeLightManagerPlugin() {
         const nativeAddAction = window.BarItems?.add_texture_mesh;
         const originalAddCondition = nativeAddAction?.condition;
         let patchedAddCondition = null;
+        let propertiesDialog = null;
         let patchedBehavior = null;
         let patchedInit = null;
         let patchedApplyTexture = null;
@@ -6119,52 +9465,65 @@ function initializeLightManagerPlugin() {
             const elements = selectedTextureMeshes();
             const first = elements[0];
             if (!first) return;
-
-            const textureOptions = {};
-            if (elements.length > 1) {
-                textureOptions.__keep__ = translateLightManager('light_manager.texture_mesh.keep_mixed');
-            }
-            (Texture.all || []).forEach(texture => {
-                if (!texture?.uuid) return;
-                const colorTexture = getColorTexture(texture);
-                if (!colorTexture?.uuid || textureOptions[colorTexture.uuid]) return;
-                textureOptions[colorTexture.uuid] = colorTexture.name || colorTexture.id || colorTexture.uuid;
+            if (propertiesDialog) { propertiesDialog.show(); return; }
+            const multiple = elements.length > 1;
+            const applyControl = property => ({
+                type: 'custom_checkbox',
+                label: `light_manager.texture_mesh.apply_${property}`, value: false,
+                condition: () => multiple, layout: 'space_between',
+                icon_on: 'check_box', icon_off: 'check_box_outline_blank',
+                icon_color_on: 'var(--color-accent)', label_color: 'var(--color-text)'
             });
-            const currentTexture = resolveTexture(first, true);
-            if (!Object.keys(textureOptions).length) textureOptions.__keep__ = translateLightManager('light_manager.texture_mesh.keep_mixed');
+            const close = () => { propertiesDialog?.delete(); propertiesDialog = null; };
 
-            new Dialog('light_manager_texture_mesh_properties_dialog', {
+            const currentTexture = resolveTexture(first, true);
+
+            propertiesDialog = new Dialog('light_manager_texture_mesh_properties_dialog', {
                 title: translateLightManager('light_manager.action.texture_mesh_properties'),
-                form: {
+                width: 480,
+                form: (window.LightManagerUI?.prepareForm || (form => form))({
+                    selection: {
+                        type: 'bar_display', icon: 'view_in_ar', paragraph: true, expand: true,
+                        value: multiple ? formatLightManagerMessage('light_manager.texture_mesh.multiple', { count: elements.length }) : first.name
+                    },
+                    apply_texture: applyControl('texture'),
                     texture: {
                         label: translateLightManager('light_manager.texture_mesh.texture'),
-                        type: 'select',
-                        options: textureOptions,
-                        value: elements.length > 1 ? '__keep__' : (currentTexture?.uuid || Object.keys(textureOptions)[0])
+                        type: 'texture_source', project_reference: true,
+                        condition: form => !multiple || form.apply_texture,
+                        value: currentTexture?.uuid || ''
                     },
+                    apply_rotation: applyControl('rotation'),
                     rotation: {
                         label: translateLightManager('light_manager.texture_mesh.rotation'),
-                        type: 'vector', dimensions: 3, value: first.rotation.slice(), step: 1
+                        type: 'custom_vector', dimensions: 3, axis_labels: true, value: first.rotation.slice(), step: 1,
+                        condition: form => !multiple || form.apply_rotation
                     },
+                    apply_scale: applyControl('scale'),
                     scale: {
                         label: translateLightManager('light_manager.texture_mesh.scale'),
-                        type: 'vector', dimensions: 3, value: first.scale.slice(), step: 0.05
+                        type: 'custom_vector', dimensions: 3, axis_labels: true, value: first.scale.slice(), default: [1, 1, 1], step: 0.05,
+                        condition: form => !multiple || form.apply_scale
                     },
+                    apply_pivot: applyControl('pivot'),
                     pivot: {
                         label: translateLightManager('light_manager.texture_mesh.pivot'),
-                        type: 'vector', dimensions: 3, value: first.origin.slice(), step: 0.25
+                        type: 'custom_vector', dimensions: 3, axis_labels: true, value: first.origin.slice(), step: 0.25,
+                        condition: form => !multiple || form.apply_pivot
                     },
                     keep_geometry: {
                         label: translateLightManager('light_manager.texture_mesh.keep_geometry'),
                         description: translateLightManager('light_manager.texture_mesh.keep_geometry.desc'),
-                        type: 'checkbox', value: true
+                        type: 'checkbox', value: true,
+                        condition: form => !multiple || form.apply_pivot
                     }
-                },
+                }),
                 onConfirm(result) {
                     const vector = (value, fallback, minimum = -Infinity) => [0, 1, 2].map(index => {
                         const number = Number(value?.[index]);
                         return Number.isFinite(number) ? Math.max(minimum, number) : fallback[index];
                     });
+                    if (multiple && !['texture', 'rotation', 'scale', 'pivot'].some(key => result[`apply_${key}`])) { close(); return; }
                     Undo.initEdit({ elements });
                     elements.forEach(element => {
                         const rotation = vector(result.rotation, element.rotation);
@@ -6172,14 +9531,17 @@ function initializeLightManagerPlugin() {
                             Math.abs(value) < 0.0001 ? (value < 0 ? -0.0001 : 0.0001) : value
                         ));
                         const pivot = vector(result.pivot, element.origin);
-                        element.rotation.splice(0, 3, ...rotation);
-                        element.scale.splice(0, 3, ...scale);
+                        if (!multiple || result.apply_rotation) element.rotation.splice(0, 3, ...rotation);
+                        if (!multiple || result.apply_scale) element.scale.splice(0, 3, ...scale);
                         controller.updateTransform?.(element);
-                        if (result.keep_geometry) element.transferOrigin(pivot);
-                        else element.origin.splice(0, 3, ...pivot);
-                        if (result.texture !== '__keep__') {
+                        if (!multiple || result.apply_pivot) {
+                            if (result.keep_geometry) element.transferOrigin(pivot);
+                            else element.origin.splice(0, 3, ...pivot);
+                        }
+                        if (!multiple || result.apply_texture) {
                             const texture = findTexture(result.texture);
                             if (texture) element.texture_name = getColorTexture(texture)?.uuid || texture.uuid;
+                            else if (!result.texture) element.texture_name = '';
                         }
                         updateElement(element);
                     });
@@ -6190,7 +9552,9 @@ function initializeLightManagerPlugin() {
                         selection: true
                     });
                     window.updateSelection?.();
-                }
+                    close();
+                },
+                onCancel: close
             }).show();
         };
 
@@ -6220,6 +9584,7 @@ function initializeLightManagerPlugin() {
         return {
             delete() {
                 disposed = true;
+                propertiesDialog?.delete(); propertiesDialog = null;
                 if (refreshTimer !== null) clearTimeout(refreshTimer);
                 listeners.forEach(listener => listener?.delete?.());
                 const menuStructure = prototype.menu?.structure;
@@ -6370,6 +9735,92 @@ function initializeLightManagerPlugin() {
             if (window.Project?.nodes_3d?.[element.uuid] === mesh) {
                 delete Project.nodes_3d[element.uuid];
             }
+        });
+    }
+
+    function prepareReloadedLightManagerElements(ElementType, type) {
+        for (const project of window.ModelProject?.all || []) {
+            if (project === window.Project) continue;
+            for (const element of project.elements || []) if (element.type === type && !(element instanceof ElementType)) Object.setPrototypeOf(element, ElementType.prototype);
+        }
+        const elements = [];
+        const seen = new Set();
+        [window.Project?.elements, window.Outliner?.elements].forEach(collection => {
+            if (!Array.isArray(collection)) return;
+            collection.forEach(element => {
+                if (!element || seen.has(element)) return;
+                seen.add(element);
+                elements.push(element);
+            });
+        });
+        const migrated = [];
+        elements.forEach(element => {
+            if (!element || element.type !== type || element instanceof ElementType) return;
+
+            // A plugin reload keeps the project's custom OutlinerElement instances but
+            // replaces their constructor. Light Manager deliberately removes preview
+            // meshes on unload, so those surviving instances otherwise point at the old
+            // class and have no mesh when Blockbench's register_element_type listeners
+            // refresh selection/highlights. Migrate the live instances in place to
+            // preserve UUIDs, parenting, selection and animation references.
+            Object.setPrototypeOf(element, ElementType.prototype);
+            if (ElementType.behavior?.parent && !Array.isArray(element.children)) {
+                Vue.set(element, 'children', []);
+                Vue.set(element, 'isOpen', false);
+            }
+
+            // registerType() dispatches synchronously before the new preview controller
+            // is installed. Give migrated elements a minimal valid scene node for that
+            // short window; the real controller rebuilds it immediately afterwards.
+            if (!element.mesh && window.Project?.nodes_3d && typeof THREE !== 'undefined') {
+                const mesh = new THREE.Object3D();
+                mesh.name = element.uuid;
+                mesh.type = type;
+                mesh.isElement = true;
+                mesh.visible = element.visibility !== false;
+                mesh.rotation.order = window.Format?.euler_order || 'ZYX';
+                mesh.geometry = new THREE.BufferGeometry();
+                mesh.geometry.boundingBox = new THREE.Box3().makeEmpty();
+                mesh.fix_position = new THREE.Vector3();
+                mesh.fix_rotation = new THREE.Euler();
+                mesh.userData = mesh.userData || {};
+                mesh.userData.lightManagerReloadPlaceholder = true;
+                Project.nodes_3d[element.uuid] = mesh;
+                const parentMesh = element.parent?.type === 'armature_bone'
+                    ? element.parent.mesh
+                    : Project.model_3d;
+                parentMesh?.add?.(mesh);
+            }
+            migrated.push(element);
+        });
+
+        if (migrated.length && !ElementType.preview_controller) {
+            // OutlinerElement.registerType dispatches register_element_type synchronously.
+            // Core selection/highlight listeners may call constructor.preview_controller
+            // during that dispatch, before Light Manager reaches the real
+            // NodePreviewController constructor below. Keep that registration window
+            // safe; constructing the real controller overwrites this class property.
+            ElementType.preview_controller = {
+                setup() { },
+                remove() { },
+                updateAll() { },
+                updateTransform() { },
+                updateVisibility() { },
+                updateSelection() { },
+                updateRenderOrder() { }
+            };
+        }
+        return migrated;
+    }
+
+    function rebuildReloadedLightManagerElementPreviews(elements, controller) {
+        if (!controller || !Array.isArray(elements) || !elements.length) return;
+        elements.forEach(element => {
+            if (!element) return;
+            if (element.mesh) controller.remove?.(element);
+            controller.setup?.(element);
+            controller.updateVisibility?.(element);
+            controller.updateSelection?.(element);
         });
     }
 
@@ -6720,7 +10171,8 @@ function initializeLightManagerPlugin() {
                 min-width: 0;
                 padding-right: 6px;
                 white-space: normal;
-                overflow-wrap: anywhere;
+                overflow-wrap: break-word;
+                word-break: normal;
                 line-height: 1.3;
             }
             ${selector} .dialog_bar > label.name_space_left > span:first-child {
@@ -6736,9 +10188,7 @@ function initializeLightManagerPlugin() {
                 min-width: 0;
             }
             ${selector} .dialog_bar > .dialog_form_description {
-                flex: 0 0 12px;
-                text-align: center;
-                margin-left: 3px;
+                display: none !important;
             }
             ${selector} .dialog_bar > .light_manager_enum_select_input {
                 flex: 1 1 112px !important;
@@ -6747,6 +10197,20 @@ function initializeLightManagerPlugin() {
             ${selector} .dialog_bar > .light_manager_horizontal_select {
                 min-height: 34px;
                 box-sizing: border-box;
+            }
+            ${selector} .full_width_dialog_bar > .tool.widget > span:first-child {
+                flex: 0 1 42%;
+                min-width: 0;
+                white-space: normal !important;
+                overflow: visible;
+                text-overflow: clip;
+                overflow-wrap: break-word;
+                word-break: normal;
+                line-height: 1.2;
+            }
+            ${selector} .full_width_dialog_bar > .tool.widget > .slider_input_combo {
+                flex: 1 1 50% !important;
+                min-width: 0 !important;
             }
             ${selector} .light_manager_horizontal_select .horizontal_select_btn.selected {
                 background: color-mix(in srgb, var(--color-accent) 68%, #000) !important;
@@ -6761,6 +10225,7 @@ function initializeLightManagerPlugin() {
                 font-size: 13px !important;
                 font-weight: 400 !important;
                 color: var(--color-text) !important;
+                border-radius: 8px;
             }
             ${selector} .light_manager_advanced_color_control.is_expanded .sp-replacer {
                 display: flex !important;
@@ -6823,12 +10288,18 @@ function initializeLightManagerPlugin() {
                 margin-bottom: 3px !important;
             }
             ${selector} .light_manager_form_variant_panel_tabs .light_manager_horizontal_select {
-                min-height: 29px;
+                height: 30px;
+                min-height: 30px;
+                max-height: 30px;
+                box-sizing: border-box;
                 border-radius: 3px;
-                overflow: hidden;
+                overflow: visible;
             }
             ${selector} .light_manager_form_variant_panel_tabs .horizontal_select_btn {
-                min-height: 28px;
+                height: 30px !important;
+                min-height: 30px !important;
+                max-height: 30px !important;
+                box-sizing: border-box;
                 padding: 3px 8px;
             }
             ${selector} .light_manager_panel_search_bar {
@@ -6836,9 +10307,10 @@ function initializeLightManagerPlugin() {
             }
             ${selector} .light_manager_panel_search {
                 display: grid;
-                grid-template-columns: minmax(78px, 1fr) minmax(86px, auto) 32px;
+                grid-template-columns: minmax(0, 1fr) minmax(0, 80px) 32px;
                 gap: 4px;
-                width: 100%;
+                width: 100% !important;
+                flex: 1 1 auto;
                 min-width: 0;
             }
             ${selector} .light_manager_panel_search_input,
@@ -6863,7 +10335,8 @@ function initializeLightManagerPlugin() {
                 font-size: 17px;
             }
             ${selector} .light_manager_panel_search_input input {
-                width: 100%;
+                flex: 1 1 0;
+                width: 0;
                 min-width: 0;
                 height: 26px;
                 padding: 0;
@@ -6880,6 +10353,9 @@ function initializeLightManagerPlugin() {
                 padding: 0 7px;
                 font: inherit;
                 cursor: pointer;
+            }
+            ${selector} .light_manager_panel_search_active {
+                min-height: 32px;
             }
             ${selector} .light_manager_panel_search_active > i,
             ${selector} .light_manager_panel_search_collapse > i {
@@ -6904,11 +10380,21 @@ function initializeLightManagerPlugin() {
                 background: color-mix(in srgb, var(--color-accent) 10%, var(--color-back));
                 color: var(--color-accent) !important;
             }
-            @container (max-width: 285px) {
-                ${selector} .light_manager_panel_search_active {
-                    min-width: 76px;
-                }
+            ${selector} .light_manager_panel_search_active.bb-select {
+                justify-content: flex-start; padding: 0 24px 0 8px;
+                white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
             }
+            ${selector} .light_manager_panel_search_clear {
+                display: grid!important; place-items: center; flex: 0 0 22px!important;
+                width: 22px!important; min-width: 22px!important; max-width: 22px!important;
+                height: 24px!important; min-height: 24px!important; max-height: 24px!important;
+                padding: 0!important; margin: 0!important; border: 0!important;
+                background: transparent!important; color: var(--color-subtle_text);
+            }
+            ${selector} .light_manager_panel_search_clear[hidden] { display: none!important; }
+            ${selector} .light_manager_panel_search_clear > .icon { width:16px!important; min-width:16px!important; margin:0!important; font-size:16px; }
+            ${selector} .light_manager_panel_search_clear:hover { color: var(--color-text); }
+            ${selector} .light_manager_panel_search_clear:focus-visible { outline: 2px solid var(--color-accent); }
             ${selector} .light_manager_panel_search_active > span {
                 white-space: nowrap;
                 overflow: hidden;
@@ -6958,6 +10444,12 @@ function initializeLightManagerPlugin() {
                 background: var(--color-accent);
                 box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-ui) 68%, transparent);
             }
+            ${selector} .dialog_bar.light_manager_property_pinned {
+                box-shadow: inset 2px 0 0 color-mix(in srgb, var(--color-accent) 68%, transparent);
+            }
+            ${selector} .dialog_bar.light_manager_property_pinned:hover {
+                box-shadow: inset 2px 0 0 var(--color-accent);
+            }
         `);
     }
 
@@ -6984,8 +10476,9 @@ function initializeLightManagerPlugin() {
             };
         };
         const filterRows = (rows, query = '', mode = 'all') => {
-            const needle = String(query).trim().toLocaleLowerCase();
-            const textMatch = row => !needle || String(row.text || '').toLocaleLowerCase().includes(needle);
+            const normalizeText = value => String(value || '').normalize('NFD').replace(/\p{M}/gu, '').toLocaleLowerCase();
+            const needles = normalizeText(query).trim().split(/\s+/).filter(Boolean);
+            const textMatch = row => needles.every(needle => normalizeText(row.text).includes(needle));
             const stateMatch = row => mode === 'all' || !!row[mode === 'modified' ? 'modified' : 'active'];
             const groups = new Map(rows.filter(row => row.group).map(row => [row.id, row]));
             const visible = new Set();
@@ -6994,7 +10487,7 @@ function initializeLightManagerPlugin() {
                 const parent = groups.get(row.parent);
                 if (stateMatch(row) && (textMatch(row) || (parent && textMatch(parent)))) {
                     visible.add(row.id);
-                    if (parent) visible.add(parent.id);
+                    if (parent && parent.applicable !== false) visible.add(parent.id);
                 }
             });
             return visible;
@@ -7048,7 +10541,79 @@ function initializeLightManagerPlugin() {
     // const design = LightManagerUI.formDesign;
     // const style = LightManagerUI.addDesignedPanelStyles('panel_id');
     // formConfig.enabled = design.checkbox({ label: 'Enabled', value: true });
+    const LightflowTextureSource = Object.freeze({
+        url(value) {
+            const source = String(value || '');
+            const texture = window.Texture?.all?.find(texture => texture.uuid === source);
+            if (texture) return texture.getDataURL?.() || texture.source || '';
+            if (/^data:image\/(png|jpeg|gif|webp);base64,/i.test(source)) return source;
+            if (/^[a-z]:[\\/]|^\//i.test(source)) return 'file:///' + encodeURI(source.replace(/\\/g, '/').replace(/^\//, '')).replace(/#/g, '%23').replace(/\?/g, '%3F');
+            if (/^\\\\/.test(source)) return 'file://' + encodeURI(source.slice(2).replace(/\\/g, '/')).replace(/#/g, '%23').replace(/\?/g, '%3F');
+            return '';
+        },
+        async choose(path, embedded) {
+            if (!path || !this.url(path)) return embedded || '';
+            return new Promise(resolve => {
+                const image = new Image();
+                image.onload = () => resolve(path);
+                image.onerror = () => resolve(embedded || '');
+                image.src = this.url(path);
+            });
+        },
+        fromTexture(texture) {
+            return this.choose(texture.saved !== false ? texture.path : '', texture.getDataURL?.() || texture.source || '');
+        },
+        fromFile(file) {
+            const embedded = /^data:image\//.test(file?.content || '') ? file.content : '';
+            return this.choose(file?.path || '', embedded);
+        },
+        label(value) {
+            const texture = window.Texture?.all?.find(texture => texture.uuid === value);
+            if (texture) return texture.name || texture.path;
+            return String(value || '').startsWith('data:') ? translateLightManager('light_manager.ui.texture_embedded') : String(value || '');
+        }
+    });
+
+    // Called explicitly at Lightflow form boundaries, including rebuilds. Never
+    // replace host FormElement types or change forms belonging to other plugins.
+    function prepareLightflowForm(source) {
+        if (!source || typeof source !== 'object') return source;
+        return Object.fromEntries(Object.entries(source).map(([key, field]) => {
+            if (!field || typeof field !== 'object') return [key, field];
+            const next = {...field};
+            switch (field.type || 'text') {
+                case 'checkbox': Object.assign(next, LightManagerFormDesign.checkbox({...field, type:'custom_checkbox'})); break;
+                case 'text': next.type = 'compact_text'; break;
+                case 'number': case 'num_slider':
+                    Object.assign(next, {type:'combo_slider', compact:field.compact === true,
+                        min:field.min ?? 0, max:field.max ?? 100,
+                        allow_lower:field.min === undefined, allow_higher:field.max === undefined});
+                    break;
+                case 'range': Object.assign(next, {type:'combo_slider', full_track:true}); break;
+                case 'color': next.type = 'advanced_color'; break;
+                case 'vector': Object.assign(next, {type:'custom_vector', axis_labels:true}); break;
+                case 'select': case 'radio':
+                    Object.assign(next, {type:'compact_select', show_value_text:true, expand:true, hide_icon:true});
+                    next.options = Object.fromEntries(Object.entries(typeof field.options === 'function' ? field.options() : field.options || {}).map(([value, option]) =>
+                        [value, option && typeof option === 'object' ? {...option} : {name:typeof tl === 'function' ? tl(option === true ? value : option) : String(option === true ? value : option)}]));
+                    break;
+                case 'inline_select': case 'inline_multi_select': case 'multi_select':
+                    Object.assign(next, {type:'horizontal_select', presentation:'inline', multi_select:field.type !== 'inline_select'});
+                    next.options = Object.fromEntries(Object.entries(typeof field.options === 'function' ? field.options() : field.options || {}).map(([value, option]) =>
+                        [value, option && typeof option === 'object' ? {...option} : {name:option === true ? value : option}]));
+                    break;
+                case 'info': Object.assign(next, {type:'bar_display', value:field.text ?? field.value ?? '', paragraph:true, expand:true}); break;
+                case 'buttons': next.type = 'lightflow_buttons'; break;
+                case 'textarea': next.type = 'lightflow_textarea'; break;
+            }
+            return [key, next];
+        }));
+    }
+
     const LightManagerFormDesign = Object.freeze({
+        code(options = {}) { return Object.assign({type:'code_editor',language:'json'},options); },
+        block(options = {}) { return Object.assign({type:'block_select'},options); },
+        identifier(options = {}) { return Object.assign({type:'block_select',placeholder:'',default_icon:'tag',browse_label:'Show identifiers',accessible_label:'Identifier'},options); },
         checkbox(options = {}) {
             return Object.assign({
                 type: 'custom_checkbox',
@@ -7059,6 +10624,19 @@ function initializeLightManagerPlugin() {
                 icon_color_on: 'var(--color-accent)',
                 icon_color_off: 'var(--color-subtle_text)',
                 padding: '2px 8px',
+                animate: false
+            }, options);
+        },
+        checkboxRow(options = {}) {
+            return Object.assign({
+                type: 'custom_checkbox',
+                presentation: 'option-row',
+                layout: 'icon_left',
+                icon_on: 'check_box',
+                icon_off: 'check_box_outline_blank',
+                icon_color_on: 'var(--color-accent)',
+                icon_color_off: 'var(--color-subtle_text)',
+                padding: '8px 10px',
                 animate: false
             }, options);
         },
@@ -7075,13 +10653,19 @@ function initializeLightManagerPlugin() {
         },
         tabs(options = {}) {
             return Object.assign({
-                type: 'horizontal_select',
+                type: options.presentation === 'flat' ? 'tab_select' : 'horizontal_select',
                 allow_empty: false,
                 multi_select: false,
                 expand: true,
                 variant: 'panel_tabs'
             }, options);
         },
+        inlineSelect(options = {}) {
+            return Object.assign({ type: 'horizontal_select', presentation: 'inline', expand: true, allow_empty: false }, options);
+        },
+        grid(options = {}) { return Object.assign({ type: 'grid_select' }, options); },
+        preview(options = {}) { return Object.assign({ type: 'image_preview' }, options); },
+        outliner(options = {}) { return Object.assign({ type: 'outliner_select' }, options); },
         search(options = {}) {
             return Object.assign({
                 type: 'panel_search',
@@ -7108,6 +10692,9 @@ function initializeLightManagerPlugin() {
         color(options = {}) {
             return Object.assign({ type: 'advanced_color', expand_control: true }, options);
         },
+        texture(options = {}) {
+            return Object.assign({ type: 'texture_source' }, options);
+        },
         vector(options = {}) {
             return Object.assign({ type: 'custom_vector' }, options);
         },
@@ -7126,18 +10713,1368 @@ function initializeLightManagerPlugin() {
 
     // Native panel positions remain user-owned. Defaults are applied only to modes
     // without saved customization; the explicit layout action has a reversible backup.
+    function createLightflowCreationGuide(kind) {
+        const storageKey = `lightflow_creation_guide_v1_${kind}`;
+        const visible = () => lightManagerSafeGet(storageKey, '') === 'pending';
+        return {
+            _lightflow_creation_guide: {
+                type: 'bar_display', paragraph: true, expand: true, search_ignore: true, font_size: '12px',
+                value: translateLightManager(`light_manager.ui.guide_${kind}_short`),
+                description: translateLightManager(`light_manager.ui.guide_${kind}`),
+                color: 'var(--color-subtle_text)', condition: visible
+            },
+            _lightflow_creation_guide_dismiss: {
+                type: 'action_button', semantic_button: true, search_ignore: true,
+                icon: 'close',
+                description: translateLightManager('light_manager.ui.guide_dismiss'),
+                aria_label: translateLightManager('light_manager.ui.guide_dismiss'),
+                condition: visible,
+                click: () => {
+                    lightManagerSafeSet(storageKey, 'done');
+                    const panel = window.Panels?.[kind === 'light' ? 'light_properties' : 'lightflow_atmosphere_properties'];
+                    panel?.form?.update?.();
+                }
+            }
+        };
+    }
+
+    // Scene actions stay beside the viewport; property inspectors keep values.
+    function createLightflowViewportTools(workspace) {
+        const rails = new Map();
+        const t = key => translateLightManager('light_manager.ui.' + key);
+        const worldControls = () => Panels.global_renderer_properties?.form?.form_data;
+        const worldKeys = ['world_shading', 'world_ssao', 'world_grids', 'world_ground'];
+        const navigateRail = event => {
+            if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
+            const available = [...event.currentTarget.querySelectorAll('button')].filter(button => !button.hidden && !button.disabled);
+            const current = available.indexOf(document.activeElement);
+            const next = event.key === 'Home' ? 0 : event.key === 'End' ? available.length - 1
+                : (current + (event.key === 'ArrowDown' ? 1 : -1) + available.length) % available.length;
+            event.preventDefault();
+            event.stopPropagation();
+            available[next]?.focus();
+        };
+        const selection = () => (window.Outliner?.selected || []).filter(element => element?.type);
+        const kind = () => {
+            const types = new Set(selection().map(element => element.type));
+            return types.size === 1 ? [...types][0] : '';
+        };
+        // Reuse Blockbench's transform tools and Undo path for spatial effects.
+        // Native conditions remain authoritative outside the Render workspace.
+        const spatialTypes = ['light', 'art_key', 'lightflow_volume', 'lightflow_god_ray', 'lightflow_particle_effect', 'lightflow_scene_instance'];
+        const nativeTools = ['move_tool', 'rotate_tool', 'resize_tool'].map(id => {
+            const tool = window.BarItems?.[id];
+            if (!tool) return null;
+            const previousModes = tool.modes;
+            const previousCondition = tool.condition;
+            const modes = [...new Set([...(previousModes || []), 'edit', 'render'])];
+            const condition = () => {
+                if (!Modes?.render) {
+                    const nativeAllowed = Condition(previousCondition);
+                    if (nativeAllowed || !Modes?.edit) return nativeAllowed;
+                }
+                const selected = selection();
+                return selected.length > 0 && selected.every(element =>
+                    spatialTypes.includes(element.type) &&
+                    (id !== 'resize_tool' || element.getTypeBehavior?.('resizable')) &&
+                    (id !== 'rotate_tool' || element.getTypeBehavior?.('rotatable')));
+            };
+            tool.modes = modes;
+            tool.condition = condition;
+            return {
+                delete() {
+                    if (tool.modes === modes) tool.modes = previousModes;
+                    if (tool.condition === condition) tool.condition = previousCondition;
+                }
+            };
+        }).filter(Boolean);
+        // Blockbench 5.2 selects transform modules separately from the tool.
+        // Keep its drag, snapping and Undo implementation in the Render workspace.
+        const editTransforms = window.TransformerModule?.modules?.edit;
+        const nativeMove = editTransforms?.onMove;
+        const moveAttachedEffects = typeof nativeMove === 'function' ? function (context) {
+            if (Toolbox?.selected?.id !== 'move_tool') return nativeMove.call(this, context);
+            const selected = selection();
+            const attachedChildren = selected.filter(element => element.type === 'light')
+                .flatMap(light => (light.children || []).filter(child => child.light_attached && !child.selected)
+                    .map(child => ({ child, position: child.position.slice() })));
+            const globalRays = window.getEditTransformSpace?.() === 0 ? selected
+                .filter(element => element.type === 'lightflow_god_ray' && element.parent?.type === 'light' && !element.parent.selected)
+                .map(element => ({ element, position: element.position.slice() })) : [];
+            const result = nativeMove.call(this, context);
+            for (const { child, position } of attachedChildren) {
+                child.position.splice(0, 3, ...position);
+                child.preview_controller.updateTransform(child);
+            }
+            for (const { element, position } of globalRays) {
+                const delta = new THREE.Vector3();
+                delta[context.axis.toLowerCase()] = context.value - (this.previous_value || 0);
+                delta.applyQuaternion(element.mesh.parent.getWorldQuaternion(new THREE.Quaternion()).invert());
+                element.position.splice(0, 3, ...position.map((value, axis) => value + delta.getComponent(axis)));
+                element.preview_controller.updateTransform(element);
+            }
+            if (attachedChildren.length || globalRays.length) updateSelection();
+            return result;
+        } : null;
+        if (moveAttachedEffects) editTransforms.onMove = moveAttachedEffects;
+        const renderTransforms = editTransforms ? new TransformerModule('lightflow_render_effects', {
+            condition: () => !!Modes?.render && nativeTools.length > 0 &&
+                ['move_tool', 'rotate_tool', 'resize_tool'].includes(Toolbox?.selected?.id) &&
+                selection().length > 0 && selection().every(element =>
+                    spatialTypes.includes(element.type)),
+            updateGizmo() {
+                const element = selection().find(element => element.visibility !== false);
+                if (!element || (Toolbox.selected.id === 'resize_tool' && !element.getTypeBehavior('resizable'))) return false;
+                Transformer.rotation_object = element;
+                if (Toolbox.selected.id === 'rotate_tool') element.mesh.getWorldPosition(Transformer.position).sub(scene.position);
+                else Transformer.position.fromArray(getSelectionCenter());
+                const space = window.getEditTransformSpace?.();
+                if (space >= 2 || Toolbox.selected.id === 'resize_tool') Transformer.rotation_ref = element.mesh;
+                else if (space instanceof OutlinerNode && space.getTypeBehavior('parent')) Transformer.rotation_ref = space.mesh;
+                return true;
+            },
+            ...Object.fromEntries(['onPointerDown', 'calculateOffset', 'onStart', 'onMove', 'onEnd', 'onCancel']
+                .filter(key => typeof editTransforms[key] === 'function')
+                .map(key => [key, function (context) { return editTransforms[key].call(this, context); }]))
+        }) : null;
+        const inspector = () => ({
+            light: Panels.light_properties, art_key: Panels.light_properties,
+            lightflow_volume: Panels.lightflow_atmosphere_properties,
+            lightflow_god_ray: Panels.lightflow_god_ray_properties,
+            lightflow_particle_effect: Panels.lightflow_particle_properties,
+            lightflow_scene_instance: Panels.lightflow_scene_links_inspector, lightflow_camera: Panels.lightflow_cinematic_camera
+        })[kind()];
+        const run = (id, event) => {
+            const action = window.BarItems?.[id];
+            if (!action || !Condition(action.condition)) return;
+            if (action instanceof Tool) action.select();
+            else action.trigger?.(event);
+        };
+        let previousHelpers = workspace.helperPolicy === 'clean' ? 'contextual' : workspace.helperPolicy;
+        const findSetting = () => {
+            const panel = inspector() || Panels.lightflow_scene_composer_panel;
+            const search = Object.values(panel?.form?.form_data || {}).find(element => element.options?.type === 'panel_search');
+            if (Project?.mode === 'animate') {
+                panel?.selectTab?.(); if (panel?.folded) panel.fold(false);
+                (search?.input || panel?.form?.node?.querySelector('input:not([type=range])'))?.focus?.();
+                return;
+            }
+            if (!search) return;
+            workspace.select(panel);
+            if (panel.folded) panel.fold(false);
+            search.input.focus();
+            search.input.select();
+            search.bar.scrollIntoView({ block: 'nearest' });
+        };
+        const findAction = new Action('lightflow_find_setting', {
+            name: t('search'), description: t('search_shortcut'), icon: 'manage_search', category: 'view',
+            keybind: new Keybind({ key: 'f', ctrl: true, shift: true }),
+            condition: () => !!window.Project && ['render', 'animate'].includes(Project.mode),
+            click: findSetting
+        });
+        const selectionMenu = event => {
+            const type = kind();
+            const actions = type === 'light' ? ['light_manager_edit_target', 'light_manager_target_position', 'light_manager_aim_selection', 'light_manager_release_target', '_', 'toggle_light_area_gizmos', 'light_manager_reset_gizmo', 'lightflow_god_ray_from_light', 'edit_light_properties']
+                : type === 'lightflow_volume' ? ['move_tool', 'resize_tool', '_', 'fit_lightflow_volume', 'edit_lightflow_volume']
+                    : type === 'lightflow_god_ray' ? ['move_tool', 'lightflow_god_ray_gizmos', 'lightflow_god_ray_detach', '_', 'edit_lightflow_god_ray']
+                        : type === 'lightflow_particle_effect' ? ['move_tool', '_', 'lightflow_particle_settings'] : [];
+            new Menu(['move_tool', 'rotate_tool', 'resize_tool', '_', ...actions.filter(id => !['move_tool', 'rotate_tool', 'resize_tool'].includes(id)), '_', 'lightflow_find_setting']).open(event);
+        };
+        const sync = () => {
+            const rendering = Project?.mode === 'render', animating = Project?.mode === 'animate', editing = Project?.mode === 'edit';
+            const active = !!window.Project && (rendering || animating || editing);
+            // Native project selection briefly clears Mode.selected before
+            // restoring its editor state; Tool.select writes Mode.selected.tool.
+            if (active && Modes.selected && ['move_tool', 'rotate_tool', 'resize_tool'].includes(Toolbox.selected?.id) && !Condition(Toolbox.selected.condition)) {
+                window.BarItems?.light_manager_edit_tool?.select?.();
+            }
+            const type = kind();
+            const light = type === 'light';
+            const contextual = ['light', 'lightflow_volume', 'lightflow_god_ray', 'lightflow_particle_effect'].includes(type);
+            for (const preview of window.Preview?.all || []) {
+                if (!preview.node?.isConnected || preview.id === 'lightflow_cinematic_camera_monitor' || !preview.node.querySelector('.preview_menu')) continue;
+                if (!rails.has(preview)) {
+                    const node = document.createElement('div');
+                    node.className = 'lightflow_viewport_tools';
+                    node.setAttribute('role', 'toolbar');
+                    node.setAttribute('aria-orientation', 'vertical');
+                    node.setAttribute('aria-label', t('viewport_tools'));
+                    const buttons = {};
+                    const add = (id, icon, label, click, menu = false) => {
+                        const button = document.createElement('button');
+                        button.type = 'button';
+                        button.className = 'tool lightflow_viewport_tool';
+                        button.dataset.lightflowAction = id;
+                        button.title = label;
+                        button.setAttribute('aria-label', label);
+                        if (menu) button.setAttribute('aria-haspopup', 'menu');
+                        const iconNode = Blockbench.getIconNode(icon);
+                        iconNode.setAttribute('aria-hidden', 'true');
+                        button.append(iconNode);
+                        const tooltip = document.createElement('div');
+                        tooltip.className = 'tooltip';
+                        tooltip.textContent = label;
+                        button.append(tooltip);
+                        button.addEventListener('click', event => { click(event); sync(); });
+                        node.append(button);
+                        buttons[id] = button;
+                        return button;
+                    };
+                    add('gizmos', 'control_camera', t('edit_scene_gizmos'), () => {
+                        if (workspace.helperPolicy === 'clean') workspace.setHelperPolicy(previousHelpers);
+                        run(kind() === 'light' ? 'light_manager_edit_tool' : kind() === 'lightflow_god_ray' ? 'lightflow_god_ray_gizmos' : kind() === 'lightflow_particle_effect' ? 'move_tool' : 'resize_tool');
+                    });
+                    add('focus', 'center_focus_weak', t('focus_selection'), () => run('focus_on_selection', { ctrlKey: true }));
+                    const targetButton = add('aim_target', 'my_location', translateLightManager('light_manager.target.create'), () => {
+                        if (workspace.helperPolicy === 'clean') workspace.setHelperPolicy(previousHelpers);
+                        run('light_manager_edit_target');
+                    }, true);
+                    targetButton.addEventListener('contextmenu', event => {
+                        event.preventDefault(); event.stopPropagation();
+                        new Menu(['light_manager_target_position', 'light_manager_aim_selection', 'light_manager_release_target']).open(event);
+                    });
+                    add('fit_lights', 'fit_screen', t('fit_lights'), () => window.LightManagerFitTool?.fit());
+                    add('selection', 'more_horiz', t('selection_actions'), selectionMenu, true);
+                    const toggleLight = key => {
+                        const field = Panels.light_properties?.form?.form_data?.[key];
+                        if (field) { field.setValue(!field.value, false); field.change(); sync(); }
+                    };
+                    add('shadows', 'stroke_partial', tl('property.cast_shadows'), () => toggleLight('cast_shadows'));
+                    const divider = document.createElement('div');
+                    divider.className = 'lightflow_viewport_tools_divider';
+                    divider.setAttribute('role', 'separator');
+                    node.append(divider);
+                    const helpersButton = add('helpers', 'visibility', t('helpers_clean'), () => {
+                        if (workspace.helperPolicy === 'clean') workspace.setHelperPolicy(previousHelpers);
+                        else { previousHelpers = workspace.helperPolicy; workspace.setHelperPolicy('clean'); }
+                    });
+                    helpersButton.addEventListener('contextmenu', event => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        new Menu(['contextual', 'all', 'clean'].map(policy => ({
+                            id: policy, name: t('helpers_' + policy), icon: policy === workspace.helperPolicy ? 'radio_button_checked' : 'radio_button_unchecked',
+                            click: () => { if (policy !== 'clean') previousHelpers = policy; workspace.setHelperPolicy(policy); }
+                        }))).open(event);
+                    });
+                    add('output', 'crop_free', t('render_frame'), () => {
+                        if (window.StudioRender?.frameOwner === 'lightflow_cinematic') window.StudioRender.showFrame({preview});
+                        else run('studio_render_toggle_frame');
+                    });
+                    add('block_snap', 'grid_on', tl('light_manager.action.block_snap'), event => run('lightflow_block_snap', event));
+                    add('camera_view', 'visibility', t('camera_view'), () => run('lightflow_cinematic_view_through_camera'));
+                    add('camera_keyframe', 'add_circle_outline', t('camera_keyframe'), () => run('lightflow_cinematic_camera_keyframe'));
+                    add('camera_fly', 'flight', t('camera_fly'), () => window.LightflowCinematic?.startFly?.());
+                    add('camera_monitor', 'picture_in_picture_alt', t('camera_monitor'), () => window.LightflowCinematic?.toggleCameraMonitor?.());
+                    add('cinematic_frame', 'crop_16_9', tl(window.BarItems?.lightflow_cinematic_record_frame?.name || 'lightflow_cinematic.field.camera'), event => run('lightflow_cinematic_record_frame', event));
+                    node.addEventListener('pointerdown', event => event.stopPropagation());
+                    node.addEventListener('dblclick', event => event.stopPropagation());
+                    node.addEventListener('keydown', navigateRail);
+                    preview.node.append(node);
+                    const worldNode = document.createElement('div');
+                    worldNode.className = 'lightflow_viewport_tools lightflow_world_tools';
+                    worldNode.setAttribute('role', 'toolbar');
+                    worldNode.setAttribute('aria-orientation', 'vertical');
+                    worldNode.setAttribute('aria-label', tl('panel.global_renderer_properties'));
+                    const worldButtons = {};
+                    const addWorld = (id, icon, key, settings = false) => {
+                        const button = document.createElement('button');
+                        button.type = 'button';
+                        button.className = 'tool lightflow_viewport_tool';
+                        button.dataset.lightflowAction = id;
+                        const label = tl(key);
+                        button.title = label;
+                        button.setAttribute('aria-label', label);
+                        if (settings) button.setAttribute('aria-haspopup', 'dialog');
+                        const iconNode = Blockbench.getIconNode(icon);
+                        iconNode.setAttribute('aria-hidden', 'true');
+                        button.append(iconNode);
+                        const tooltip = document.createElement('div');
+                        tooltip.className = 'tooltip';
+                        tooltip.textContent = label;
+                        button.append(tooltip);
+                        button.addEventListener('click', event => {
+                            if (id === 'cinematic_sequence') { window.LightflowCinematic?.openViewportSequenceMenu?.(event); sync(); return; }
+                            const control = worldControls()?.[id];
+                            if (settings) control?.options?.click?.();
+                            else control?.node?.click();
+                            sync();
+                        });
+                        worldNode.append(button);
+                        worldButtons[id] = button;
+                    };
+                    addWorld('world_shading', 'wb_sunny', 'light_manager.ui.world_shading');
+                    addWorld('world_ssao', 'blur_on', 'light_manager.ui.world_ao');
+                    addWorld('world_ssao_settings', 'tune', 'light_manager.ui.ao_settings', true);
+                    const worldDivider = divider.cloneNode();
+                    worldNode.append(worldDivider);
+                    addWorld('world_grids', 'grid_3x3', 'light_manager.ui.world_grid');
+                    addWorld('world_ground', 'layers', 'light_manager.ui.world_ground');
+                    addWorld('world_environment_gizmos', 'crop_free', 'light_manager.ui.sun_region');
+                    worldButtons.world_environment_gizmos.addEventListener('click', () => {
+                        if (Toolbox.selected?.id === 'lightflow_sun_region_tool') run('light_manager_edit_tool');
+                        else {
+                            if (workspace.helperPolicy === 'clean') workspace.setHelperPolicy(previousHelpers);
+                            Canvas.show_gizmos = true;
+                            window.LightManagerAreaGizmos?.setEnabled?.(true, { notify: false });
+                            window.LightflowEnvironment?.setSettings?.({ show_shadow_gizmo: true }, { cause: 'gizmo_visibility', forceShadow: false, syncPanel: true });
+                            run('lightflow_sun_region_tool');
+                        }
+                        sync();
+                    });
+                    const sequenceDivider = divider.cloneNode(); worldNode.append(sequenceDivider);
+                    addWorld('cinematic_sequence', 'theaters', 'light_manager.ui.cinematic_sequences');
+                    worldNode.append(buttons.helpers);
+                    addWorld('environment', 'landscape', 'lightflow_environment.field.enabled');
+                    worldButtons.environment.addEventListener('click', () => {
+                        window.LightflowEnvironment?.setSettings?.({enabled: !window.LightflowEnvironment.settings.enabled}, {cause:'viewport_toggle',syncPanel:true}); sync();
+                    });
+                    worldNode.addEventListener('pointerdown', event => event.stopPropagation());
+                    worldNode.addEventListener('dblclick', event => event.stopPropagation());
+                    worldNode.addEventListener('keydown', navigateRail);
+                    preview.node.append(worldNode);
+                    rails.set(preview, { node, buttons, divider, worldNode, worldButtons, sequenceDivider, renderOrder: [...node.children] });
+                }
+                const { node, buttons, divider, worldNode, worldButtons, sequenceDivider } = rails.get(preview);
+                if (node.dataset.lightflowMode !== Project?.mode) {
+                    node.dataset.lightflowMode = Project?.mode || '';
+                    const renderOrder = rails.get(preview).renderOrder.filter(child => child !== buttons.helpers);
+                    const animationOrder = ['cinematic_frame', 'output', 'camera_view', 'camera_fly', 'camera_keyframe', 'camera_monitor'].map(id => buttons[id]).concat([divider, buttons.focus]);
+                    const order = animating ? animationOrder.concat(renderOrder.filter(child => !animationOrder.includes(child))) : renderOrder;
+                    order.forEach(child => node.append(child));
+                }
+                const controls = worldControls();
+                const worldActive = active && !editing && (worldKeys.some(key => !!controls?.[key]) || (animating && !!window.LightflowCinematic?.openViewportSequenceMenu));
+                worldNode.hidden = !worldActive;
+                worldButtons.cinematic_sequence.hidden = !animating || !window.LightflowCinematic?.openViewportSequenceMenu;
+                sequenceDivider.hidden = worldButtons.cinematic_sequence.hidden;
+                worldButtons.cinematic_sequence.disabled = !!window.LightflowCinematic?.activeJob;
+                worldButtons.cinematic_sequence.classList.toggle('selected', !!window.LightflowCinematic?.sequencePreview);
+                worldButtons.cinematic_sequence.setAttribute('aria-pressed', String(!!window.LightflowCinematic?.sequencePreview));
+                worldButtons.world_ssao_settings.hidden = !controls?.world_ssao_settings;
+                for (const key of worldKeys) {
+                    worldButtons[key].hidden = !controls?.[key];
+                    const enabled = !!controls?.[key]?.value;
+                    worldButtons[key].classList.toggle('selected', enabled);
+                    worldButtons[key].setAttribute('aria-pressed', String(enabled));
+                }
+                const environment = window.LightflowEnvironment?.settings;
+                worldButtons.environment.hidden = !environment;
+                worldButtons.environment.classList.toggle('selected', !!environment?.enabled);
+                worldButtons.environment.setAttribute('aria-pressed', String(!!environment?.enabled));
+                const sunTool = Toolbox.selected?.id === 'lightflow_sun_region_tool';
+                const environmentActive = (Panels.lightflow_scene?.open_attached_panel?.id === 'lightflow_environment_panel');
+                const sunButton = worldButtons.world_environment_gizmos;
+                sunButton.hidden = animating || !window.BarItems?.lightflow_sun_region_tool || (!environmentActive && !sunTool);
+                sunButton.disabled = !environment?.enabled || !environment.sun_enabled || !environment.sun_cast_shadows || !environment.shadow_auto_fit;
+                sunButton.classList.toggle('selected', sunTool);
+                sunButton.setAttribute('aria-pressed', String(sunTool));
+                sunButton.title = sunButton.disabled ? t('sun_region_hint') : t('sun_region');
+                sunButton.querySelector('.tooltip').textContent = sunButton.title;
+                node.hidden = !active;
+                buttons.block_snap.hidden = !editing || !window.BarItems?.lightflow_block_snap;
+                const snapping = !!window.BarItems?.lightflow_block_snap?.value;
+                buttons.block_snap.classList.toggle('selected', snapping);
+                buttons.block_snap.setAttribute('aria-pressed', String(snapping));
+                buttons.helpers.hidden = editing && !contextual;
+                buttons.gizmos.hidden = animating || !contextual;
+                buttons.selection.hidden = animating || (!contextual && type !== 'art_key');
+                buttons.focus.hidden = selection().length === 0;
+                const targetLight = window.LightManagerViewportControls?.getSelectedLights()?.[0];
+                const targetSupported = !!window.BarItems?.light_manager_edit_target && Condition(BarItems.light_manager_edit_target.condition);
+                const targetEnabled = !!window.LightManagerViewportControls?.hasAimTarget(targetLight);
+                buttons.aim_target.hidden = animating || !targetSupported;
+                buttons.aim_target.classList.toggle('selected', targetEnabled);
+                buttons.aim_target.setAttribute('aria-pressed', String(targetEnabled));
+                const targetLabel = translateLightManager(targetEnabled ? 'light_manager.target.edit' : 'light_manager.target.create');
+                buttons.aim_target.title = targetLabel;
+                buttons.aim_target.setAttribute('aria-label', targetLabel);
+                buttons.aim_target.querySelector('.tooltip').textContent = targetLabel;
+                buttons.fit_lights.hidden = animating || !window.LightManagerFitTool?.canFit?.();
+                divider.hidden = animating ? !window.LightflowCinematic : selection().length === 0;
+                const clean = workspace.helperPolicy === 'clean';
+                const helpersLabel = t('helpers_' + (clean ? previousHelpers : 'clean'));
+                buttons.helpers.title = helpersLabel;
+                buttons.helpers.setAttribute('aria-label', helpersLabel);
+                buttons.helpers.querySelector('.tooltip').textContent = helpersLabel;
+                buttons.helpers.classList.toggle('selected', clean);
+                buttons.helpers.setAttribute('aria-pressed', String(clean));
+                buttons.gizmos.classList.toggle('selected', contextual && Toolbox.selected?.id === (light ? 'light_manager_edit_tool' : type === 'lightflow_god_ray' ? 'lightflow_god_ray_gizmos' : type === 'lightflow_particle_effect' ? 'move_tool' : 'resize_tool'));
+                buttons.gizmos.setAttribute('aria-pressed', String(buttons.gizmos.classList.contains('selected')));
+                buttons.output.disabled = !window.BarItems?.studio_render_toggle_frame;
+                const frameVisible = !!window.BarItems?.studio_render_toggle_frame?.value && window.StudioRender?.frameOwner !== 'lightflow_cinematic';
+                buttons.output.classList.toggle('selected', frameVisible);
+                buttons.output.setAttribute('aria-pressed', String(frameVisible));
+                const cinematic = window.LightflowCinematic;
+                const recordingAction = window.BarItems?.lightflow_cinematic_record_frame;
+                const recordingFrame = window.StudioRender?.frameOwner === 'lightflow_cinematic';
+                const cameraState = cinematic?.viewportCameraState;
+                for (const id of ['camera_view', 'camera_keyframe', 'camera_fly', 'camera_monitor']) {
+                    buttons[id].hidden = !animating || !cameraState?.selected;
+                    buttons[id].disabled = !!cinematic?.activeJob;
+                }
+                for (const [id, pressed] of [['camera_view', cameraState?.looking], ['camera_fly', cameraState?.flying], ['camera_monitor', cameraState?.monitorEnabled]]) {
+                    buttons[id].classList.toggle('selected', !!pressed); buttons[id].setAttribute('aria-pressed', String(!!pressed));
+                }
+                buttons.cinematic_frame.hidden = !cinematic || !recordingAction || (!animating && !cameraState?.selected && !recordingFrame);
+                buttons.cinematic_frame.disabled = !!cinematic?.activeJob || !recordingAction || !Condition(recordingAction.condition);
+                buttons.cinematic_frame.classList.toggle('selected', recordingFrame);
+                buttons.cinematic_frame.setAttribute('aria-pressed', String(recordingFrame));
+                if (recordingAction) {
+                    buttons.cinematic_frame.title = tl(recordingAction.name);
+                    buttons.cinematic_frame.setAttribute('aria-label', buttons.cinematic_frame.title);
+                    buttons.cinematic_frame.querySelector('.tooltip').textContent = buttons.cinematic_frame.title;
+                }
+                for (const [key, field] of [['shadows', 'cast_shadows']]) {
+                    buttons[key].hidden = animating || !light;
+                    const enabled = !!Panels.light_properties?.form?.form_data?.[field]?.value;
+                    buttons[key].classList.toggle('selected', enabled); buttons[key].setAttribute('aria-pressed', String(enabled));
+                }
+                for (const railNode of [node, worldNode]) railNode.classList.toggle('lightflow-rail-scroll', !railNode.hidden && railNode.scrollHeight > railNode.clientHeight + 1);
+            }
+            Panels.global_renderer_properties?.node?.classList?.toggle('lightflow_world_has_rail', rendering && !!worldControls());
+            for (const [preview, rail] of rails) {
+                if (!preview.node?.isConnected) { rail.node.remove(); rail.worldNode.remove(); rails.delete(preview); }
+            }
+        };
+        const events = ['lightflow_block_snap_changed', 'lightflow_aim_target_changed', 'update_selection', 'select_tool', 'select_mode', 'select_project', 'update_view', 'update_scene_shading', 'shader_architect_ambient_occlusion_changed', 'lightflow_world_controls_changed', 'lightflow_environment_changed', 'lightflow_left_section_changed', 'studio_render_frame_visibility', 'lightflow_cinematic_ui_changed', 'lightflow_cinematic_render_started', 'lightflow_cinematic_render_complete'];
+        let pendingSync = null;
+        const scheduleSync = () => {
+            if (pendingSync !== null) return;
+            pendingSync = requestAnimationFrame(() => { pendingSync = null; sync(); });
+        };
+        // Selection events can fire before Project and the other plugins finish
+        // restoring their state. Read the completed state on the next frame.
+        const listeners = events.map(event => Blockbench.on(event, scheduleSync));
+        window.addEventListener('lightflow_gizmo_visibility_changed', sync);
+        const style = Blockbench.addCSS(`
+            .lightflow_viewport_tools { position: absolute; top: 46px; right: 8px; z-index: 12; display: flex; flex-direction: column; gap: 2px; padding: 0px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-checkerboard); max-height: calc(100% - 130px); }
+            .lightflow_viewport_tools[hidden], .lightflow_viewport_tools > [hidden] { display: none !important; }
+            .lightflow_viewport_tool { position: relative; display: grid; place-items: center; width: 30px !important; min-width: 30px !important; height: 30px; min-height: 30px; padding: 0; margin: 0; border: 0; border-radius: 8px; background: transparent; color: var(--color-text); }
+            .lightflow_viewport_tool > .material-icons { font-size: 20px; }
+            .lightflow_viewport_tool:hover, .lightflow_viewport_tool.selected { background: var(--color-selected); color: var(--color-accent); }
+            .lightflow_viewport_tool:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+            .lightflow_viewport_tool[data-lightflow-action="cinematic_camera"] { color: var(--lf-cinematic-camera, var(--color-text)); }
+            .lightflow_viewport_tool[data-lightflow-action="cinematic_frame"] { color: var(--lf-cinematic-record, var(--color-accent)); }
+            .lightflow_viewport_tools.lightflow-rail-scroll { overflow-y: auto; scrollbar-width: none; }
+            .lightflow_viewport_tool[data-lightflow-action^="camera_"] { color: var(--lf-cinematic-camera, var(--color-text)); }
+            .lightflow_viewport_tool > .tooltip { left: auto; right: 36px; top: 0; bottom: auto; white-space: nowrap; pointer-events: none; }
+            .lightflow_world_tools { left: 8px; right: auto; }
+            .lightflow_world_tools .lightflow_viewport_tool > .tooltip { left: 36px; right: auto; }
+            #panel_global_renderer_properties.lightflow_world_has_rail .world_appearance_row,
+            #panel_global_renderer_properties.lightflow_world_has_rail .world_guides_row { display: none !important; }
+            .lightflow_viewport_tools_divider { height: 1px; margin: 3px 2px; background: var(--color-grid); }
+            @media (max-height: 600px) { .lightflow_viewport_tools { top: 40px; gap: 0; } .lightflow_viewport_tool { height: 26px; min-height: 26px; } }
+        `);
+        sync();
+        return {
+            delete() {
+                listeners.forEach(listener => listener.delete());
+                if (pendingSync !== null) cancelAnimationFrame(pendingSync);
+                window.removeEventListener('lightflow_gizmo_visibility_changed', sync);
+                rails.forEach(rail => { rail.node.remove(); rail.worldNode.remove(); });
+                Panels.global_renderer_properties?.node?.classList?.remove('lightflow_world_has_rail');
+                rails.clear();
+                findAction.delete();
+                nativeTools.forEach(tool => tool.delete());
+                renderTransforms?.delete();
+                if (editTransforms?.onMove === moveAttachedEffects) editTransforms.onMove = nativeMove;
+                style.delete();
+            }
+        };
+    }
+
+    function createLightflowParticlePlayer() {
+        const players = new Map(), t = key => translateLightManager('light_manager.ui.' + key);
+        let collapsed = lightManagerSafeGet('lightflow_particle_player_collapsed_v1', 'false') === 'true', frame = null, disposed = false, lastTick = 0;
+        const api = () => window.LightflowParticleTransport;
+        const setIcon = (button, icon, label) => { if (button.dataset.icon !== icon) { button.replaceChildren(Blockbench.getIconNode(icon)); button.dataset.icon = icon; } button.title = label; button.setAttribute('aria-label', label); };
+        const schedule = () => { if (!disposed && frame == null) frame = requestAnimationFrame(update); };
+        const tick = time => { frame = null; if (disposed) return; if (time - lastTick >= 80) { lastTick = time; update(time); } else frame = requestAnimationFrame(tick); };
+        const update = time => {
+            frame = null; if (disposed) return;
+            const state = api()?.state(), active = !!window.Project && !!Modes?.render && !!state;
+            for (const preview of window.Preview?.all || []) {
+                if (!preview.node?.isConnected || !preview.node.querySelector('.preview_menu')) continue;
+                if (!players.has(preview)) {
+                    const root = document.createElement('div'); root.className = 'lightflow_particle_player'; root.setAttribute('role', 'toolbar'); root.setAttribute('aria-label', t('particle_player'));
+                    const button = (action, icon, label, click) => {
+                        const node = document.createElement('button'); node.type = 'button'; node.dataset.transport = action; setIcon(node, icon, label);
+                        node.addEventListener('click', event => { event.stopPropagation(); click(); schedule(); }); root.append(node); return node;
+                    };
+                    const fold = button('fold', 'unfold_less', t('player_minimize'), () => { collapsed = !collapsed; localStorage.setItem('lightflow_particle_player_collapsed_v1', String(collapsed)); }); fold.setAttribute('aria-expanded', 'true');
+                    const play = button('play', 'play_arrow', t('player_play'), () => api()?.toggle()); play.setAttribute('aria-pressed', 'false');
+                    const restart = button('restart', 'replay', t('player_restart'), () => api()?.restart());
+                    const loop = button('loop', 'repeat', t('player_loop'), () => api()?.loop()); loop.setAttribute('aria-pressed', 'false');
+                    const range = document.createElement('input'); range.type = 'range'; range.min = '0'; range.max = '10'; range.step = '.05'; range.value = '0'; range.setAttribute('aria-label', t('player_time')); root.append(range);
+                    const clock = document.createElement('output'); clock.className = 'lightflow_particle_clock'; clock.setAttribute('aria-hidden', 'true'); root.append(clock);
+                    let seeking = false;
+                    const begin = () => { if (!seeking) seeking = api()?.begin() === true; };
+                    const end = () => { if (seeking) { seeking = false; api()?.end(); schedule(); } };
+                    range.addEventListener('pointerdown', event => { begin(); range.setPointerCapture?.(event.pointerId); });
+                    range.addEventListener('input', () => { api()?.seek(Number(range.value)); schedule(); });
+                    range.addEventListener('pointerup', end); range.addEventListener('pointercancel', end); range.addEventListener('lostpointercapture', end); range.addEventListener('blur', end);
+                    range.addEventListener('keydown', event => { if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) begin(); });
+                    range.addEventListener('keyup', end);
+                    root.addEventListener('pointerdown', event => event.stopPropagation()); root.addEventListener('dblclick', event => event.stopPropagation()); root.addEventListener('keydown', event => event.stopPropagation()); root.addEventListener('wheel', event => event.stopPropagation());
+                    preview.node.append(root); players.set(preview, { root, fold, play, restart, loop, range, clock, end, seeking: () => seeking });
+                }
+                const player = players.get(preview), visible = active && preview === Preview.selected;
+                player.root.hidden = !visible; if (!visible) { player.end(); continue; }
+                player.root.classList.toggle('collapsed', collapsed); player.root.classList.toggle('playing', state.playing);
+                player.root.setAttribute('aria-label', t('particle_player') + ': ' + state.name);
+                setIcon(player.fold, collapsed ? 'ac_unit' : 'arrow_circle_left', (collapsed ? t('player_expand') : t('player_minimize')) + ': ' + state.name); player.fold.setAttribute('aria-expanded', String(!collapsed));
+                setIcon(player.play, state.playing ? 'pause' : 'play_arrow', t(state.playing ? 'player_pause' : 'player_play')); player.play.setAttribute('aria-pressed', String(state.playing));
+                player.loop.classList.toggle('selected', state.loop); player.loop.setAttribute('aria-pressed', String(state.loop));
+                for (const control of [player.play, player.restart, player.loop, player.range]) control.disabled = !state.available;
+                if (!player.seeking()) { player.range.max = String(state.max); player.range.value = String(Math.min(state.max, state.time)); }
+                player.range.setAttribute('aria-valuetext', state.time.toFixed(2) + ' s'); player.clock.textContent = state.time.toFixed(1) + ' s';
+            }
+            for (const [preview, player] of players) if (!preview.node?.isConnected) { player.end(); player.root.remove(); players.delete(preview); }
+            if (active && state.playing) {
+                // The renderer owns playback; this frame loop only refreshes the clock.
+                if (time - lastTick >= 80) lastTick = time;
+                frame = requestAnimationFrame(tick);
+            }
+        };
+        const listeners = ['update_selection', 'select_mode', 'select_project', 'update_view', 'undo', 'redo', 'finished_edit'].map(event => Blockbench.on(event, schedule));
+        window.addEventListener('lightflow_particle_transport_changed', schedule);
+        const style = Blockbench.addCSS(`
+            .lightflow_particle_player { position:absolute; left:12px; bottom:12px; z-index:12; display:flex; align-items:center; gap:4px; width:min(400px,calc(100% - 24px)); padding:0px 0px; box-sizing:border-box; border:1px solid var(--color-border); border-radius:8px; background:var(--color-ui); color:var(--color-text); box-shadow:0 2px 6px #0003; transition:width .15s ease; min-height: 30px; padding-right: 8px; }
+            .lightflow_particle_player[hidden] { display:none !important; }
+            .lightflow_particle_player button { display:grid; place-items:center; width:30px; height:30px; min-width:30px; padding:0; margin:0; border:0; border-radius:8px; background:transparent; color:var(--color-text); }
+            .lightflow_particle_player button > .icon { display:flex; align-items:center; justify-content:center; width:20px; height:20px; margin:0; font-size:20px; line-height:1; }
+            .lightflow_particle_player button:hover,.lightflow_particle_player button.selected { background:var(--color-selected); color:var(--color-accent); }
+            .lightflow_particle_player button:focus-visible,.lightflow_particle_player input:focus-visible { outline:2px solid var(--color-accent); outline-offset:-2px; }
+            .lightflow_particle_player input[type=range] { flex:1 1 0; min-width:24px; width:0; height:28px; padding:0; margin:0; accent-color:var(--color-accent); }
+            .lightflow_particle_clock { flex:0 0 45px; box-sizing:border-box; padding-right:4px; text-align:right; font-size:11px; font-variant-numeric:tabular-nums; white-space:nowrap; }
+            .lightflow_particle_player.collapsed { width:32px; }
+            .lightflow_particle_player.collapsed > :not([data-transport=fold]) { display:none; }
+            .lightflow_particle_player.collapsed.playing [data-transport=fold] { color:var(--color-accent); }
+            @media(prefers-reduced-motion:reduce) { .lightflow_particle_player { transition:none; } }
+        `);
+        schedule();
+        return { delete() { disposed = true; if (frame != null) cancelAnimationFrame(frame); listeners.forEach(listener => listener.delete()); window.removeEventListener('lightflow_particle_transport_changed', schedule); players.forEach(player => { player.end(); player.root.remove(); }); players.clear(); style.delete(); } };
+    }
+
+    function createLightflowLeftSidebar(workspace) {
+        const definitions = [
+            ['lightflow_scene', 'view_in_ar', 'light_manager.ui.scene'],
+            ['lightflow_environment_panel', 'landscape', 'light_manager.ui.nav_environment'],
+            ['material_properties', 'texture', 'light_manager.ui.nav_material'],
+            ['lightflow_scene_composer_panel', 'photo_camera', 'light_manager.ui.nav_output']
+        ];
+        const attributeBackups = new Map();
+        const enhanced = new Set();
+        const icons = new Set();
+        const scrollPositions = new Map();
+        const t = key => translateLightManager(key);
+        const setAttribute = (node, name, value) => {
+            if (!attributeBackups.has(node)) attributeBackups.set(node, new Map());
+            const backup = attributeBackups.get(node);
+            if (!backup.has(name)) backup.set(name, node.getAttribute(name));
+            if (node.getAttribute(name) !== String(value)) node.setAttribute(name, value);
+        };
+        const handles = () => definitions.map(([id]) => document.querySelector(`#left_bar .lightflow-left-navigation .panel_handle[panel_id="${id}"]`)).filter(Boolean);
+        const rememberScroll = event => {
+            const active = Panels.lightflow_scene?.open_attached_panel || Panels.lightflow_scene;
+            const form = event?.type === 'scroll' ? event.target : active?.node?.querySelector('.form');
+            if (!form?.classList?.contains('form') || !form.getBoundingClientRect().height) return;
+            const id = form.closest('.panel')?.id?.replace(/^panel_/, '');
+            if (definitions.some(definition => definition[0] === id)) scrollPositions.set(id, form.scrollTop);
+        };
+        const open = index => {
+            const panel = Panels[definitions[index]?.[0]];
+            if (!panel || (panel.getHostPanel?.() || panel).slot !== 'left_bar') return;
+            rememberScroll();
+            workspace.select(panel);
+            const host = panel.getHostPanel?.() || panel;
+            if (host.folded) host.fold(false);
+            sync();
+        };
+        const keydown = event => {
+            if (event.target.closest('.panel_menu_button')) return;
+            const handle = event.target.closest('.panel_handle');
+            if (!handle) return;
+            const tabs = handles();
+            const current = tabs.indexOf(handle);
+            let next = current;
+            if (event.key === 'ArrowRight') next = (current + 1) % tabs.length;
+            else if (event.key === 'ArrowLeft') next = (current + tabs.length - 1) % tabs.length;
+            else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') next = (current + 2) % tabs.length;
+            else if (event.key === 'Home') next = 0;
+            else if (event.key === 'End') next = tabs.length - 1;
+            else if (event.key !== 'Enter' && event.key !== ' ') return;
+            event.preventDefault();
+            event.stopPropagation();
+            const id = tabs[next]?.getAttribute('panel_id');
+            open(definitions.findIndex(definition => definition[0] === id));
+            handles().find(tab => tab.getAttribute('panel_id') === id)?.focus();
+        };
+        let disposed = false;
+        let creationSignature = '';
+        let lastSelected = '';
+        const sync = () => {
+            if (disposed) return;
+            const world = Panels.global_renderer_properties;
+            if (Modes?.render && world?.slot === 'left_bar' && world.folded) world.fold(false);
+            const host = Panels.lightflow_scene;
+            const container = host?.container;
+            const list = container?.querySelector(':scope > .panel_tab_bar > .panel_tab_list');
+            if (!list || container.parentElement?.id !== 'left_bar') return;
+            const nextCreationSignature = ['add_light', 'add_lightflow_volume', 'add_lightflow_god_ray', 'lightflow_particle_create'].map(id => !!BarItems[id]).join();
+            if (nextCreationSignature !== creationSignature) {
+                creationSignature = nextCreationSignature;
+                host.form?.update();
+            }
+            if (!list.classList.contains('lightflow-left-navigation')) list.classList.add('lightflow-left-navigation');
+            setAttribute(list, 'role', 'tablist');
+            setAttribute(list, 'aria-label', t('light_manager.ui.left_sections'));
+            if (!enhanced.has(list)) {
+                list.addEventListener('keydown', keydown);
+                list.addEventListener('click', rememberScroll, true);
+                enhanced.add(list);
+            }
+            const active = host.open_attached_panel || host;
+            for (const [id, icon, labelKey] of definitions) {
+                const handle = list.querySelector(`.panel_handle[panel_id="${id}"]`);
+                const panel = Panels[id];
+                if (!handle || !panel) continue;
+                const selected = active === panel;
+                setAttribute(handle, 'id', `lightflow-left-tab-${id}`);
+                setAttribute(handle, 'role', 'tab');
+                setAttribute(handle, 'aria-selected', selected);
+                setAttribute(handle, 'aria-controls', `panel_${id}`);
+                setAttribute(handle, 'tabindex', selected ? 0 : -1);
+                setAttribute(handle, 'title', `${t(labelKey)} · Ctrl+Alt+${definitions.findIndex(definition => definition[0] === id) + 1}`);
+                if (!handle.querySelector('.lightflow-left-tab-icon')) {
+                    const node = Blockbench.getIconNode(icon);
+                    node.classList.add('lightflow-left-tab-icon');
+                    node.setAttribute('aria-hidden', 'true');
+                    handle.prepend(node);
+                    icons.add(node);
+                }
+                const label = handle.querySelector(':scope > span');
+                if (label && label.textContent !== t(labelKey)) label.textContent = t(labelKey);
+                setAttribute(panel.node, 'role', 'tabpanel');
+                setAttribute(panel.node, 'aria-labelledby', `lightflow-left-tab-${id}`);
+            }
+            // Native tabs own selection and scroll; do not recreate their content.
+            if (active.id !== lastSelected) {
+                const form = active.node?.querySelector('.form');
+                if (form && scrollPositions.has(active.id)) form.scrollTop = scrollPositions.get(active.id);
+                lastSelected = active.id;
+                Blockbench.dispatchEvent('lightflow_left_section_changed', { panel: active.id });
+            }
+        };
+        const actions = definitions.map(([id, icon, label], index) => new Action('lightflow_section_' + id, {
+            name: t(label), icon, category: 'view',
+            keybind: new Keybind({ key: 49 + index, ctrl: true, alt: true }),
+            condition: () => !!Project && !!Modes?.render && !!Panels[id] && (Panels[id].getHostPanel?.() || Panels[id]).slot === 'left_bar',
+            click: () => open(index)
+        }));
+        const observer = new MutationObserver(sync);
+        observer.observe(Interface.left_bar, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+        Interface.left_bar.addEventListener('scroll', rememberScroll, true);
+        const listeners = ['select_mode', 'select_project', 'update_interface', 'update_selection'].map(event => Blockbench.on(event, sync));
+        const style = Blockbench.addCSS(`
+            .lightflow-workspace-enabled #left_bar :is(#panel_lightflow_environment_panel, #panel_material_properties, #panel_lightflow_scene_composer_panel).attached { min-height: 0 !important; }
+            .lightflow-workspace-enabled:not(.lightflow-wide-canvas) #left_bar .panel_tab_bar:has(> .lightflow-left-navigation) { align-items: stretch; padding: 0; gap: 0; height: auto !important; min-height: 64px; flex-shrink: 0; }
+            .lightflow-workspace-enabled:not(.lightflow-wide-canvas) #left_bar .lightflow-left-navigation { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0; flex: 1 1 auto; min-width: 0; height: auto !important; overflow: visible; }
+            .lightflow-workspace-enabled:not(.lightflow-wide-canvas) #left_bar .lightflow-left-navigation > .panel_handle { display: flex; align-items: center; gap: 5px; min-width: 0; height: 32px; padding: 0 7px; border-radius: 0; overflow: hidden; }
+            .lightflow-workspace-enabled:not(.lightflow-wide-canvas) #left_bar .lightflow-left-navigation > .panel_handle > span { min-width: 0; flex: 1 1 auto; white-space: nowrap; }
+            .lightflow-workspace-enabled:not(.lightflow-wide-canvas) #left_bar .lightflow-left-navigation > .panel_handle:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+            #left_bar .lightflow-left-navigation .lightflow-left-tab-icon { font-size: 17px; width: 18px; flex: 0 0 18px; text-align: center; }
+            #left_bar .lightflow-left-navigation .panel_menu_button { width: 16px; min-width: 16px; flex: 0 0 16px; margin: 0; }
+            #left_bar .lightflow-left-navigation .panel_menu_button > .material-icons { font-size: 16px; }
+            #left_bar .panel_tab_bar:has(> .lightflow-left-navigation) > .panel_folding_button { align-self: center; width: 18px; min-width: 18px; }
+            #left_bar .panel_container[panel_id="lightflow_scene"] { container-type: inline-size; }
+            .lightflow-workspace-enabled:not(.lightflow-wide-canvas) #left_bar .panel_container[panel_id="global_renderer_properties"] > .panel_tab_bar > .panel_folding_button { display: none; }
+            @container (max-width: 320px) { #left_bar .lightflow-left-navigation > .panel_handle { font-size: 14px !important; gap: 4px !important; } }
+            @container (max-width: 320px) { #left_bar .lightflow-left-navigation .lightflow-left-tab-icon { display: none; } }
+            @container (max-width: 260px) { #left_bar .lightflow-left-navigation > .panel_handle { font-size: 13px !important; text-transform: none; } }
+            #left_bar :is(#panel_lightflow_scene, #panel_lightflow_environment_panel, #panel_material_properties, #panel_lightflow_scene_composer_panel) .form { padding: 6px !important; margin-right: 0px; padding-right: 4px !important; margin-left: 0px !important;}
+            #left_bar :is(#panel_lightflow_environment_panel, #panel_material_properties, #panel_lightflow_scene_composer_panel) .dialog_bar[form_type="enum_select"] { display: flex; flex-direction: column; align-items: stretch; gap: 4px; height: auto !important; padding: 6px 4px !important; }
+            #left_bar :is(#panel_lightflow_environment_panel, #panel_material_properties, #panel_lightflow_scene_composer_panel) .dialog_bar[form_type="enum_select"] > label.name_space_left { width: 100%; flex: 0 0 auto; padding: 0; }
+            #left_bar :is(#panel_lightflow_environment_panel, #panel_material_properties, #panel_lightflow_scene_composer_panel) .dialog_bar[form_type="enum_select"] > .light_manager_enum_select_input { flex: 0 0 auto !important; width: 100% !important; min-width: 0 !important; height: auto !important; min-height: 30px; padding: 5px 26px 5px 8px !important; line-height: 1.3; white-space: normal !important; text-align: left; justify-content: flex-start; }
+            #left_bar :is(#panel_lightflow_environment_panel, #panel_material_properties, #panel_lightflow_scene_composer_panel) .light_manager_form_variant_group .custom_checkbox { height: auto !important; min-height: 34px; }
+            #left_bar :is(#panel_lightflow_environment_panel, #panel_material_properties, #panel_lightflow_scene_composer_panel) .light_manager_form_variant_group .custom_checkbox > span { flex: 1 1 auto !important; }
+            #left_bar :is(#panel_lightflow_environment_panel, #panel_material_properties, #panel_lightflow_scene_composer_panel) .light_manager_form_variant_group .custom_checkbox > span > .material-icons { margin: 0 !important; }
+            #left_bar :is(#panel_lightflow_environment_panel, #panel_material_properties, #panel_lightflow_scene_composer_panel) .light_manager_form_variant_group .custom_checkbox > span > span:first-of-type { white-space: normal !important; overflow: visible !important; line-height: 1.3; }
+            @container (max-width: 340px) { #left_bar .light_manager_group_summary { display: none; } }
+            #left_bar :is(#panel_lightflow_scene, #panel_lightflow_environment_panel, #panel_material_properties, #panel_lightflow_scene_composer_panel) .light_manager_action_button:has(> span) { width: 100% !important; height: auto !important; min-height: 32px; padding: 6px 8px !important; justify-content: flex-start !important; }
+            #left_bar :is(#panel_lightflow_scene, #panel_lightflow_environment_panel, #panel_material_properties, #panel_lightflow_scene_composer_panel) .light_manager_action_button > span { min-width: 0; white-space: normal !important; text-align: left; font-size: 13px; line-height: 1.3; }
+            #left_bar :is(#panel_lightflow_scene, #panel_lightflow_environment_panel, #panel_material_properties, #panel_lightflow_scene_composer_panel) .light_manager_action_button > .material-icons { flex: 0 0 18px; width: 18px; margin: 0 !important; }
+            #left_bar :is(#panel_lightflow_environment_panel, #panel_material_properties, #panel_lightflow_scene_composer_panel) .light_manager_form_variant_group .custom_checkbox > span > span:first-of-type { text-align: left; }
+            #left_bar :is(#panel_lightflow_environment_panel, #panel_material_properties, #panel_lightflow_scene_composer_panel) .full_width_dialog_bar > .tool.widget > span:first-child { text-align: left; }
+            #left_bar .form_row_group > :is(.form_bar__environment_preset_identity, .form_bar__sa_properties_info_label_) { flex: 1 1 0 !important; min-width: 0; }
+            #left_bar #panel_lightflow_environment_panel .form_bar__environment_region { display: none !important; }
+            #left_bar :is(#panel_lightflow_environment_panel, #panel_material_properties, #panel_lightflow_scene_composer_panel) .light_manager_panel_search_bar { position: sticky; top: 0; z-index: 4; background: var(--color-ui) !important; padding-top: 6px !important; padding-bottom: 6px !important; }
+            @container (max-width: 320px) {
+                #left_bar :is(#panel_lightflow_environment_panel, #panel_material_properties, #panel_lightflow_scene_composer_panel) .light_manager_panel_search { grid-template-columns: minmax(0, 1fr) 30px; }
+                #left_bar .light_manager_panel_search > .light_manager_panel_search_input { grid-column: 1 / -1; }
+                #left_bar .light_manager_panel_search > .light_manager_panel_search_active { grid-column: 1; grid-row: 2; width: 100% !important; }
+                #left_bar .light_manager_panel_search > .light_manager_panel_search_collapse { grid-column: 2; grid-row: 2; }
+            }
+            @container (max-width: 360px) {
+                #left_bar :is(#panel_lightflow_environment_panel, #panel_material_properties, #panel_lightflow_scene_composer_panel) .dialog_bar:has(.combo_slider_label) > .tool.widget { display: grid !important; grid-template-columns: minmax(0, 1fr) auto; height: auto !important; min-height: 48px; gap: 3px 4px; padding-top: 4px !important; padding-bottom: 4px !important; }
+                #left_bar :is(#panel_lightflow_environment_panel, #panel_material_properties, #panel_lightflow_scene_composer_panel) .combo_slider_label { grid-column: 1 / -1; flex: none !important; width: 100%; margin: 0 !important; white-space: normal !important; line-height: 1.3; text-align: left; }
+                #left_bar :is(#panel_lightflow_environment_panel, #panel_material_properties, #panel_lightflow_scene_composer_panel) .slider_input_combo { grid-column: 1; width: 100% !important; height: 30px !important; margin: 0 !important; gap: 6px; }
+                #left_bar :is(#panel_lightflow_environment_panel, #panel_material_properties, #panel_lightflow_scene_composer_panel) .slider_input_combo input[type="range"] { min-width: 100px !important; }
+                #left_bar :is(#panel_lightflow_environment_panel, #panel_material_properties, #panel_lightflow_scene_composer_panel) .slider_input_combo .numeric_input { flex: 0 0 64px !important; width: 64px !important; min-width: 64px !important; }
+                #left_bar :is(#panel_lightflow_environment_panel, #panel_material_properties, #panel_lightflow_scene_composer_panel) .slider_input_combo .numeric_input input { min-width: 0 !important; width: 100%; }
+                #left_bar :is(#panel_lightflow_environment_panel, #panel_material_properties, #panel_lightflow_scene_composer_panel) .dialog_bar:has(.combo_slider_label) > .tool.widget > .material-icons:last-child { grid-column: 2; grid-row: 2; width: 20px; height: 26px; justify-content: center; margin: 0 !important; }
+            }
+            @container (max-width: 260px) {
+                #left_bar #panel_global_renderer_properties .dialog_bar:has(.combo_slider_label) > .tool.widget { position: relative; display: grid !important; grid-template-columns: minmax(0, 1fr) auto; height: auto !important; min-height: 46px; gap: 2px 4px; }
+                #left_bar #panel_global_renderer_properties .combo_slider_label { grid-column: 1 / -1; width: 100%; margin: 0 !important; white-space: normal !important; text-align: left; }
+                #left_bar #panel_global_renderer_properties .slider_input_combo { grid-column: 1; width: 100% !important; height: 28px !important; margin: 0 !important; gap: 6px; }
+                #left_bar #panel_global_renderer_properties input[type="range"] { min-width: 100px !important; }
+                #left_bar #panel_global_renderer_properties .numeric_input { flex: 0 0 64px !important; width: 64px !important; }
+                #left_bar #panel_global_renderer_properties .numeric_input input { min-width: 0 !important; }
+                #left_bar #panel_global_renderer_properties .dialog_bar:has(.combo_slider_label) > .tool.widget > .material-icons:last-child { grid-column: 2; grid-row: 2; margin: 0 !important; }
+                #left_bar #panel_global_renderer_properties .dialog_bar:has(.combo_slider_label) > .tool.widget > .material-icons:first-child { position: absolute; top: 0; left: 4px; width: 18px; height: 20px; margin: 0 !important; }
+                #left_bar #panel_global_renderer_properties .dialog_bar:has(.combo_slider_label) > .tool.widget:has(> .material-icons:first-child) > .combo_slider_label { box-sizing: border-box; padding-left: 24px; }
+            }
+            #left_bar #panel_lightflow_scene .form_row_group .light_manager_action_button { justify-content: flex-start !important; }
+            #left_bar #panel_lightflow_scene .form_row_group .light_manager_action_button > .material-icons { flex: 0 0 18px; width: 18px; margin: 0 !important; }
+            #left_bar #panel_lightflow_scene .form_row_group .light_manager_action_button > span { flex: 0 1 auto !important; margin: 0 !important; }
+        `);
+        sync();
+        return {
+            delete() {
+                disposed = true;
+                observer.disconnect();
+                Interface.left_bar.removeEventListener('scroll', rememberScroll, true);
+                listeners.forEach(listener => listener.delete());
+                actions.forEach(action => action.delete());
+                enhanced.forEach(node => { node.removeEventListener('keydown', keydown); node.removeEventListener('click', rememberScroll, true); node.classList.remove('lightflow-left-navigation'); });
+                icons.forEach(node => node.remove());
+                attributeBackups.forEach((backup, node) => backup.forEach((value, name) => value === null ? node.removeAttribute(name) : node.setAttribute(name, value)));
+                style.delete();
+            }
+        };
+    }
+
+    // Extend the native tree rather than replacing its rows, selection or drag path.
+    function createLightflowRightSidebar() {
+        const bar = Interface.right_bar;
+        const outliner = Panels.outliner;
+        const ids = ['light_properties', 'lightflow_atmosphere_properties', 'lightflow_god_ray_properties', 'lightflow_particle_properties'];
+        const t = key => translateLightManager('light_manager.ui.' + key);
+        const tabs = new Set();
+        const attrs = new Map();
+        const tabText = new Map();
+        const foldHosts = new Set();
+        const titles = [t('scene_light'), t('scene_volume'), t('scene_ray'), t('scene_particles')];
+        const filters = document.createElement('div');
+        filters.className = 'lightflow-outliner-filters';
+        filters.setAttribute('role', 'group');
+        filters.setAttribute('aria-label', t('scene_filter'));
+        let filter = 'all';
+        let autoFit = lightManagerSafeGet('lightflow_outliner_auto_fit_v1', 'true') !== 'false';
+        const filterTrigger = document.createElement('button');
+        filterTrigger.type = 'button'; filterTrigger.className = 'lightflow-outliner-filter-trigger';
+        filterTrigger.setAttribute('aria-haspopup', 'menu');
+        let frame = null;
+        let disposed = false;
+        const kinds = { all: null, light: ['light', 'art_key'], volume: ['lightflow_volume'], effects: ['lightflow_god_ray', 'lightflow_particle_effect'] };
+        const labels = { all: t('all_elements'), light: t('scene_light'), volume: t('scene_volume'), effects: t('effects') };
+        const icons = { all: 'view_list', light: 'lightbulb', volume: 'blur_on', effects: 'auto_awesome' };
+        const buttons = new Map();
+        const matches = node => filter === 'all' || kinds[filter].includes(node.type) || (node.children || []).some(matches);
+        const rule = {
+            id: 'lightflow_scene_type', test: node => {
+                // Vue's root filter is cached. Reading the native revision here
+                // makes updateNodeDisplayRules invalidate it for our type filter.
+                void Outliner.vue.options.update_conditions;
+                return !bar.classList.contains('lightflow-right-workspace') || matches(node);
+            }
+        };
+        Outliner.node_display_rules?.push(rule);
+        // Invalidate an already cached native root after registering a rule.
+        // Vue's patched splice notifies it without changing any scene node.
+        Outliner.vue.root.splice(0, 0);
+        const refreshTree = () => Outliner.updateNodeDisplayRules?.();
+        const setFilter = value => {
+            filter = value;
+            filterTrigger.replaceChildren(Blockbench.getIconNode(value === 'all' ? 'filter_list' : icons[value]));
+            filterTrigger.title = `${t('scene_filter')}: ${labels[value]}`;
+            filterTrigger.setAttribute('aria-label', filterTrigger.title);
+            filterTrigger.classList.toggle('selected', value !== 'all');
+            buttons.forEach((button, key) => { button.classList.toggle('selected', key === value); button.setAttribute('aria-pressed', String(key === value)); });
+            refreshTree();
+        };
+        filterTrigger.addEventListener('click', () => {
+            new Menu('lightflow_outliner_filters', [
+                ...Object.keys(kinds).map(key => ({ name: labels[key], icon: key === filter ? 'radio_button_checked' : 'radio_button_unchecked', click: () => setFilter(key) })),
+                new MenuSeparator(), {
+                    name: t('outliner_auto_fit'), icon: autoFit ? 'check_box' : 'check_box_outline_blank', click: () => {
+                        autoFit = !autoFit; localStorage.setItem('lightflow_outliner_auto_fit_v1', String(autoFit)); schedule();
+                    }
+                }
+            ]).open(filterTrigger);
+        });
+        const resizeStart = event => {
+            if (event.target.closest('.panel_sidebar_resize_handle')?.parentElement === outliner.container) { autoFit = false; localStorage.setItem('lightflow_outliner_auto_fit_v1', 'false'); }
+        };
+        bar.addEventListener('pointerdown', resizeStart, true);
+        Object.keys(kinds).forEach(key => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.append(Blockbench.getIconNode(icons[key]));
+            const label = document.createElement('span');
+            label.textContent = labels[key];
+            button.append(label);
+            button.title = labels[key];
+            button.setAttribute('aria-label', labels[key]);
+            button.addEventListener('click', () => setFilter(key));
+            filters.append(button);
+            buttons.set(key, button);
+        });
+        const remember = (node, name, value) => {
+            if (!attrs.has(node)) attrs.set(node, new Map());
+            const backup = attrs.get(node);
+            if (!backup.has(name)) backup.set(name, node.getAttribute(name));
+            if (node.getAttribute(name) !== String(value)) node.setAttribute(name, String(value));
+        };
+        const keydown = event => {
+            const foldButton = event.target.closest('.panel_folding_button');
+            if (foldButton && foldButton.closest('.lightflow-right-inspector') && ['Enter', ' '].includes(event.key)) {
+                event.preventDefault(); event.stopPropagation();
+                const host = Panels[foldButton.closest('.panel_container').getAttribute('panel_id')];
+                host?.fold(!host.folded);
+                return;
+            }
+            const handle = event.target.closest('.panel_handle');
+            if (!handle || event.target.closest('.panel_menu_button')) return;
+            const list = [...handle.parentElement.children].filter(node => ids.includes(node.getAttribute('panel_id')));
+            if (!list.length) return;
+            let index = list.indexOf(handle);
+            if (event.key === 'Home') index = 0;
+            else if (event.key === 'End') index = list.length - 1;
+            else if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) index = (index + ({ ArrowLeft: -1, ArrowRight: 1, ArrowUp: -2, ArrowDown: 2 }[event.key]) + list.length) % list.length;
+            else if (!['Enter', ' '].includes(event.key)) return;
+            event.preventDefault(); event.stopPropagation();
+            const panel = Panels[list[index].getAttribute('panel_id')];
+            const host = panel.getHostPanel?.() || panel;
+            if (host.folded) host.fold(false);
+            host.selectTab(panel);
+            list[index].focus();
+        };
+        const openClickedTab = event => {
+            const handle = event.target.closest('.lightflow-right-navigation .panel_handle');
+            if (!handle || event.target.closest('.panel_menu_button')) return;
+            const panel = Panels[handle.getAttribute('panel_id')], host = panel?.getHostPanel?.() || panel;
+            if (host?.folded) host.fold(false);
+        };
+        bar.addEventListener('keydown', keydown);
+        bar.addEventListener('click', openClickedTab);
+        const sync = () => {
+            if (disposed) return;
+            const enabled = Project?.mode === 'render' && !Interface.work_screen.classList.contains('lightflow-wide-canvas') && outliner.slot === 'right_bar';
+            bar.classList.toggle('lightflow-right-workspace', enabled);
+            if (!enabled) { if (filter !== 'all') setFilter('all'); return; }
+            // The tree stays above the inspector, so folding or replacing an
+            // inspector cannot move a row away from the user's pointer.
+            // Keep the editor usable even after a native/manual tree resize.
+            const editorReserve = Math.min(360, Math.round(bar.clientHeight * .58));
+            const treeLimit = Math.max(80, Math.min(Math.round(bar.clientHeight * .34), bar.clientHeight - editorReserve));
+            let height = Math.min(treeLimit, Math.max(140, Number(outliner.position_data.height) || 240));
+            const tree = outliner.node.querySelector('#cubes_list');
+            if (autoFit && tree) {
+                const rows = [...tree.querySelectorAll('.outliner_object')].reduce((sum, node) => sum + node.getBoundingClientRect().height, 0);
+                const overhead = outliner.container.getBoundingClientRect().height - tree.getBoundingClientRect().height;
+                height = Math.min(height, Math.max(100, overhead + rows + 6));
+            }
+            bar.style.setProperty('--lightflow-tree-height', outliner.folded ? '32px' : height + 'px');
+            const wrapper = outliner.node.querySelector('.panel_vue_wrapper');
+            if (wrapper && filters.parentElement !== outliner.node) outliner.node.insertBefore(filters, wrapper);
+            if (filterTrigger.parentElement !== outliner.tab_bar) outliner.tab_bar.insertBefore(filterTrigger, outliner.tab_bar.querySelector('.panel_folding_button'));
+            for (const id of ids) {
+                const panel = Panels[id];
+                if (!panel || panel.slot !== 'right_bar') continue;
+                const host = panel.getHostPanel?.() || panel;
+                host.container.classList.add('lightflow-right-inspector');
+                if (!foldHosts.has(host)) { foldHosts.add(host); listeners.push(host.on('fold', schedule)); }
+                const foldButton = host.tab_bar.querySelector('.panel_folding_button');
+                if (foldButton) {
+                    remember(foldButton, 'role', 'button'); remember(foldButton, 'tabindex', '0');
+                    remember(foldButton, 'aria-expanded', String(!host.folded));
+                    remember(foldButton, 'aria-label', t(host.folded ? 'expand_inspector' : 'collapse_inspector'));
+                    remember(foldButton, 'title', t(host.folded ? 'expand_inspector' : 'collapse_inspector'));
+                }
+                const list = host.tab_bar.querySelector('.panel_tab_list');
+                if (!list) continue;
+                tabs.add(list);
+                list.classList.add('lightflow-right-navigation');
+                const handles = ids.map(id => [...list.children].find(node => node.getAttribute('panel_id') === id)).filter(Boolean);
+                if (handles.some((node, index) => list.children[index] !== node)) {
+                    const focused = document.activeElement;
+                    const restoreFocus = list.contains(focused);
+                    handles.forEach(node => list.append(node));
+                    if (restoreFocus) focused.focus();
+                }
+                remember(list, 'role', 'tablist');
+                for (const handle of list.children) {
+                    const childId = handle.getAttribute('panel_id');
+                    if (!ids.includes(childId)) continue;
+                    const text = handle.querySelector(':scope > span');
+                    if (text) {
+                        if (!tabText.has(text)) tabText.set(text, text.textContent);
+                        const title = titles[ids.indexOf(childId)];
+                        if (text.textContent !== title) text.textContent = title;
+                    }
+                    const selected = (host.open_attached_panel || host).id === childId;
+                    remember(handle, 'role', 'tab');
+                    remember(handle, 'tabindex', selected ? '0' : '-1');
+                    remember(handle, 'aria-selected', String(selected));
+                    remember(handle, 'aria-controls', Panels[childId].node.id);
+                    remember(Panels[childId].node, 'role', 'tabpanel');
+                }
+            }
+            buttons.forEach((button, key) => {
+                const count = (Project.elements || []).filter(node => key === 'all' || kinds[key].includes(node.type)).length;
+                button.title = `${labels[key]} (${count})`;
+            });
+        };
+        const schedule = () => { if (frame === null) frame = requestAnimationFrame(() => { frame = null; sync(); }); };
+        const observer = new MutationObserver(schedule);
+        observer.observe(bar, { childList: true, subtree: true });
+        const resize = new ResizeObserver(schedule);
+        resize.observe(bar);
+        const listeners = ['select_mode', 'select_project', 'update_interface'].map(event => Blockbench.on(event, schedule));
+        listeners.push(Blockbench.on('update_selection', () => {
+            if (filter !== 'all' && (Outliner.selected || []).some(node => !matches(node))) setFilter('all');
+            schedule();
+        }));
+        const originalResize = outliner.onResize;
+        const onResize = function (...args) { originalResize?.apply(this, args); schedule(); };
+        outliner.onResize = onResize;
+        // Use the native rename transaction in Render as well. The native
+        // shared action is otherwise restricted to Edit/Paint.
+        if (window.SharedActions?.add && typeof renameOutliner === 'function') listeners.push(SharedActions.add('rename', {
+            subject: 'lightflow_outliner', priority: 0,
+            condition: () => bar.classList.contains('lightflow-right-workspace') && !!Outliner.selected?.length,
+            run: () => renameOutliner()
+        }));
+        const style = Blockbench.addCSS(`
+            #right_bar.lightflow-right-workspace { overflow: hidden; }
+            #right_bar.lightflow-right-workspace > .panel_container[panel_id="outliner"] { order: -10; margin-top: 0 !important; flex: 0 0 var(--lightflow-tree-height) !important; height: var(--lightflow-tree-height) !important; min-height: 0 !important; max-height: var(--lightflow-tree-height) !important; }
+            #right_bar.lightflow-right-workspace > .lightflow-right-inspector { order: -9; flex: 1 1 0 !important; min-height: 0 !important; height: auto !important; container-type: inline-size; }
+            #right_bar.lightflow-right-workspace > .lightflow-right-inspector.folded { flex: 0 0 64px !important; }
+            #right_bar.lightflow-right-workspace .lightflow-right-inspector > .panel { flex: 1 1 0; min-height: 0; overflow: hidden; }
+            #right_bar.lightflow-right-workspace .lightflow-right-inspector .form { padding: 6px !important; min-height: 0; overflow-y: auto; scrollbar-gutter: stable; margin-right: 0px; margin-left: 0px; }
+            #right_bar.lightflow-right-workspace .lightflow-right-inspector > .panel_tab_bar { height: auto !important; min-height: 64px; align-items: stretch; flex-shrink: 0; }
+            #right_bar.lightflow-right-workspace .lightflow-right-navigation { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); flex: 1 1 auto; height: auto !important; overflow: visible; }
+            #right_bar.lightflow-right-workspace .lightflow-right-navigation .panel_handle { min-width: 0; height: 32px; padding: 0 7px; display: flex; align-items: center; gap: 4px; font-size: 14px; text-transform: none; }
+            #right_bar.lightflow-right-workspace .lightflow-right-navigation .panel_handle > span { flex: 1 1 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+            #right_bar.lightflow-right-workspace .lightflow-right-navigation .panel_menu_button { flex: 0 0 16px; min-width: 16px; width: 16px; margin: 0; }
+            #right_bar.lightflow-right-workspace .lightflow-right-navigation .panel_menu_button > i { font-size: 16px; }
+            #right_bar.lightflow-right-workspace .lightflow-right-inspector > .panel_tab_bar > .panel_folding_button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+            #right_bar.lightflow-right-workspace .lightflow-right-inspector .panel_folding_button { align-self: center; width: 18px; min-width: 18px; }
+            #right_bar.lightflow-right-workspace :is(.panel_handle,button):focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+            #right_bar.lightflow-right-workspace #panel_outliner { min-height: 0; overflow: hidden; }
+            #right_bar.lightflow-right-workspace > .panel_container[panel_id="outliner"] { container-type: inline-size; }
+            #right_bar.lightflow-right-workspace .panel_container[panel_id="outliner"]:not(.folded) > .panel_sidebar_resize_handle { display: block !important; }
+            #right_bar.lightflow-right-workspace #panel_outliner > .panel_vue_wrapper { flex: 1 1 0; min-height: 0; overflow: hidden; }
+            #right_bar.lightflow-right-workspace #panel_outliner > .panel_vue_wrapper > div { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+            #right_bar.lightflow-right-workspace #cubes_list { flex: 1 1 0; min-height: 0; overflow-y: auto; scrollbar-gutter: stable; }
+            #right_bar.lightflow-right-workspace #cubes_list > .outliner_node:last-child { margin-bottom: 4px !important; }
+            #right_bar.lightflow-right-workspace #cubes_list .outliner_object { min-height: 28px; align-items: center; }
+            #right_bar.lightflow-right-workspace #cubes_list .outliner_object > .icon { display: inline-flex; align-items: center; justify-content: center; }
+            #right_bar.lightflow-right-workspace .lightflow-outliner-filters { display: none; }
+            .lightflow-outliner-filter-trigger { display: none; }
+            #right_bar.lightflow-right-workspace .lightflow-outliner-filter-trigger { display: grid; place-items: center; width: 26px; min-width: 26px; height: 26px; margin: 0 3px; padding: 0; background: transparent; color: var(--color-subtle_text); border: 0; }
+            #right_bar.lightflow-right-workspace .lightflow-outliner-filter-trigger > i { font-size: 18px; }
+            #right_bar.lightflow-right-workspace .lightflow-outliner-filter-trigger.selected { color: var(--color-accent); }
+            .lightflow-outliner-filters { display: none; }
+            #right_bar.lightflow-right-workspace .lightflow-outliner-filters button { flex: 1 1 0; min-width: 0; height: 28px; padding: 0 3px; display: flex; align-items: center; justify-content: center; gap: 4px; border: 0; background: transparent; color: var(--color-subtle_text); }
+            #right_bar.lightflow-right-workspace .lightflow-outliner-filters button > i { width: 18px; font-size: 18px; }
+            #right_bar.lightflow-right-workspace .lightflow-outliner-filters button > span { min-width: 0; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+            #right_bar.lightflow-right-workspace .lightflow-outliner-filters button.selected { background: var(--color-selected); color: var(--color-text); }
+            #right_bar.lightflow-right-workspace .lightflow-outliner-filters button:hover { background: var(--color-button); color: var(--color-text); }
+            #right_bar.lightflow-right-workspace .lightflow-right-inspector .light_manager_panel_search_bar { position: sticky; top: 0; z-index: 4; background: var(--color-ui) !important; padding: 4px !important; }
+            #right_bar.lightflow-right-workspace .lightflow-right-inspector .name_space_left { white-space: normal; line-height: 1.3; }
+            #right_bar.lightflow-right-workspace .lightflow-right-inspector .light_manager_form_variant_group .custom_checkbox { min-height: 32px; height: auto !important; }
+            #right_bar.lightflow-right-workspace .lightflow-right-inspector .light_manager_form_variant_group .custom_checkbox > span > span:first-of-type { white-space: normal !important; text-align: left; }
+            #right_bar.lightflow-right-workspace .lightflow-right-inspector .light_manager_action_button:has(>span) { width: 100% !important; min-height: 32px; height: auto !important; padding: 5px 8px !important; }
+            .light_manager_action_button > .icon { margin: 0 !important; flex: 0 0 auto; }
+            #right_bar.lightflow-right-workspace .form_bar_light_target_state .light_manager_action_button { justify-content: flex-start !important; min-height: 28px !important; height: 28px !important; padding: 2px 6px !important; }
+            #right_bar.lightflow-right-workspace .lightflow-right-inspector .light_manager_action_button > span { white-space: normal !important; font-size: 13px; line-height: 1.3; }
+            #right_bar.lightflow-right-workspace .lightflow-right-inspector .dialog_bar[form_type="enum_select"] { display: flex; flex-direction: column; align-items: stretch; gap: 4px; height: auto !important; padding: 5px 4px !important; }
+            #right_bar.lightflow-right-workspace .lightflow-right-inspector .dialog_bar[form_type="enum_select"] > label { width: 100%; padding: 0; }
+            #right_bar.lightflow-right-workspace .lightflow-right-inspector .light_manager_enum_select_input { width: 100% !important; flex: none !important; min-height: 30px; height: auto !important; white-space: normal !important; padding: 5px 26px 5px 8px !important; justify-content: flex-start; }
+            #right_bar.lightflow-right-workspace .lightflow-right-inspector .light_manager_form_variant_panel_tabs { position: static !important; }
+            #right_bar.lightflow-right-workspace :is(#panel_lightflow_atmosphere_properties,#panel_lightflow_god_ray_properties) .light_manager_form_variant_panel_tabs,
+            #right_bar.lightflow-right-workspace .lf-particle-tabs-row { position: sticky !important; top: 0; z-index: 5; background: var(--color-ui) !important; box-shadow: 0 4px 0 var(--color-ui); }
+            #right_bar.lightflow-right-workspace :is(#panel_lightflow_atmosphere_properties,#panel_lightflow_god_ray_properties,#panel_lightflow_particle_properties) .light_manager_panel_search_bar { top: 36px !important; z-index: 4; }
+            #right_bar.lightflow-right-workspace .lightflow_volume_overview_row > .form_bar_summary { min-width: 0 !important; }
+            #right_bar.lightflow-right-workspace .lightflow_volume_overview_row .bar_display_main { flex: 1 1 0 !important; min-width: 0; }
+            #right_bar.lightflow-right-workspace .lightflow_volume_overview_row .bar_display_content { min-width: 0; }
+            #right_bar.lightflow-right-workspace #panel_light_properties .light_manager_full_track_slider .combo_slider_label { max-width: none !important; }
+            #right_bar.lightflow-right-workspace .light_manager_full_track_slider { row-gap: 0 !important; }
+            #right_bar.lightflow-right-workspace .light_manager_full_track_slider input[type="range"] { height: 24px; }
+            #right_bar.lightflow-right-workspace .lf-particle-tabs-row { flex-wrap: nowrap !important; }
+            #right_bar.lightflow-right-workspace .lf-particle-tabs-row > .form_bar__setup { flex: 0 0 30px !important; width: 30px !important; min-width: 30px !important; padding: 0 !important; box-sizing: border-box; }
+            @container (max-width: 320px) {
+                #right_bar.lightflow-right-workspace #panel_light_properties .lf-light-primary-row { display: grid !important; grid-template-columns: auto minmax(0,1fr); gap: 4px !important; }
+                #right_bar.lightflow-right-workspace #panel_light_properties .lf-light-primary-row > .form_bar_light_properties_label { grid-column: 1 / -1; width: 100% !important; min-width: 0 !important; }
+                #right_bar.lightflow-right-workspace #panel_light_properties .lf-light-primary-row > .light_manager_form_separator { display: none; }
+                #right_bar.lightflow-right-workspace #panel_light_properties .lf-light-primary-row > .form_bar_light_color { justify-self: end; }
+            }
+            @container (max-width: 360px) {
+                #right_bar .lightflow-right-inspector .dialog_bar:has(.combo_slider_label) > .tool.widget { position: relative; display: grid !important; grid-template-columns: minmax(0,1fr) auto; min-height: 48px; height: auto !important; gap: 3px 4px; }
+                #right_bar .lightflow-right-inspector .combo_slider_label { grid-column: 1 / -1; width: 100%; flex: none !important; white-space: normal !important; line-height: 1.3; text-align: left; margin: 0 !important; }
+                #right_bar .lightflow-right-inspector .slider_input_combo { grid-column: 1; width: 100% !important; height: 30px !important; margin: 0 !important; gap: 6px; }
+                #right_bar .lightflow-right-inspector .slider_input_combo { min-width: 0 !important; }
+                #right_bar .lightflow-right-inspector .slider_input_combo input[type="range"] { min-width: 0 !important; width: 0; flex: 1 1 0 !important; }
+                #right_bar .lightflow-right-inspector .numeric_input { flex: 0 0 64px !important; width: 64px !important; min-width: 64px !important; }
+                #right_bar .lightflow-right-inspector .numeric_input input { width: 100%; min-width: 0 !important; }
+                #right_bar .lightflow-right-inspector .dialog_bar:has(.combo_slider_label) > .tool.widget > .material-icons:last-child { grid-column: 2; grid-row: 2; width: 20px; height: 26px; margin: 0 !important; }
+                #right_bar .lightflow-right-inspector .dialog_bar:has(.combo_slider_label) > .tool.widget > .material-icons:first-child { position: absolute; top: 0; left: 4px; width: 18px; height: 20px; margin: 0 !important; }
+                #right_bar .lightflow-right-inspector .dialog_bar:has(.combo_slider_label) > .tool.widget:has(> .material-icons:first-child) > .combo_slider_label { box-sizing: border-box; padding-left: 24px; }
+            }
+            @container (max-width: 260px) {
+                #right_bar .lightflow-right-inspector .light_manager_panel_search { grid-template-columns: minmax(0,1fr) 32px 32px; }
+                #right_bar .lightflow-right-inspector .light_manager_panel_search_active { width: 30px !important; min-width: 30px !important; padding: 0 !important; font-size: 0 !important; justify-content: center; }
+                #right_bar .lightflow-right-inspector .light_manager_panel_search_active > span { display: none; }
+                #right_bar .lightflow-right-inspector .light_manager_panel_search_active::before { content: 'filter_list'; font-family: 'Material Icons'; font-size: 18px; }
+                #right_bar .lightflow-right-inspector .light_manager_panel_search_active > i { display: none; }
+                #right_bar .lightflow-right-inspector .light_manager_group_summary { display: none; }
+            }
+            @container (max-width: 320px) { #right_bar .lightflow-outliner-filters button > i { display: none; } }
+        `);
+        setFilter('all'); sync();
+        return {
+            delete() {
+                disposed = true; if (frame !== null) cancelAnimationFrame(frame);
+                observer.disconnect(); resize.disconnect(); listeners.forEach(listener => listener.delete());
+                bar.removeEventListener('pointerdown', resizeStart, true); filterTrigger.remove();
+                bar.removeEventListener('keydown', keydown); bar.removeEventListener('click', openClickedTab);
+                if (outliner.onResize === onResize) outliner.onResize = originalResize;
+                const index = Outliner.node_display_rules?.indexOf(rule); if (index >= 0) Outliner.node_display_rules.splice(index, 1);
+                Outliner.vue.root.splice(0, 0);
+                refreshTree(); filters.remove(); style.delete();
+                bar.classList.remove('lightflow-right-workspace'); bar.style.removeProperty('--lightflow-tree-height');
+                bar.querySelectorAll('.lightflow-right-inspector').forEach(node => node.classList.remove('lightflow-right-inspector'));
+                tabs.forEach(list => { list.classList.remove('lightflow-right-navigation'); });
+                attrs.forEach((backup, node) => backup.forEach((value, name) => value === null ? node.removeAttribute(name) : node.setAttribute(name, value)));
+                tabText.forEach((value, node) => { node.textContent = value; });
+            }
+        };
+    }
+
     function createLightflowWorkspace() {
         const read = (key, fallback) => {
             try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch (_) { return fallback; }
         };
         const registered = new Map();
+        const suppressedPanelIds = new Set();
         const appliedDefaults = new WeakMap();
         const listeners = [];
         const layoutKey = 'lightflow_workspace_layout_v3';
         const helperKey = 'lightflow_helper_policy_v3';
         let helperPolicy = read(helperKey, 'contextual');
         if (!['contextual', 'all', 'clean'].includes(helperPolicy)) helperPolicy = 'contextual';
+        const widthLimits = Object.freeze({ min: 240, max: 440, viewport: 360, rail: 44 });
+        const storedWidths = read(LIGHT_MANAGER_STORAGE_KEYS.workspaceWidths, {});
+        const preferredWidths = Object.freeze({ left: 288, right: 272 });
+        const sidebarWidths = {
+            left: Number.isFinite(Number(storedWidths.left)) ? Number(storedWidths.left) : preferredWidths.left,
+            right: Number.isFinite(Number(storedWidths.right)) ? Number(storedWidths.right) : preferredWidths.right
+        };
+        // Older Lightflow builds also wrote Render widths into Interface.data.
+        // That is the fallback for a mode which has not been opened yet, so a
+        // fresh Edit tab could inherit Render's compact columns after reset.
+        if (Interface?.data && Interface?.default_data) {
+            if (Interface.data.left_bar_width === sidebarWidths.left && Interface.data.right_bar_width === sidebarWidths.right) {
+                Interface.data.left_bar_width = Interface.default_data.left_bar_width;
+                Interface.data.right_bar_width = Interface.default_data.right_bar_width;
+            }
+        }
+        let wideCanvas = read(LIGHT_MANAGER_STORAGE_KEYS.wideCanvas, false) === true;
+        let autoFoldOutliner = false;
+        let ownedOutlinerFold = null;
+        const splitterNodes = [];
+        const railNodes = new Map();
+        let activeWideDrawer = null;
+        let workspaceStyles = null;
+        let scenePanel = null;
         let cleanSnapshot = null;
+        let previewResizeFrame = null;
+        const schedulePreviewResize = () => {
+            if (previewResizeFrame !== null) return;
+            previewResizeFrame = requestAnimationFrame(() => {
+                previewResizeFrame = null;
+                // Native panel layout updates the grid, but does not resize the
+                // WebGL or CSS renderer. Do this after the new columns settle.
+                (window.Preview?.all || []).forEach(preview => {
+                    if (!preview.canvas?.isConnected || !preview.node?.clientWidth || !preview.node?.clientHeight) return;
+                    if (preview.width !== preview.node.parentElement.clientWidth || preview.height !== preview.node.parentElement.clientHeight) preview.resize();
+                });
+            });
+        };
+        listeners.push({ delete() { if (previewResizeFrame !== null) cancelAnimationFrame(previewResizeFrame); } });
+        const workWidth = () => Math.max(
+            1,
+            Number(window.Interface?.work_screen?.clientWidth) ||
+            Number(document.documentElement?.clientWidth) ||
+            1280
+        );
+        const clampSidebarWidth = (value, opposite) => {
+            const available = Math.max(widthLimits.min, workWidth() - Number(opposite || 0) - widthLimits.viewport);
+            return Math.round(Math.max(widthLimits.min, Math.min(widthLimits.max, available, Number(value) || widthLimits.min)));
+        };
+        const persistWidths = () => localStorage.setItem(
+            LIGHT_MANAGER_STORAGE_KEYS.workspaceWidths,
+            JSON.stringify(sidebarWidths)
+        );
+        const restoreActiveWideDrawer = () => {
+            const drawer = activeWideDrawer;
+            if (!drawer || !wideCanvas || modeId() !== 'render') return;
+            const host = drawer.panel?.getHostPanel?.() || drawer.host || drawer.panel;
+            const container = host?.container || drawer.container;
+            if (!container?.classList) return;
+            drawer.panel?.selectTab?.(drawer.panel);
+            host?.selectTab?.(drawer.panel);
+            container.classList.add('lightflow-wide-drawer-panel');
+            container.dataset.lightflowDrawerSide = drawer.side;
+            container.style.setProperty('--lightflow-wide-drawer-width', `${Math.round(sidebarWidths[drawer.side] || 288)}px`);
+            if (drawer.closeButton && drawer.closeButton.parentElement !== container) container.append(drawer.closeButton);
+            drawer.button?.classList?.add('active');
+            drawer.button?.setAttribute?.('aria-expanded', 'true');
+            drawer.button?.closest?.('.lightflow-wide-rail')?.classList?.add('has-drawer');
+            drawer.host = host;
+            drawer.container = container;
+        };
+        const syncSplitterPositions = () => {
+            const workspaceActive = modeId() === 'render';
+            splitterNodes.forEach(node => {
+                node.hidden = !workspaceActive || (wideCanvas && node.dataset.side === 'left');
+                if (node.dataset.side === 'left') node.style.left = `${Math.max(0, Number(Interface?.left_bar_width) - 3)}px`;
+                else node.style.right = `${Math.max(0, Number(Interface?.right_bar_width) - 3)}px`;
+            });
+        };
+        const setNativeSidebarWidths = (left, right) => {
+            const modeData = Interface.getModeData?.() || Interface.data;
+            if (modeData) {
+                modeData.left_bar_width = left;
+                modeData.right_bar_width = right;
+            }
+        };
+        const applySidebarWidths = () => {
+            if (!window.Interface) return;
+            const workspaceActive = modeId() === 'render';
+            Interface?.work_screen?.classList?.toggle('lightflow-wide-canvas', workspaceActive && wideCanvas);
+            if (!workspaceActive) {
+                closeWideDrawer();
+                syncRightInspectorContext();
+                syncSplitterPositions();
+                return;
+            }
+            if (wideCanvas) {
+                sidebarWidths.right = clampSidebarWidth(sidebarWidths.right, widthLimits.rail);
+                setNativeSidebarWidths(widthLimits.rail, sidebarWidths.right);
+            } else {
+                sidebarWidths.left = clampSidebarWidth(sidebarWidths.left, sidebarWidths.right);
+                sidebarWidths.right = clampSidebarWidth(sidebarWidths.right, sidebarWidths.left);
+                setNativeSidebarWidths(sidebarWidths.left, sidebarWidths.right);
+            }
+            window.updateInterfacePanels?.();
+            schedulePreviewResize();
+            restoreActiveWideDrawer();
+            syncRightInspectorContext();
+            syncSplitterPositions();
+        };
+        const closeWideDrawer = ({ restoreFocus = false } = {}) => {
+            if (!activeWideDrawer) return false;
+            const drawer = activeWideDrawer;
+            activeWideDrawer = null;
+            drawer.container?.classList?.remove('lightflow-wide-drawer-panel');
+            drawer.container?.removeAttribute?.('data-lightflow-drawer-side');
+            drawer.container?.style?.removeProperty?.('--lightflow-wide-drawer-width');
+            drawer.closeButton?.remove?.();
+            if (drawer.button) {
+                drawer.button.classList.remove('active');
+                drawer.button.setAttribute('aria-expanded', 'false');
+                drawer.button.closest?.('.lightflow-wide-rail')?.classList.remove('has-drawer');
+                if (restoreFocus && drawer.button.isConnected) drawer.button.focus();
+            }
+            return true;
+        };
+        const openWideDrawer = (panel, side, button) => {
+            if (!wideCanvas || modeId() !== 'render' || !panel) return false;
+            const host = panel.getHostPanel?.() || panel;
+            const container = host.container;
+            if (!container?.classList) return false;
+            if (activeWideDrawer?.panel === panel && activeWideDrawer.container === container) {
+                closeWideDrawer({ restoreFocus: true });
+                return false;
+            }
+
+            closeWideDrawer();
+            host.selectTab?.(panel);
+            const name = tl(panel.name || panel.id);
+            const closeLabel = formatLightManagerMessage('light_manager.ui.wide_close_panel', { panel: name });
+            const closeButton = document.createElement('button');
+            closeButton.type = 'button';
+            closeButton.className = 'lightflow-wide-drawer-close';
+            closeButton.title = closeLabel;
+            closeButton.setAttribute('aria-label', closeLabel);
+            closeButton.append(Blockbench.getIconNode('close'));
+            closeButton.addEventListener('click', event => {
+                event.preventDefault();
+                event.stopPropagation();
+                closeWideDrawer({ restoreFocus: true });
+            });
+
+            container.classList.add('lightflow-wide-drawer-panel');
+            container.dataset.lightflowDrawerSide = side;
+            container.style.setProperty('--lightflow-wide-drawer-width', `${Math.round(sidebarWidths[side] || 288)}px`);
+            container.append(closeButton);
+            button.classList.add('active');
+            button.setAttribute('aria-expanded', 'true');
+            button.closest?.('.lightflow-wide-rail')?.classList.add('has-drawer');
+            if (container.id) button.setAttribute('aria-controls', container.id);
+            activeWideDrawer = { panel, host, container, side, button, closeButton };
+            return true;
+        };
+        const makeRailButton = (panel, side) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'lightflow-wide-rail-button';
+            const name = tl(panel.name || panel.id);
+            const result = formatLightManagerMessage('light_manager.ui.wide_open_panel', { panel: name });
+            button.title = result;
+            button.setAttribute('aria-label', result);
+            button.setAttribute('aria-expanded', 'false');
+            button.dataset.panel = panel.id;
+            button.append(Blockbench.getIconNode(panel.icon || (side === 'left' ? 'view_sidebar' : 'tune')));
+            const label = document.createElement('span');
+            label.className = 'lightflow-wide-rail-label';
+            label.textContent = name;
+            button.append(label);
+            button.addEventListener('click', () => {
+                openWideDrawer(panel, side, button);
+            });
+            return button;
+        };
+        const rebuildRails = () => {
+            if (!window.Interface?.left_bar || !window.Interface?.right_bar) return;
+            closeWideDrawer();
+            const obsoleteRightRail = railNodes.get('right');
+            obsoleteRightRail?.remove?.();
+            railNodes.delete('right');
+            for (const side of ['left']) {
+                let rail = railNodes.get(side);
+                if (!rail) {
+                    rail = document.createElement('nav');
+                    rail.className = `lightflow-wide-rail lightflow-wide-rail-${side}`;
+                    rail.setAttribute('aria-label', translateLightManager(`light_manager.ui.${side}_rail`));
+                    (side === 'left' ? Interface.left_bar : Interface.right_bar).append(rail);
+                    railNodes.set(side, rail);
+                }
+                rail.replaceChildren();
+                const brand = document.createElement('div');
+                brand.className = 'lightflow-wide-rail-brand';
+                brand.setAttribute('aria-hidden', 'true');
+                brand.append(Blockbench.getIconNode(LIGHT_MANAGER_PLUGIN_ICON));
+                const brandLabel = document.createElement('span');
+                brandLabel.className = 'lightflow-wide-rail-label';
+                brandLabel.textContent = 'Lightflow';
+                brand.append(brandLabel);
+                rail.append(brand);
+                const knownPanels = [
+                    ...registered.values(),
+                    window.Panels?.global_renderer_properties,
+                    window.Panels?.lightflow_scene,
+                    window.Panels?.lightflow_environment_panel,
+                    window.Panels?.material_properties,
+                    window.Panels?.lightflow_scene_composer_panel
+                ].filter(panel => panel && !suppressedPanelIds.has(panel.id));
+                const panels = knownPanels.filter(panel => {
+                    const slot = layoutFor(panel.id, modeId())?.slot || panel.position_data?.slot;
+                    return slot === `${side}_bar`;
+                });
+                const preferredOrder = ['global_renderer_properties', 'lightflow_scene', 'lightflow_environment_panel', 'material_properties', 'lightflow_scene_composer_panel'];
+                const orderIndex = panel => {
+                    const index = preferredOrder.indexOf(panel.id);
+                    return index < 0 ? preferredOrder.length : index;
+                };
+                panels.sort((a, b) => orderIndex(a) - orderIndex(b));
+                const unique = Array.from(new Map(panels.map(panel => [panel.id, panel])).values());
+                unique.forEach(panel => rail.append(makeRailButton(panel, side)));
+                const exit = document.createElement('button');
+                exit.type = 'button';
+                exit.className = 'lightflow-wide-rail-button lightflow-wide-rail-exit';
+                exit.title = translateLightManager('light_manager.ui.wide_canvas_exit');
+                exit.setAttribute('aria-label', exit.title);
+                exit.append(Blockbench.getIconNode('last_page'));
+                const exitLabel = document.createElement('span');
+                exitLabel.className = 'lightflow-wide-rail-label';
+                exitLabel.textContent = translateLightManager('light_manager.ui.wide_canvas_exit_short');
+                exit.append(exitLabel);
+                exit.addEventListener('click', () => api.setWideCanvas(false));
+                rail.append(exit);
+            }
+        };
+        const installSplitter = side => {
+            if (!window.Interface?.work_screen) return;
+            const node = document.createElement('div');
+            node.className = `lightflow-sidebar-splitter lightflow-sidebar-splitter-${side}`;
+            node.dataset.side = side;
+            node.title = translateLightManager('light_manager.ui.resize_sidebar');
+            node.setAttribute('role', 'separator');
+            node.setAttribute('aria-orientation', 'vertical');
+            node.setAttribute('aria-label', node.title);
+            node.tabIndex = 0;
+            const updateFromClientX = clientX => {
+                const rect = Interface.work_screen.getBoundingClientRect();
+                const raw = side === 'left' ? clientX - rect.left : rect.right - clientX;
+                const opposite = wideCanvas
+                    ? (side === 'left' ? sidebarWidths.right : widthLimits.rail)
+                    : (side === 'left' ? sidebarWidths.right : sidebarWidths.left);
+                sidebarWidths[side] = clampSidebarWidth(raw, opposite);
+                applySidebarWidths();
+            };
+            const begin = event => {
+                if (modeId() !== 'render' || (wideCanvas && side === 'left')) return;
+                event.preventDefault();
+                event.stopPropagation();
+                node.classList.add('dragging');
+                const move = moveEvent => {
+                    moveEvent.preventDefault();
+                    moveEvent.stopPropagation();
+                    updateFromClientX(moveEvent.clientX);
+                };
+                const stop = stopEvent => {
+                    stopEvent?.preventDefault?.();
+                    stopEvent?.stopPropagation?.();
+                    node.classList.remove('dragging');
+                    document.removeEventListener('pointermove', move, true);
+                    document.removeEventListener('pointerup', stop, true);
+                    document.removeEventListener('pointercancel', stop, true);
+                    persistWidths();
+                };
+                document.addEventListener('pointermove', move, true);
+                document.addEventListener('pointerup', stop, true);
+                document.addEventListener('pointercancel', stop, true);
+            };
+            node.addEventListener('pointerdown', begin);
+            node.addEventListener('keydown', event => {
+                if (!['ArrowLeft', 'ArrowRight'].includes(event.key) || modeId() !== 'render' || (wideCanvas && side === 'left')) return;
+                const direction = event.key === 'ArrowRight' ? 1 : -1;
+                const opposite = wideCanvas && side === 'right'
+                    ? widthLimits.rail
+                    : (side === 'left' ? sidebarWidths.right : sidebarWidths.left);
+                sidebarWidths[side] = clampSidebarWidth(sidebarWidths[side] + direction * (side === 'left' ? 8 : -8), opposite);
+                persistWidths();
+                applySidebarWidths();
+                event.preventDefault();
+            });
+            Interface.work_screen.append(node);
+            splitterNodes.push(node);
+        };
         const hideCleanHelpers = () => {
             if (!cleanSnapshot) return;
             const nodes = [...(Canvas.gizmos || []), typeof three_grid !== 'undefined' ? three_grid : null, Canvas.side_grids?.x, Canvas.side_grids?.z];
@@ -7160,17 +12097,110 @@ function initializeLightManagerPlugin() {
         };
         const modeId = () => window.Interface?.getUIMode?.() || window.Project?.mode || 'edit';
         const layoutFor = (id, mode) => {
-            const right = {slot: 'right_bar', height: 300, fixed_height: true, folded: false, sidebar_index: 1};
-            const left = {slot: 'left_bar', height: 520, fixed_height: false, folded: false, sidebar_index: 1};
-            if (id === 'lightflow_scene') return {...left, attached_to: Panels.material_properties ? 'material_properties' : '', attached_index: 3};
-            if (id === 'material_properties') return {...left, attached_to: ''};
-            if (id === 'light_properties' || id === 'lightflow_atmosphere_properties') {
-                return {...right, attached_to: id === 'light_properties' ? '' : 'light_properties', attached_index: id === 'light_properties' ? 0 : 1};
-            }
-            if (id === 'lightflow_environment_panel' || id === 'lightflow_scene_composer_panel') {
-                return {...left, attached_to: Panels.material_properties ? 'material_properties' : (Panels.lightflow_scene ? 'lightflow_scene' : ''), attached_index: id === 'lightflow_environment_panel' ? 1 : 2};
+            const right = { slot: 'right_bar', height: 360, fixed_height: false, folded: false, sidebar_index: 1 };
+            const left = { slot: 'left_bar', height: 520, fixed_height: false, folded: false, sidebar_index: 1 };
+            if (id === 'global_renderer_properties') return { ...left, height: 100, attached_to: '', sidebar_index: 0 };
+            if (id === 'lightflow_scene') return { ...left, attached_to: '', attached_index: 0 };
+            if (id === 'lightflow_environment_panel') return { ...left, attached_to: 'lightflow_scene', attached_index: 3 };
+            if (id === 'material_properties') return { ...left, attached_to: 'lightflow_scene', attached_index: 2 };
+            if (id === 'lightflow_scene_composer_panel') return { ...left, attached_to: 'lightflow_scene', attached_index: 1 };
+            const inspectorIds = ['light_properties', 'lightflow_atmosphere_properties', 'lightflow_god_ray_properties', 'lightflow_particle_properties'];
+            if (inspectorIds.includes(id)) {
+                return { ...right, attached_to: id === 'light_properties' ? '' : 'light_properties', attached_index: inspectorIds.indexOf(id) };
             }
             return null;
+        };
+        const normalizeLeftNavigation = () => {
+            const scene = registered.get('lightflow_scene');
+            if (!scene) return;
+            const activeId = scene.open_attached_panel?.id || scene.id;
+            const order = ['lightflow_scene', 'lightflow_environment_panel', 'material_properties', 'lightflow_scene_composer_panel'];
+            order.forEach((id, index) => {
+                const panel = registered.get(id);
+                if (!panel) return;
+                const next = layoutFor(id, modeId());
+                panel.customizePosition?.({
+                    slot: 'left_bar',
+                    attached_to: index === 0 ? '' : 'lightflow_scene',
+                    // Blockbench renders attached tabs in descending attached_index.
+                    attached_index: index === 0 ? 0 : order.length - index,
+                    sidebar_index: 1,
+                    fixed_height: false,
+                    folded: false,
+                    ...(next || {})
+                });
+                panel.updateSlot?.();
+            });
+            scene.selectTab?.(registered.get(activeId) || scene);
+        };
+        const selectedInspectorType = () => {
+            if (!window.Modes?.render || modeId() !== 'render') return '';
+            const selected = Array.isArray(window.Outliner?.selected) ? Outliner.selected : [];
+            const active = selected[selected.length - 1];
+            if (!active) return '';
+            if (active.type === 'light' || active.type === 'art_key') return 'light';
+            if (active.type === 'lightflow_volume') return 'volume';
+            if (active.type === 'lightflow_god_ray') return 'god_ray';
+            if (active.type === 'lightflow_particle_effect') return 'particle';
+            return '';
+        };
+        const selectedInspectorPanel = () => {
+            switch (selectedInspectorType()) {
+                case 'light': return registered.get('light_properties') || window.Panels?.light_properties;
+                case 'volume': return registered.get('lightflow_atmosphere_properties') || window.Panels?.lightflow_atmosphere_properties;
+                case 'god_ray': return registered.get('lightflow_god_ray_properties') || window.Panels?.lightflow_god_ray_properties;
+                case 'particle': return registered.get('lightflow_particle_properties') || window.Panels?.lightflow_particle_properties;
+                default: return null;
+            }
+        };
+        const syncRightInspectorContext = () => {
+            const rightBar = window.Interface?.right_bar;
+            if (!rightBar) return;
+            rightBar.querySelectorAll?.('.panel_container.lightflow-wide-context-panel, .panel_container.lightflow-wide-outliner, .panel_container.lightflow-context-idle, .panel_container.lightflow-context-active')?.forEach?.(node => {
+                node.classList.remove('lightflow-wide-context-panel', 'lightflow-wide-outliner', 'lightflow-context-idle', 'lightflow-context-active');
+            });
+            if (modeId() !== 'render') return;
+
+            const inspectorPanels = [
+                registered.get('light_properties') || window.Panels?.light_properties,
+                registered.get('lightflow_atmosphere_properties') || window.Panels?.lightflow_atmosphere_properties,
+                registered.get('lightflow_god_ray_properties') || window.Panels?.lightflow_god_ray_properties,
+                registered.get('lightflow_particle_properties') || window.Panels?.lightflow_particle_properties
+            ].filter(Boolean);
+            const inspectorHosts = Array.from(new Set(inspectorPanels.map(panel => panel.getHostPanel?.() || panel)));
+            const selectedPanel = selectedInspectorPanel();
+            const selectedHost = selectedPanel ? (selectedPanel.getHostPanel?.() || selectedPanel) : null;
+            inspectorHosts.forEach(host => {
+                const active = !!selectedHost && host === selectedHost;
+                host.container?.classList?.toggle('lightflow-context-active', active);
+                host.container?.classList?.toggle('lightflow-context-idle', !active);
+            });
+            if (selectedPanel && selectedHost) {
+                // Attached inspector tabs can retain the previously open child even when
+                // the host is already active. Ask the child itself first so selection is
+                // always reflected immediately (Light vs Volume/God Ray/Particle).
+                selectedPanel.selectTab?.(selectedPanel);
+                selectedHost.selectTab?.(selectedPanel);
+            }
+
+            if (!wideCanvas) return;
+
+            const outliner = window.Panels?.outliner;
+            outliner?.container?.classList?.add('lightflow-wide-outliner');
+            selectedHost?.container?.classList?.add('lightflow-wide-context-panel');
+        };
+        const syncOutlinerFold = () => {
+            const outliner = window.Panels?.outliner;
+            if (!outliner) return;
+            const shouldFold = false;
+            if (shouldFold && ownedOutlinerFold === null) {
+                ownedOutlinerFold = !!outliner.folded;
+                if (!outliner.folded) outliner.fold(true);
+            } else if (!shouldFold && ownedOutlinerFold !== null) {
+                const restore = ownedOutlinerFold;
+                ownedOutlinerFold = null;
+                if (outliner.folded !== restore) outliner.fold(restore);
+            }
         };
         const updateDefaults = () => {
             const savedPanels = read('panel_customization', {});
@@ -7180,12 +12210,12 @@ function initializeLightManagerPlugin() {
                 for (const mode of ['edit', 'render']) {
                     const next = layoutFor(id, mode);
                     if (!next) continue;
-                    panel.default_configuration.mode_positions[mode] = {...panel.default_configuration.mode_positions[mode], ...next};
+                    panel.default_configuration.mode_positions[mode] = { ...panel.default_configuration.mode_positions[mode], ...next };
                     const current = panel.mode_position_data[mode];
                     const stillDefault = !applied[mode] || Object.entries(applied[mode]).every(([key, value]) => current?.[key] === value);
                     if (!savedPanels[id]?.[mode] && current && stillDefault) {
                         Object.assign(panel.mode_position_data[mode], next);
-                        applied[mode] = {...next};
+                        applied[mode] = { ...next };
                     }
                 }
                 appliedDefaults.set(panel, applied);
@@ -7194,21 +12224,44 @@ function initializeLightManagerPlugin() {
         };
         const notifyHelpers = () => {
             window.updateSelection?.();
-            window.LightElement?.all?.forEach(light => LightElement.preview_controller?.updateSelection(light, {gizmos: false}));
+            window.LightElement?.all?.forEach(light => LightElement.preview_controller?.updateSelection(light, { gizmos: false }));
             window.LightManagerAreaGizmos?.updateAll?.();
             window.LightManagerViewportControls?.updateAll?.();
-            Blockbench.dispatchEvent('lightflow_gizmo_visibility_changed', {policy: helperPolicy});
+            Blockbench.dispatchEvent('lightflow_gizmo_visibility_changed', { policy: helperPolicy });
             hideCleanHelpers();
             window.Preview?.all?.forEach(preview => preview.render?.());
         };
         const api = {
-            version: 3,
+            version: 5,
             get helperPolicy() { return helperPolicy; },
-            helperVisible(options) { return LightflowUIState.helperVisible({policy: helperPolicy, global: window.Canvas?.show_gizmos !== false, ...options}); },
+            get wideCanvas() { return wideCanvas; },
+            get autoFoldOutliner() { return autoFoldOutliner; },
+            helperVisible(options) { return LightflowUIState.helperVisible({ policy: helperPolicy, global: window.Canvas?.show_gizmos !== false, ...options }); },
+            setWideCanvas(value, options = {}) {
+                const nextWideCanvas = !!value;
+                if (!nextWideCanvas) closeWideDrawer();
+                wideCanvas = nextWideCanvas;
+                if (options.persist !== false) {
+                    localStorage.setItem(LIGHT_MANAGER_STORAGE_KEYS.wideCanvas, JSON.stringify(wideCanvas));
+                }
+                applySidebarWidths();
+                rebuildRails();
+                syncOutlinerFold();
+                scenePanel?.form?.form_data?._scene_wide?.setValue?.(wideCanvas);
+                return wideCanvas;
+            },
+            toggleWideCanvas() { return api.setWideCanvas(!wideCanvas); },
+            setAutoFoldOutliner(value) {
+                autoFoldOutliner = !!value;
+                localStorage.setItem(LIGHT_MANAGER_STORAGE_KEYS.autoFoldOutliner, JSON.stringify(autoFoldOutliner));
+                syncOutlinerFold();
+                scenePanel?.form?.form_data?._scene_auto_outliner?.setValue?.(autoFoldOutliner);
+                return autoFoldOutliner;
+            },
             setHelperPolicy(value) {
                 if (!['contextual', 'all', 'clean'].includes(value)) return;
                 if (value === 'clean' && !cleanSnapshot) {
-                    cleanSnapshot = {show: Canvas.show_gizmos, nodes: new Map()};
+                    cleanSnapshot = { show: Canvas.show_gizmos, nodes: new Map() };
                     Canvas.show_gizmos = false;
                 } else if (value !== 'clean' && cleanSnapshot) {
                     // Do not write project/environment visibility; only restore the UI flag.
@@ -7220,8 +12273,26 @@ function initializeLightManagerPlugin() {
             },
             register(panel) {
                 if (!panel || registered.get(panel.id) === panel) return true;
+                suppressedPanelIds.delete(panel.id);
                 registered.set(panel.id, panel);
                 updateDefaults();
+                normalizeLeftNavigation();
+                rebuildRails();
+                syncRightInspectorContext();
+                return true;
+            },
+            unregister(panel) {
+                if (!panel) return false;
+                const current = registered.get(panel.id);
+                if (current !== panel) return false;
+                if (activeWideDrawer?.panel === panel || activeWideDrawer?.host === panel) closeWideDrawer();
+                registered.delete(panel.id);
+                // Plugin unload unregisters before Panel.delete(), so the old native
+                // window.Panels entry can still exist during this rail rebuild.
+                // Suppress that stale instance until its replacement registers.
+                suppressedPanelIds.add(panel.id);
+                rebuildRails();
+                syncRightInspectorContext();
                 return true;
             },
             select(panel) {
@@ -7232,24 +12303,32 @@ function initializeLightManagerPlugin() {
                 const mode = modeId();
                 const previous = read(layoutKey, {});
                 previous[mode] ||= {};
+                if (mode === 'render') {
+                    previous[mode].__sidebarWidths ||= { left: Interface.left_bar_width, right: Interface.right_bar_width };
+                    Object.assign(sidebarWidths, preferredWidths);
+                }
                 for (const [id, panel] of registered) {
-                    previous[mode][id] ||= {...panel.position_data};
+                    previous[mode][id] ||= { ...panel.position_data };
                     panel.customizePosition?.(layoutFor(id, mode));
                     panel.updateSlot?.();
                 }
                 const outliner = Panels.outliner;
                 if (outliner) {
-                    previous[mode].outliner ||= {...outliner.position_data};
-                    outliner.customizePosition?.({slot: 'right_bar', attached_to: '', sidebar_index: 3, height: 300, folded: false});
+                    previous[mode].outliner ||= { ...outliner.position_data };
+                    outliner.customizePosition?.({ slot: 'right_bar', attached_to: '', sidebar_index: 3, height: 300, folded: false });
                     outliner.updateSlot?.();
                 }
+                normalizeLeftNavigation();
                 localStorage.setItem(layoutKey, JSON.stringify(previous));
+                persistWidths();
+                applySidebarWidths();
                 window.updateInterfacePanels?.();
             },
             restoreLayout() {
                 const previous = read(layoutKey, {});
                 const mode = modeId();
                 for (const [id, data] of Object.entries(previous[mode] || {})) {
+                    if (id === '__sidebarWidths') { Object.assign(sidebarWidths, data); persistWidths(); applySidebarWidths(); continue; }
                     Panels[id]?.customizePosition?.(data);
                     Panels[id]?.updateSlot?.();
                 }
@@ -7260,26 +12339,39 @@ function initializeLightManagerPlugin() {
             installScene() {
                 const t = key => translateLightManager('light_manager.ui.' + key);
                 const run = id => window.BarItems?.[id]?.trigger?.();
+                const design = LightManagerFormDesign;
+                const create = (id, icon, label) => ({ type: 'action_button', semantic_button: true, text: t(label), icon, background: 'var(--color-button)', condition: () => !!BarItems[id], click: () => run(id) });
+                const workspaceOpen = result => result._scene_workspace !== false;
                 const scene = new Panel('lightflow_scene', {
                     name: t('scene'), icon: 'view_in_ar', growable: true, resizable: true,
-                    condition: {modes: ['render'], project: true},
-                    default_position: {slot: 'left_bar', height: 520, fixed_height: false, sidebar_index: 1},
-                    form: {
-                        _scene_hint: {type: 'info', text: t('scene_hint')},
-                        _scene_camera: {type: 'buttons', buttons: [t('camera_output')], click: () => run('studio_render_export')},
-                        _scene_shots: {type: 'buttons', buttons: [t('saved_cameras')], click: () => run('studio_render_camera_presets')},
-                        _scene_add: {type: 'buttons', label: t('create'), buttons: [t('add_light'), t('add_volume')], click: index => run(index ? 'add_lightflow_volume' : 'add_light')},
-                        _scene_helpers: {type: 'select', label: t('helpers'), description: t('helpers_hint'), value: helperPolicy, options: {contextual: t('helpers_contextual'), all: t('helpers_all'), clean: t('helpers_clean')}},
-                        _scene_layout: {type: 'buttons', label: t('layout'), description: t('layout_description'), buttons: [t('layout_apply'), t('layout_restore')], click: index => index ? api.restoreLayout() : api.applyLayout()}
-                    }
+                    condition: { modes: ['render'], project: true },
+                    default_position: { slot: 'left_bar', height: 520, fixed_height: false, sidebar_index: 1 },
+                    form: (window.LightManagerUI?.prepareForm || (form => form))({
+                        _scene_create: design.subsection({ value: t('scene_create'), icon: 'add', color: 'var(--color-text)' }),
+                        _scene_light: create('add_light', 'lightbulb', 'scene_light'),
+                        _scene_volume: create('add_lightflow_volume', 'blur_on', 'scene_volume'),
+                        _scene_ray: create('add_lightflow_god_ray', 'wb_sunny', 'scene_ray'),
+                        _scene_particles: create('lightflow_particle_create', 'ac_unit', 'scene_particles'),
+                        _scene_link: { type: 'action_button', semantic_button: true, text: translateLightManager('lightflow_links.add', 'Linked scene…'), icon: 'kid_star', background: 'var(--color-button)', condition: () => !!BarItems.lightflow_scene_link_add, click: () => run('lightflow_scene_link_add') },
+                        _scene_hint: { type: 'bar_display', paragraph: true, expand: true, font_size: '12px', color: 'var(--color-subtle_text)', value: t('scene_hint_short') },
+                        _scene_workspace: design.group({ label: t('scene_view'), label_icon: 'dashboard', value: false }),
+                        _scene_helpers: { type: 'select', condition: workspaceOpen, label: t('helpers'), description: t('helpers_hint'), value: helperPolicy, options: { contextual: t('helpers_contextual'), all: t('helpers_all'), clean: t('helpers_clean') } },
+                        _scene_wide: { type: 'checkbox', condition: workspaceOpen, label: t('wide_canvas'), description: t('wide_canvas_desc'), value: wideCanvas, style: 'toggle_switch' },
+                        _scene_layout: { type: 'buttons', condition: workspaceOpen, label: t('layout'), description: t('layout_description'), buttons: [t('layout_apply'), t('layout_restore')], click: index => index ? api.restoreLayout() : api.applyLayout() }
+                    })
                 });
-                listeners.push(scene, scene.form.on('change', ({result, changed_keys}) => {
+                scenePanel = scene;
+                window.applyIndestructibleFormGroups(scene.form, [
+                    { elements: ['_scene_light', '_scene_volume'], gap: '6px', flex: { _scene_light: '1 1 0', _scene_volume: '1 1 0' } },
+                    { elements: ['_scene_ray', '_scene_particles'], gap: '6px', flex: { _scene_ray: '1 1 0', _scene_particles: '1 1 0' } }
+                ]);
+                listeners.push(scene, scene.form.on('change', ({ result, changed_keys }) => {
                     if (changed_keys?.includes('_scene_helpers')) api.setHelperPolicy(result._scene_helpers);
+                    if (changed_keys?.includes('_scene_wide')) api.setWideCanvas(result._scene_wide);
                 }), addLightManagerDesignedPanelStyles('lightflow_scene'), Blockbench.addCSS(`
                     #panel_lightflow_scene .form { --max_label_width: 120px !important; }
                     #panel_lightflow_scene .dialog_bar[form_type="buttons"] { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px; padding: 6px 4px !important; }
                     #panel_lightflow_scene .dialog_bar[form_type="buttons"] > label { grid-column: 1; width: auto; }
-                    #panel_lightflow_scene .dialog_bar[form_type="buttons"] > .dialog_form_description { grid-column: 2; grid-row: 1; }
                     #panel_lightflow_scene .dialog_form_buttons { grid-column: 1 / -1; grid-row: 2; }
                     #panel_lightflow_scene .name_space_left { width: auto; max-width: 45%; white-space: normal; }
                     #panel_lightflow_scene .dialog_bar[form_type="buttons"] .name_space_left { max-width: 100%; }
@@ -7287,15 +12379,286 @@ function initializeLightManagerPlugin() {
                     #panel_lightflow_scene button { width: auto !important; min-width: 0 !important; height: auto !important; min-height: 30px; padding: 5px 8px; line-height: 1.3; white-space: normal; flex: 1 1 110px; margin: 0; }
                 `));
                 api.register(scene);
+                listeners.push(createLightflowLeftSidebar(api));
+                listeners.push(createLightflowRightSidebar());
+                listeners.push(createLightflowViewportTools(api));
+                listeners.push(createLightflowParticlePlayer());
                 if (helperPolicy === 'clean') api.setHelperPolicy('clean');
             },
             delete() {
                 restoreCleanHelpers();
+                closeWideDrawer();
+                if (ownedOutlinerFold !== null) {
+                    const restore = ownedOutlinerFold;
+                    ownedOutlinerFold = null;
+                    if (Panels?.outliner?.folded !== restore) Panels.outliner.fold(restore);
+                }
+                wideCanvas = false;
+                Interface?.work_screen?.classList?.remove('lightflow-wide-canvas', 'lightflow-workspace-enabled');
+                applySidebarWidths();
+                splitterNodes.forEach(node => node.remove());
+                railNodes.forEach(node => node.remove());
+                workspaceStyles?.delete?.();
                 listeners.forEach(listener => listener?.delete?.());
                 registered.clear();
             }
         };
+        Interface?.work_screen?.classList?.add('lightflow-workspace-enabled');
+        workspaceStyles = Blockbench.addCSS(`
+            .lightflow-workspace-enabled { position: relative; }
+            /* The native observer toggles display and otherwise resizes its own
+               intrinsic toolbar. Keep its overflow slot stable and use the
+               native inline display state only for visibility / interaction. */
+            .lightflow-workspace-enabled #main_toolbar .toolbar.no_wrap > .toolbar_overflow_button { display: block !important; order: 1; }
+            .lightflow-workspace-enabled #main_toolbar .toolbar.no_wrap > .toolbar_overflow_button[style*="display: none"] { visibility: hidden; pointer-events: none; }
+            #left_bar .panel_container[panel_id="lightflow_scene"] > .panel_tab_bar .panel_tab_list > .panel_handle {
+                flex: 0 1 auto;
+                min-width: 0;
+                padding-left: 7px;
+                padding-right: 7px;
+            }
+            .lightflow-workspace-enabled:not(.lightflow-wide-canvas) #right_bar > .panel_container.lightflow-context-idle {
+                display: flex !important;
+            }
+            .lightflow-sidebar-splitter {
+                position: absolute;
+                top: var(--toolbar-height, 40px);
+                bottom: 0;
+                width: 6px;
+                z-index: 6;
+                cursor: col-resize;
+                touch-action: none;
+                background: transparent;
+            }
+            .lightflow-sidebar-splitter::after {
+                content: '';
+                position: absolute;
+                top: 0;
+                bottom: 0;
+                left: 2px;
+                width: 1px;
+                background: var(--color-border);
+            }
+            .lightflow-sidebar-splitter:hover::after,
+            .lightflow-sidebar-splitter.dragging::after,
+            .lightflow-sidebar-splitter:focus-visible::after {
+                background: var(--color-accent);
+            }
+            .lightflow-sidebar-splitter:focus-visible { outline: 1px solid var(--color-accent); outline-offset: -1px; }
+            .lightflow-wide-rail {
+                display: none;
+                position: absolute;
+                top: 0;
+                bottom: 0;
+                width: 44px;
+                height: 100%;
+                padding: 2px;
+                box-sizing: border-box;
+                flex-direction: column;
+                align-items: stretch;
+                gap: 2px;
+                background: var(--color-ui);
+                border-color: var(--color-border);
+                overflow: hidden;
+                z-index: 19;
+            }
+            .lightflow-wide-rail-left { left: 0; border-right: 1px solid var(--color-border); }
+            .lightflow-wide-rail-right { right: 0; border-left: 1px solid var(--color-border); }
+            .lightflow-wide-rail-brand {
+                width: 40px;
+                min-width: 40px;
+                min-height: 34px;
+                padding: 0 10px;
+                box-sizing: border-box;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                color: var(--color-subtle_text);
+                border-bottom: 1px solid var(--color-border);
+                overflow: hidden;
+                white-space: nowrap;
+            }
+            .lightflow-wide-rail-button {
+                width: 40px;
+                min-width: 40px;
+                height: 40px;
+                min-height: 40px;
+                margin: 0;
+                padding: 0 10px;
+                box-sizing: border-box;
+                display: flex;
+                align-items: center;
+                justify-content: flex-start;
+                gap: 8px;
+                border: 0;
+                border-radius: 3px;
+                background: transparent;
+                color: var(--color-text);
+                overflow: hidden;
+                white-space: nowrap;
+                flex: 0 0 40px;
+            }
+            .lightflow-wide-rail-button:hover { background: var(--color-selected); }
+            .lightflow-wide-rail-button.active { background: var(--color-selected); color: var(--color-accent); }
+            .lightflow-wide-rail-button:focus-visible { outline: 1px solid var(--color-accent); outline-offset: -1px; }
+            .lightflow-wide-rail-button > .material-icons,
+            .lightflow-wide-rail-brand > .material-icons { font-size: 18px; flex: 0 0 20px; }
+            .lightflow-wide-rail-button > svg,
+            .lightflow-wide-rail-brand > svg,
+            .lightflow-wide-rail-button > img,
+            .lightflow-wide-rail-brand > img { flex: 0 0 20px; }
+            .lightflow-wide-rail-label {
+                display: none;
+            }
+            .lightflow-wide-rail-exit { margin-top: auto; color: var(--color-accent); }
+            .lightflow-wide-canvas #left_bar { position: relative; overflow: visible !important; }
+            .lightflow-wide-canvas #right_bar { position: relative; overflow: hidden !important; }
+            .lightflow-wide-canvas #left_bar > .panel_container,
+            .lightflow-wide-canvas #right_bar > .panel_container { display: none !important; }
+            .lightflow-wide-canvas #right_bar > .panel_container[panel_id="outliner"],
+            .lightflow-wide-canvas #right_bar > .panel_container.lightflow-wide-outliner,
+            .lightflow-wide-canvas #right_bar > .panel_container.lightflow-wide-context-panel {
+                display: flex !important;
+            }
+            .lightflow-wide-canvas #right_bar > .panel_container[panel_id="outliner"],
+            .lightflow-wide-canvas #right_bar > .panel_container.lightflow-wide-outliner {
+                flex: 1 1 auto !important;
+                min-height: 160px !important;
+            }
+            .lightflow-wide-canvas #right_bar > .panel_container.lightflow-wide-context-panel {
+                flex: 0 1 min(52%, 520px) !important;
+                min-height: 180px !important;
+                max-height: 52% !important;
+            }
+            .lightflow-wide-canvas #right_bar > .panel_container.lightflow-wide-context-panel > .panel {
+                min-height: 0 !important;
+                overflow: auto;
+            }
+            .lightflow-wide-canvas #left_bar > .panel_container.lightflow-wide-drawer-panel {
+                display: flex !important;
+                position: absolute !important;
+                top: 0 !important;
+                bottom: 0 !important;
+                width: min(var(--lightflow-wide-drawer-width, 288px), calc(100vw - 132px)) !important;
+                height: auto !important;
+                z-index: 18;
+                background: var(--color-ui);
+                border-color: var(--color-border);
+            }
+            .lightflow-wide-drawer-panel[data-lightflow-drawer-side="left"] {
+                left: 44px !important;
+                right: auto !important;
+                border-right: 1px solid var(--color-border);
+            }
+            .lightflow-wide-drawer-close {
+                position: absolute;
+                top: 4px;
+                right: 4px;
+                width: 28px;
+                min-width: 28px;
+                height: 28px;
+                min-height: 28px;
+                margin: 0;
+                padding: 0;
+                display: grid;
+                place-items: center;
+                z-index: 20;
+                border: 0;
+                border-radius: 3px;
+                background: var(--color-ui);
+                color: var(--color-text);
+            }
+            .lightflow-wide-drawer-close:hover { background: var(--color-selected); }
+            .lightflow-wide-drawer-close:focus-visible { outline: 1px solid var(--color-accent); outline-offset: -1px; }
+            .lightflow-wide-drawer-close > .material-icons { font-size: 18px; }
+            .lightflow-wide-canvas #left_bar > .lightflow-wide-rail { display: flex; }
+        `);
+        installSplitter('left');
+        installSplitter('right');
+        let nativeResizeSyncTimer = null;
+        let nativeSidebarResizeSide = '';
+        const beginNativeSidebarResize = event => {
+            nativeSidebarResizeSide = '';
+            if (modeId() !== 'render') return;
+            if (event.target?.closest?.('#resizer_right')) nativeSidebarResizeSide = 'right';
+            else if (!wideCanvas && event.target?.closest?.('#resizer_left')) nativeSidebarResizeSide = 'left';
+        };
+        const finishNativeSidebarResize = () => {
+            nativeResizeSyncTimer = null;
+            const side = nativeSidebarResizeSide;
+            nativeSidebarResizeSide = '';
+            if (!side || modeId() !== 'render') return;
+            const currentLeft = Number(Interface?.left_bar_width);
+            const currentRight = Number(Interface?.right_bar_width);
+            if (side === 'left' && Number.isFinite(currentLeft) && currentLeft > 0) {
+                sidebarWidths.left = clampSidebarWidth(currentLeft, currentRight);
+            }
+            if (side === 'right' && Number.isFinite(currentRight) && currentRight > 0) {
+                const opposite = wideCanvas ? widthLimits.rail : sidebarWidths.left;
+                sidebarWidths.right = clampSidebarWidth(currentRight, opposite);
+            }
+            applySidebarWidths();
+            persistWidths();
+        };
+        const queueNativeSidebarResize = () => {
+            if (!nativeSidebarResizeSide) return;
+            clearTimeout(nativeResizeSyncTimer);
+            nativeResizeSyncTimer = setTimeout(finishNativeSidebarResize, 0);
+        };
+        document.addEventListener('pointerdown', beginNativeSidebarResize, true);
+        document.addEventListener('pointerup', queueNativeSidebarResize, true);
+        document.addEventListener('mouseup', queueNativeSidebarResize, true);
+        const closeDrawerFromOutside = event => {
+            if (!wideCanvas || !activeWideDrawer) return;
+            const target = event.target;
+            if (
+                activeWideDrawer.container?.contains?.(target) ||
+                target?.closest?.('.lightflow-wide-rail') ||
+                target?.closest?.('#right_bar') ||
+                target?.closest?.('.lightflow-sidebar-splitter-right') ||
+                target?.closest?.('#resizer_right, #resizer_left')
+            ) return;
+            closeWideDrawer();
+        };
+        const closeDrawerFromEscape = event => {
+            if (event.key !== 'Escape' || !wideCanvas || !activeWideDrawer) return;
+            event.preventDefault();
+            event.stopPropagation();
+            closeWideDrawer({ restoreFocus: true });
+        };
+        document.addEventListener('pointerdown', closeDrawerFromOutside, true);
+        document.addEventListener('keydown', closeDrawerFromEscape, true);
+        const sidebarResizeObserver = typeof ResizeObserver === 'function'
+            ? new ResizeObserver(syncSplitterPositions)
+            : null;
+        sidebarResizeObserver?.observe?.(Interface.left_bar);
+        sidebarResizeObserver?.observe?.(Interface.right_bar);
+        listeners.push({
+            delete() {
+                clearTimeout(nativeResizeSyncTimer);
+                document.removeEventListener('pointerdown', beginNativeSidebarResize, true);
+                document.removeEventListener('pointerup', queueNativeSidebarResize, true);
+                document.removeEventListener('mouseup', queueNativeSidebarResize, true);
+                document.removeEventListener('pointerdown', closeDrawerFromOutside, true);
+                document.removeEventListener('keydown', closeDrawerFromEscape, true);
+                sidebarResizeObserver?.disconnect?.();
+            }
+        });
+        rebuildRails();
+        api.setWideCanvas(wideCanvas, { persist: false });
+        const resizeListener = () => applySidebarWidths();
+        window.addEventListener('resize', resizeListener);
+        listeners.push({ delete() { window.removeEventListener('resize', resizeListener); } });
+        listeners.push(Blockbench.on('reset_layout', () => {
+            if (modeId() === 'render') api.applyLayout();
+        }));
         ['update_selection', 'update_view', 'select_project', 'select_mode'].forEach(event => listeners.push(Blockbench.on(event, () => {
+            if (event === 'select_project' || event === 'select_mode') {
+                closeWideDrawer();
+                scheduleLightManagerTimeout(applySidebarWidths, 0);
+            }
+            syncOutlinerFold();
+            syncRightInspectorContext();
             if (helperPolicy !== 'clean' || !cleanSnapshot) return;
             if (Canvas.show_gizmos === true) {
                 cleanSnapshot.show = true;
@@ -7307,16 +12670,19 @@ function initializeLightManagerPlugin() {
 
     Plugin.register('light_manager', {
         title: 'Light Manager',
-        icon: 'light_mode',
+        icon: LIGHT_MANAGER_PLUGIN_ICON,
         author: 'MidFord327',
         description: 'Add production-ready point, spot, and directional lights to Blockbench with viewport gizmos, animation support, shadows, and Studio Render controls. Provides the Lightflow lighting foundation for Shader Architect and Studio Render.',
         tags: ['Lightflow', 'Lighting', 'Shadows'],
-        version: '1.8.2',
+        version: '1.9.0',
         min_version: '4.9.0',
         variant: 'both',
 
         onload() {
+            window.LightManagerIcons = lightManagerIconsApi;
+            installLightManagerIconBridge();
             disposeLightManagerResources();
+            deletables.push(installLightflowOutlinerColors());
             disposeRetiredLightManagerLights();
             cleanupLightManagerRegistries();
             removeLightManagerLegacyStoredToolbarLayouts();
@@ -7324,6 +12690,16 @@ function initializeLightManagerPlugin() {
             restoreLightManagerAnimatorPreview();
             resetLightManagerShadowState();
             window.LightManagerMarkShadowsDirty = markLightManagerShadowsDirty;
+            window.LightManagerCameraShadows = LightManagerCameraShadows;
+            window.LightManagerShadowRegions = LightManagerShadowRegions;
+            deletables.push({ delete() { LightManagerShadowRegions.dispose(); LightManagerGroundShadows.dispose(); } });
+            for (const eventName of ['finish_edit', 'undo', 'redo', 'update_view', 'select_project', 'parsed', 'display_animation_frame']) {
+                deletables.push(Blockbench.on(eventName, () => LightManagerShadowRegions.invalidate()));
+            }
+            for (const eventName of ['select_project', 'close_project']) {
+                deletables.push(Blockbench.on(eventName, () => LightManagerShadowRegions.dispose()));
+            }
+            deletables.push(Blockbench.on('change_view_mode', () => LightManagerGroundShadows.sync()));
             window.LightManagerFlushAnimatedLights = flushLightManagerAnimatedLights;
             patchLightManagerAnimatorPreview();
             deletables.push(Blockbench.on('display_animation_frame', event => {
@@ -7342,18 +12718,58 @@ function initializeLightManagerPlugin() {
                 lightflowLifecycle = createLightflowLifecycleRuntime();
                 window.LightflowLifecycle = lightflowLifecycle;
             }
+            // An older shared runtime can remain alive while dependent plugins reload.
+            if (lightflowLifecycle.liveCheckpointVersion !== 2) {
+                const recoveryRuntime = lightflowLifecycle;
+                recoveryRuntime.preserveLiveElements = (project, types) => {
+                    if (!Array.isArray(project?.elements)) return;
+                    const ownedTypes = new Set(types);
+                    const live = project.elements.filter(element => ownedTypes.has(element.type) && typeof element.getSaveCopy === 'function').map(element => element.getSaveCopy());
+                    const checkpoint = model => {
+                        model = project._lightflowRecoveryModel || model;
+                        if (!Array.isArray(model?.elements)) return;
+                        const snapshot = { ...model, elements: [...model.elements.filter(element => !ownedTypes.has(element.type)), ...live] };
+                        Object.defineProperty(project, '_lightflowRecoveryModel', { value: snapshot, writable: true, configurable: true });
+                        recoveryRuntime.captureModel(project, snapshot);
+                    };
+                    if (project._lightflowRecoveryModel) return checkpoint(project._lightflowRecoveryModel);
+                    return recoveryRuntime.readProjectModel(project).then(checkpoint);
+                };
+                recoveryRuntime.liveCheckpointVersion = 2;
+            }
+            deletables.push(Blockbench.on('unselect_project', event => {
+                const types = ['light', 'art_key', 'lightflow_volume', 'lightflow_god_ray', 'lightflow_particle_effect'].filter(type => window.OutlinerElement?.types?.[type]);
+                lightflowLifecycle.preserveLiveElements(event?.project || window.Project, types);
+            }));
 
             // Shared condition/disabled-state support for Light Manager custom FormElements.
             // `show_condition` is normalized to Blockbench's native form condition path. The
             // custom disabled path joins the same form.update pass instead of adding event listeners.
             const ensureLightManagerFormStateBridge = (form) => {
+                form.node?.classList.add('lf-controls');
                 if (form._lightManagerFormStateBridge) return form._lightManagerFormStateBridge;
 
                 const updaters = new Map();
                 const originalUpdate = form.update;
                 const originalBuildForm = form.buildForm;
+                const originalDeleteFormElements = form.deleteFormElements;
+                const originalDeleteForm = form.delete;
+
+                form.deleteFormElements = function (...args) {
+                    const deleting = this._lightflowDeletingControls;
+                    this._lightflowDeletingControls = true;
+                    try { return originalDeleteFormElements.apply(this, args); }
+                    finally { this._lightflowDeletingControls = deleting; }
+                };
+                form.delete = function (...args) {
+                    this._lightflowDeletingControls = true;
+                    try { return originalDeleteForm.apply(this, args); }
+                    finally { this._lightflowDeletingControls = false; }
+                };
 
                 form.update = function (formResult) {
+                    if (this._lightflowDeletingControls) return;
+                    this.node?.classList.add('lf-controls');
                     const result = formResult === undefined ? this.getResult() : formResult;
                     const response = originalUpdate.call(this, result);
                     for (const updateElementState of updaters.values()) {
@@ -7365,7 +12781,10 @@ function initializeLightManagerPlugin() {
                 form.buildForm = function (...args) {
                     const viewState = captureLightflowFormView(this);
                     updaters.clear();
-                    const response = originalBuildForm.apply(this, args);
+                    this._lightflowDeletingControls = true;
+                    let response;
+                    try { response = originalBuildForm.apply(this, args); }
+                    finally { this._lightflowDeletingControls = false; }
                     this.update();
                     restoreLightflowFormView(this, viewState);
                     return response;
@@ -7459,6 +12878,9 @@ function initializeLightManagerPlugin() {
                         element.disabled_reason.textContent = disableDesc;
                         element.disabled_reason.hidden = !disableDesc;
                     }
+                    if (element._lfDescription) {
+                        element._lfDescription.textContent = tooltipDescription(disableDesc, translateText(data.description, result));
+                    }
                     const tooltip = disableDesc || translateText(data.description, result);
                     if (tooltip === lastTooltip) return;
                     element.bar.title = tooltip;
@@ -7467,6 +12889,7 @@ function initializeLightManagerPlugin() {
                     }
                     lastTooltip = tooltip;
                 };
+                const tooltipDescription = (reason, description) => [description, reason].filter(Boolean).join(' · ');
                 const applyDisabledState = (disabled, result) => {
                     disabled = !!disabled;
                     const previousDisabled = element.is_disabled;
@@ -7558,6 +12981,7 @@ function initializeLightManagerPlugin() {
             };
 
             class ComboSlider extends Widget {
+                delete() { this.numberEdit?.dispose(); return super.delete(); }
                 constructor(id, data) {
                     if (typeof id === 'object') {
                         data = id;
@@ -7610,8 +13034,9 @@ function initializeLightManagerPlugin() {
                     const accessibleName = data.label
                         ? (typeof tl !== 'undefined' ? tl(data.label) : data.label)
                         : (data.description ? (typeof tl !== 'undefined' ? tl(data.description) : data.description) : 'Value');
+                    rangeInput.classList.add('lf-slider-track');
                     rangeInput.setAttribute('aria-label', accessibleName);
-                    numberInput.setAttribute('aria-label', `${accessibleName} value`);
+                    numberInput.setAttribute('aria-label', `${accessibleName} ${translateLightManager('light_manager.ui.value')}`);
                     this.rangeInput = rangeInput;
                     this.numberInput = numberInput;
 
@@ -7642,6 +13067,8 @@ function initializeLightManagerPlugin() {
                     // Optional label.
                     if (data.label) {
                         let labelElement = Interface.createElement('span', {
+                            class: 'combo_slider_label',
+                            title: typeof tl !== 'undefined' ? tl(data.label) : data.label,
                             style: 'margin-right: 5px; font-size: 13px; color: var(--color-subtle_text); white-space: nowrap; display: flex; align-items: center;'
                         }, typeof tl !== 'undefined' ? tl(data.label) : data.label);
                         containerChildren.push(labelElement);
@@ -7663,16 +13090,24 @@ function initializeLightManagerPlugin() {
                     // Optional reset button.
                     if (this.settings.resettable) {
                         this.resetBtn = Interface.createElement('i', {
-                            class: 'material-icons icon',
+                            class: 'material-icons icon lf-slider-reset',
                             title: translateLightManager('light_manager.generic.reset_value'),
-                            style: `font-size: 18px;cursor: pointer;display: none;margin-left: 2px;color: var(--color-subtle_text);display: flex;align-items: center;`
+                            style: `font-size: 16px;cursor: pointer;display: none;margin-left: 2px;color: var(--color-subtle_text);display: flex;align-items: center;`
                         }, 'replay');
+                        this.resetBtn.tabIndex = 0;
+                        this.resetBtn.setAttribute('role', 'button');
+                        this.resetBtn.setAttribute('aria-label', `${this.resetBtn.title} ${data.label ? (typeof tl !== 'undefined' ? tl(data.label) : data.label) : this.name}`);
 
                         this.resetBtn.onclick = (e) => {
+                            if (this.node?.getAttribute('aria-disabled') === 'true' || this.is_disabled) return;
                             if (typeof this.onBefore === 'function') this.onBefore(e);
                             this.change(this.settings.reset_value, e);
                             if (typeof this.onAfter === 'function') this.onAfter(e);
                         };
+                        this.resetBtn.addEventListener('keydown', event => {
+                            if (event.key !== 'Enter' && event.key !== ' ') return;
+                            event.preventDefault(); event.stopPropagation(); this.resetBtn.click();
+                        });
 
                         containerChildren.push(this.resetBtn);
                     }
@@ -7687,7 +13122,7 @@ function initializeLightManagerPlugin() {
                     }
 
                     this.node = Interface.createElement('div', {
-                        class: 'tool widget',
+                        class: 'tool widget lf-controls',
                         toolbar_item: this.id,
                         style: rootStyles
                     }, containerChildren);
@@ -7715,24 +13150,19 @@ function initializeLightManagerPlugin() {
                         let val = parseFloat($(event.target).val());
                         if (isNaN(val)) return;
                         const isNumberInput = event.target === $number[0];
+                        if (isNumberInput) return;
                         scope.change(val, event.originalEvent, isNumberInput);
                         if (scope.onDrag && (scope.isDragging || event.target === $range[0])) {
                             scope.onDrag(val, event.originalEvent, isNumberInput);
                         }
                     });
 
-                    $number.on('blur', function (event) {
-                        let val = parseFloat($(this).val());
-                        if (isNaN(val)) {
-                            val = scope.settings.reset_value;
-                        }
-                        scope.change(val, event.originalEvent, false);
-                    });
-
-                    $number.on('keydown', function (event) {
-                        if (event.key === 'Enter' || event.key === 'Escape') {
-                            this.blur();
-                        }
+                    this.numberEdit = bindLightflowNumberEdit(this.numberInput, {
+                        read: () => scope.value,
+                        write: (value, event) => scope.change(value, event, true),
+                        onBegin: event => scope.onBefore?.(event),
+                        onCommit: event => scope.onAfter?.(event),
+                        onCancel: event => { data.onCancel?.(event); scope.onAfter?.(event); }
                     });
 
                     // Track dragging state.
@@ -7747,14 +13177,9 @@ function initializeLightManagerPlugin() {
                         scope.updateResetButton();
                     });
 
-                    $number.on('focus', function (event) {
-                        if (scope.onBefore) scope.onBefore(event.originalEvent);
-                    });
-
-                    $inputs.on('change', function (event) {
-                        scope.isDragging = false;
-                        scope.updateResetButton();
-                        if (scope.onAfter) scope.onAfter(event.originalEvent);
+                    $range.on('keydown', event => { if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) return; if (!scope.isDragging) { scope.isDragging = true; scope.onBefore?.(event.originalEvent); } });
+                    $range.on('change', function (event) {
+                        scope.isDragging = false; scope.updateResetButton(); scope.onAfter?.(event.originalEvent);
                     });
 
                     // Keyboard shortcuts.
@@ -7868,57 +13293,221 @@ function initializeLightManagerPlugin() {
 
             window.ComboSlider = ComboSlider;
 
+            const enabledLightflowSelectKeys = options => Object.keys(options).filter(key => options[key] && !options[key].disabled && Condition(options[key].condition));
+            const addNativeSelectSearch = (menu, options, anchor) => {
+                if (!menu.node) return;
+                const rows = [...menu.node.children].filter(row => row.matches('li[menu_item]'));
+                const searchRow = document.createElement('li');
+                searchRow.setAttribute('role', 'presentation');
+                searchRow.style.cssText = 'position:sticky;top:0;z-index:2;padding:5px;background:var(--color-bright_ui);cursor:default';
+                const input = document.createElement('input');
+                input.type = 'search';
+                input.placeholder = translateLightManager('light_manager.ui.search_options');
+                input.setAttribute('aria-label', input.placeholder);
+                input.style.cssText = 'width:100%;min-width:160px;height:28px;box-sizing:border-box';
+                searchRow.append(input);
+                menu.node.prepend(searchRow);
+                const empty = document.createElement('li');
+                empty.className = 'disabled'; empty.style.display = 'none';
+                empty.textContent = translateLightManager('light_manager.ui.no_options');
+                menu.node.append(empty);
+                searchRow.addEventListener('click', event => event.stopPropagation());
+                input.addEventListener('input', () => {
+                    const query = input.value.trim().toLocaleLowerCase();
+                    let visible = 0;
+                    rows.forEach(row => {
+                        const option = options[row.getAttribute('menu_item')];
+                        const label = option?.name ? (typeof tl === 'function' ? tl(option.name) : option.name)
+                            : (row.querySelector(':scope > span')?.textContent || '');
+                        const matches = !query || String(label).toLocaleLowerCase().includes(query);
+                        row.style.display = matches ? '' : 'none';
+                        row.classList.remove('focused');
+                        if (matches) visible++;
+                    });
+                    empty.style.display = visible ? 'none' : '';
+                });
+                input.addEventListener('keydown', event => {
+                    event.stopPropagation();
+                    const visible = rows.filter(row => row.style.display !== 'none' && !row.classList.contains('disabled'));
+                    const active = visible.findIndex(row => row.classList.contains('focused'));
+                    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                        event.preventDefault();
+                        rows.forEach(row => row.classList.remove('focused'));
+                        const index = active < 0 ? (event.key === 'ArrowDown' ? 0 : visible.length - 1)
+                            : (active + (event.key === 'ArrowDown' ? 1 : -1) + visible.length) % visible.length;
+                        visible[index]?.classList.add('focused');
+                        visible[index]?.scrollIntoView({ block: 'nearest' });
+                    } else if (event.key === 'Enter') {
+                        event.preventDefault();
+                        (visible[active < 0 ? 0 : active])?.click();
+                    } else if (event.key === 'Escape') {
+                        event.preventDefault(); menu.hide(); anchor?.focus();
+                    }
+                });
+                const rect = menu.node.getBoundingClientRect();
+                menu.node.style.maxHeight = Math.max(100, Math.min(420, innerHeight - rect.top - 12)) + 'px';
+                menu.node.style.overflowY = 'auto';
+                input.focus();
+            };
+
             class CompactDropdownSelect extends Widget {
                 constructor(id, data) {
+                    if (typeof id === 'object') {
+                        data = id;
+                        id = data.id;
+                    }
+                    data = data || {};
                     super(id, data);
                     this.type = 'select';
-                    this.value = data.value;
-                    this.values = [];
+                    this.data = data;
                     this.options = data.options || {};
+                    this.values = Object.keys(this.options);
+                    this.value = data.value !== undefined ? data.value : (data.default !== undefined ? data.default : (this.values[0] || ''));
                     this.onChange = data.onChange;
+                    this.onUpdate = data.onUpdate;
                     this.description = data.description || data.title || '';
+                    this.show_value_text = data.show_value_text !== undefined ? !!data.show_value_text : (data.icon_mode === false);
+                    this.icon_size = data.icon_size;
+                    this.background = data.background;
+                    this.expand = !!data.expand;
 
-                    // Collect available option keys.
-                    for (let key in this.options) {
-                        if (!this.value) this.value = key;
-                        this.values.push(key);
+                    // Button DOM node.
+                    let button = document.createElement('div');
+                    button.className = 'tool widget compact_dropdown_select lf-dropdown';
+                    if (data.class) {
+                        data.class.split(' ').filter(Boolean).forEach(c => button.classList.add(c));
                     }
+                    if (data.className) {
+                        data.className.split(' ').filter(Boolean).forEach(c => button.classList.add(c));
+                    }
+                    button.setAttribute('toolbar_item', this.id);
+                    button.tabIndex = 0;
+                    button.setAttribute('role', 'button');
+                    button.setAttribute('aria-haspopup', 'menu');
+                    button.setAttribute('aria-expanded', 'false');
 
-                    // Main DOM node.
-                    this.node = document.createElement('div');
-                    this.node.className = 'tool widget compact_dropdown_select';
-                    this.node.setAttribute('toolbar_item', this.id);
+                    let baseStyles = `display: flex; align-items: center; cursor: pointer; padding: 2px 6px; background: ${this.background ? this.background : 'var(--color-button)'}; height: 30px; box-sizing: border-box; flex: ${this.expand ? '1 1 auto' : '0 0 auto'}; min-width: 0;`;
+                    if (data.width) baseStyles += ` width: ${typeof data.width === 'number' ? data.width + 'px' : data.width};`;
+                    if (data.min_width) baseStyles += ` min-width: ${typeof data.min_width === 'number' ? data.min_width + 'px' : data.min_width};`;
+                    if (typeof data.style === 'string') {
+                        baseStyles += ` ${data.style}`;
+                    }
+                    button.style = baseStyles;
+                    if (typeof data.style === 'object' && data.style !== null) {
+                        Object.assign(button.style, data.style);
+                    }
 
                     // Main icon container.
                     this.icon_wrapper = document.createElement('div');
                     this.icon_wrapper.className = 'main_icon_wrapper';
+                    this.icon_wrapper.style = `display: ${data.hide_icon ? 'none' : 'flex'}; align-items: center; margin-right: 4px;`;
+
+                    // Value label text.
+                    this.value_label = document.createElement('span');
+                    this.value_label.className = 'compact_dropdown_value';
+                    this.value_label.style = 'font-size: 13px; color: var(--color-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1 1 auto;';
+                    this.value_label.hidden = !this.show_value_text;
 
                     // Native-style dropdown arrow.
                     this.arrow_node = document.createElement('i');
                     this.arrow_node.className = 'fas fa-caret-down dropdown_arrow';
+                    this.arrow_node.style = 'font-size: 12px; color: var(--color-text); display: flex; align-items: center; margin-left: auto;';
 
-                    this.node.append(this.icon_wrapper, this.arrow_node);
+                    button.append(this.icon_wrapper, this.value_label, this.arrow_node);
+                    this.button = button;
 
-                    this.node.addEventListener('click', (event) => {
+                    // Group with label when present without splitting the row in half.
+                    if (data.label && !data.hide_label) {
+                        let outerContainer = document.createElement('div');
+                        outerContainer.className = 'compact_dropdown_container';
+                        outerContainer.className = 'lf-dropdown-row lf-controls';
+                        outerContainer.style = 'display: flex; align-items: center; gap: 8px; width: 100%; height: 30px; padding: 0 4px; box-sizing: border-box;';
+
+                        let labelElement = document.createElement('span');
+                        labelElement.className = 'lf-dropdown-label';
+                        labelElement.style = 'font-size: 13px; color: var(--color-text); white-space: nowrap;';
+                        labelElement.innerText = typeof tl !== 'undefined' ? tl(data.label) : data.label;
+                        outerContainer.append(labelElement);
+
+                        if (data.description) {
+                            let infoIcon = document.createElement('i');
+                            infoIcon.className = 'fa fa-question dialog_form_description';
+                            infoIcon.style = 'font-size: 14px; cursor: help; margin-left: 4px; color: var(--color-subtle_text);';
+                            infoIcon.title = typeof tl !== 'undefined' ? tl(data.description) : data.description;
+                            outerContainer.append(infoIcon);
+                        }
+
+                        outerContainer.append(button);
+                        this.container = outerContainer;
+                        this.node = outerContainer;
+                    } else {
+                        this.node = button;
+                    }
+
+                    // Events.
+                    $(button).on('click', (event) => {
+                        if (this.is_disabled) return;
                         this.open(event);
                     });
 
+                    $(button).on('keydown', (event) => {
+                        if (this.is_disabled) return;
+                        if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            this.open(event);
+                        }
+                    });
+
                     // Mouse wheel support for quick option switching.
-                    $(this.node).on('wheel', event => {
+                    $(button).on('wheel', (event) => {
+                        if (this.is_disabled || document.activeElement !== button) return;
+                        event.preventDefault();
                         let e = event.originalEvent;
-                        let index = this.values.indexOf(this.value);
+                        const values = enabledLightflowSelectKeys(this.options);
+                        if (!values.length) return;
+                        let index = values.indexOf(this.value);
                         index += e.deltaY < 0 ? -1 : 1;
-                        if (index < 0) index = this.values.length - 1;
-                        if (index >= this.values.length) index = 0;
-                        this.change(this.values[index], e);
+                        if (index < 0) index = values.length - 1;
+                        if (index >= values.length) index = 0;
+                        this.change(values[index], e);
                     });
 
                     this.nodes.push(this.node);
                     this.set(this.value);
                 }
 
+                get is_disabled() {
+                    if (this._disabled || this.disabled) return true;
+                    if (this.data?.disabled || this.data?.disable) return true;
+                    if (typeof this.condition === 'function' && !this.condition()) return true;
+                    if (typeof this.data?.disable_condition === 'function' && this.data.disable_condition()) return true;
+                    return false;
+                }
+
+                disable() {
+                    this._disabled = true;
+                    this.nodes.forEach(n => {
+                        let btn = n.classList?.contains('compact_dropdown_select') ? n : (n.querySelector?.('.compact_dropdown_select') || n);
+                        btn.classList.add('disabled');
+                        btn.setAttribute('aria-disabled', 'true');
+                    });
+                    return this;
+                }
+
+                enable() {
+                    this._disabled = false;
+                    this.nodes.forEach(n => {
+                        let btn = n.classList?.contains('compact_dropdown_select') ? n : (n.querySelector?.('.compact_dropdown_select') || n);
+                        btn.classList.remove('disabled');
+                        btn.removeAttribute('aria-disabled');
+                    });
+                    return this;
+                }
+
                 // Opens the native Blockbench menu with this widget's options.
                 open(event) {
+                    if (this.is_disabled) return this;
                     if (Menu.closed_in_this_click == this.id) return this;
                     let scope = this;
                     let items = [];
@@ -7927,65 +13516,136 @@ function initializeLightManagerPlugin() {
                         let opt = this.options[key];
                         if (opt) {
                             items.push({
+                                id: key,
                                 name: opt.name || key,
                                 icon: opt.icon,
-                                color: opt.color,
-                                condition: opt.condition,
+                                color: undefined,
+                                condition: opt.disabled ? false : opt.condition,
+                                marked: key === this.value,
                                 click: (e) => {
+                                    if (opt.disabled) return;
+                                    let targetBtn = (event && event.currentTarget) ? event.currentTarget : (scope.button || (scope.node?.classList?.contains('compact_dropdown_select') ? scope.node : scope.node?.querySelector?.('.compact_dropdown_select')));
+                                    if (targetBtn) targetBtn.setAttribute('aria-expanded', 'false');
                                     scope.change(key, e);
                                 }
                             });
                         }
                     }
 
-                    // Pass a single base class to the Menu constructor.
-                    let menu = new Menu(this.id, items, { class: 'select_menu' });
+                    let targetBtn = (event && event.currentTarget) ? event.currentTarget : (this.button || (this.node?.classList?.contains('compact_dropdown_select') ? this.node : this.node?.querySelector?.('.compact_dropdown_select')));
+                    let menu = new Menu(this.id, items, {
+                        class: 'select_menu',
+                        onClose: () => {
+                            if (targetBtn) targetBtn.setAttribute('aria-expanded', 'false');
+                        }
+                    });
 
-                    // Add the custom menu class safely through classList.
                     if (menu.node) {
                         menu.node.classList.add('compact_dropdown_menu');
-                        // Match the menu width to the button.
-                        menu.node.style['min-width'] = this.node.clientWidth + 'px';
+                        if (targetBtn) {
+                            menu.node.style['min-width'] = targetBtn.clientWidth + 'px';
+                        }
                     }
 
-                    menu.open(this.node, this);
+                    menu.open(targetBtn || this.node, this);
+                    if (targetBtn) targetBtn.setAttribute('aria-expanded', 'true');
+
+                    // Inject custom hover and selection styles.
+                    let styleBlock = document.createElement('style');
+                    let cssRules = '';
+
+                    for (let key in this.options) {
+                        let opt = this.options[key];
+
+                        if (opt && opt.color) {
+                            let safeKey = key.replace(/"/g, '\\"');
+                            let li = menu.node.querySelector(`li[menu_item="${safeKey}"]`);
+
+                            if (li) {
+                                let customClass = 'custom_hover_' + key.replace(/[^a-zA-Z0-9]/g, '_');
+                                li.classList.add(customClass);
+
+                                cssRules += `
+                                    .${customClass} {
+                                       background: linear-gradient(90deg, ${opt.color} 0px, var(--color-bright_ui) 32px);
+                                    }
+
+                                    .${customClass}:hover,
+                                    .${customClass}.focused {
+                                        background: linear-gradient(90deg, ${opt.color} 0px, var(--color-bright_ui) 50%);
+                                        color: var(--color-accent_text) !important;
+                                    }
+
+                                    .${customClass}.marked {
+                                        background: linear-gradient(90deg, ${opt.color} 0px, var(--color-bright_ui) 100%);
+                                        color: var(--color-accent_text) !important;
+                                    }
+                                `;
+                            }
+                        }
+                    }
+
+                    if (cssRules !== '') {
+                        styleBlock.innerHTML = cssRules;
+                        menu.node.appendChild(styleBlock);
+                    }
+                    return this;
                 }
 
                 // Changes the value and dispatches widget events.
                 change(value, event) {
                     this.set(value);
-                    if (this.onChange) {
+                    if (typeof this.onChange === 'function') {
                         this.onChange(this, event);
                     }
                     this.dispatchEvent('change', { value, event });
                     return this;
                 }
 
-                // Updates the DOM to show the selected option icon.
+                // Updates the DOM to show the selected option icon, label, and title.
                 set(key) {
                     if (!this.options[key]) return this;
                     this.value = key;
-                    let opt = this.options[key];
+                    this.updateVisuals();
+                    return this;
+                }
 
-                    // Include the widget name, current option, and description when available.
-                    let baseName = this.name ? this.name + ': ' : '';
-                    let optName = opt.name || key;
-                    let desc = this.description ? '\n' + (typeof tl !== 'undefined' ? tl(this.description) : this.description) : '';
-                    this.node.title = `${baseName}${optName}${desc}`;
+                setValue(value) {
+                    return this.set(value);
+                }
 
-                    // Replace the visible icon in every widget instance.
+                updateVisuals() {
+                    let opt = this.options[this.value];
+                    if (!opt) return this;
+
+                    let baseLabel = this.data.label || this.name;
+                    let baseName = baseLabel ? (typeof tl !== 'undefined' ? tl(baseLabel) : baseLabel) + ': ' : '';
+                    let optName = opt.name || this.value;
+                    let desc = (this.description || this.data.description)
+                        ? '\n' + (typeof tl !== 'undefined' ? tl(this.description || this.data.description) : (this.description || this.data.description))
+                        : '';
+
                     this.nodes.forEach(n => {
-                        let wrapper = n.querySelector('.main_icon_wrapper');
+                        let btn = n.classList?.contains('compact_dropdown_select') ? n : (n.querySelector?.('.compact_dropdown_select') || n);
+                        btn.title = `${baseName}${optName}${desc}`;
+                        btn.setAttribute('aria-label', `${baseName}${optName}`);
+
+                        let valueLabel = btn.querySelector?.('.compact_dropdown_value');
+                        if (valueLabel) {
+                            valueLabel.textContent = optName;
+                            valueLabel.hidden = !this.show_value_text;
+                        }
+
+                        let wrapper = btn.querySelector?.('.main_icon_wrapper');
                         if (wrapper) {
                             wrapper.innerHTML = '';
-
                             let iconElement = Blockbench.getIconNode(opt.icon || 'help');
-
-                            // Apply custom color to the main icon.
+                            if (this.icon_size !== undefined) {
+                                iconElement.style.fontSize = typeof this.icon_size === 'number' ? `${this.icon_size}px` : this.icon_size;
+                            }
                             if (opt.color) {
                                 iconElement.style.color = opt.color;
                             }
-
                             wrapper.append(iconElement);
                         }
                     });
@@ -7995,26 +13655,56 @@ function initializeLightManagerPlugin() {
 
                 setOptions(options) {
                     this.options = options || {};
-                    this.values = [];
+                    this.values = Object.keys(this.options);
 
-                    // Collect the new option keys.
-                    for (let key in this.options) {
-                        this.values.push(key);
-                    }
-
-                    // Fallback to the first option when the current value no longer exists.
+                    // Fallback to the default or first option when current value is missing.
                     if (!this.options[this.value] && this.values.length > 0) {
-                        this.value = this.values[0];
+                        this.value = this.data.default !== undefined && this.options[this.data.default]
+                            ? this.data.default
+                            : this.values[0];
                     }
 
-                    // Refresh the displayed value.
-                    this.set(this.value);
+                    this.updateVisuals();
+                    return this;
+                }
+
+                setShowValueText(show) {
+                    this.show_value_text = !!show;
+                    this.nodes.forEach(n => {
+                        let btn = n.classList?.contains('compact_dropdown_select') ? n : (n.querySelector?.('.compact_dropdown_select') || n);
+                        let val = btn.querySelector?.('.compact_dropdown_value');
+                        if (val) val.hidden = !this.show_value_text;
+                    });
+                    return this;
+                }
+
+                setIconSize(size) {
+                    this.icon_size = size;
+                    this.updateVisuals();
+                    return this;
+                }
+
+                setBackground(bg) {
+                    this.background = bg;
+                    this.nodes.forEach(n => {
+                        let btn = n.classList?.contains('compact_dropdown_select') ? n : (n.querySelector?.('.compact_dropdown_select') || n);
+                        btn.style.background = bg ? bg : 'var(--color-button)';
+                    });
+                    return this;
+                }
+
+                setExpand(expand) {
+                    this.expand = !!expand;
+                    this.nodes.forEach(n => {
+                        let btn = n.classList?.contains('compact_dropdown_select') ? n : (n.querySelector?.('.compact_dropdown_select') || n);
+                        btn.style.flex = this.expand ? '1 1 auto' : '0 0 auto';
+                    });
                     return this;
                 }
 
                 update() {
-                    this.set(this.value);
-                    if (this.onUpdate) {
+                    this.updateVisuals();
+                    if (typeof this.onUpdate === 'function') {
                         this.onUpdate(this);
                     }
                     return this;
@@ -8022,6 +13712,14 @@ function initializeLightManagerPlugin() {
 
                 get() {
                     return this.value;
+                }
+
+                getValue() {
+                    return this.value;
+                }
+
+                getDefault() {
+                    return this.data.default !== undefined ? this.data.default : (this.values[0] || '');
                 }
             }
 
@@ -8199,6 +13897,7 @@ function initializeLightManagerPlugin() {
                     // Define widget properties
                     this.type = 'text_input';
                     this.value = data.default_text || '';
+                    this.label = data.label || '';
                     this.placeholder = data.placeholder || '';
                     this.icon_name = data.icon || '';
                     this.expand = data.expand || false;
@@ -8211,7 +13910,7 @@ function initializeLightManagerPlugin() {
 
                     // Outer Container Node
                     this.node = document.createElement('div');
-                    this.node.className = 'tool wide widget text_input_widget';
+                    this.node.className = 'tool wide widget text_input_widget lf-controls';
                     this.node.setAttribute('toolbar_item', this.id);
 
                     if (this.description) {
@@ -8224,7 +13923,7 @@ function initializeLightManagerPlugin() {
                     this.node.style.width = this.expand ? 'auto' : this.width + 'px';
                     this.node.style.background = 'var(--color-back)';
                     this.node.style.border = '1px solid var(--color-border)';
-                    this.node.style.borderRadius = '2px';
+                    this.node.style.borderRadius = 'var(--lf-radius-control,8px)';
                     this.node.style.padding = '0 4px';
                     this.node.style.boxSizing = 'border-box';
 
@@ -8268,6 +13967,7 @@ function initializeLightManagerPlugin() {
                     this.input_node.type = 'text';
                     this.input_node.value = this.value;
                     this.input_node.placeholder = this.placeholder;
+                    this.input_node.setAttribute('aria-label', typeof tl === 'function' ? tl(this.label || this.description || this.id) : (this.label || this.description || this.id));
 
                     // Style the input to remove default web styling and fit Blockbench
                     this.input_node.style.flex = '1';
@@ -8276,7 +13976,6 @@ function initializeLightManagerPlugin() {
                     this.input_node.style.background = 'transparent';
                     this.input_node.style.border = 'none';
                     this.input_node.style.color = 'var(--color-text)';
-                    this.input_node.style.outline = 'none';
 
                     this.node.append(this.input_node);
                 }
@@ -8436,8 +14135,9 @@ function initializeLightManagerPlugin() {
     }
     .ac_screen_picker_btn:hover,
     .ac_screen_picker_btn:focus-visible {
-        color: var(--color-light);
-        outline: none;
+        color: var(--color-accent);
+        outline: 2px solid var(--color-accent);
+        outline-offset: 2px;
     }
     .ac_screen_picker_btn.disabled {
         opacity: 0.5;
@@ -8471,7 +14171,7 @@ function initializeLightManagerPlugin() {
         margin: 0;
     }
     /* Hide Spectrum's native text input container. */
-    .sp-picker-container .sp-input-container {
+    .lightflow-spectrum .sp-picker-container .sp-input-container {
         display: none !important;
     }
 `);
@@ -8539,6 +14239,7 @@ function initializeLightManagerPlugin() {
 
                 injectAdvancedUI() {
                     let spContainer = this.jq.spectrum("container");
+                    spContainer.addClass("lightflow-spectrum lf-controls");
                     let pickerContainer = spContainer.find(".sp-picker-container");
 
                     if (pickerContainer.find(".advanced_color_ui").length > 0) {
@@ -8827,6 +14528,111 @@ function initializeLightManagerPlugin() {
             window.AdvancedColorPicker = AdvancedColorPicker;
 
 
+            const sharedTypeIds = ['texture_source', 'advanced_color', 'combo_slider', 'compact_select', 'enum_select', 'horizontal_select', 'icon_select', 'compact_text', 'progress', 'bar_display', 'custom_checkbox', 'panel_search', 'action_toggle', 'action_button', 'custom_vector', 'gradient_editor', 'tab_select', 'grid_select', 'image_preview', 'outliner_select', 'code_editor', 'block_select'];
+            sharedTypeIds.push('lightflow_buttons', 'lightflow_textarea');
+            const previousSharedTypes = new Map(sharedTypeIds.map(id => [id, FormElement.types[id]]));
+            deletables.push(installLightflowControlStyles());
+
+            const previousTextureSourceType = FormElement.types.texture_source?.name === 'LightflowTextureSourceElement' ? undefined : FormElement.types.texture_source;
+            FormElement.types.texture_source = class LightflowTextureSourceElement extends FormElement {
+                get uses_wide_inputs() { return false; }
+                delete() { this.menu?.delete(); this.menu = null; super.delete(); }
+                build(bar) {
+                    this.bar = bar;
+                    bar.classList.add('full_width_dialog_bar', 'lightflow_texture_source');
+                    const data = this.options;
+                    this.value = String(data.value || '');
+                    this.node = document.createElement('button');
+                    this.node.type = 'button';
+                    this.node.className = 'lightflow_texture_pick';
+                    this.node.setAttribute('aria-haspopup', 'menu');
+                    this.node.setAttribute('aria-label', tl(data.label || 'light_manager.ui.texture_choose'));
+                    this.image = document.createElement('img');
+                    this.image.alt = '';
+                    this.image.className = 'lightflow_texture_thumbnail';
+                    this.placeholder = Blockbench.getIconNode('image');
+                    this.placeholder.classList.add('lightflow_texture_placeholder');
+                    const text = document.createElement('span');
+                    text.className = 'lightflow_texture_description';
+                    const label = document.createElement('span');
+                    label.textContent = tl(data.label || 'light_manager.ui.texture_choose');
+                    this.path = document.createElement('span');
+                    this.path.className = 'lightflow_texture_path';
+                    text.append(label, this.path);
+                    this.node.append(this.image, this.placeholder, text, Blockbench.getIconNode(data.action_icon || 'expand_more'));
+                    if (data.onActivate) this.node.removeAttribute('aria-haspopup');
+                    bar.append(this.node);
+                    this.image.onerror = () => { this.image.hidden = true; this.placeholder.hidden = false; };
+                    this.node.addEventListener('click', event => this.open(event));
+                    this.updatePreview();
+                }
+                updatePreview() {
+                    const source = this.options.preview_source?.(this.value) || this.value || '';
+                    const url = LightflowTextureSource.url(source) || (!this.value && /^(file:|blob:|https?:)/i.test(source) ? source : '');
+                    this.image.hidden = !url; this.placeholder.hidden = !!url;
+                    this.image.src = url || '';
+                    this.path.textContent = this.options.value_label?.(this.value) || LightflowTextureSource.label(this.value) || tl(this.options.empty_label || 'light_manager.ui.texture_choose');
+                    const texture = window.Texture?.all?.find(texture => texture.uuid === this.value);
+                    this.node.title = [tl(this.options.label || 'light_manager.ui.texture_choose'), texture?.path || LightflowTextureSource.label(this.value) || this.path.textContent, this.options.title ? tl(this.options.title) : ''].filter(Boolean).join('\n');
+                }
+                async commit(source, event, file = null) {
+                    if (!this.bar.isConnected || this.form.form_data[this.id] !== this || (!file && source === this.value)) return;
+                    this.options.onBefore?.(event);
+                    try {
+                        if (file) source = new Texture().fromFile(file).add(false).uuid;
+                        this.setValue(source, false); this.change();
+                    } finally { this.options.onAfter?.(event); }
+                }
+                open(event) {
+                    if (this.is_disabled) return;
+                    if (this.options.onActivate) { this.options.onActivate(this.value, event); return; }
+                    if (this.options.items) {
+                        const items=typeof this.options.items==='function'?this.options.items():this.options.items;
+                        this.menu?.delete();this.menu=new Menu((items||[]).map(item=>({name:item.name||item.id,icon:item.icon||'folder_special',click:()=>{if(this.options.onChoose)this.options.onChoose(item.id,event);else this.commit(item.id,event);}})));this.menu.open(event||this.node);return;
+                    }
+                    const structure = [{
+                        name: 'light_manager.ui.texture_import', icon: 'upload_file', click: () => {
+                            Blockbench.import({ extensions: ['png', 'jpg', 'jpeg', 'webp'], type: tl('light_manager.ui.texture_choose'), readtype: 'image' }, async files => {
+                                if (files?.[0]) {
+                                    if (this.options.project_reference) await this.commit('', event, files[0]);
+                                    else { const source = await LightflowTextureSource.fromFile(files[0]); if (source) await this.commit(source, event); }
+                                }
+                            });
+                        }
+                    }];
+                    if (window.Texture?.all?.length) {
+                        structure.push(new MenuSeparator());
+                        for (const texture of Texture.all) structure.push({
+                            name: texture.name, icon: LightflowTextureSource.url(texture.uuid) || 'texture', click: async () => {
+                                const source = this.options.project_reference ? texture.uuid : await LightflowTextureSource.fromTexture(texture); if (source) await this.commit(source, event);
+                            }
+                        });
+                    }
+                    if (this.value) structure.push(new MenuSeparator(), { name: 'light_manager.ui.texture_clear', icon: 'clear', click: () => this.commit('', event) });
+                    this.menu?.delete();
+                    this.menu = new Menu('lightflow_texture_source_menu', structure, { searchable: true });
+                    this.menu.open(this.node);
+                    this.menu.node.classList.add('lightflow_texture_source_menu');
+                    addNativeSelectSearch(this.menu, structure, this.node);
+                }
+                setValue(value, update_form = true) { this.value = String(value || ''); this.updatePreview(); if (update_form) this.form.updateValues(); return this; }
+                getValue() { return this.value; }
+                update() { if (this.node) this.node.disabled = !!this.is_disabled; }
+            };
+            const textureSourceType = FormElement.types.texture_source;
+            deletables.push({ delete() { if (FormElement.types.texture_source === textureSourceType) { if (previousTextureSourceType) FormElement.types.texture_source = previousTextureSourceType; else delete FormElement.types.texture_source; } } });
+            deletables.push(Blockbench.addCSS(`
+                .lightflow_texture_source { padding: 3px 4px !important; min-width: 0; }
+                .lightflow_texture_pick { display: flex; align-items: center; gap: 8px; padding: 5px 7px; width: 100% !important; min-width: 0; min-height: 46px; border: 1px solid var(--color-border); background: var(--color-back); color: var(--color-text); text-align: left; }
+                .lightflow_texture_pick:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+                .lightflow_texture_thumbnail { width: 34px; height: 34px; flex: 0 0 34px; object-fit: contain; image-rendering: pixelated; background: repeating-conic-gradient(var(--color-ui) 0% 25%,var(--color-back) 0% 50%) 0 / 10px 10px; }
+                .lightflow_texture_placeholder { display:flex;align-items:center;justify-content:center;width:34px;height:34px;flex:0 0 34px; }
+                .lightflow_texture_pick > [hidden] { display: none !important; }
+                .lightflow_texture_description { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+                .lightflow_texture_path { min-width: 0; font-size: 11px; color: var(--color-subtle_text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+                .lightflow_texture_pick > .material-icons:last-child { flex: 0 0 18px; font-size: 18px; }
+            `));
+
             // MARK: Advanced color form element
             FormElement.types.advanced_color = class FormElementAdvancedColor extends FormElement {
 
@@ -8929,7 +14735,24 @@ function initializeLightManagerPlugin() {
             };
 
             // MARK: Combo Slider Form Element
+            deletables.push(Blockbench.addCSS(`
+                .light_manager_marked_slider .light_manager_slider_marks { position: relative; width: calc(100% - 20px) !important; height: 24px; margin: 0 10px !important; box-shadow: none;}
+                .light_manager_marked_slider .light_manager_slider_mark {
+                    position: absolute; top: 0; transform: translateX(-50%); display: flex;
+                    align-items: center; justify-content: center; width: 20px !important; min-width: 20px !important;
+                    height: 24px !important; margin: 0 !important; padding: 5px 0 0 !important;
+                    border: 0 !important; border-radius: 0; background: transparent !important; color: var(--color-subtle_text) !important;
+                    font-size: 11px; line-height: 18px; overflow: visible; white-space: nowrap;
+                }
+                .light_manager_marked_slider .light_manager_slider_mark::before { content: ''; position: absolute; top: 0; left: 9px; height: 4px; width: 1px; background: var(--color-grid); }
+                .light_manager_marked_slider .light_manager_slider_mark > .icon { font-size: 16px; width: 18px; height: 18px; margin: 0 !important; display: flex; align-items: center; justify-content: center; }
+                .light_manager_marked_slider .light_manager_slider_mark.selected,
+                .light_manager_marked_slider .light_manager_slider_mark:hover { color: var(--color-text) !important; text-decoration:underline; text-decoration-thickness:2px; text-underline-offset:2px; }
+                .light_manager_marked_slider .light_manager_slider_mark:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 0; }
+                :is(.light_manager_marked_slider,.light_manager_full_track_slider) input[type=range] { display: block; height: 28px; }
+            `));
             FormElement.types.combo_slider = class FormElementComboSlider extends FormElement {
+                delete() { this.numberEdit?.dispose(); this.releasePopupDocumentListeners?.(); this.popup_panel?.remove(); super.delete(); }
                 get uses_wide_inputs() { return true; }
 
                 setup() {
@@ -8993,15 +14816,17 @@ function initializeLightManagerPlugin() {
                     const accessibleName = data.label
                         ? (typeof tl !== 'undefined' ? tl(data.label) : data.label)
                         : (data.description ? (typeof tl !== 'undefined' ? tl(data.description) : data.description) : 'Value');
+                    rangeInput.classList.add('lf-slider-track');
                     rangeInput.setAttribute('aria-label', accessibleName);
-                    numberInput.setAttribute('aria-label', `${accessibleName} value`);
+                    numberInput.setAttribute('aria-label', `${accessibleName} ${translateLightManager('light_manager.ui.value')}`);
                     this.rangeInput = rangeInput;
                     this.numberInput = numberInput;
+                    this.landmarks = (Array.isArray(data.marks) ? data.marks : []).filter(mark => Number.isFinite(mark.value) && mark.value >= this.settings.min && mark.value <= this.settings.max).sort((a, b) => a.value - b.value);
 
                     let numSliderIcon = Interface.createElement('div', {
                         class: 'tool numeric_input_slider'
                     }, [
-                        Interface.createElement('i', { class: 'material-icons' }, 'code')
+                        Interface.createElement('i', { class: 'material-icons', style: 'font-size: 16px; margin-top: px;' }, 'code')
                     ]);
 
                     let numberContainer = Interface.createElement('div', {
@@ -9033,6 +14858,7 @@ function initializeLightManagerPlugin() {
 
                     if (data.label) {
                         let labelOptions = {
+                            class: 'combo_slider_label',
                             style: 'margin-right: 5px; font-size: 13px; color: var(--color-subtle_text); white-space: nowrap; display: flex; align-items: center;'
                         };
                         if (data.description) {
@@ -9051,13 +14877,13 @@ function initializeLightManagerPlugin() {
 
                     if (this.settings.resettable) {
                         this.resetBtn = Interface.createElement('i', {
-                            class: 'material-icons icon',
-                            title: 'Reset',
-                            style: `font-size: 18px;cursor: pointer;display: none;margin-left: 2px;color: var(--color-subtle_text);display: flex;align-items: center;`
+                            class: 'material-icons icon lf-slider-reset',
+                            title: translateLightManager('light_manager.generic.reset_value'),
+                            style: `font-size: 16px;cursor: pointer;display: none;margin-left: 2px;color: var(--color-subtle_text);display: flex;align-items: center;`
                         }, 'replay');
                         this.resetBtn.tabIndex = 0;
                         this.resetBtn.setAttribute('role', 'button');
-                        this.resetBtn.setAttribute('aria-label', `Reset ${accessibleName}`);
+                        this.resetBtn.setAttribute('aria-label', `${translateLightManager('light_manager.generic.reset_value')} ${accessibleName}`);
 
                         this.resetBtn.onclick = (e) => {
                             if (this.is_disabled) return;
@@ -9068,6 +14894,7 @@ function initializeLightManagerPlugin() {
                         this.resetBtn.onkeydown = e => {
                             if (e.key !== 'Enter' && e.key !== ' ') return;
                             e.preventDefault();
+                            e.stopPropagation();
                             this.resetBtn.onclick(e);
                         };
                         containerChildren.push(this.resetBtn);
@@ -9075,9 +14902,90 @@ function initializeLightManagerPlugin() {
 
                     // Main slider container
                     this.slider_node = Interface.createElement('div', {
-                        class: 'tool widget',
+                        class: 'tool widget lf-controls',
                         style: `display: flex;flex-direction: row;align-items: center;height: 30px;padding: 0 4px;min-width: 0; width: 100%; box-sizing: border-box;`
                     }, containerChildren);
+
+                    if (data.density === 'compact') this.slider_node.classList.add('lf-slider-compact');
+                    if (this.landmarks.length || data.full_track) {
+                        this.slider_node.classList.add(this.landmarks.length ? 'light_manager_marked_slider' : 'light_manager_full_track_slider');
+                        this.slider_node.style.setProperty('display', 'grid', 'important');
+                        this.slider_node.style.setProperty('grid-template-columns', 'minmax(0, 1fr) 64px 24px', 'important');
+                        this.slider_node.style.setProperty('height', 'auto', 'important');
+                        this.slider_node.style.gap = '4px';
+                        this.slider_node.style.position = 'relative';
+                        comboWrapper.style.setProperty('grid-column', '1 / -1', 'important');
+                        comboWrapper.style.setProperty('grid-row', '2', 'important');
+                        comboWrapper.style.setProperty('height', 'auto', 'important');
+                        comboWrapper.style.setProperty('display', 'block', 'important');
+                        comboWrapper.style.setProperty('margin', '0', 'important');
+                        const label = this.slider_node.querySelector('.combo_slider_label');
+                        if (label) {
+                            label.style.setProperty('grid-column', '1', 'important');
+                            label.style.setProperty('grid-row', '1', 'important');
+                            label.style.setProperty('white-space', 'normal', 'important');
+                            label.style.lineHeight = '1.3';
+                            if (data.icon && !this.is_compact) {
+                                const icon = this.slider_node.firstElementChild;
+                                icon.style.position = 'absolute';
+                                icon.style.left = '4px';
+                                icon.style.top = '3px';
+                                label.style.paddingLeft = '24px';
+                            }
+                        }
+                        this.slider_node.insertBefore(numberContainer, comboWrapper);
+                        numberContainer.style.setProperty('grid-column', '2', 'important');
+                        numberContainer.style.setProperty('grid-row', '1', 'important');
+                        numberContainer.style.width = '64px';
+                        if (this.resetBtn) {
+                            this.resetBtn.style.setProperty('grid-column', '3', 'important');
+                            this.resetBtn.style.setProperty('grid-row', '1', 'important');
+                            this.resetBtn.style.setProperty('margin', '0', 'important');
+                        }
+                        this.markNodes = [];
+                        if (this.landmarks.length) {
+                            const marks = document.createElement('div');
+                            marks.className = 'light_manager_slider_marks';
+                            this.landmarks.forEach(mark => {
+                                const button = document.createElement('button');
+                                button.type = 'button';
+                                button.className = 'light_manager_slider_mark';
+                                const label = typeof tl === 'function' ? tl(mark.label || String(mark.value)) : (mark.label || String(mark.value));
+                                button.title = label === `${mark.value}${data.unit || ''}` ? label : `${label} · ${mark.value}${data.unit || ''}`;
+                                button.setAttribute('aria-label', button.title);
+                                button.style.setProperty('left', `${100 * (mark.value - this.settings.min) / (this.settings.max - this.settings.min)}%`, 'important');
+                                if (mark.icon) {
+                                    const icon = Blockbench.getIconNode(mark.icon);
+                                    icon.setAttribute('aria-hidden', 'true');
+                                    button.append(icon);
+                                } else button.textContent = mark.short_label || label;
+                                button.addEventListener('click', event => {
+                                    if (this.is_disabled) return;
+                                    event.preventDefault();
+                                    this.onBefore?.(event);
+                                    this.setValue(mark.value, true);
+                                    this.onAfter?.(event);
+                                });
+                                marks.append(button);
+                                this.markNodes.push({ mark, button });
+                            });
+                            comboWrapper.append(marks);
+                            const hint = typeof tl === 'function' ? tl('light_manager.slider.magnetic_hint') : 'Hold Alt while dragging to snap to marks. Alt + arrows jumps between marks.';
+                            rangeInput.title = hint;
+                            rangeInput.addEventListener('keydown', event => {
+                                if (!event.altKey || !['ArrowLeft', 'ArrowRight'].includes(event.key) || this.is_disabled) return;
+                                event.preventDefault();
+                                event.stopPropagation();
+                                const next = event.key === 'ArrowRight' ? this.landmarks.find(mark => mark.value > this.value) : [...this.landmarks].reverse().find(mark => mark.value < this.value);
+                                if (!next) return;
+                                this.onBefore?.(event);
+                                this.setValue(next.value, true);
+                                this.onAfter?.(event);
+                            });
+                        }
+                        bar.style.setProperty('height', 'auto', 'important');
+                        bar.style.setProperty('min-height', '0', 'important');
+                    }
 
 
                     // Configure the selected interaction mode.
@@ -9087,8 +14995,8 @@ function initializeLightManagerPlugin() {
                         bar.style.background = 'transparent';
 
                         this.node = document.createElement('div');
-                        this.node.className = 'tool widget compact_dropdown_select';
-                        this.node.style = `display: flex; align-items: center; cursor: pointer; padding: 2px 6px; background: ${data.background || 'var(--color-button)'}; border-radius: 2px; height: 30px; box-sizing: border-box; flex-shrink: 0;`;
+                        this.node.className = 'tool widget compact_dropdown_select lf-dropdown';
+                        this.node.style = `display: flex; align-items: center; cursor: pointer; padding: 2px 6px; background: ${data.background || 'var(--color-button)'}; border-radius: var(--lf-radius-control,8px); height: 30px; box-sizing: border-box; flex-shrink: 0;`;
                         this.node.tabIndex = 0;
                         this.node.setAttribute('role', 'button');
                         this.node.setAttribute('aria-haspopup', 'dialog');
@@ -9133,14 +15041,18 @@ function initializeLightManagerPlugin() {
                         this.closePopup = (e) => {
                             if (!this._isOpen) return;
                             if (e.type === 'keydown' && e.key !== 'Escape') return;
+                            if (e.type === 'keydown' && e.target === this.numberInput && this.numberEdit?.core.active) return;
                             if (e.type === 'mousedown' && (this.popup_panel.contains(e.target) || this.node.contains(e.target))) return;
 
+                            const restoreFocus = e.type === 'keydown' || this.popup_panel.contains(document.activeElement);
+                            if (e.type === 'keydown') { e.preventDefault?.(); e.stopImmediatePropagation?.(); e.stopPropagation?.(); }
                             this.popup_panel.style.display = 'none';
                             if (this.popup_panel.parentNode) this.popup_panel.parentNode.removeChild(this.popup_panel);
                             this._isOpen = false;
                             this.node.setAttribute('aria-expanded', 'false');
                             this.releasePopupDocumentListeners?.();
                             this.releasePopupDocumentListeners = null;
+                            if (restoreFocus && this.node.isConnected) this.node.focus({ preventScroll: true });
                         };
 
                         this.node.addEventListener('mousedown', (e) => {
@@ -9153,35 +15065,34 @@ function initializeLightManagerPlugin() {
                             this.popup_panel.style.display = 'block';
                             document.body.appendChild(this.popup_panel);
 
-                            let rect = this.node.getBoundingClientRect();
-                            this.popup_panel.style.top = (rect.bottom + 4) + 'px';
-
-                            let popupRect = this.popup_panel.getBoundingClientRect();
-                            let leftPos = rect.left;
-                            if (leftPos + popupRect.width > window.innerWidth) {
-                                leftPos = window.innerWidth - popupRect.width - 4;
-                            }
-                            this.popup_panel.style.left = leftPos + 'px';
+                            const reposition = () => positionLightflowOverlay(this.node, this.popup_panel);
+                            reposition();
+                            this.rangeInput.focus({ preventScroll: true });
 
                             this._isOpen = true;
                             this.node.setAttribute('aria-expanded', 'true');
 
-                            scheduleLightManagerTimeout(() => {
-                                if (!this._isOpen) return;
+                            {
+                                window.addEventListener('resize', reposition);
+                                window.addEventListener('scroll', reposition, true);
                                 document.addEventListener('mousedown', this.closePopup);
-                                document.addEventListener('keydown', this.closePopup);
+                                // Consume Escape before Blockbench's modal key handler.
+                                document.addEventListener('keydown', this.closePopup, true);
                                 this.releasePopupDocumentListeners = trackDocumentInteraction(() => {
+                                    window.removeEventListener('resize', reposition);
+                                    window.removeEventListener('scroll', reposition, true);
                                     document.removeEventListener('mousedown', this.closePopup);
-                                    document.removeEventListener('keydown', this.closePopup);
+                                    document.removeEventListener('keydown', this.closePopup, true);
                                     if (this.popup_panel.parentNode) this.popup_panel.parentNode.removeChild(this.popup_panel);
                                     this._isOpen = false;
                                     this.node.setAttribute('aria-expanded', 'false');
                                 });
-                            }, 10);
+                            }
                         });
                         this.node.addEventListener('keydown', e => {
                             if (this.is_disabled || (e.key !== 'Enter' && e.key !== ' ')) return;
                             e.preventDefault();
+                            e.stopPropagation();
                             this.node.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
                         });
 
@@ -9220,6 +15131,7 @@ function initializeLightManagerPlugin() {
 
                                     if (!scope.settings.allow_lower && newValue < scope.settings.min) newValue = scope.settings.min;
                                     if (!scope.settings.allow_higher && newValue > scope.settings.max) newValue = scope.settings.max;
+                                    if (scope.landmarks.length) newValue = scope.snapToMark(newValue, !!e2.altKey);
 
                                     if (typeof trimFloatNumber !== 'undefined') {
                                         newValue = trimFloatNumber(newValue, 8);
@@ -9253,6 +15165,11 @@ function initializeLightManagerPlugin() {
                         let val = parseFloat($(event.target).val());
                         if (isNaN(val)) return;
                         const isNumberInput = event.target === $number[0];
+                        if (isNumberInput) return;
+                        if (!isNumberInput && scope.landmarks.length) {
+                            scope.rawRangeValue = val;
+                            val = scope.snapToMark(val, scope.snapHeld);
+                        }
                         scope.setValue(val, true, isNumberInput);
                         if (scope.onDrag && (scope.isDragging || event.target === $range[0])) {
                             scope.onDrag(val, event.originalEvent, isNumberInput);
@@ -9263,45 +15180,83 @@ function initializeLightManagerPlugin() {
                     $range.on('mousedown touchstart', function (event) {
                         scope.isDragging = true;
                         if (scope.onBefore) scope.onBefore(event.originalEvent);
-                    });
-
-                    $number.on('focus', function (event) {
-                        if (scope.onBefore) scope.onBefore(event.originalEvent);
-                    });
-
-                    // Trigger onAfter when editing finishes.
-                    $range.on('mouseup touchend', function (event) {
-                        scope.isDragging = false;
-                        scope.updateResetButton();
-                        if (scope.onAfter) scope.onAfter(event.originalEvent);
-                    });
-
-                    $inputs.on('change', function (event) {
-                        scope.isDragging = false;
-                        scope.updateResetButton();
-                        if (scope.onAfter) scope.onAfter(event.originalEvent);
-                    });
-
-                    // Special handling for the number input.
-                    $number.on('blur', function (event) {
-                        let val = parseFloat($(this).val());
-                        if (isNaN(val)) {
-                            val = scope.settings.reset_value;
+                        if (scope.landmarks.length) {
+                            scope.snapHeld = !!event.originalEvent?.altKey;
+                            const modifier = e => {
+                                if ((e.type === 'keydown' || e.type === 'keyup') && e.key === 'Alt') {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                }
+                                const held = !!e.altKey && !(e.type === 'keyup' && e.key === 'Alt');
+                                if (held === scope.snapHeld) return;
+                                scope.snapHeld = held;
+                                if (Number.isFinite(scope.rawRangeValue)) scope.setValue(scope.snapToMark(scope.rawRangeValue, held), true);
+                            };
+                            const finish = e => {
+                                scope.finishMarkedDrag = null;
+                                release();
+                                scope.isDragging = false;
+                                scope.snapHeld = false;
+                                scope.rawRangeValue = null;
+                                scope.updateResetButton();
+                                scope.onAfter?.(e);
+                            };
+                            const release = trackDocumentInteraction(() => {
+                                document.removeEventListener('mousemove', modifier, true);
+                                document.removeEventListener('keydown', modifier, true);
+                                document.removeEventListener('keyup', modifier, true);
+                                document.removeEventListener('mouseup', finish, true);
+                                document.removeEventListener('touchend', finish, true);
+                                document.removeEventListener('touchcancel', finish, true);
+                                window.removeEventListener('blur', finish);
+                            });
+                            scope.finishMarkedDrag = finish;
+                            document.addEventListener('mousemove', modifier, true);
+                            document.addEventListener('keydown', modifier, true);
+                            document.addEventListener('keyup', modifier, true);
+                            document.addEventListener('mouseup', finish, true);
+                            document.addEventListener('touchend', finish, true);
+                            document.addEventListener('touchcancel', finish, true);
+                            window.addEventListener('blur', finish);
                         }
-                        scope.setValue(val, true, false);
-                        if (scope.onAfter) scope.onAfter(event.originalEvent);
                     });
 
-                    $number.on('keydown', function (event) {
-                        if (event.key === 'Enter' || event.key === 'Escape') {
-                            this.blur();
-                            if (scope.is_compact && event.key === 'Enter') {
-                                scope.closePopup({ type: 'mousedown', target: document.body });
-                            }
-                        }
+                    $range.on('mouseup touchend change', function (event) {
+                        if (scope.landmarks.length) { scope.finishMarkedDrag?.(event.originalEvent); return; }
+                        if (!scope.isDragging) return;
+                        scope.isDragging = false; scope.updateResetButton(); scope.onAfter?.(event.originalEvent);
+                    });
+                    let rangeKeyboardActive = false;
+                    $range.on('keydown', event => {
+                        if (scope.is_disabled || event.altKey || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) return;
+                        if (!scope.isDragging) { rangeKeyboardActive = true; scope.isDragging = true; scope.onBefore?.(event.originalEvent); }
+                    });
+                    $range.on('keyup blur', event => {
+                        if (!rangeKeyboardActive) return;
+                        rangeKeyboardActive = false;
+                        if (!scope.isDragging) return;
+                        scope.isDragging = false; scope.onAfter?.(event.originalEvent);
+                    });
+                    this.numberEdit = bindLightflowNumberEdit(this.numberInput, {
+                        read: () => scope.value,
+                        write: (value, event) => scope.setValue(value, true, true),
+                        onBegin: event => scope.onBefore?.(event),
+                        onCommit: event => scope.onAfter?.(event),
+                        onCancel: event => { scope.options.onCancel?.(event); scope.onAfter?.(event); },
+                        disabled: () => scope.is_disabled,
+                        tearingDown: () => scope.form._lightflowDeletingControls,
+                        close: () => scope.is_compact && scope.closePopup({ type: 'keydown', key: 'Escape' })
                     });
 
                     this.setValue(this.value, false);
+                }
+
+                snapToMark(value, held) {
+                    if (!held || !this.landmarks?.length) return value;
+                    const nearest = this.landmarks.reduce((best, mark) => Math.abs(mark.value - value) < Math.abs(best.value - value) ? mark : best);
+                    const width = Math.max(1, this.rangeInput.getBoundingClientRect().width - 20);
+                    const distance = Math.abs(nearest.value - value) * width / (this.settings.max - this.settings.min);
+                    return distance <= (Number(this.options.mark_snap_distance) || 10) ? nearest.value : value;
                 }
 
                 updateResetButton() {
@@ -9317,13 +15272,14 @@ function initializeLightManagerPlugin() {
 
                 updateSliderFill() {
                     if (!this.settings.slider_fill || !this.rangeInput) return;
-                    
+
                     const min = parseFloat(this.settings.min) || 0;
-                    const max = parseFloat(this.settings.max) || 100;
+                    const parsedMax = parseFloat(this.settings.max);
+                    const max = Number.isFinite(parsedMax) ? parsedMax : 100;
                     const value = parseFloat(this.value);
-                    
-                    const progress = ((value - min) / (max - min)) * 100;
-                    
+
+                    const progress = max === min ? 0 : Math.max(0, Math.min(100, ((value - min) / (max - min)) * 100));
+
                     this.rangeInput.style.setProperty('--color-track',
                         `linear-gradient(
                             to right,
@@ -9387,6 +15343,15 @@ function initializeLightManagerPlugin() {
 
                     this.updateResetButton();
                     this.updateSliderFill();
+                    if (this.markNodes) {
+                        const selected = this.markNodes.find(({ mark }) => Math.abs(mark.value - value) < 1e-6);
+                        this.markNodes.forEach(({ mark, button }) => {
+                            const active = Math.abs(mark.value - value) < 1e-6;
+                            button.classList.toggle('selected', active);
+                            button.setAttribute('aria-pressed', String(active));
+                        });
+                        this.rangeInput.setAttribute('aria-valuetext', selected ? selected.button.title : String(value));
+                    }
 
                     if (this.is_compact) {
                         let baseName = this.options.label ? (typeof tl !== 'undefined' ? tl(this.options.label) : this.options.label) + ': ' : '';
@@ -9405,6 +15370,7 @@ function initializeLightManagerPlugin() {
             // MARK: Compact Dropdown Select
             FormElement.types.compact_select = class FormElementCompactDropdown extends FormElement {
                 get uses_wide_inputs() { return false; }
+                delete() { this._lightflowSelectMenu?.delete?.(); super.delete(); }
                 setup() {
                     let tempDesc = this.options.description;
                     this.options.description = null;
@@ -9424,8 +15390,8 @@ function initializeLightManagerPlugin() {
 
                     // Button DOM mirrors the original widget.
                     this.node = document.createElement('div');
-                    this.node.className = 'tool widget compact_dropdown_select';
-                    this.node.style = `display: flex; align-items: center; cursor: pointer; padding: 2px 6px; background: ${data.background ? data.background : 'var(--color-button)'}; border-radius: 2px; height: 30px; box-sizing: border-box; flex: ${data.expand ? '1 1 auto' : '0 0 auto'}; min-width: 0;`;
+                    this.node.className = 'tool widget compact_dropdown_select lf-dropdown';
+                    this.node.style = `display: flex; align-items: center; cursor: pointer; padding: 2px 6px; background: ${data.background ? data.background : 'var(--color-button)'}; height: 30px; box-sizing: border-box; flex: ${data.expand ? '1 1 auto' : '0 0 auto'}; min-width: 0;`;
                     this.node.tabIndex = 0;
                     this.node.setAttribute('role', 'button');
                     this.node.setAttribute('aria-haspopup', 'menu');
@@ -9433,7 +15399,8 @@ function initializeLightManagerPlugin() {
 
                     this.icon_wrapper = document.createElement('div');
                     this.icon_wrapper.className = 'main_icon_wrapper';
-                    this.icon_wrapper.style = 'display: flex; align-items: center; margin-right: 4px;';
+                    this.icon_wrapper.style = `display: ${data.hide_icon ? 'none' : 'flex'}; align-items: center; margin-right: 4px;`;
+                    this.icon_size = data.icon_size;
 
                     this.arrow_node = document.createElement('i');
                     this.arrow_node.className = 'fas fa-caret-down dropdown_arrow';
@@ -9448,10 +15415,12 @@ function initializeLightManagerPlugin() {
 
                     // Group with the label when present without splitting the row in half.
                     let outerContainer = document.createElement('div');
+                    outerContainer.className = 'lf-dropdown-row';
                     outerContainer.style = 'display: flex; align-items: center; gap: 8px; width: 100%; height: 30px; padding: 0 4px; box-sizing: border-box;';
 
                     if (data.label && !data.hide_label) {
                         let labelElement = document.createElement('span');
+                        labelElement.className = 'lf-dropdown-label';
                         labelElement.style = 'font-size: 13px; color: var(--color-text); white-space: nowrap;';
                         labelElement.innerText = typeof tl !== 'undefined' ? tl(data.label) : data.label;
                         outerContainer.append(labelElement);
@@ -9478,6 +15447,7 @@ function initializeLightManagerPlugin() {
                         if (this.is_disabled) return;
                         if (event.key === 'Enter' || event.key === ' ') {
                             event.preventDefault();
+                            event.stopPropagation();
                             this.open(event);
                         }
                     });
@@ -9486,11 +15456,13 @@ function initializeLightManagerPlugin() {
                         if (this.is_disabled || document.activeElement !== this.node) return;
                         event.preventDefault();
                         let e = event.originalEvent;
-                        let index = this.values.indexOf(this.value);
+                        const values = enabledLightflowSelectKeys(this.options_dict);
+                        if (!values.length) return;
+                        let index = values.indexOf(this.value);
                         index += e.deltaY < 0 ? -1 : 1;
-                        if (index < 0) index = this.values.length - 1;
-                        if (index >= this.values.length) index = 0;
-                        this.setValue(this.values[index]);
+                        if (index < 0) index = values.length - 1;
+                        if (index >= values.length) index = 0;
+                        this.setValue(values[index]);
                         this.change();
                     });
 
@@ -9511,9 +15483,10 @@ function initializeLightManagerPlugin() {
                                 name: opt.name || key,
                                 icon: opt.icon,
                                 color: undefined,
-                                condition: opt.condition,
+                                condition: opt.disabled ? false : opt.condition,
                                 marked: key === this.value,
                                 click: (e) => {
+                                    if (opt.disabled) return;
                                     scope.node.setAttribute('aria-expanded', 'false');
                                     scope.setValue(key);
                                     scope.change();
@@ -9522,14 +15495,22 @@ function initializeLightManagerPlugin() {
                         }
                     }
 
-                    let menu = new Menu(this.id, items, { class: 'select_menu' });
+                    let menu = new Menu(this.id, items, {
+                        class: 'select_menu',
+                        onClose: () => {
+                            scope.node.setAttribute('aria-expanded', 'false');
+                        }
+                    });
                     if (menu.node) {
                         menu.node.classList.add('compact_dropdown_menu');
                         menu.node.style['min-width'] = this.node.clientWidth + 'px';
                     }
 
+                    this._lightflowSelectMenu?.delete?.();
+                    this._lightflowSelectMenu = menu;
                     menu.open(this.node);
                     this.node.setAttribute('aria-expanded', 'true');
+                    if (this.options.searchable) addNativeSelectSearch(menu, this.options_dict, this.node);
 
                     // Inject custom hover and selection styles
                     let styleBlock = document.createElement('style');
@@ -9547,12 +15528,12 @@ function initializeLightManagerPlugin() {
                                 li.classList.add(customClass);
 
                                 cssRules += `
-                                    
+
                                     .${customClass} {
                                         /*color: ${opt.color} !important;
-                                        
+
                                         -webkit-text-stroke: 1px color-mix(in oklab, ${opt.color} 80%, var(--color-accent_text)) !important;*/
-                                        
+
                                        background: linear-gradient(90deg, ${opt.color} 0px, var(--color-bright_ui) 32px);
                                     }
 
@@ -9562,7 +15543,7 @@ function initializeLightManagerPlugin() {
                                         color: color-mix(in oklab, ${opt.color} 60%, var(--color-accent_text)) !important;
                                     }*/
 
-                                    
+
                                     .${customClass}:hover,
                                     .${customClass}.focused {
                                         /*background-color: color-mix(in oklab, ${opt.color} 25%, var(--color-bright_ui)) !important;*/
@@ -9576,7 +15557,7 @@ function initializeLightManagerPlugin() {
                                         color: var(--color-accent_text) !important;
                                     }
 
-                                    
+
                                     /*.${customClass}:hover *,
                                     .${customClass}.focused *,
                                     .${customClass}.marked * {
@@ -9606,6 +15587,9 @@ function initializeLightManagerPlugin() {
 
                     this.icon_wrapper.innerHTML = '';
                     let iconElement = Blockbench.getIconNode(opt.icon || 'help');
+                    if (this.icon_size !== undefined) {
+                        iconElement.style.fontSize = typeof this.icon_size === 'number' ? `${this.icon_size}px` : this.icon_size;
+                    }
                     if (opt.color) {
                         iconElement.style.color = opt.color;
                     }
@@ -9622,7 +15606,19 @@ function initializeLightManagerPlugin() {
                 }
 
                 getDefault() {
-                    return this.values[0] || '';
+                    return (this.options && this.options.default !== undefined) ? this.options.default : (this.values[0] || '');
+                }
+
+                setOptions(options) {
+                    this.options_dict = options || {};
+                    this.values = Object.keys(this.options_dict);
+                    if (!this.options_dict[this.value] && this.values.length > 0) {
+                        this.value = (this.options && this.options.default !== undefined && this.options_dict[this.options.default])
+                            ? this.options.default
+                            : this.values[0];
+                    }
+                    this.updateVisuals();
+                    return this;
                 }
             };
 
@@ -9822,15 +15818,20 @@ function initializeLightManagerPlugin() {
                     this.allow_empty = data.allow_empty !== undefined ? !!data.allow_empty : true;
                     this.multi_select = data.multi_select !== false;
                     this.selected = [];
+                    const borderRadius = data.border_radius === undefined
+                        ? '8px'
+                        : (typeof data.border_radius === 'number' ? `${data.border_radius}px` : String(data.border_radius));
 
                     this.node = document.createElement('div');
                     this.node.className = 'horizontal_select_widget light_manager_horizontal_select';
+                    this.node.dataset.presentation = data.presentation || 'segmented';
                     this.node.setAttribute('role', 'group');
                     this.node.setAttribute('aria-label', typeof tl === 'function'
                         ? tl(data.description || data.label || this.id)
                         : (data.description || data.label || this.id));
                     this.node.style.backgroundColor = data.background || data.bg_color || 'var(--color-back)';
                     this.node.style.border = `1px solid ${data.divider_color || 'var(--color-border)'}`;
+                    this.node.style.borderRadius = borderRadius;
                     this.node.style.display = 'flex';
                     this.node.style.width = data.expand === false ? 'auto' : '100%';
                     this.node.style.flex = data.expand === false ? '0 0 auto' : '1 1 auto';
@@ -9843,13 +15844,27 @@ function initializeLightManagerPlugin() {
                         button.dataset.key = key;
                         button.style.flex = data.expand === false ? '0 0 auto' : '1 1 0';
                         button.style.border = '0';
-                        button.style.borderRadius = '0';
+                        button.style.borderTopLeftRadius = index === 0 ? borderRadius : '0';
+                        button.style.borderBottomLeftRadius = index === 0 ? borderRadius : '0';
+                        button.style.borderTopRightRadius = index === entries.length - 1 ? borderRadius : '0';
+                        button.style.borderBottomRightRadius = index === entries.length - 1 ? borderRadius : '0';
                         button.style.fontFamily = 'inherit';
                         if (index < entries.length - 1) {
                             button.style.borderRight = `1px solid ${data.divider_color || 'var(--color-border)'}`;
                         }
                         if (option.color) button.style.color = option.color;
                         if (option.disabled) button.classList.add('disabled');
+                        button.disabled = !!option.disabled;
+                        button.addEventListener('keydown', event => {
+                            if (this.is_disabled || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+                            const buttons = Object.values(this.button_nodes).filter(node => !node.disabled);
+                            const current = buttons.indexOf(button);
+                            const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
+                                : (current + (event.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length;
+                            event.preventDefault();
+                            event.stopPropagation();
+                            buttons[next]?.focus();
+                        });
 
                         if (option.icon) {
                             const icon = Blockbench.getIconNode(option.icon);
@@ -9867,7 +15882,7 @@ function initializeLightManagerPlugin() {
 
                         const title = option.description || option.name || key;
                         button.title = typeof tl === 'function' ? tl(title) : title;
-                        button.setAttribute('aria-label', button.title);
+                        button.setAttribute('aria-label', typeof tl === 'function' ? tl(option.name || key) : (option.name || key));
                         button.addEventListener('click', event => {
                             if (this.is_disabled || option.disabled) return;
                             const toggle = this.multi_select && (event.ctrlKey || event.shiftKey);
@@ -9930,6 +15945,98 @@ function initializeLightManagerPlugin() {
             };
 
             // MARK: Compact Text
+            const previousIconSelectType = FormElement.types.icon_select;
+            FormElement.types.icon_select = class LightflowIconSelect extends FormElement.types.horizontal_select {
+                build(bar) {
+                    const value = String(this.options.value || 'texture');
+                    this.currentIcon = value;
+                    this.value = value;
+                    this.options.options = {
+                        current: { icon: value, description: translateLightManager('light_manager.ui.current_icon') },
+                        texture: { icon: 'texture', description: translateLightManager('light_manager.ui.icon_texture') },
+                        view_in_ar: { icon: 'view_in_ar', description: translateLightManager('light_manager.ui.icon_object') },
+                        star: { icon: 'star', description: translateLightManager('light_manager.ui.icon_star') },
+                        water_drop: { icon: 'water_drop', description: translateLightManager('light_manager.ui.icon_water') },
+                        grass: { icon: 'grass', description: translateLightManager('light_manager.ui.icon_plants') },
+                        local_fire_department: { icon: 'local_fire_department', description: translateLightManager('light_manager.ui.icon_fire') },
+                        ac_unit: { icon: 'ac_unit', description: translateLightManager('light_manager.ui.icon_snow') }
+                    };
+                    this.options.multi_select = false;
+                    this.options.allow_empty = false;
+                    super.build(bar);
+                    bar.style.setProperty('height', 'auto', 'important');
+                    bar.style.setProperty('min-height', '0', 'important');
+                    bar.style.setProperty('align-items', 'stretch', 'important');
+                    this.node.style.display = 'grid';
+                    this.node.style.gridTemplateColumns = 'repeat(auto-fit, minmax(30px, 1fr))';
+                    this.node.style.gap = '1px';
+                    this.node.style.border = '0';
+                    this.node.style.background = 'transparent';
+                    Object.values(this.button_nodes).forEach(button => {
+                        Object.assign(button.style, { minWidth: '0', height: '30px', padding: '3px', border: '0', borderRadius: '3px' });
+                        button.querySelector('.icon')?.style.setProperty('margin', '0');
+                        button.addEventListener('keydown', event => {
+                            if (event.key === 'Enter' || event.key === ' ') event.stopPropagation();
+                        });
+                    });
+                    const wrapper = document.createElement('div');
+                    wrapper.style.cssText = 'display:grid;gap:6px;width:100%;min-width:0';
+                    const details = document.createElement('details');
+                    const summary = document.createElement('summary');
+                    summary.textContent = translateLightManager('light_manager.ui.custom_icon');
+                    summary.style.cssText = 'color:var(--color-subtle_text);font-size:12px;cursor:pointer;display:flex;align-items:center;gap:4px;list-style:none';
+                    const chevron = Blockbench.getIconNode('chevron_right');
+                    chevron.style.cssText = 'font-size:16px;width:16px;height:16px;line-height:16px;margin:0';
+                    summary.prepend(chevron);
+                    details.addEventListener('toggle', () => { chevron.style.transform = details.open ? 'rotate(90deg)' : ''; });
+                    this.customInput = document.createElement('input');
+                    this.customInput.type = 'text';
+                    this.customInput.value = value;
+                    this.customInput.setAttribute('aria-label', translateLightManager('light_manager.ui.custom_icon'));
+                    this.customInput.style.cssText = 'width:100%;min-width:0;margin:5px 0 0';
+                    this.customInput.addEventListener('input', () => { this.setValue(this.customInput.value); this.change(); });
+                    details.append(summary, this.customInput);
+                    const label = document.createElement('span');
+                    label.textContent = typeof tl === 'function' ? tl(this.options.label || 'generic.icon') : (this.options.label || 'Icon');
+                    label.style.cssText = 'font-size:12px;color:var(--color-subtle_text)';
+                    wrapper.append(label, this.node, details);
+                    bar.append(wrapper);
+                    this.setValue(value);
+                }
+                setValue(value) {
+                    this.value = String(value || 'texture');
+                    if (!this.options_dict) return;
+                    if (this.options_dict[this.value] && this.value !== 'current') this.selected = [this.value];
+                    else {
+                        this.currentIcon = this.value;
+                        this.selected = ['current'];
+                        const button = this.button_nodes?.current;
+                        if (button) {
+                            button.replaceChildren(Blockbench.getIconNode(this.currentIcon));
+                            button.querySelector('.icon')?.style.setProperty('margin', '0');
+                        }
+                    }
+                    super.updateVisuals();
+                    if (this.customInput) this.customInput.value = this.value;
+                }
+                updateVisuals() {
+                    const key = this.selected?.[0];
+                    if (key) this.value = key === 'current' ? this.currentIcon : key;
+                    super.updateVisuals();
+                    if (this.customInput) this.customInput.value = this.value;
+                }
+                getValue() { return this.value; }
+                getDefault() { return this.options.default || 'texture'; }
+            };
+            const iconSelectType = FormElement.types.icon_select;
+            deletables.push({
+                delete() {
+                    if (FormElement.types.icon_select !== iconSelectType) return;
+                    if (previousIconSelectType) FormElement.types.icon_select = previousIconSelectType;
+                    else delete FormElement.types.icon_select;
+                }
+            });
+
             FormElement.types.compact_text = class FormElementCompactText extends FormElement {
                 get uses_wide_inputs() { return true; }
 
@@ -10031,6 +16138,59 @@ function initializeLightManagerPlugin() {
                 getDefault() { return String(this.options.default ?? ''); }
             };
 
+            // Shared progress control: no renderer/timer ownership, safe in dialogs and forms.
+            const progressControls = new Set();
+            const createLightflowProgress = (host, options = {}) => {
+                const node = document.createElement('div'); node.className = 'lightflow_progress';
+                const heading = document.createElement('div'); heading.className = 'lightflow_progress_heading';
+                const label = document.createElement('span'); label.className = 'lightflow_progress_label'; label.setAttribute('aria-live', 'polite');
+                const percent = document.createElement('span'); percent.className = 'lightflow_progress_percent'; percent.setAttribute('aria-hidden', 'true'); heading.append(label, percent);
+                const track = document.createElement('div'); track.className = 'lightflow_progress_track'; track.setAttribute('role', 'progressbar'); track.setAttribute('aria-valuemin', '0'); track.setAttribute('aria-valuemax', '100');
+                const fill = document.createElement('div'); fill.className = 'lightflow_progress_fill'; track.append(fill);
+                const detail = document.createElement('div'); detail.className = 'lightflow_progress_detail'; node.append(heading, track, detail); host.append(node);
+                let state = { value: 0, label: '', detail: '', indeterminate: false, ...options }, disposed = false;
+                const api = {
+                    node, update(patch = {}) {
+                        if (disposed) return; state = { ...state, ...patch };
+                        const value = Math.max(0, Math.min(1, Number(state.value) || 0)), unknown = state.indeterminate || state.value === null;
+                        node.dataset.state = ['error', 'paused', 'cancelled'].includes(state.status) ? state.status : unknown ? 'indeterminate' : value >= 1 ? 'complete' : 'active';
+                        const labelText = String(state.label || ''); if (label.textContent !== labelText) label.textContent = labelText; percent.textContent = unknown ? '…' : Math.round(value * 100) + '%';
+                        detail.textContent = String(state.detail || ''); detail.hidden = !state.detail;
+                        track.setAttribute('aria-busy', String(unknown));
+                        track.setAttribute('aria-label', state.label || options.description || 'Progress');
+                        track.setAttribute('aria-valuetext', String(state.detail || state.label || ''));
+                        if (unknown) track.removeAttribute('aria-valuenow'); else track.setAttribute('aria-valuenow', String(Math.round(value * 100)));
+                        fill.style.width = (value * 100) + '%';
+                        if (state.color) node.style.setProperty('--lightflow-progress-accent', state.color);
+                    }, delete() { if (disposed) return; disposed = true; node.remove(); progressControls.delete(api); }
+                };
+                progressControls.add(api); api.update(); return api;
+            };
+            deletables.push({ delete() { for (const progress of [...progressControls]) progress.delete(); } });
+            deletables.push(Blockbench.addCSS(`
+                .lightflow_progress{width:100%;min-width:0;padding:8px 0;color:var(--color-text);--lightflow-progress-accent:var(--color-accent);}
+                .lightflow_progress_heading{display:flex;align-items:baseline;gap:12px;margin-bottom:9px;}
+                .lightflow_progress_label{flex:1;min-width:0;font-weight:600;line-height:1.35;overflow-wrap:anywhere;}
+                .lightflow_progress_percent{flex:none;font-variant-numeric:tabular-nums;color:var(--color-subtle_text);}
+                .lightflow_progress_track{height:8px;overflow:hidden;border-radius:8px;background:var(--color-back);border:1px solid var(--color-border);}
+                .lightflow_progress_fill{height:100%;border-radius:inherit;background:var(--lightflow-progress-accent);transition:width .15s linear;}
+                .lightflow_progress_detail{margin-top:9px;line-height:1.5;font-size:.92em;color:var(--color-subtle_text);font-variant-numeric:tabular-nums;overflow-wrap:anywhere;}
+                .lightflow_progress[data-state=indeterminate] .lightflow_progress_fill{width:35%!important;animation:lightflow_progress_indeterminate 1.4s ease-in-out infinite;}
+                .lightflow_progress[data-state=error] .lightflow_progress_fill{background:var(--color-error);}
+                .lightflow_progress:is([data-state=paused],[data-state=cancelled]) .lightflow_progress_fill{background:var(--color-subtle_text);animation:none;}
+                @keyframes lightflow_progress_indeterminate{from{transform:translateX(-100%)}to{transform:translateX(300%)}}
+                @media(prefers-reduced-motion:reduce){.lightflow_progress_fill{transition:none!important;animation:none!important;}.lightflow_progress[data-state=indeterminate] .lightflow_progress_fill{width:100%!important;opacity:.45;}}
+            `));
+            const previousProgressType = FormElement.types.progress;
+            const ProgressType = FormElement.types.progress = class LightflowProgressElement extends FormElement {
+                get uses_wide_inputs() { return true; }
+                build(bar) { this.bar = bar; bar.classList.add('full_width_dialog_bar'); const value = this.value ?? this.options.value ?? 0; this.value = value; this.progress = createLightflowProgress(bar, { ...this.options, ...(typeof value === 'object' && value !== null ? value : { value }) }); }
+                setValue(value) { this.value = value; this.progress?.update(typeof value === 'object' && value !== null ? value : { value }); }
+                getValue() { return this.value; }
+                delete() { this.progress?.delete(); super.delete(); }
+            };
+            deletables.push({ delete() { if (FormElement.types.progress === ProgressType) { if (previousProgressType) FormElement.types.progress = previousProgressType; else delete FormElement.types.progress; } } });
+
             // MARK: Bar Display
             FormElement.types.bar_display = class FormElementBarDisplay extends FormElement {
                 get uses_wide_inputs() { return true; }
@@ -10113,6 +16273,11 @@ function initializeLightManagerPlugin() {
                         boxSizing: 'border-box',
                         alignItems: this.is_paragraph ? 'flex-start' : 'center'
                     });
+                    if (this.is_paragraph) {
+                        this.node.style.setProperty('height', 'auto', 'important');
+                        this.node.style.setProperty('max-height', 'none', 'important');
+                        bar.style.setProperty('flex-shrink', '0');
+                    }
 
                     if (data.background) this.node.style.background = data.background;
                     if (data.border) this.node.style.border = data.border;
@@ -10224,7 +16389,12 @@ function initializeLightManagerPlugin() {
                         this.content_node.style.whiteSpace = 'pre-wrap';
                         this.content_node.style.lineHeight = '1.4';
                     } else {
-                        this.content_node.style.display = 'flex';
+                        this.content_node.style.display = 'block';
+                        this.content_node.style.minWidth = '0';
+                        this.content_node.style.whiteSpace = 'nowrap';
+                        this.content_node.style.overflow = 'hidden';
+                        this.content_node.style.textOverflow = 'ellipsis';
+                        this.content_node.title = String(this.text ?? '');
                         this.content_node.style.alignItems = 'center';
                         this.content_node.style.justifyContent = this.text_alignment === 'center'
                             ? 'center'
@@ -10245,6 +16415,7 @@ function initializeLightManagerPlugin() {
                     this.text = value;
                     if (this.content_node) {
                         this.content_node.textContent = String(value ?? '');
+                        if (!this.is_paragraph) this.content_node.title = String(value ?? '');
                     }
                     if (this.main_node) {
                         this.main_node.style.gap = this.text || this.inline_label ? '6px' : '0';
@@ -10287,13 +16458,14 @@ function initializeLightManagerPlugin() {
                         }
                     };
                     this.value = data.value !== undefined ? !!data.value : (data.default !== undefined ? !!data.default : false);
+                    this.presentation = data.presentation || 'switch';
 
                     // Customization settings.
                     this.icon_on = data.icon_on || 'check_box';
                     this.icon_off = data.icon_off || 'check_box_outline_blank';
                     this.icon_color_on = data.icon_color_on || 'var(--color-text)';
                     this.icon_color_off = data.icon_color_off || 'var(--color-subtle_text)';
-                    this.label_color = data.label_color || 'var(--color-subtle_text)';
+                    this.label_color = data.label_color || 'var(--color-text)';
                     this.layout = data.layout || 'icon_left'; // Options: 'icon_left', 'icon_right', 'space_between'
                     this.icon_size = data.icon_size || '18px';
                     this.background_on = data.background_on || 'transparent';
@@ -10313,7 +16485,7 @@ function initializeLightManagerPlugin() {
                     this.node = document.createElement('div');
                     this.node.className = 'tool widget custom_checkbox';
                     this.node.tabIndex = 0;
-                    this.node.setAttribute('role', 'checkbox');
+                    this.node.setAttribute('role', data.variant === 'group' ? 'button' : this.presentation === 'switch' ? 'switch' : 'checkbox');
                     Object.assign(this.node.style, {
                         display: 'flex',
                         alignItems: 'center',
@@ -10348,6 +16520,12 @@ function initializeLightManagerPlugin() {
                         transition: 'background-color 0.25s ease'
                     });
 
+                    if (data.variant !== 'group' && this.presentation === 'switch') {
+                        this.node.classList.add('lf-switch'); this.node.setAttribute('role', 'switch');
+                        this.icon_wrapper.classList.add('lf-switch-track');
+                    } else if (data.variant !== 'group' && this.presentation === 'option-row') {
+                        this.node.classList.add('lf-checkbox-option-row');
+                    }
                     this.icon_node = document.createElement('i');
                     Object.assign(this.icon_node.style, {
                         fontSize: this.icon_size,
@@ -10392,15 +16570,25 @@ function initializeLightManagerPlugin() {
                         this.label_container.append(labelIcon);
                     }
                     this.label_container.append(this.label_node);
+                    if (this.presentation === 'option-row' && data.supporting_text) {
+                        this.supporting_node = document.createElement('span');
+                        this.supporting_node.className = 'lf-checkbox-option-support';
+                        this.supporting_node.id = `lf_checkbox_support_${++lightflowControlInstance}`;
+                        this.supporting_node.textContent = typeof tl === 'function' ? tl(data.supporting_text) : String(data.supporting_text);
+                        this.label_container.append(this.supporting_node);
+                    }
                     if (data.summary !== undefined && data.summary !== null && data.summary !== '') {
                         this.summary_node = document.createElement('span');
-                        this.summary_node.className = 'light_manager_group_summary';
+                        this.summary_node.className = this.presentation === 'option-row' ? 'lf-checkbox-option-summary' : 'light_manager_group_summary';
                         this.summary_node.textContent = typeof data.summary === 'function'
                             ? String(data.summary())
                             : String(data.summary);
                         this.summary_node.title = this.summary_node.textContent;
-                        this.label_container.append(this.summary_node);
+                        if (this.presentation !== 'option-row') this.label_container.append(this.summary_node);
+                        else this.summary_node.id = `lf_checkbox_summary_${++lightflowControlInstance}`;
                     }
+                    const descriptionIds = [this.supporting_node?.id, this.presentation === 'option-row' ? this.summary_node?.id : ''].filter(Boolean);
+                    if (descriptionIds.length) this.node.setAttribute('aria-describedby', descriptionIds.join(' '));
                     if (data.modified !== undefined) {
                         this.modified_node = document.createElement('span');
                         this.modified_node.className = 'light_manager_modified_dot';
@@ -10458,6 +16646,7 @@ function initializeLightManagerPlugin() {
                         this.node.style.justifyContent = 'space-between';
                         this.node.append(this.label_container, this.icon_wrapper);
                     }
+                    if (this.presentation === 'option-row' && this.summary_node) this.node.append(this.summary_node);
 
                     bar.append(this.node);
 
@@ -10475,6 +16664,7 @@ function initializeLightManagerPlugin() {
                         if (this.is_disabled) return;
                         if (event.key === 'Enter' || event.key === ' ') {
                             event.preventDefault();
+                            event.stopPropagation();
                             this.onBefore?.(event);
                             try {
                                 this.setValue(!this.value);
@@ -10492,7 +16682,7 @@ function initializeLightManagerPlugin() {
                     const currentIcon = this.value ? this.icon_on : this.icon_off;
                     const currentColor = this.value ? this.icon_color_on : this.icon_color_off;
                     const currentBackground = this.value ? this.background_on : this.background_off;
-                    this.node.setAttribute('aria-checked', this.value ? 'true' : 'false');
+                    this.node.setAttribute(this.options.variant === 'group' ? 'aria-expanded' : 'aria-checked', this.value ? 'true' : 'false');
 
                     // Reset classes
                     this.icon_node.className = '';
@@ -10572,14 +16762,39 @@ function initializeLightManagerPlugin() {
                     this.input.placeholder = !data.placeholder || ['Find setting', 'Search'].includes(data.placeholder) ? translateLightManager('light_manager.ui.search') : tl(data.placeholder);
                     this.input.setAttribute('aria-label', this.input.placeholder);
                     this.input.autocomplete = 'off';
+                    this.input.style.setProperty('flex', '1 1 0', 'important');
+                    this.input.style.setProperty('width', '0', 'important');
+                    this.input.style.setProperty('min-width', '0', 'important');
                     searchWrap.append(this.input);
+                    const clearFilter = () => {
+                        this.filter_mode = 'all';
+                        this.filter_select.set('all');
+                        this.setValue('');
+                        this.form.update();
+                        this.input.focus();
+                    };
+                    this.clear_button = document.createElement('button');
+                    this.clear_button.type = 'button';
+                    this.clear_button.className = 'light_manager_panel_search_clear';
+                    // Native form button styles also affect attached inspector panels.
+                    // Keep this control intrinsic regardless of the host panel's CSS.
+                    for (const [key, value] of Object.entries({ display: 'grid', placeItems: 'center', flex: '0 0 22px', width: '22px', minWidth: '22px', maxWidth: '22px', height: '24px', minHeight: '24px', maxHeight: '24px', padding: '0', margin: '0', border: '0', background: 'transparent' })) {
+                        this.clear_button.style.setProperty(key.replace(/[A-Z]/g, letter => '-' + letter.toLowerCase()), value, 'important');
+                    }
+                    this.clear_button.title = translateLightManager('light_manager.ui.clear_search');
+                    this.clear_button.setAttribute('aria-label', this.clear_button.title);
+                    this.clear_button.append(Blockbench.getIconNode('close'));
+                    this.clear_button.hidden = true;
+                    this.clear_button.addEventListener('click', clearFilter);
+                    searchWrap.append(this.clear_button);
 
                     this.filter_select = new Interface.CustomElements.SelectInput(`lightflow_filter_${this.id}`, {
                         value: 'all',
                         options: {
                             all: translateLightManager('light_manager.ui.filter_all'),
                             active: translateLightManager('light_manager.ui.filter_active'),
-                            modified: translateLightManager('light_manager.ui.filter_modified')
+                            modified: translateLightManager('light_manager.ui.filter_modified'),
+                            favorites: translateLightManager('light_manager.ui.filter_favorites')
                         },
                         onInput: () => {
                             this.filter_mode = this.filter_select.node.getAttribute('value') || 'all';
@@ -10589,6 +16804,8 @@ function initializeLightManagerPlugin() {
                     this.active_button = this.filter_select.node;
                     this.active_button.classList.remove('half');
                     this.active_button.style.width = '100%';
+                    this.active_button.style.setProperty('min-width', '0', 'important');
+                    this.active_button.style.setProperty('max-width', '100%', 'important');
                     this.active_button.classList.add('light_manager_panel_search_active');
                     this.active_button.setAttribute('aria-label', translateLightManager('light_manager.ui.filter_label'));
 
@@ -10597,12 +16814,58 @@ function initializeLightManagerPlugin() {
                     this.collapse_button.className = 'light_manager_panel_search_collapse';
                     this.collapse_button.title = !data.collapse_label || data.collapse_label === 'Collapse all' ? translateLightManager('light_manager.ui.collapse') : tl(data.collapse_label);
                     this.collapse_button.setAttribute('aria-label', this.collapse_button.title);
-                    
-                    const collapse_icon_node = Blockbench.getIconNode('collapse_content');
-                    collapse_icon_node.style.fontSize = '22px';
-                    collapse_icon_node.style.paddingLeft = '2px'
+
+                    const collapse_icon_node = Blockbench.getIconNode('close_fullscreen');
+                    collapse_icon_node.style.fontSize = '18px';
+                    collapse_icon_node.style.paddingLeft = '3px';
+                    collapse_icon_node.style.paddingTop = '1px';
+                    collapse_icon_node.style.textShadow = 'none';
                     this.collapse_button.append(collapse_icon_node);
 
+                    const favoritesKey = data.favorites_key || `lightflow_favorites_v1_${this.id}`;
+                    let savedFavorites;
+                    try { savedFavorites = data.persist_favorites === false ? [] : JSON.parse(localStorage.getItem(favoritesKey) || '[]'); } catch (_) { savedFavorites = []; }
+                    this.favorites = new Set(Array.isArray(savedFavorites) ? savedFavorites : []);
+                    const canFavorite = element => (
+                        element && element !== this && !element.id.startsWith('_') && !element.options?.search_ignore &&
+                        !['bar_display', 'action_button', 'buttons', 'panel_search'].includes(element.options?.type) &&
+                        element.options?.variant !== 'group'
+                    );
+                    const setFavorite = (element, pinned) => {
+                        if (!canFavorite(element)) return;
+                        if (pinned) this.favorites.add(element.id);
+                        else this.favorites.delete(element.id);
+                        if (data.persist_favorites !== false) lightManagerSafeSet(favoritesKey, JSON.stringify([...this.favorites]));
+                        this.form.update();
+                    };
+                    const installFavoriteContextMenu = element => {
+                        if (!canFavorite(element) || !element.bar) return;
+                        const bar = element.bar;
+                        const bindingKey = `lightflowFavoriteMenu_${this.id}`;
+                        if (bar[bindingKey]) return;
+                        const onContextMenu = event => {
+                            // Preserve slider, color, dropdown and text editing menus.
+                            if (event.target.closest('input, textarea, button, select, [contenteditable], .nslide, input[type="range"], .custom_checkbox, .compact_dropdown_select, .bb-select, .sp-replacer')) return;
+                            event.preventDefault();
+                            event.stopImmediatePropagation();
+                            event.stopPropagation();
+                            const pinned = this.favorites.has(element.id);
+                            new Menu([{
+                                id: pinned ? 'lightflow_unpin_property' : 'lightflow_pin_property',
+                                name: translateLightManager(pinned ? 'light_manager.ui.unpin_property' : 'light_manager.ui.pin_property'),
+                                icon: 'push_pin',
+                                click: () => setFavorite(element, !pinned)
+                            }]).open(event);
+                        };
+                        bar.addEventListener('contextmenu', onContextMenu, true);
+                        bar.addEventListener('keydown', event => {
+                            if (!event.altKey || event.key.toLowerCase() !== 'p') return;
+                            event.preventDefault();
+                            event.stopPropagation();
+                            setFavorite(element, !this.favorites.has(element.id));
+                        });
+                        bar[bindingKey] = onContextMenu;
+                    };
                     this.node.append(searchWrap, this.active_button, this.collapse_button);
                     bar.append(this.node);
                     this.empty_node = document.createElement('div');
@@ -10633,25 +16896,40 @@ function initializeLightManagerPlugin() {
                                 parentActive = LightflowUIState.fieldState(options, element.getValue?.(), result).active;
                             }
                             let applicable = true;
+                            const favorite = this.favorites.has(element.id);
                             try { applicable = Condition(element.condition, filtering ? expanded : result); } catch (_) { /* Keep the native fallback. */ }
+                            if (!filtering && options.panel_category_visible === false) applicable = false;
                             const state = LightflowUIState.fieldState(options, element.getValue?.(), result);
                             if (!group && options.active === undefined && typeof element.getValue?.() !== 'boolean') state.active = parentActive;
-                            try { if (options.disable || (options.disable_condition !== undefined && Condition(options.disable_condition, expanded))) state.active = false; } catch (_) {}
+                            try { if (options.disable || (options.disable_condition !== undefined && Condition(options.disable_condition, expanded))) state.active = false; } catch (_) { }
                             return Object.assign({
                                 id: element.id, group, parent: group ? null : parent,
                                 text: `${options.label || ''} ${options.description || ''} ${options.search_terms || ''} ${element.bar.textContent || ''} ${element.bar.title || ''}`,
-                                applicable
+                                applicable, favorite
                             }, state);
                         });
-                        const shown = filtering ? LightflowUIState.filterRows(rows, this.value, this.filter_mode) : new Set(rows.filter(row => row.applicable).map(row => row.id));
+                        const filteredRows = this.filter_mode === 'favorites' ? rows.filter(row => row.favorite) : rows;
+                        const shown = filtering ? LightflowUIState.filterRows(filteredRows, this.value, this.filter_mode === 'favorites' ? 'all' : this.filter_mode) : new Set(rows.filter(row => row.applicable).map(row => row.id));
                         candidates.forEach((element, index) => {
+                            installFavoriteContextMenu(element);
+                            element.bar.classList.toggle('light_manager_property_pinned', rows[index].favorite && !rows[index].group);
+                            if (rows[index].favorite && !rows[index].group) element.bar.dataset.lightflowPinned = 'true';
+                            else delete element.bar.dataset.lightflowPinned;
                             const visible = shown.has(element.id) && rows[index].applicable;
                             element.bar.classList.toggle('light_manager_panel_filter_hidden', !visible);
                             element.bar.style.display = visible ? '' : 'none';
-                            if (rows[index].group) element.bar.classList.toggle('lightflow_search_expanded', filtering && visible);
+                            if (rows[index].group) {
+                                element.bar.classList.toggle('lightflow_search_expanded', filtering && visible);
+                                const expanded = (filtering && visible) || !!element.getValue?.();
+                                element.node?.setAttribute('aria-expanded', String(expanded));
+                                if (element.icon_node) element.icon_node.textContent = expanded ? element.icon_on : element.icon_off;
+                            }
                         });
                         this.active_button.classList.toggle('selected', this.filter_mode !== 'all');
+                        this.empty_node.textContent = translateLightManager(this.filter_mode === 'favorites' ? 'light_manager.ui.favorites_empty' : 'light_manager.ui.filter_empty');
                         this.empty_node.hidden = !filtering || shown.size > 0;
+                        this.clear_button.hidden = !filtering;
+                        this.clear_button.style.setProperty('display', filtering ? 'grid' : 'none', 'important');
                         this.collapse_button.disabled = filtering;
                     };
                     this.applyFilter = applyFilter;
@@ -10662,15 +16940,12 @@ function initializeLightManagerPlugin() {
                     this.input.addEventListener('keydown', event => {
                         if (event.key !== 'Escape') return;
                         event.stopPropagation();
-                        this.filter_mode = 'all';
-                        this.filter_select.set('all');
-                        this.setValue('');
-                        this.form.update();
+                        clearFilter();
                     });
                     this.collapse_button.addEventListener('click', () => {
                         const changedKeys = [];
                         Object.values(this.form?.form_data || {}).forEach(element => {
-                            if (element === this || element?.options?.variant !== 'group' || element.getValue?.() === false) return;
+                            if (element === this || element?.options?.variant !== 'group' || element.getValue?.() === false || element.bar?.style.display === 'none') return;
                             element.setValue?.(false);
                             changedKeys.push(element.id);
                         });
@@ -10742,7 +17017,7 @@ function initializeLightManagerPlugin() {
                     this.icon_off = data.icon_off || 'check_box_outline_blank';
                     this.bg_on = data.bg_on || 'var(--color-accent)';
                     this.bg_off = data.bg_off || 'transparent';
-                    this.color_on = data.color_on || 'var(--color-light)';
+                    this.color_on = data.color_on || 'var(--color-accent_text,var(--color-text))';
                     this.color_off = data.color_off || 'var(--color-text)';
 
                     this.animate_click = data.animate !== false;
@@ -10786,7 +17061,7 @@ function initializeLightManagerPlugin() {
                         width: this.action?.side_menu ? 'auto' : this.button_size,
                         minWidth: this.button_size,
                         height: this.button_size,
-                        borderRadius: '2px',
+                        borderRadius: '8px',
                         cursor: 'pointer',
                         flexShrink: '0',
                         margin: '0',
@@ -10860,15 +17135,24 @@ function initializeLightManagerPlugin() {
                     this.toggle_btn.setAttribute('aria-checked', this.value ? 'true' : 'false');
 
                     this.toggle_btn.style.background = currentBackground;
-                    this.icon_node.style.color = currentColor;
-
-                    this.icon_node.className = '';
-                    this.icon_node.innerText = '';
-
                     const isFa = /^(fa-|fas |fab |far )/.test(currentIcon);
                     if (isFa) {
+                        this.icon_node.style.color = currentColor;
                         this.icon_node.className = `fa ${currentIcon}`;
+                        this.icon_node.innerText = '';
+                    } else if (typeof currentIcon === 'string' && window.LightManagerIcons?.has?.(currentIcon)) {
+                        const customIconNode = Blockbench.getIconNode(currentIcon, currentColor);
+                        Object.assign(customIconNode.style, {
+                            fontSize: this.icon_size,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            transition: this.animate_click ? 'transform 0.15s cubic-bezier(0.2, 1.5, 0.4, 1)' : 'none'
+                        });
+                        this.icon_node.replaceWith(customIconNode);
+                        this.icon_node = customIconNode;
                     } else {
+                        this.icon_node.style.color = currentColor;
                         this.icon_node.className = 'material-icons';
                         this.icon_node.innerText = currentIcon;
                     }
@@ -10951,6 +17235,7 @@ function initializeLightManagerPlugin() {
                         bar.style.justifyContent = 'flex-start';
                     }
 
+                    if (!hasLabel && data.text) bar.style.width = '100%';
                     // Keep the legacy div option for existing forms, while allowing
                     // selected controls to opt into native button semantics.
                     this.node = document.createElement(data.semantic_button ? 'button' : 'div');
@@ -10962,7 +17247,8 @@ function initializeLightManagerPlugin() {
                     const tooltipText = data.title || data.description || data.label;
                     if (tooltipText) {
                         this.node.title = typeof tl !== 'undefined' ? tl(tooltipText) : tooltipText;
-                        this.node.setAttribute('aria-label', typeof tl !== 'undefined' ? tl(tooltipText) : tooltipText);
+                        const visibleName = data.text || data.label || tooltipText;
+                        this.node.setAttribute('aria-label', typeof tl !== 'undefined' ? tl(visibleName) : visibleName);
                     }
 
                     Object.assign(this.node.style, {
@@ -10970,19 +17256,20 @@ function initializeLightManagerPlugin() {
                         alignItems: 'center',
                         justifyContent: 'center',
                         gap: data.text ? '6px' : '0', // Set data.text to display text inside the button.
-                        minWidth: this.button_size,
+                        minWidth: data.text ? '0' : this.button_size,
                         width: data.text ? 'auto' : this.button_size,
-                        height: this.button_size,
-                        padding: data.text ? '0 8px' : '0',
+                        maxWidth: '100%',
+                        height: data.text ? 'auto' : this.button_size,
+                        minHeight: this.button_size,
+                        padding: data.text ? '4px 8px' : '0',
                         margin: '0',
                         border: 'none',
-                        outline: 'none',
-                        borderRadius: '2px',
+                        borderRadius: '8px',
                         boxSizing: 'border-box',
                         background: data.background || 'transparent',
                         color: data.color || 'var(--color-text)',
                         cursor: 'pointer',
-                        flexShrink: '0',
+                        flexShrink: data.text ? '1' : '0',
                         position: 'relative',
                         transition: this.animate_click ? 'background 0.2s ease, color 0.2s ease' : 'none'
                     });
@@ -11001,7 +17288,10 @@ function initializeLightManagerPlugin() {
                     if (data.text) {
                         const textNode = document.createElement('span');
                         textNode.textContent = typeof tl !== 'undefined' ? tl(data.text) : data.text;
-                        textNode.style.whiteSpace = 'nowrap';
+                        textNode.style.whiteSpace = 'normal';
+                        textNode.style.minWidth = '0';
+                        textNode.style.overflowWrap = 'anywhere';
+                        textNode.style.lineHeight = '1.3';
                         this.node.append(textNode);
                     }
 
@@ -11036,6 +17326,7 @@ function initializeLightManagerPlugin() {
 
             // MARK: Custom Vector
             FormElement.types.custom_vector = class FormElementCustomVector extends FormElement {
+                delete() { this.numberEditors?.forEach(editor => editor.dispose()); super.delete(); }
                 get uses_wide_inputs() { return true; }
 
                 setup() {
@@ -11179,6 +17470,7 @@ function initializeLightManagerPlugin() {
                         resetBtn.addEventListener('keydown', event => {
                             if (event.key !== 'Enter' && event.key !== ' ') return;
                             event.preventDefault();
+                            event.stopPropagation();
                             resetBtn.click();
                         });
                         this.reset_button = resetBtn;
@@ -11223,7 +17515,7 @@ function initializeLightManagerPlugin() {
                                 : 'display: flex; flex: 1 1 0; flex-direction: row; align-items: center; height: 30px; min-width: 0; width: auto; box-sizing: border-box;';
 
                             let axisLabel = document.createElement('span');
-                            axisLabel.style = `margin-right: 5px; font-size: 13px; color: ${axis.css}; font-weight: bold; white-space: nowrap; display: flex; align-items: center; width: 14px; justify-content: center; font-family: monospace;`;
+                            axisLabel.style = 'margin-right: 5px; font-size: 13px; color: var(--color-text); font-weight: bold; white-space: nowrap; display: flex; align-items: center; width: 14px; justify-content: center; font-family: monospace;';
                             axisLabel.innerText = axis.name;
                             rowContainer.append(axisLabel);
                         }
@@ -11256,7 +17548,7 @@ function initializeLightManagerPlugin() {
                             if (!allowHigher) numberInputAttrs.max = maxVal;
 
                             let numberInput = Interface.createElement('input', numberInputAttrs);
-                            numberInput.setAttribute('aria-label', `${translatedLabel} ${axis.name} value`);
+                            numberInput.setAttribute('aria-label', `${translatedLabel} ${axis.name} ${translateLightManager('light_manager.ui.value')}`);
 
                             let numberContainer = Interface.createElement('div', {
                                 class: 'numeric_input tool disp_text',
@@ -11330,30 +17622,21 @@ function initializeLightManagerPlugin() {
                                 rangeEditActive = false;
                                 this.onAfter?.(event.originalEvent);
                             });
-                            $(numberInput).on('focus', event => {
-                                if (numberEditActive) return;
-                                numberEditActive = true;
-                                this.onBefore?.(event.originalEvent);
+                            const numberEdit = bindLightflowNumberEdit(numberInput, {
+                                read: () => this.value[i],
+                                write: (value, event) => {
+                                    if (data.integer) value = Math.round(value);
+                                    if (!allowLower) value = Math.max(minVal, value);
+                                    if (!allowHigher) value = Math.min(maxVal, value);
+                                    sync({ target: { value }, originalEvent: event });
+                                },
+                                onBegin: event => this.onBefore?.(event),
+                                onCommit: event => this.onAfter?.(event),
+                                onCancel: event => { data.onCancel?.(event); this.onAfter?.(event); },
+                                disabled: () => this.is_disabled,
+                                tearingDown: () => this.form._lightflowDeletingControls
                             });
-                            $(numberInput).on('input', sync);
-                            $(numberInput).on('blur', (e) => {
-                                let num = parseFloat(e.target.value);
-                                if (isNaN(num)) num = 0;
-                                if (data.integer) num = Math.round(num);
-
-                                let clampedNum = num;
-                                if (!allowLower && clampedNum < minVal) clampedNum = minVal;
-                                if (!allowHigher && clampedNum > maxVal) clampedNum = maxVal;
-
-                                e.target.value = clampedNum;
-                                this.value[i] = typeof trimFloatNumber !== 'undefined' ? trimFloatNumber(parseFloat(clampedNum) || 0) : clampedNum;
-                                updateVisuals(clampedNum);
-                                this.change();
-                                if (numberEditActive) {
-                                    numberEditActive = false;
-                                    this.onAfter?.(e.originalEvent);
-                                }
-                            });
+                            (this.numberEditors ||= []).push(numberEdit);
 
                             this.inputs.push({
                                 is_custom: true,
@@ -12076,6 +18359,19 @@ function initializeLightManagerPlugin() {
                 return { clamp01, normalizeHex, hexToRgb, rgbToHex, normalize, sample, css, clone, defaultValue, makeId };
             })();
 
+            const activeGradientDrags = new Set();
+            const pendingGradientChanges = new Set();
+            deletables.push({
+                delete() {
+                    [...activeGradientDrags].forEach(editor => editor.cancelDrag?.());
+                    pendingGradientChanges.forEach(editor => {
+                        if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(editor.pendingChangeFrame);
+                        else clearTimeout(editor.pendingChangeFrame);
+                        editor.pendingChangeFrame = null;
+                    });
+                    pendingGradientChanges.clear();
+                }
+            });
             FormElement.types.gradient_editor = class FormElementGradientEditor extends FormElement {
                 get uses_wide_inputs() { return true; }
 
@@ -12123,6 +18419,7 @@ function initializeLightManagerPlugin() {
 
                     this.node = document.createElement('div');
                     this.node.className = `light_manager_gradient_editor${this.data.compact ? ' compact' : ''}`;
+                    if (this.data.stop_controls) this.node.classList.add('with_stop_controls');
                     const trackHeight = Math.max(18, Number(this.data.height) || (this.data.compact ? 28 : 38));
                     const handleSize = Math.max(12, Number(this.data.handle_size) || (this.data.compact ? 14 : 18));
                     this.node.style.setProperty('--gradient-track-height', `${trackHeight}px`);
@@ -12143,13 +18440,25 @@ function initializeLightManagerPlugin() {
                     }
                     if (this.data.label && !this.data.hide_label) {
                         const label = document.createElement('span');
-                        label.textContent = typeof tl === 'function' ? tl(this.data.label) : this.data.label;
+                        label.textContent = typeof tl === 'function' ? tl(this.data.short_label || this.data.label) : (this.data.short_label || this.data.label);
                         title.append(label);
                     }
                     const description = this.data.description ? (typeof tl === 'function' ? tl(this.data.description) : this.data.description) : '';
                     if (description) {
                         title.title = description;
                         title.classList.add('has_description');
+                    }
+                    if (this.data.stop_controls && this.data.compact) {
+                        title.tabIndex = 0;
+                        title.setAttribute('role', 'button');
+                        title.addEventListener('click', () => { this.activateEditor(); this.track.focus(); });
+                        title.addEventListener('keydown', event => {
+                            if (!['Enter', ' '].includes(event.key)) return;
+                            event.preventDefault();
+                            this.activateEditor();
+                            this.track.focus();
+                        });
+                        this.node.addEventListener('focusin', () => this.activateEditor());
                     }
                     header.append(title);
 
@@ -12160,6 +18469,7 @@ function initializeLightManagerPlugin() {
                         button.type = 'button';
                         button.className = 'tool light_manager_gradient_tool';
                         button.title = typeof tl === 'function' ? tl(titleText) : titleText;
+                        button.setAttribute('aria-label', button.title);
                         const icon = document.createElement('i');
                         icon.className = 'material-icons';
                         icon.textContent = iconName;
@@ -12173,11 +18483,14 @@ function initializeLightManagerPlugin() {
                         return button;
                     };
                     if (this.data.show_toolbar !== false) {
+                        if (this.data.stop_controls) this.addButton = makeButton('add', 'light_manager.gradient.add_stop', () => this.performEdit(() => this.addStop()));
                         this.removeButton = makeButton('delete', 'light_manager.gradient.remove_stop', () => this.performEdit(() => this.removeSelectedStop()));
                         if (this.hasExplicitDefault && this.data.resettable !== false) {
                             this.resetButton = makeButton('restart_alt', 'light_manager.gradient.reset', () => this.performEdit(() => this.setValue(this.defaultValue, true)));
+                            this.resetButton.classList.add('light_manager_gradient_reset');
                         }
                         this.optionsButton = makeButton('tune', 'light_manager.gradient.options', event => this.openOptionsMenu(event));
+                        if (typeof this.data.on_expand === 'function') makeButton('open_in_full', 'light_manager.gradient.expand', () => this.data.on_expand(this.id));
                         header.append(toolbar);
                     }
                     if (this.data.show_toolbar !== false || this.data.label) this.node.append(header);
@@ -12191,17 +18504,95 @@ function initializeLightManagerPlugin() {
                     this.canvas.width = Math.max(128, Math.round(Number(this.data.preview_resolution) || 512));
                     this.canvas.height = Math.max(18, Math.round(trackHeight));
                     this.canvas.className = 'light_manager_gradient_canvas';
+                    if (this.data.stop_controls) this.canvas.title = this.translate('light_manager.gradient.hint');
                     this.handles = document.createElement('div');
                     this.handles.className = 'light_manager_gradient_handles';
                     this.track.append(this.canvas, this.handles);
                     this.node.append(this.track);
 
-                    this.canvas.addEventListener('click', event => this.openOptionsMenu(event, this.positionFromEvent(event)));
+                    this.canvas.addEventListener('click', event => {
+                        if (!this.data.stop_controls) return this.openOptionsMenu(event, this.positionFromEvent(event));
+                        const position = this.positionFromEvent(event);
+                        const nearest = this.value.stops.reduce((best, stop) => Math.abs(stop.position - position) < Math.abs(best.position - position) ? stop : best);
+                        this.selectStop(nearest.id, true);
+                    });
+                    if (this.data.stop_controls) this.canvas.addEventListener('dblclick', event => this.performEdit(() => this.addStop(this.positionFromEvent(event))));
                     this.canvas.addEventListener('contextmenu', event => {
                         event.preventDefault();
                         this.openOptionsMenu(event, this.positionFromEvent(event));
                     });
                     this.track.addEventListener('keydown', event => this.onTrackKeyDown(event));
+
+                    if (this.data.axis_labels) {
+                        const axis = document.createElement('div');
+                        axis.className = 'light_manager_gradient_axis';
+                        this.data.axis_labels.forEach(key => {
+                            const label = document.createElement('span');
+                            label.textContent = this.translate(key);
+                            axis.append(label);
+                        });
+                        this.node.append(axis);
+                    }
+                    if (this.data.stop_controls) {
+                        const controls = document.createElement('div');
+                        controls.className = 'light_manager_gradient_controls';
+                        if (this.data.stop_selector) {
+                            this.node.classList.add('with_stop_selector');
+                            const label = document.createElement('label');
+                            label.className = 'light_manager_gradient_selection';
+                            const caption = document.createElement('span');
+                            caption.textContent = this.translate('light_manager.gradient.selected_stop');
+                            this.stopSelect = document.createElement('select');
+                            this.stopSelect.setAttribute('aria-label', caption.textContent);
+                            this.stopSelect.addEventListener('keydown', event => event.stopPropagation());
+                            this.stopSelect.addEventListener('change', () => this.selectStop(this.stopSelect.value));
+                            label.append(caption, this.stopSelect);
+                            controls.append(label);
+                        }
+                        this.colorButton = document.createElement('button');
+                        this.colorButton.type = 'button';
+                        this.colorButton.className = 'light_manager_gradient_swatch';
+                        this.colorButton.title = this.translate('light_manager.gradient.color');
+                        this.colorButton.setAttribute('aria-label', this.colorButton.title);
+                        this.colorButton.addEventListener('click', () => this.openStopColorPicker(this.selectedStopId));
+                        const input = (className, key, type) => {
+                            const node = document.createElement('input');
+                            node.className = className;
+                            node.type = type;
+                            node.title = this.translate(key);
+                            node.setAttribute('aria-label', node.title);
+                            node.addEventListener('keydown', event => {
+                                event.stopPropagation();
+                                if (event.key === 'Enter') node.blur();
+                                if (event.key === 'Escape') { this.updateControls(); node.blur(); }
+                            });
+                            return node;
+                        };
+                        this.hexInput = input('light_manager_gradient_hex', 'light_manager.gradient.hex', 'text');
+                        this.hexInput.maxLength = 7;
+                        this.hexInput.spellcheck = false;
+                        this.hexInput.addEventListener('change', () => {
+                            const hex = this.hexInput.value.trim();
+                            if (!/^#?([\da-f]{3}|[\da-f]{6})$/i.test(hex)) {
+                                this.hexInput.setAttribute('aria-invalid', 'true');
+                                return;
+                            }
+                            this.performEdit(() => this.updateSelectedColor(hex.startsWith('#') ? hex : '#' + hex));
+                        });
+                        this.hexInput.addEventListener('blur', () => this.updateControls());
+                        this.positionInput = input('light_manager_gradient_position', 'light_manager.gradient.position', 'number');
+                        Object.assign(this.positionInput, { min: '0', max: '100', step: '0.1' });
+                        this.positionInput.addEventListener('change', () => {
+                            if (this.positionInput.value !== '' && Number.isFinite(this.positionInput.valueAsNumber)) this.performEdit(() => this.updateSelectedPosition(this.positionInput.valueAsNumber / 100));
+                            else this.updateControls();
+                        });
+                        const percent = document.createElement('span');
+                        percent.className = 'light_manager_gradient_percent';
+                        percent.textContent = '%';
+                        controls.append(this.colorButton, this.hexInput, this.positionInput, percent);
+                        if (this.removeButton) controls.append(this.removeButton);
+                        this.node.append(controls);
+                    }
 
                     this.stopColorPickerHost = document.createElement('div');
                     this.stopColorPickerHost.className = 'light_manager_gradient_picker_host';
@@ -12356,7 +18747,7 @@ function initializeLightManagerPlugin() {
                         {
                             icon: 'delete',
                             name: 'light_manager.gradient.remove_stop',
-                            condition: () => this.value.stops.length > this.minimumStops,
+                            condition: () => this.value.stops.length > this.minimumStops && !(this.data.stop_controls && this.isEndpoint(this.getSelectedStop())),
                             click: () => this.performEdit(() => this.removeSelectedStop())
                         }
                     ]).open(Number.isFinite(anchor?.clientX)
@@ -12384,8 +18775,21 @@ function initializeLightManagerPlugin() {
                     return this.value.stops.find(stop => stop.id === this.selectedStopId) || this.value.stops[0] || null;
                 }
 
+                activateEditor() {
+                    if (!this.data.stop_controls || !this.data.compact) return;
+                    this.node.closest('.form')?.querySelectorAll('.light_manager_gradient_editor.compact.editing').forEach(node => {
+                        if (node !== this.node) node.classList.remove('editing');
+                    });
+                    this.node.classList.add('editing');
+                }
+
+                isEndpoint(stop) {
+                    return this.lockEndpoints && (stop === this.value.stops[0] || stop === this.value.stops[this.value.stops.length - 1]);
+                }
+
                 selectStop(id, focus = false) {
                     if (!this.value.stops.some(stop => stop.id === id)) return;
+                    this.activateEditor();
                     this.selectedStopId = id;
                     this.renderHandles();
                     this.updateControls();
@@ -12434,6 +18838,7 @@ function initializeLightManagerPlugin() {
 
                 removeSelectedStop() {
                     if (this.value.stops.length <= this.minimumStops) return;
+                    if (this.data.stop_controls && this.isEndpoint(this.getSelectedStop())) return;
                     const index = this.value.stops.findIndex(stop => stop.id === this.selectedStopId);
                     if (index < 0) return;
                     this.value.stops.splice(index, 1);
@@ -12481,7 +18886,7 @@ function initializeLightManagerPlugin() {
                     if (!stop) return;
                     const index = this.value.stops.findIndex(candidate => candidate.id === stop.id);
                     if (this.lockEndpoints && (index === 0 || index === this.value.stops.length - 1)) return;
-                    stop.position = LightManagerGradient.clamp01(position);
+                    stop.position = this.data.stop_controls && this.lockEndpoints ? Math.max(0.001, Math.min(0.999, position)) : LightManagerGradient.clamp01(position);
                     this.normalizeValue();
                     this.render();
                     this.queueChange();
@@ -12489,6 +18894,7 @@ function initializeLightManagerPlugin() {
 
                 beginDrag(event, kind, id, segmentIndex) {
                     if (event.button !== 0) return;
+                    this.cancelDrag?.();
                     event.preventDefault();
                     event.stopPropagation();
                     if (kind === 'stop') this.selectStop(id, true);
@@ -12504,7 +18910,7 @@ function initializeLightManagerPlugin() {
                             if (!stop) return;
                             const index = this.value.stops.findIndex(candidate => candidate.id === id);
                             if (this.lockEndpoints && (index === 0 || index === this.value.stops.length - 1)) return;
-                            stop.position = position;
+                            stop.position = this.data.stop_controls && this.lockEndpoints ? Math.max(0.001, Math.min(0.999, position)) : position;
                             this.normalizeValue();
                         } else {
                             const start = this.value.stops[segmentIndex];
@@ -12515,28 +18921,55 @@ function initializeLightManagerPlugin() {
                         this.render();
                         this.queueChange();
                     };
-                    const up = () => {
+                    const finish = () => {
                         document.removeEventListener('pointermove', move, true);
                         document.removeEventListener('pointerup', up, true);
+                        document.removeEventListener('pointercancel', cancel, true);
+                        window.removeEventListener('blur', cancel);
+                        activeGradientDrags.delete(this);
+                        this.cancelDrag = null;
                         this.endEdit();
+                    };
+                    const up = () => {
+                        finish();
                         if (kind === 'stop' && !dragged) this.openStopColorPicker(id);
                     };
+                    const cancel = () => finish();
+                    this.cancelDrag = cancel;
+                    activeGradientDrags.add(this);
                     document.addEventListener('pointermove', move, true);
                     document.addEventListener('pointerup', up, true);
+                    document.addEventListener('pointercancel', cancel, true);
+                    window.addEventListener('blur', cancel);
                 }
 
                 onTrackKeyDown(event) {
+                    if (this.data.stop_controls && event.target?.classList.contains('light_manager_gradient_midpoint')) return;
                     const stop = this.getSelectedStop();
                     if (!stop) return;
+                    if (this.data.stop_controls && (event.key === 'Enter' || event.key === ' ')) {
+                        event.preventDefault();
+                        this.openStopColorPicker(stop.id);
+                        return;
+                    }
+                    if (this.data.stop_controls && ['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) {
+                        event.preventDefault();
+                        const index = this.value.stops.indexOf(stop);
+                        const target = event.key === 'Home' ? 0 : event.key === 'End' ? this.value.stops.length - 1 : Math.max(0, Math.min(this.value.stops.length - 1, index + (event.key === 'ArrowUp' ? -1 : 1)));
+                        this.selectStop(this.value.stops[target].id, true);
+                        return;
+                    }
                     if (event.key === 'Delete' || event.key === 'Backspace') {
                         event.preventDefault();
                         this.performEdit(() => this.removeSelectedStop());
+                        if (this.data.stop_controls) this.track.focus();
                         return;
                     }
                     if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
                     event.preventDefault();
                     const step = (event.shiftKey ? 0.01 : 0.001) * (event.key === 'ArrowLeft' ? -1 : 1);
                     this.performEdit(() => this.updateSelectedPosition(stop.position + step));
+                    if (this.data.stop_controls) this.track.focus();
                 }
 
                 renderCanvas() {
@@ -12583,6 +19016,16 @@ function initializeLightManagerPlugin() {
                         handle.dataset.stopId = stop.id;
                         handle.title = `${stop.color.toUpperCase()} · ${(stop.position * 100).toFixed(1)}%`;
                         handle.setAttribute('aria-label', handle.title);
+                        handle.setAttribute('aria-pressed', stop.id === this.selectedStopId ? 'true' : 'false');
+                        if (this.data.stop_controls) handle.addEventListener('focus', () => {
+                            this.selectedStopId = stop.id;
+                            this.handles.querySelectorAll('.light_manager_gradient_stop').forEach(node => {
+                                const selected = node.dataset.stopId === stop.id;
+                                node.classList.toggle('selected', selected);
+                                node.setAttribute('aria-pressed', String(selected));
+                            });
+                            this.updateControls();
+                        });
                         handle.addEventListener('pointerdown', event => this.beginDrag(event, 'stop', stop.id));
                         handle.addEventListener('click', event => {
                             event.preventDefault();
@@ -12591,6 +19034,7 @@ function initializeLightManagerPlugin() {
                         handle.addEventListener('keydown', event => {
                             if (event.key !== 'Enter' && event.key !== ' ') return;
                             event.preventDefault();
+                            event.stopPropagation();
                             this.openStopColorPicker(stop.id);
                         });
                         handle.addEventListener('contextmenu', event => {
@@ -12607,6 +19051,20 @@ function initializeLightManagerPlugin() {
                         midpoint.className = 'light_manager_gradient_midpoint';
                         midpoint.style.left = `${midpointPosition * 100}%`;
                         midpoint.title = `${typeof tl === 'function' ? tl('light_manager.gradient.midpoint') : 'Fade midpoint'}: ${(stop.midpoint * 100).toFixed(0)}%`;
+                        midpoint.setAttribute('aria-label', midpoint.title);
+                        if (this.data.stop_controls) midpoint.addEventListener('keydown', event => {
+                            if (!['ArrowLeft', 'ArrowRight', 'Home'].includes(event.key)) return;
+                            event.preventDefault();
+                            event.stopPropagation();
+                            this.performEdit(() => {
+                                stop.midpoint = event.key === 'Home' ? 0.5 : Math.max(0.05, Math.min(0.95, stop.midpoint + (event.shiftKey ? 0.1 : 0.01) * (event.key === 'ArrowLeft' ? -1 : 1)));
+                                this.renderCanvas();
+                                midpoint.style.left = `${(stop.position + (next.position - stop.position) * stop.midpoint) * 100}%`;
+                                midpoint.setAttribute('aria-label', `${this.translate('light_manager.gradient.midpoint')}: ${Math.round(stop.midpoint * 100)}%`);
+                                midpoint.title = midpoint.getAttribute('aria-label');
+                                this.queueChange();
+                            });
+                        });
                         midpoint.addEventListener('pointerdown', event => this.beginDrag(event, 'midpoint', null, index));
                         this.handles.append(midpoint);
                     });
@@ -12615,7 +19073,31 @@ function initializeLightManagerPlugin() {
                 updateControls() {
                     const stop = this.getSelectedStop();
                     if (!stop) return;
-                    if (this.removeButton) this.removeButton.disabled = this.value.stops.length <= this.minimumStops;
+                    if (this.stopSelect) {
+                        const options = this.value.stops.map((entry, index) => {
+                            const axisIndex = entry.position === 0 ? 0 : entry.position === 0.5 ? 1 : entry.position === 1 ? 2 : -1;
+                            const name = axisIndex >= 0 && this.data.axis_labels?.[axisIndex]
+                                ? this.translate(this.data.axis_labels[axisIndex])
+                                : `${this.translate('light_manager.gradient.stop')} ${index + 1}`;
+                            const option = document.createElement('option');
+                            option.value = entry.id;
+                            option.textContent = `${name} · ${Number((entry.position * 100).toFixed(1))}%`;
+                            return option;
+                        });
+                        this.stopSelect.replaceChildren(...options);
+                        this.stopSelect.value = stop.id;
+                    }
+                    if (this.removeButton) this.removeButton.disabled = this.value.stops.length <= this.minimumStops || (this.data.stop_controls && this.isEndpoint(stop));
+                    if (this.addButton) this.addButton.disabled = this.value.stops.length >= this.maximumStops;
+                    if (this.hexInput) {
+                        this.colorButton.style.setProperty('--stop-color', stop.color);
+                        this.hexInput.value = stop.color.toUpperCase();
+                        this.hexInput.removeAttribute('aria-invalid');
+                        this.positionInput.value = Number((stop.position * 100).toFixed(1));
+                        this.positionInput.disabled = this.isEndpoint(stop);
+                        this.positionInput.title = this.translate(this.isEndpoint(stop)
+                            ? 'light_manager.gradient.fixed_position' : 'light_manager.gradient.position');
+                    }
                     if (this.resetButton) {
                         const changed = JSON.stringify(this.value) !== JSON.stringify(this.defaultValue);
                         this.resetButton.style.display = changed ? 'inline-flex' : 'none';
@@ -12638,7 +19120,9 @@ function initializeLightManagerPlugin() {
 
                 queueChange() {
                     if (this.pendingChangeFrame !== null) return;
+                    pendingGradientChanges.add(this);
                     const dispatch = () => {
+                        pendingGradientChanges.delete(this);
                         this.pendingChangeFrame = null;
                         this.change();
                         if (this.finishEditAfterChange && this.editDepth === 0) {
@@ -12978,6 +19462,57 @@ function initializeLightManagerPlugin() {
                     transform: translateX(-50%) scale(.9) !important;
                     transform-origin: top center;
                 }
+                .light_manager_gradient_editor.with_stop_controls { gap: 5px; padding-bottom: 8px; }
+                .light_manager_gradient_editor.with_stop_controls .light_manager_gradient_title > span { white-space: normal; line-height: 1.35; }
+                .light_manager_gradient_editor.with_stop_controls .light_manager_gradient_title > .icon { margin: 0; }
+                .light_manager_gradient_editor.with_stop_controls .light_manager_gradient_controls { display: flex; flex-wrap: nowrap; gap: 3px; }
+                .light_manager_gradient_editor.with_stop_selector .light_manager_gradient_controls { flex-wrap: wrap; gap: 6px; }
+                .light_manager_gradient_selection { display: flex; align-items: center; gap: 8px; flex: 0 0 100%; min-width: 0; }
+                .light_manager_gradient_selection > span { color: var(--color-subtle_text); font-size: 12px; }
+                .light_manager_gradient_selection > select { flex: 1; min-width: 0; width: 0; height: 28px; }
+                .light_manager_gradient_editor.with_stop_controls .light_manager_gradient_hex { flex: 1 1 80px; width: 80px !important; min-width: 68px !important; padding: 0 5px; font-size: 13px; }
+                .light_manager_gradient_editor.with_stop_controls:not(.compact) .light_manager_gradient_hex { flex-grow: 0; max-width: 110px !important; }
+                .light_manager_gradient_editor.with_stop_controls .light_manager_gradient_position { flex: 0 0 48px; width: 48px !important; min-width: 48px !important; }
+                .light_manager_gradient_editor.with_stop_controls.compact .light_manager_gradient_header { min-height: 28px; }
+                .light_manager_gradient_editor.with_stop_controls.compact .light_manager_gradient_title { cursor: pointer; }
+                .light_manager_gradient_editor.with_stop_controls.compact .light_manager_gradient_title:focus-visible { outline: 1px solid var(--gradient-accent); outline-offset: 2px; }
+                .light_manager_gradient_editor.with_stop_controls.compact:not(.editing) .light_manager_gradient_controls,
+                .light_manager_gradient_editor.with_stop_controls.compact:not(.editing) .light_manager_gradient_axis,
+                .light_manager_gradient_editor.with_stop_controls.compact:not(.editing) .light_manager_gradient_toolbar { display: none; }
+                .light_manager_gradient_editor.with_stop_controls.compact .light_manager_gradient_reset[aria-hidden="false"] { display: inline-flex !important; }
+                .light_manager_gradient_editor.with_stop_controls .light_manager_gradient_position:disabled { color: var(--color-subtle_text); opacity: .65; }
+                .light_manager_gradient_editor.with_stop_controls .light_manager_gradient_hex[aria-invalid=true] { outline: 1px solid var(--color-error); }
+                .light_manager_gradient_swatch { flex: 0 0 28px; width: 28px !important; min-width: 28px !important; height: 28px !important; margin: 0 !important; padding: 4px !important; background: var(--color-button); border: 1px solid var(--color-border); }
+                .light_manager_gradient_swatch::after { content: ''; display: block; width: 100%; height: 100%; background: var(--stop-color); border: 1px solid var(--color-border); box-sizing: border-box; }
+                .light_manager_gradient_swatch:focus-visible { outline: 2px solid var(--gradient-accent); outline-offset: -2px; }
+                .light_manager_gradient_axis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); padding: 0 var(--gradient-edge-inset); gap: 4px; font-size: 11px; line-height: 16px; color: var(--color-subtle_text); }
+                .light_manager_gradient_axis > span:nth-child(2) { text-align: center; }
+                .light_manager_gradient_axis > span:last-child { text-align: right; }
+                .light_manager_gradient_editor.with_stop_controls .light_manager_gradient_stop { transform: translateX(-50%) !important; touch-action: none; }
+                .light_manager_gradient_editor.with_stop_controls .light_manager_gradient_midpoint { touch-action: none; }
+                .light_manager_gradient_editor.with_stop_controls.compact { --gradient-handle-space: 24px; }
+                .light_manager_gradient_editor.with_stop_controls .light_manager_gradient_stop {
+                    top: calc(var(--gradient-track-height) + 2px) !important;
+                    height: 20px !important; min-height: 20px !important; max-height: 20px !important;
+                    border: 1px solid var(--color-border) !important; border-radius: 2px !important;
+                    clip-path: none; background: var(--color-back) !important; filter: none;
+                }
+                .light_manager_gradient_editor.with_stop_controls .light_manager_gradient_stop::after { inset: 3px; border: 0; box-shadow: none; }
+                .light_manager_gradient_editor.with_stop_controls .light_manager_gradient_stop.selected { border-color: var(--gradient-accent) !important; box-shadow: 0 0 0 1px var(--gradient-accent); }
+                .light_manager_gradient_editor.with_stop_controls.compact:not(.editing) .light_manager_gradient_stop.selected { border-color: var(--color-border) !important; box-shadow: none; }
+                .light_manager_gradient_editor.with_stop_controls .light_manager_gradient_midpoint {
+                    width: 20px !important; min-width: 20px !important; max-width: 20px !important;
+                    height: 20px !important; min-height: 20px !important; max-height: 20px !important;
+                    border: 0 !important; background: transparent !important; box-shadow: none;
+                    transform: translate(-50%, -50%) !important;
+                }
+                .light_manager_gradient_editor.with_stop_controls .light_manager_gradient_midpoint::after {
+                    content: '' !important; display: block !important; position: absolute; inset: 6px;
+                    background: var(--color-text); border: 1px solid var(--color-back);
+                    box-shadow: 0 0 0 1px var(--color-border); transform: rotate(45deg);
+                }
+                .light_manager_gradient_editor.with_stop_controls .light_manager_gradient_midpoint:focus-visible::after,
+                .light_manager_gradient_editor.with_stop_controls .light_manager_gradient_midpoint:hover::after { background: var(--gradient-accent); }
                 .light_manager_gradient_picker_host {
                     position: absolute;
                     z-index: 30;
@@ -13029,20 +19564,617 @@ function initializeLightManagerPlugin() {
             deletables.push(panelSearchStateStyles);
 
 
+            // Shared additions: real FormElements, with no renderer or scene ownership.
+            FormElement.types.tab_select = class LightflowTabSelect extends FormElement.types.horizontal_select {
+                build(bar) {
+                    super.build(bar);
+
+                    this._disposed = false;
+                    this.tabsBar = this.node.parentElement;
+                    this._tabsBarOriginalStyle = this.tabsBar.getAttribute('style');
+
+                    this.instanceId = `lf_tabs_${++lightflowControlInstance}`;
+
+                    this.node.classList.add('lf-tabs');
+                    this.node.dataset.presentation = this.options.presentation || 'flat';
+                    this.node.setAttribute('role', 'tablist');
+                    this.node.setAttribute(
+                        'aria-label',
+                        tl(this.options.label || 'light_manager.ui.sections')
+                    );
+
+                    Object.entries(this.button_nodes).forEach(([key, button], index) => {
+                        button.id = `${this.instanceId}_tab_${index}`;
+                        button.setAttribute('role', 'tab');
+                        button.removeAttribute('aria-pressed');
+
+                        button.addEventListener('keydown', event => {
+                            if (
+                                !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key) ||
+                                this.is_disabled
+                            ) return;
+
+                            event.preventDefault();
+                            event.stopImmediatePropagation();
+
+                            const entries = Object.entries(this.button_nodes)
+                                .filter(([, node]) => !node.disabled);
+
+                            if (!entries.length) return;
+
+                            const current = entries.findIndex(([, node]) => node === button);
+
+                            const next = event.key === 'Home'
+                                ? 0
+                                : event.key === 'End'
+                                    ? entries.length - 1
+                                    : (
+                                        current +
+                                        (event.key === 'ArrowRight' ? 1 : -1) +
+                                        entries.length
+                                    ) % entries.length;
+
+                            if (!entries[next]) return;
+
+                            this.setValue(entries[next][0]);
+                            this.change();
+                            entries[next][1].focus();
+                        }, true);
+                    });
+
+                    queueMicrotask(() => {
+                        if (!this.bar?.parentElement || this._disposed || this.options.dock === false) return;
+
+                        const parent = this.bar.parentElement;
+
+                        const dialogContent = parent.parentElement;
+                        const containingDialog = parent.closest('.dialog_content')?.closest('dialog.dialog');
+
+                        const isFirstDialogControl =
+                            parent.firstElementChild === this.bar &&
+                            dialogContent?.matches('.dialog_content') &&
+                            dialogContent.firstElementChild === parent;
+
+                        const dialog = isFirstDialogControl
+                            ? dialogContent.closest('dialog.dialog')
+                            : null;
+
+                        // Embedded/secondary tabs stay in form order. Docking them
+                        // against the dialog would cover its handle and move earlier
+                        // fields into the tab content (e.g. a camera preset name).
+                        if (containingDialog && !dialog) return;
+
+                        Object.assign(this.tabsBar.style, {
+                            position: 'absolute', left: '0', right: '0',
+                            width: 'auto', zIndex: '10'
+                        });
+
+                        this.tabsHandle = dialog?.querySelector(
+                            ':scope > .dialog_handle'
+                        ) || null;
+
+                        this.tabsBar.classList.toggle(
+                            'lf-tabs-docked',
+                            !!this.tabsHandle
+                        );
+
+                        this.contentPanel = document.createElement('div');
+                        this.contentPanel.className = 'lf-tab-content';
+                        this.contentPanel.id = `${this.instanceId}_content`;
+                        this.contentPanel.setAttribute('role', 'tabpanel');
+
+                        for (const child of [...parent.children]) {
+                            if (child !== this.bar) {
+                                this.contentPanel.append(child);
+                            }
+                        }
+
+                        parent.append(this.contentPanel);
+
+                        this.tabsSpacer = document.createElement('div');
+                        this.tabsSpacer.className = 'lf-tabs-spacer';
+                        this.tabsSpacer.setAttribute('aria-hidden', 'true');
+
+                        Object.assign(this.tabsSpacer.style, {
+                            display: 'block',
+                            width: '100%',
+                            minWidth: '0',
+                            height: '0px',
+                            flex: '0 0 auto',
+                            margin: '0',
+                            padding: '0',
+                            border: '0',
+                            pointerEvents: 'none'
+                        });
+
+                        this.bar.after(this.tabsSpacer);
+
+                        this.syncTabsSpacer = () => {
+                            if (
+                                this._disposed ||
+                                !this.tabsBar?.isConnected ||
+                                !this.tabsSpacer?.isConnected
+                            ) return;
+
+                            if (this.tabsHandle?.isConnected) {
+                                const positionedAncestor = this.tabsBar.offsetParent;
+
+                                if (positionedAncestor) {
+                                    const headerRect =
+                                        this.tabsHandle.getBoundingClientRect();
+
+                                    const ancestorRect =
+                                        positionedAncestor.getBoundingClientRect();
+
+                                    const top =
+                                        headerRect.bottom -
+                                        ancestorRect.top -
+                                        positionedAncestor.clientTop +
+                                        positionedAncestor.scrollTop;
+
+                                    this.tabsBar.style.top =
+                                        `${Math.max(0, top)}px`;
+                                }
+                            } else {
+                                this.tabsBar.style.removeProperty('top');
+                            }
+
+                            const tabsRect = this.tabsBar.getBoundingClientRect();
+                            let height = tabsRect.height;
+
+                            if (this.tabsHandle) {
+                                const slotTop =
+                                    this.tabsSpacer.getBoundingClientRect().top +
+                                    (dialogContent.scrollTop || 0);
+
+                                height = Math.max(
+                                    0,
+                                    tabsRect.bottom - slotTop
+                                );
+                            }
+
+                            const nextHeight = `${Math.ceil(height)}px`;
+
+                            if (this.tabsSpacer.style.height !== nextHeight) {
+                                this.tabsSpacer.style.height = nextHeight;
+                            }
+                        };
+
+                        this.tabsResizeObserver = new ResizeObserver(() => {
+                            if (this.tabsSpacerFrame) return;
+                            this.tabsSpacerFrame = requestAnimationFrame(() => {
+                                this.tabsSpacerFrame = null;
+                                this.syncTabsSpacer();
+                            });
+                        });
+
+                        this.tabsResizeObserver.observe(this.tabsBar);
+
+                        if (this.tabsHandle) {
+                            this.tabsResizeObserver.observe(this.tabsHandle);
+                        }
+
+                        this.syncTabsSpacer();
+
+                        for (const button of Object.values(this.button_nodes)) {
+                            button.setAttribute(
+                                'aria-controls',
+                                this.contentPanel.id
+                            );
+                        }
+
+                        this.updateVisuals(false);
+                    });
+                }
+
+                updateVisuals(...args) {
+                    super.updateVisuals(...args);
+
+                    for (const [key, button] of Object.entries(this.button_nodes || {})) {
+                        const selected = this.selected.includes(key);
+
+                        button.setAttribute('aria-selected', String(selected));
+                        button.removeAttribute('aria-pressed');
+
+                        button.tabIndex = selected && !button.disabled ? 0 : -1;
+
+                        if (selected) {
+                            this.contentPanel?.setAttribute(
+                                'aria-labelledby',
+                                button.id
+                            );
+                        }
+                    }
+                }
+
+                delete() {
+                    this._disposed = true;
+
+                    this.tabsResizeObserver?.disconnect();
+                    this.tabsResizeObserver = null;
+                    if (this.tabsSpacerFrame) cancelAnimationFrame(this.tabsSpacerFrame);
+                    this.tabsSpacerFrame = null;
+                    this.syncTabsSpacer = null;
+
+                    this.tabsSpacer?.remove();
+                    this.tabsSpacer = null;
+
+                    if (this.contentPanel?.parentElement) {
+                        this.contentPanel.replaceWith(
+                            ...this.contentPanel.children
+                        );
+                    }
+
+                    this.contentPanel = null;
+
+                    if (this.tabsBar) {
+                        this.tabsBar.classList.remove('lf-tabs-docked');
+
+                        if (this._tabsBarOriginalStyle === null) {
+                            this.tabsBar.removeAttribute('style');
+                        } else {
+                            this.tabsBar.setAttribute(
+                                'style',
+                                this._tabsBarOriginalStyle
+                            );
+                        }
+                    }
+
+                    this.tabsHandle = null;
+                    this.tabsBar = null;
+                    this._tabsBarOriginalStyle = null;
+
+                    super.delete();
+                }
+            };
+
+
+
+            FormElement.types.grid_select = class LightflowGridSelect extends FormElement {
+                get uses_wide_inputs() { return true; }
+                build(bar) {
+                    this.bar = bar; bar.classList.add('full_width_dialog_bar');
+                    this.value = this.options.value ?? this.options.default ?? '';
+                    this.node = document.createElement('div'); this.node.className = 'lf-grid-select';
+                    this.node.setAttribute('role', 'radiogroup'); this.node.setAttribute('aria-label', tl(this.options.label || this.id));
+                    this.buttons = new Map();
+                    const options = typeof this.options.options === 'function' ? this.options.options() : this.options.options || {};
+                    for (const [key, raw] of Object.entries(options)) {
+                        const option = typeof raw === 'object' ? raw : { name: raw };
+                        const button = document.createElement('button'); button.type = 'button'; button.setAttribute('role', 'radio');
+                        button.disabled = !!option.disabled;
+                        const name = tl(option.name || key); button.setAttribute('aria-label', name);
+                        if (option.preview) {
+                            const preview = document.createElement('span'); preview.className = 'lf-grid-preview';
+                            preview.setAttribute('aria-hidden', 'true'); preview.style.background = option.preview; button.append(preview);
+                        } else if (option.image) {
+                            const img = document.createElement('img'); img.alt = ''; img.loading = 'lazy'; img.decoding = 'async';
+                            img.src = option.image; img.style.imageRendering = option.pixelated ? 'pixelated' : 'auto'; button.append(img);
+                        } else if (option.icon) button.append(Blockbench.getIconNode(option.icon));
+                        const label = document.createElement('span'); label.className = 'lf-grid-name'; label.textContent = name; button.append(label);
+                        if (option.detail) {
+                            const detail = document.createElement('span'); detail.className = 'lf-grid-detail';
+                            detail.textContent = tl(option.detail); button.append(detail);
+                            button.setAttribute('aria-label', `${name} · ${detail.textContent}`);
+                        }
+                        const choose = event => { if (this.is_disabled || button.disabled) return; this.options.onBefore?.(event); this.setValue(key); this.change(); this.options.onAfter?.(event); };
+                        button.addEventListener('click', choose);
+                        button.addEventListener('keydown', event => {
+                            if (!this.is_disabled && !button.disabled && ['Enter', ' '].includes(event.key)) {
+                                event.preventDefault(); event.stopPropagation(); button.click(); return;
+                            }
+                            if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key) || this.is_disabled) return;
+                            event.preventDefault();
+                            event.stopPropagation();
+                            const entries = [...this.buttons].filter(([, node]) => !node.disabled);
+                            const index = entries.findIndex(([id]) => id === key);
+                            const next = event.key === 'Home' ? 0 : event.key === 'End' ? entries.length - 1
+                                : (index + (['ArrowRight', 'ArrowDown'].includes(event.key) ? 1 : -1) + entries.length) % entries.length;
+                            const [id, target] = entries[next] || []; if (!target) return;
+                            target.click(); target.focus();
+                        });
+                        this.buttons.set(key, button); this.node.append(button);
+                    }
+                    if (!this.buttons.size) {
+                        const empty = document.createElement('p'); empty.setAttribute('role', 'status');
+                        empty.textContent = tl(this.options.empty_label || 'light_manager.ui.no_options');
+                        empty.style.gridColumn = '1 / -1'; this.node.append(empty);
+                    }
+                    bar.append(this.node); this.setValue(this.value);
+                }
+                getValue() { return this.value; }
+                updateOption(key, option) {
+                    const button = this.buttons.get(key);
+                    if (!button) return;
+                    const name = tl(option.name || key);
+                    button.querySelector('.lf-grid-name').textContent = name;
+                    const preview = button.querySelector('.lf-grid-preview');
+                    if (preview && option.preview) preview.style.background = option.preview;
+                    const detail = button.querySelector('.lf-grid-detail');
+                    if (detail) detail.textContent = tl(option.detail || '');
+                    button.setAttribute('aria-label', `${name}${detail?.textContent ? ' · ' + detail.textContent : ''}`);
+                }
+                setValue(value) {
+                    if (!this.buttons.has(String(value))) value = [...this.buttons].find(([, node]) => !node.disabled)?.[0] || '';
+                    this.value = String(value);
+                    for (const [key, button] of this.buttons) {
+                        const selected = key === this.value; button.setAttribute('aria-checked', String(selected));
+                        button.tabIndex = selected && !button.disabled ? 0 : -1;
+                    }
+                }
+            };
+
+            FormElement.types.block_select = class LightflowBlockSelect extends FormElement {
+                get uses_wide_inputs() { return true; }
+                build(bar) {
+                    this.bar=bar;bar.classList.add('lf-block-bar');this.value=String(this.options.value||'');
+                    this.node=document.createElement('div');this.node.className='lf-block-select';
+                    this.preview=document.createElement('span');this.preview.className='lf-block-icon';this.preview.setAttribute('aria-hidden','true');
+                    this.input=document.createElement('input');this.input.type='text';this.input.className='focusable_input';this.input.placeholder=this.options.placeholder??'minecraft:stone';
+                    if(this.options.label){const label=document.createElement('label');label.textContent=tl(this.options.label);this.input.id='lf_block_input_'+(++lightflowControlInstance);label.htmlFor=this.input.id;label.className='lf-block-label';bar.append(label);}
+                    this.input.setAttribute('role','combobox');this.input.setAttribute('aria-autocomplete','list');this.input.setAttribute('aria-expanded','false');this.input.setAttribute('aria-label',tl(this.options.label||this.options.accessible_label||'Block identifier'));
+                    this.browseButton=document.createElement('button');this.browseButton.type='button';this.browseButton.className='lf-block-inventory';this.browseButton.append(Blockbench.getIconNode('expand_more'));this.browseButton.setAttribute('aria-label',tl(this.options.browse_label||(String(window.Language?.code||'').startsWith('es')?'Mostrar bloques':'Show blocks')));this.browseButton.addEventListener('click',()=>{if(this.popup)this.close();else {this.open(true);this.input.focus();}});
+                    this.pickButton=document.createElement('button');this.pickButton.type='button';this.pickButton.className='lf-block-inventory';this.pickButton.append(Blockbench.getIconNode('apps'));this.pickButton.setAttribute('aria-label',String(window.Language?.code||'').startsWith('es')?'Abrir inventario de bloques':'Open block inventory');this.pickButton.title=this.pickButton.getAttribute('aria-label');
+                    this.pickButton.addEventListener('click',()=>{if(this.is_disabled||this.options.readonly)return;this.close();this.options.pick?.(value=>{if(!this.node.isConnected)return;this.setValue(typeof value==='string'?value:value.block||value.id||'');this.change();this.input.focus();});});
+                    this.pickButton.hidden=typeof this.options.pick!=='function';
+                    this.input.addEventListener('input',()=>{this.updateIcon(this.input.value);this.open();});this.input.addEventListener('change',()=>this.commitManual());this.input.addEventListener('click',()=>this.open());
+                    this.input.addEventListener('keydown',event=>{if(event.key==='Escape'&&this.popup){event.preventDefault();event.stopPropagation();this.close();return;}if(['ArrowDown','ArrowUp'].includes(event.key)){event.preventDefault();event.stopPropagation();if(!this.popup)this.open();this.active=Math.max(0,Math.min((this.items?.length||1)-1,(this.active??-1)+(event.key==='ArrowDown'?1:-1)));this.updateActive();}else if(event.key==='Enter'){const opened=!!this.popup;if(this.popup&&this.active>=0)this.choose(this.items[this.active]);else {this.commitManual();this.close();}if(opened){event.preventDefault();event.stopPropagation();}}else if(event.key==='Tab')this.close();});
+                    this.node.append(this.preview,this.input,this.browseButton,this.pickButton);bar.append(this.node);this.setValue(this.value);
+                }
+                getValue(){return this.input?.value??this.value;}
+                commitManual(){if(this.is_disabled||this.options.readonly)return;const value=this.input.value;if(value===this.value)return;this.value=value;this.updateIcon();this.change();}
+                setValue(value){this.value=String(value??'');this.input.value=this.value;this.updateIcon();}
+                updateIcon(value=this.value){this.preview.replaceChildren();const icon=this.options.iconForValue?.(value)||Blockbench.getIconNode(this.options.default_icon||'deployed_code');if(icon instanceof HTMLElement)this.preview.append(icon);}
+                choose(item){if(!item||this.is_disabled||this.options.readonly){this.close();return;}this.setValue(typeof item==='string'?item:item.id);this.close();this.change();this.input.focus();}
+                open(all=false){
+                    if(this.is_disabled||this.options.readonly)return;this.close();
+                    const source=typeof this.options.options==='function'?this.options.options():this.options.options||[];
+                    const query=all?'':this.input.value.trim().toLowerCase();this.items=Array.from(source).filter(item=>{const id=typeof item==='string'?item:item.id;return !query||String(id+' '+(item.name||'')).toLowerCase().includes(query);}).slice(0,30);if(!this.items.length)return;
+                    this.active=-1;this.popup=document.createElement('div');this.popup.className='lf-block-options lf-controls';this.popup.id='lf_block_options_'+(++lightflowControlInstance);this.popup.setAttribute('role','listbox');this.popup.setAttribute('aria-label',this.input.getAttribute('aria-label'));this.popup.style.width=Math.max(220,this.node.getBoundingClientRect().width)+'px';
+                    this.items.forEach((item,index)=>{const id=typeof item==='string'?item:item.id,row=document.createElement('button');row.type='button';row.tabIndex=-1;row.id=this.popup.id+'_'+index;row.setAttribute('role','option');row.setAttribute('aria-selected','false');const icon=this.options.iconForValue?.(id)||Blockbench.getIconNode(this.options.default_icon||'deployed_code');if(icon instanceof HTMLElement){icon.setAttribute('aria-hidden','true');row.append(icon);}const label=document.createElement('span');label.textContent=(item.name||id)+'\n'+id;row.append(label);row.addEventListener('pointerdown',e=>e.preventDefault());row.addEventListener('click',()=>this.choose(item));this.popup.append(row);});
+                    (this.node.closest('dialog')||document.body).append(this.popup);positionLightflowOverlay(this.node,this.popup,{maxHeight:320});this.input.setAttribute('aria-controls',this.popup.id);this.input.setAttribute('aria-expanded','true');
+                    this.outside=e=>{if(!this.node.contains(e.target)&&!this.popup?.contains(e.target))this.close();};this.reposition=()=>{if(this.node.isConnected&&this.popup)positionLightflowOverlay(this.node,this.popup,{maxHeight:320});else this.close();};document.addEventListener('pointerdown',this.outside,true);window.addEventListener('resize',this.reposition);window.addEventListener('scroll',this.reposition,true);
+                    this.escape=e=>{if(e.key==='Escape'&&this.popup){e.preventDefault();e.stopImmediatePropagation();this.close();this.input.focus();}};document.addEventListener('keydown',this.escape,true);
+                    this.detachObserver=new MutationObserver(()=>{if(!this.node.isConnected)this.close();});this.detachObserver.observe(document.body,{childList:true,subtree:true});
+                    this.release=trackDocumentInteraction(()=>{this.release=null;this.close();});
+                }
+                updateActive(){[...this.popup?.children||[]].forEach((row,index)=>{row.setAttribute('aria-selected',String(index===this.active));if(index===this.active){this.input.setAttribute('aria-activedescendant',row.id);row.scrollIntoView({block:'nearest'});}});}
+                close(){if(this.release){const release=this.release;this.release=null;release();return;}this.detachObserver?.disconnect();this.detachObserver=null;document.removeEventListener('keydown',this.escape,true);document.removeEventListener('pointerdown',this.outside,true);window.removeEventListener('resize',this.reposition);window.removeEventListener('scroll',this.reposition,true);this.popup?.remove();this.popup=null;this.input?.setAttribute('aria-expanded','false');this.input?.removeAttribute('aria-activedescendant');this.input?.removeAttribute('aria-controls');}
+                delete(){this.close();super.delete?.();}
+            };
+
+            FormElement.types.code_editor = class LightflowCodeEditor extends FormElement {
+                static parseForEditing(source) {
+                    const root=JSON.parse(source),pending=[root];
+                    while(pending.length){const value=pending.pop();if(typeof value==='number'&&(!Number.isFinite(value)||(Number.isInteger(value)&&!Number.isSafeInteger(value))))throw new RangeError('JSON number cannot be preserved safely; keep it in Code or use typed JSON.');if(value&&typeof value==='object')for(const child of Object.values(value))pending.push(child);}
+                    return root;
+                }
+                get uses_wide_inputs() { return true; }
+                build(bar) {
+                    this.bar=bar;bar.classList.add('full_width_dialog_bar');this.forms=[];this.expanded=new Set();
+                    this.language=this.options.language||'json';this.mode=this.options.mode||'code';
+                    this.node=document.createElement('div');this.node.className='lf-code-editor';
+                    this.toolbar=document.createElement('div');this.toolbar.className='lf-code-toolbar';
+                    const text=(en,es)=>String(window.Language?.code||'').startsWith('es')?es:en;
+                    this.text=text;
+                    const button=(label,click)=>{const b=document.createElement('button');b.type='button';b.textContent=label;b.addEventListener('click',click);this.toolbar.append(b);return b;};
+                    this.modeForm=new InputForm((window.LightManagerUI?.prepareForm || (form => form))({mode:{type:'tab_select',dock:false,label:false,presentation:'flat',value:this.mode,options:{code:{name:text('Code','Código'),icon:'code'},visual:{name:text('Properties','Propiedades'),icon:'tune',condition:()=>this.language==='json'}}}}));
+                    this.modeTabs=this.modeForm.form_data.mode;this.modeForm.node.hidden=this.language!=='json';this.toolbar.append(this.modeForm.node);
+                    this.modeForm.on('change',({result})=>this.setMode(result.mode));
+                    this.codeButton=this.modeTabs.button_nodes.code;this.visualButton=this.modeTabs.button_nodes.visual;this.visualButton.hidden=this.language!=='json';
+                    this.formatButton=button(text('Format','Formatear'),()=>this.format());this.formatButton.hidden=this.language!=='json';
+                    this.languageBadge=document.createElement('span');this.languageBadge.textContent=this.language.toUpperCase();this.toolbar.append(this.languageBadge);
+                    this.code=document.createElement('div');this.code.className='lf-code-source';
+                    this.gutter=document.createElement('pre');this.gutter.className='lf-code-gutter';this.gutter.setAttribute('aria-hidden','true');
+                    this.highlight=document.createElement('pre');this.highlight.className='lf-code-highlight';this.highlight.setAttribute('aria-hidden','true');
+                    this.input=document.createElement('textarea');this.input.className='lf-code-input focusable_input';this.input.spellcheck=false;this.input.wrap='off';
+                    this.input.setAttribute('aria-label',tl(this.options.label||text('Code','Código')));this.input.style.height=(this.options.height||240)+'px';
+                    this.input.addEventListener('input',()=>{this.value=this.input.value;this.renderCode();this.validate();this.change();});
+                    this.input.addEventListener('scroll',()=>{this.highlight.scrollTop=this.input.scrollTop;this.highlight.scrollLeft=this.input.scrollLeft;this.gutter.scrollTop=this.input.scrollTop;});
+                    this.input.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.shiftKey&&e.key.toLowerCase()==='f'&&this.language==='json'){e.preventDefault();e.stopPropagation();this.format();}});
+                    this.code.append(this.gutter,this.highlight,this.input);
+                    this.visual=document.createElement('div');this.visual.className='lf-code-properties';
+                    this.status=document.createElement('div');this.status.className='lf-code-status';this.status.setAttribute('role','status');this.status.setAttribute('aria-live','polite');
+                    this.status.id='lf_code_status_'+(++lightflowControlInstance);this.input.setAttribute('aria-describedby',this.status.id);
+                    if(this.options.label){const label=document.createElement('label');label.className='lf-code-label';label.textContent=tl(this.options.label);this.input.id='lf_code_input_'+(++lightflowControlInstance);label.htmlFor=this.input.id;this.node.append(label);}
+                    this.node.append(this.toolbar,this.code,this.visual,this.status);bar.append(this.node);this.setValue(this.options.value??'');
+                }
+                getValue() { return this.value; }
+                setValue(value) {this.value=String(value??'');this.input.value=this.value;this.renderCode();this.validate();this.setMode(this.mode);}
+                validate() {
+                    this.error='';
+                    if(this.language==='json'&&this.value.trim())try{JSON.parse(this.value);}catch(e){this.error=e.message;}
+                    if(!this.error&&typeof this.options.validate==='function')try{this.error=this.options.validate(this.value)||'';}catch(e){this.error=e.message;}
+                    this.input.setAttribute('aria-invalid',String(!!this.error));this.status.textContent=this.error||this.text('Draft · changes apply with the surrounding form','Borrador · los cambios se aplican con el formulario');
+                    this.status.classList.toggle('invalid',!!this.error);return !this.error;
+                }
+                renderCode() {
+                    const source=this.value+'\n';this.highlight.replaceChildren();
+                    if(['json','molang'].includes(this.language)&&source.length<200000){
+                        const pattern=this.language==='json'?/("(?:\\.|[^"\\])*"\s*:?)|\b(?:true|false|null)\b|-?\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b/g:/"(?:\\.|[^"\\])*"|\b(?:query|q|variable|v|temp|t|context|c|math)\.[\w.]+|\b(?:return|true|false|this|break|continue)\b|-?\b\d+(?:\.\d+)?\b/g;
+                        let offset=0;for(const match of source.matchAll(pattern)){this.highlight.append(document.createTextNode(source.slice(offset,match.index)));const span=document.createElement('span');span.className=match[0].startsWith('"')?(match[0].trimEnd().endsWith(':')?'lf-code-key':'lf-code-string'):'lf-code-number';span.textContent=match[0];this.highlight.append(span);offset=match.index+match[0].length;}this.highlight.append(document.createTextNode(source.slice(offset)));
+                    }else this.highlight.textContent=source;
+                    const lines=Math.min(20000,this.value.split('\n').length);this.gutter.textContent=Array.from({length:lines},(_,i)=>i+1).join('\n');
+                    this.highlight.scrollTop=this.input.scrollTop;this.highlight.scrollLeft=this.input.scrollLeft;
+                }
+                format() {if(this.options.readonly||this.is_disabled||!this.validate()||!this.value.trim())return;try{this.setValue(JSON.stringify(this.constructor.parseForEditing(this.value),null,2));this.change();}catch(e){this.status.textContent=e.message;this.status.classList.add('invalid');}}
+                setMode(mode) {
+                    if(mode==='visual'&&(this.language!=='json'||!this.validate()))mode='code';
+                    if(mode==='visual'&&this.value.trim())try{this.constructor.parseForEditing(this.value);}catch(e){mode='code';this.status.textContent=e.message;this.status.classList.add('invalid');}
+                    this.mode=mode;
+                    this.code.hidden=mode!=='code';this.visual.hidden=mode!=='visual';
+                    this.modeTabs.setValue(mode);
+                    for(const [key,button] of Object.entries(this.modeTabs.button_nodes)){const panel=key==='code'?this.code:this.visual;if(!panel.id)panel.id='lf_code_panel_'+(++lightflowControlInstance);panel.setAttribute('role','tabpanel');panel.setAttribute('aria-labelledby',button.id);button.setAttribute('aria-controls',panel.id);}
+                    if(mode==='visual')this.renderVisual();else this.disposeVisual();
+                }
+                disposeVisual() {for(const f of this.forms||[])f.delete?.();this.forms=[];this.visual?.replaceChildren();}
+                renderVisual() {
+                    this.disposeVisual();if(!this.value.trim()){this.visual.textContent=this.text('Empty document. Enter JSON in Code.','Documento vacío. Introduce JSON en Código.');return;}
+                    let root;try{root=JSON.parse(this.value);}catch{return;}
+                    const read=path=>path.reduce((v,k)=>v[k],root);
+                    const write=(path,value)=>{if(!path.length)root=value;else read(path.slice(0,-1))[path.at(-1)]=value;this.value=JSON.stringify(root,null,2);this.input.value=this.value;this.renderCode();this.validate();this.change();};
+                    let count=0;
+                    const visit=(value,path,host,label)=>{
+                        if(++count>1000||path.length>32){const note=document.createElement('p');note.textContent=this.text('Continue editing this branch in Code.','Continúa editando esta rama en Código.');host.append(note);return;}
+                        const typedKey=this.options.typed_json_key;
+                        if(typedKey && value && typeof value==='object' && typeof value[typedKey]==='string'){const key=Object.hasOwn(value,'value')?'value':'values';if(Object.hasOwn(value,key)){visit(value[key],[...path,key],host,(label||'NBT')+' · '+value[typedKey]);return;}}
+                        if(this.options.typed_nbt && value && !Array.isArray(value) && Number.isInteger(value.type) && value.type>=0 && value.type<=12 && Object.hasOwn(value,'value')) {
+                            const names=['End','Byte','Short','Int','Long','Float','Double','ByteArray','String','List','Compound','IntArray','LongArray'];
+                            visit(value.value,[...path,'value'],host,(label||'NBT')+' · '+names[value.type]);return;
+                        }
+                        const schema=this.options.schemaForPath?.(path,value,root,{field:this})||{};
+                        const vector=Array.isArray(value)&&value.length>=2&&value.length<=4&&value.every(v=>typeof v==='number');
+                        if(value!==null&&typeof value==='object'&&!vector){
+                            const section=document.createElement('details'),summary=document.createElement('summary'),body=document.createElement('div'),key=JSON.stringify(path);
+                            summary.textContent=(label||this.text('Document','Documento'))+' · '+Object.keys(value).length;section.append(summary,body);host.append(section);let mounted=false;
+                            const mount=()=>{if(mounted)return;mounted=true;for(const [k,v]of Object.entries(value))visit(v,[...path,k],body,k);};
+                            section.addEventListener('toggle',()=>{if(section.open){this.expanded.add(key);mount();}else this.expanded.delete(key);});
+                            if(path.length<=1||this.expanded.has(key)){section.open=true;mount();}return;
+                        }
+                        let type=vector?'custom_vector':typeof value==='boolean'?'checkbox':typeof value==='number'?'number':'compact_text';
+                        if(typeof value==='string'&&(/\b(?:query|q|variable|v|temp|t|context|c|math)\./.test(value)||schema.language==='molang'))type='code_editor';
+                        if(schema.options)type='enum_select';else if(typeof value==='number'&&Number.isFinite(schema.min)&&Number.isFinite(schema.max))type='combo_slider';
+                        if(schema.control==='switch')type='checkbox';
+                        const config={...schema,type,label:schema.label||label||'value',value:value===null?'null':value,readonly:value===null||this.options.readonly||schema.readonly,disable:this.is_disabled,resettable:false};
+                        if(type==='code_editor'){config.language='molang';config.height=100;}
+                        if(type==='checkbox'){config.style='toggle_switch';config.value=Boolean(value);}if(vector){config.dimensions=value.length;config.axis_labels=true;}if(type==='combo_slider'){config.full_track=false;config.density='compact';config.compact=false;config.reset_value=value;}
+                        const fieldId='property_'+(++lightflowControlInstance),form=new InputForm((window.LightManagerUI?.prepareForm || (form => form))({[fieldId]:config}));this.forms.push(form);host.append(form.node);
+                        form.on('change',({result})=>{if(config.readonly||this.is_disabled)return;let next=result[fieldId];if(typeof value==='number'&&typeof next==='boolean')next=Number(next);if(schema.options&&typeof value==='number')next=Number(next);if(schema.options&&typeof value==='boolean')next=next==='true'||next===true;if(typeof value==='number'&&!Number.isFinite(Number(next)))return;write(path,next);});
+                    };visit(root,[],this.visual,this.options.document_label||'');
+                }
+                delete() {this.disposeVisual();this.modeForm?.delete?.();super.delete?.();}
+            };
+
+            FormElement.types.image_preview = class LightflowImagePreview extends FormElement {
+                get uses_wide_inputs() { return true; }
+                build(bar) {
+                    this.bar = bar; bar.classList.add('full_width_dialog_bar');
+                    this.node = document.createElement('figure'); this.node.className = 'lf-image-preview';
+                    this.image = document.createElement('img'); this.image.alt = tl(this.options.alt || this.options.label || '');
+                    this.image.loading = 'lazy'; this.image.decoding = 'async';
+                    this.image.style.imageRendering = this.options.pixelated ? 'pixelated' : 'auto';
+                    if (this.options.height) this.node.style.setProperty('--lf-preview-height', `${Number(this.options.height)}px`);
+                    this.caption = document.createElement('figcaption'); this.caption.setAttribute('role', 'status');
+                    this.image.onload = () => { this.caption.textContent = tl(this.options.caption || ''); };
+                    this.image.onerror = () => { this.image.hidden = true; this.caption.textContent = tl('light_manager.ui.preview_error'); };
+                    this.node.append(this.image, this.caption); bar.append(this.node); this.setValue(this.options.value || '');
+                }
+                getValue() { return this.value; }
+                setValue(value) {
+                    this.value = String(value || ''); this.image.hidden = !this.value;
+                    this.caption.textContent = tl(this.value ? 'light_manager.ui.loading' : this.options.empty_label || 'light_manager.ui.preview_empty');
+                    if (this.value) this.image.src = this.value; else this.image.removeAttribute('src');
+                }
+                delete() { this.image.onload = this.image.onerror = null; this.image.removeAttribute('src'); super.delete(); }
+            };
+
+            FormElement.types.outliner_select = class LightflowOutlinerSelect extends FormElement {
+                get uses_wide_inputs() { return true; }
+                build(bar) {
+                    this.bar = bar; bar.classList.add('full_width_dialog_bar');
+                    this.value = { ...(this.options.value || {}) }; this.collapsed = new Set(); this.query = '';
+                    this.node = document.createElement('div'); this.node.className = 'lf-outliner-select';
+                    this.search = document.createElement('input'); this.search.type = 'search'; this.search.className = 'lf-outliner-search';
+                    this.search.placeholder = tl('light_manager.ui.search_objects'); this.search.setAttribute('aria-label', this.search.placeholder);
+                    this.search.addEventListener('input', () => { this.query = this.search.value; this.render(); });
+                    this.tree = document.createElement('div'); this.tree.className = 'lf-outliner-tree'; this.tree.setAttribute('role', 'tree');
+                    this.tree.setAttribute('aria-label', tl(this.options.label || 'light_manager.art.targets'));
+                    this.footer = document.createElement('div'); this.footer.className = 'lf-outliner-footer'; this.footer.setAttribute('role', 'status');
+                    this.node.append(this.search, this.tree, this.footer); bar.append(this.node); this.render();
+                }
+                getValue() { return { ...this.value }; }
+                setValue(value) { this.value = { ...(value || {}) }; this.render(); }
+                render() {
+                    if (!this.tree) return;
+                    const focusedId = document.activeElement?.closest?.('.lf-outliner-row')?.dataset.uuid;
+                    const nodes = typeof this.options.nodes === 'function' ? this.options.nodes() : this.options.nodes || Outliner.root || [];
+                    const entries = new Map();
+                    const collect = node => {
+                        if (!node?.uuid || entries.has(node.uuid) || (this.options.filter && !this.options.filter(node))) return;
+                        entries.set(node.uuid, node); (node.children || []).forEach(collect);
+                    };
+                    nodes.forEach(collect);
+                    const roots = [...entries.values()].filter(node => !entries.has(node.parent?.uuid));
+                    const normalize = text => String(text || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase();
+                    const words = normalize(this.query).split(/\s+/).filter(Boolean);
+                    const matching = node => words.every(word => normalize(node.name).includes(word));
+                    const containsMatch = node => matching(node) || (node.children || []).some(child => entries.has(child.uuid) && containsMatch(child));
+                    const fragment = document.createDocumentFragment(); let count = 0;
+                    const append = (node, depth) => {
+                        if (words.length && !containsMatch(node)) return;
+                        const children = (node.children || []).filter(child => entries.has(child.uuid));
+                        const row = document.createElement('div'); row.className = 'lf-outliner-row'; row.dataset.uuid = node.uuid; row.setAttribute('role', 'treeitem');
+                        row.setAttribute('aria-level', String(depth + 1)); row.setAttribute('aria-label', node.name || node.uuid); row.tabIndex = count++ === 0 ? 0 : -1;
+                        const fold = document.createElement('button'); fold.type = 'button'; fold.tabIndex = -1;
+                        fold.disabled = !children.length;
+                        if (children.length) fold.setAttribute('aria-label', tl(this.collapsed.has(node.uuid) ? 'light_manager.ui.expand_group' : 'light_manager.ui.collapse_group'));
+                        else fold.setAttribute('aria-hidden', 'true');
+                        fold.append(Blockbench.getIconNode(children.length ? (this.collapsed.has(node.uuid) ? 'chevron_right' : 'expand_more') : (node.icon || 'deployed_code')));
+                        if (children.length) row.setAttribute('aria-expanded', String(!this.collapsed.has(node.uuid) || !!words.length));
+                        fold.addEventListener('click', () => { this.collapsed.has(node.uuid) ? this.collapsed.delete(node.uuid) : this.collapsed.add(node.uuid); this.render(); });
+                        const name = document.createElement('span'); name.textContent = node.name || node.uuid; name.style.paddingInlineStart = `${Math.min(depth, 8) * 10}px`;
+                        const select = document.createElement('select'); select.setAttribute('aria-label', `${node.name} · ${tl('light_manager.art.targets')}`);
+                        for (const key of ['auto', 'include', 'exclude']) { const option = document.createElement('option'); option.value = key; option.textContent = tl(`light_manager.art.${key}`); select.append(option); }
+                        select.value = this.value[node.uuid] || 'auto'; select.disabled = !!this.is_disabled;
+                        select.addEventListener('change', event => {
+                            if (this.is_disabled) return;
+                            this.options.onBefore?.(event);
+                            if (select.value === 'auto') delete this.value[node.uuid]; else this.value[node.uuid] = select.value;
+                            this.change(); this.options.onAfter?.(event); this.updateSummary(count);
+                        });
+                        row.addEventListener('keydown', event => {
+                            if (event.target !== row) return;
+                            const rows = [...this.tree.children]; const index = rows.indexOf(row);
+                            if (['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) {
+                                event.preventDefault(); const next = event.key === 'Home' ? 0 : event.key === 'End' ? rows.length - 1 : Math.max(0, Math.min(rows.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)));
+                                rows.forEach(item => item.tabIndex = -1); rows[next].tabIndex = 0; rows[next].focus();
+                            } else if (children.length && ['ArrowLeft', 'ArrowRight'].includes(event.key)) {
+                                event.preventDefault(); event.key === 'ArrowLeft' ? this.collapsed.add(node.uuid) : this.collapsed.delete(node.uuid); this.render();
+                            } else if (event.key === 'Enter') { event.preventDefault(); select.focus(); }
+                        });
+                        row.append(fold, name, select); fragment.append(row);
+                        if (!this.collapsed.has(node.uuid) || words.length) children.forEach(child => append(child, depth + 1));
+                    };
+                    roots.forEach(node => append(node, 0)); this.tree.replaceChildren(fragment); this.updateSummary(count);
+                    if (focusedId) ([...this.tree.children].find(row => row.dataset.uuid === focusedId) || this.tree.firstElementChild)?.focus();
+                }
+                updateSummary(count) {
+                    const values = Object.values(this.value);
+                    this.footer.textContent = `${count} ${tl('light_manager.ui.objects')} · ${values.filter(value => value === 'include').length} ${tl('light_manager.art.include')} · ${values.filter(value => value === 'exclude').length} ${tl('light_manager.art.exclude')}`;
+                }
+            };
+
+            // Keep native multi-action and multiline value/event semantics while
+            // giving these less common controls the shared Lightflow state/skin.
+            for (const type of ['buttons', 'textarea']) {
+                const NativeType = FormElement.types[type];
+                FormElement.types['lightflow_' + type] = class extends NativeType {
+                    build(bar) {
+                        super.build(bar);
+                        bar.classList.add('lf-controls', 'lightflow_auxiliary_control');
+                        bar.querySelectorAll('button').forEach(button => button.classList.add('light_manager_action_button'));
+                        bar.querySelectorAll('textarea').forEach(input => input.classList.add('dark_bordered', 'focusable_input'));
+                    }
+                };
+            }
             const lightManagerFormElementTypes = [
+                'lightflow_buttons', 'lightflow_textarea',
                 'advanced_color',
+                'texture_source',
+                'icon_select',
                 'combo_slider',
                 'compact_select',
                 'enum_select',
                 'horizontal_select',
                 'compact_text',
                 'bar_display',
+                'progress',
                 'panel_search',
                 'custom_checkbox',
                 'action_toggle',
                 'action_button',
                 'custom_vector',
-                'gradient_editor'
+                'gradient_editor', 'tab_select', 'grid_select', 'image_preview', 'outliner_select', 'code_editor', 'block_select'
             ];
             for (const typeId of lightManagerFormElementTypes) {
                 const Type = FormElement.types[typeId];
@@ -13054,14 +20186,102 @@ function initializeLightManagerPlugin() {
                     if (variant && this.bar) {
                         this.bar.classList.add(`light_manager_form_variant_${variant}`);
                     }
+                    this.bar?.classList.add('lf-controls');
+                    if (this.bar && (this.options.description || this.options.disable_desc)) {
+                        const help = document.createElement('span'); help.className = 'lf-control-help';
+                        help.id = `lf_description_${++lightflowControlInstance}`;
+                        help.textContent = typeof this.options.description === 'string' ? tl(this.options.description) : '';
+                        this.bar.append(help); this._lfDescription = help;
+                        this.bar.querySelectorAll('input,select,textarea,button,[tabindex]').forEach(node => {
+                            node.setAttribute('aria-describedby', [node.getAttribute('aria-describedby'), help.id].filter(Boolean).join(' '));
+                        });
+                    }
+
+                    this.bar?.querySelectorAll('input[type=range]').forEach(node => node.classList.add('lf-slider-track'));
                     setupLightManagerFormElementState(this);
                 };
                 Type.prototype._lightManagerFormStateWrapped = true;
             }
 
+            const ownedSharedTypes = new Map(sharedTypeIds.map(id => [id, FormElement.types[id]]));
+            deletables.push({
+                delete() {
+                    for (const [id, Type] of ownedSharedTypes) {
+                        if (FormElement.types[id] !== Type) continue;
+                        const previous = previousSharedTypes.get(id);
+                        if (previous) FormElement.types[id] = previous; else delete FormElement.types[id];
+                    }
+                }
+            });
             window.applyIndestructibleFormGroups = applyIndestructibleFormGroups;
+            const taskDialogs = new Set();
+            deletables.push(Blockbench.addCSS(`
+                .lightflow_task_dialog .light_manager_panel_search { display:grid; grid-template-columns:minmax(0,1fr) 100px; gap:4px; width:100%; }
+                .lightflow_task_dialog .light_manager_panel_search_input { display:flex; align-items:center; gap:5px; padding:0 6px; min-width:0; border:1px solid var(--color-border); background:var(--color-back); }
+                .lightflow_task_dialog .light_manager_panel_search_input > .icon { font-size:18px; margin:0!important; flex:0 0 auto; }
+                .lightflow_task_dialog .light_manager_panel_search_input input { width:100%; min-width:0; height:29px; border:0; padding:0; background:transparent; }
+                .lightflow_task_dialog .light_manager_panel_search_active { height:31px; width:100%!important; margin:0; }
+                .lightflow_task_dialog .light_manager_panel_search_collapse { display:none!important; }
+                .lightflow_task_dialog .light_manager_panel_search_clear { display:grid!important; place-items:center; flex:0 0 22px!important; width:22px!important; min-width:22px!important; max-width:22px!important; height:24px!important; min-height:24px!important; max-height:24px!important; padding:0!important; margin:0!important; background:transparent!important; border:0!important; }
+                .lightflow_task_dialog .light_manager_panel_search_clear[hidden] { display:none!important; }
+                .lightflow_task_dialog .light_manager_panel_search_clear > .icon { margin:0!important; font-size:16px; }
+                .lightflow_task_dialog .light_manager_panel_search_input:focus-within { outline:1px solid var(--color-accent); }
+                .lightflow_task_dialog .custom_checkbox { min-height:30px; height:auto!important; }
+                .lightflow_task_dialog .custom_checkbox > span > span { white-space:normal!important; line-height:1.3; }
+            `));
+            deletables.push({ delete() { for (const dialog of [...taskDialogs]) { dialog.cancel(); dialog.delete(); } } });
+            const showTaskDialog = (id, config, owner = null) => {
+                const confirm = config.onConfirm, cancel = config.onCancel;
+                const dialog = new Dialog(id, {
+                    ...config,
+                    form: prepareLightflowForm(config.form),
+                    onConfirm(result) { const response = confirm?.call(this, result); if (response === false) return false; dialog.delete(); },
+                    onCancel() { const response = cancel?.call(this); if (response === false) return false; dialog.delete(); }
+                });
+                const nativeDelete = dialog.delete;
+                let disposed = false;
+                dialog.delete = function () {
+                    if (disposed) return;
+                    disposed = true; taskDialogs.delete(dialog); owner?.delete(dialog);
+                    return nativeDelete.call(this);
+                };
+                taskDialogs.add(dialog); owner?.add(dialog);
+                dialog.show();
+                dialog.object.classList.add('lightflow_task_dialog');
+                return dialog;
+            };
+            const taskDialogForm = (source, sections) => {
+                const categoryByKey = new Map();
+                sections.forEach(section => section.entries.forEach(key => categoryByKey.set(key, section.id)));
+                const form = {
+                    _task_sections: LightManagerFormDesign.tabs({
+                        presentation: 'flat', value: sections[0].id,
+                        options: Object.fromEntries(sections.map(section => [section.id, { name: section.label, icon: section.icon }]))
+                    }),
+                    _task_search: LightManagerFormDesign.search()
+                };
+                for (const [key, field] of Object.entries(source)) {
+                    if (!field || typeof field !== 'object' || key.startsWith('atmosphere_section')) continue;
+                    const category = categoryByKey.get(key);
+                    const condition = field.condition;
+                    const next = { ...field, condition: result => Condition(condition, result) && (!category || result._task_sections === category || !!String(result._task_search || '').trim()) };
+                    if (next.type === 'select') {
+                        const options = Object.fromEntries(Object.entries(next.options || {}).map(([value, label]) => [value, label && typeof label === 'object' ? label : { name: tl(label === true ? value : label) }]));
+                        Object.assign(next, { type: 'compact_select', options, hide_icon: !Object.values(options).some(option => option.icon), show_value_text: true, expand: true, searchable: Object.keys(options).length > 8 });
+                    }
+                    if (next.type === 'inline_select' || next.type === 'inline_multi_select') Object.assign(next, { type: 'horizontal_select', presentation: 'inline', multi_select: next.type === 'inline_multi_select' });
+                    if (next.type === 'range' || next.type === 'combo_slider') Object.assign(next, { type: 'combo_slider', full_track: true });
+                    if (next.type === 'vector') Object.assign(next, { type: 'custom_vector', axis_labels: true });
+                    if (next.type === 'checkbox') Object.assign(next, { type: 'custom_checkbox', layout: 'space_between', icon_on: 'check_box', icon_off: 'check_box_outline_blank', icon_color_on: 'var(--color-accent)', label_color: 'var(--color-text)' });
+                    form[key] = next;
+                }
+                return form;
+            };
             lightManagerUIApi = {
-                designVersion: 3,
+                designVersion: 4,
+                removeToolbarAction: removeLightflowToolbarAction,
+                controls: Object.freeze({ version: 1, bindNumberEdit: bindLightflowNumberEdit, mountNumberEditors: mountLightflowNumberEditors, positionOverlay: positionLightflowOverlay }),
+                mediaViewer: Object.freeze({version:1, mount:mountLightflowMediaViewer, openImage:openLightflowImageViewer}),
                 state: LightflowUIState,
                 captureFormView: captureLightflowFormView,
                 restoreFormView: restoreLightflowFormView,
@@ -13069,21 +20289,65 @@ function initializeLightManagerPlugin() {
                 addCompactPanelStyles: addLightManagerCompactPanelStyles,
                 addDesignedPanelStyles: addLightManagerDesignedPanelStyles,
                 formDesign: LightManagerFormDesign,
+                prepareForm: prepareLightflowForm,
+                progress: Object.freeze({ create: createLightflowProgress }),
+                textureSource: LightflowTextureSource,
+                creationGuide: createLightflowCreationGuide,
                 markerColor: getLightManagerMarkerColor,
                 markerPresets: LIGHT_MANAGER_UI_MARKER_PRESETS,
                 GridMenu: LightManagerGridMenu,
                 IdentityMenu: LightManagerIdentityMenu,
                 ActionToggle: LightManagerActionToggle,
+                CompactDropdownSelect: CompactDropdownSelect,
+                searchMenu: addNativeSelectSearch,
+                showTaskDialog,
+                taskDialogForm,
                 formElementTypes: lightManagerFormElementTypes.slice(),
                 gradient: LightManagerGradient,
-                GradientEditor: FormElement.types.gradient_editor
+                GradientEditor: FormElement.types.gradient_editor,
+                gizmos: Object.freeze({
+                    screenWorldSize: getLightManagerScreenWorldSize,
+                    screenScale: getLightManagerScreenScale
+                })
             };
             window.LightManagerUI = lightManagerUIApi;
+            window.LightflowMenus = createLightflowMenuOrganizer({menuBar:MenuBar,items:BarItems,checkCondition:condition=>Condition(condition),text:labels=>String(window.Language?.code||'').startsWith('es')?labels[1]:labels[0]});
+            deletables.push(window.LightflowMenus);
+            trackLightManagerWindowBinding('LightflowMenus');
             lightManagerUIApi.workspace = createLightflowWorkspace();
             deletables.push(lightManagerUIApi.workspace);
 
             const compactWidgetStyles = Blockbench.addCSS(
-                `.select_menu li.marked > span {
+                `.lightflow_viewport_tools button,
+                .lightflow_particle_player button,
+                .lightflow-outliner-filter-trigger,
+                .lightflow-outliner-filters button,
+                .lightflow-wide-rail button,
+                .lightflow-wide-drawer-close,
+                .lightflow_texture_pick,
+                .horizontal_select_widget > .horizontal_select_btn,
+                .light_manager_panel_search_active,
+                .light_manager_panel_search_collapse,
+                .light_manager_panel_search_clear,
+                .action_toggle_btn,
+                .light_manager_action_button,
+                .light_manager_enum_reset,
+                .light_manager_slider_marks > .light_manager_slider_mark,
+                .light_manager_gradient_tool,
+                .light_manager_gradient_swatch,
+                .light_manager_gradient_stop,
+                .light_manager_gradient_midpoint,
+                #panel_lightflow_scene button,
+                #panel_light_properties button,
+                #panel_lightflow_atmosphere_properties button,
+                #panel_lightflow_god_ray_properties button,
+                #panel_lightflow_particle_properties button,
+                #panel_lightflow_scene_composer_panel button,
+                #panel_material_properties button {
+                    box-shadow: none !important;
+                }
+
+                ul.light_manager_grid_menu li.marked > span {
                     text-decoration: underline;
                 }
 
@@ -13106,7 +20370,7 @@ function initializeLightManagerPlugin() {
                     fill: #17191f !important;
                 }
 
-                .compact_dropdown_select {
+                .compact_dropdown_select.lf-dropdown {
                     display: flex !important;
                     align-items: center;
                     justify-content: center;
@@ -13115,20 +20379,21 @@ function initializeLightManagerPlugin() {
                     position: relative;
                     width: auto !important;
                     min-width: 32px;
+                    border-radius: var(--lf-radius-control,8px);
                 }
 
-                .compact_dropdown_select:hover {
+                .compact_dropdown_select.lf-dropdown:hover {
                     background-color: var(--color-button);
                 }
 
-                .compact_dropdown_select .main_icon_wrapper {
+                .compact_dropdown_select.lf-dropdown .main_icon_wrapper {
                     display: flex;
                     align-items: center;
                     justify-content: center;
                     font-size: 16px; /* Icon size. */
                 }
 
-                .compact_dropdown_select .dropdown_arrow {
+                .compact_dropdown_select.lf-dropdown .dropdown_arrow {
                     font-size: 10px;
                     margin-left: 4px;
                     color: var(--color-text);
@@ -13217,40 +20482,44 @@ function initializeLightManagerPlugin() {
                     background-clip: content-box !important;
                 }
 
-                .horizontal_select_widget {
+                .horizontal_select_widget.light_manager_horizontal_select {
                     display: flex;
                     align-items: stretch;
                     border-radius: 2px;
-                    overflow: hidden;
+                    overflow: visible;
                     box-sizing: border-box;
-                    height: 30px; /* Standard Blockbench toolbar height */
+                    min-height:30px; height:auto;
+                    min-width:0;
                     user-select: none;
                 }
-                .horizontal_select_btn {
+                .light_manager_horizontal_select > .horizontal_select_btn {
                     display: flex;
                     align-items: center;
                     justify-content: center;
-                    padding: 0 10px;
+                    padding:4px 8px;
                     cursor: pointer;
                     transition: background 0.15s ease, color 0.15s ease;
                     color: var(--color-text);
                     background: transparent;
-                    min-width: 32px;
+                    min-width:0!important;
+                    height:auto!important;
+                    min-height:30px;
                 }
                 .horizontal_select_btn:hover:not(.disabled) {
                     background: var(--color-button);
                 }
                 .horizontal_select_btn.selected {
                     background: var(--color-accent);
-                    color: var(--color-light) !important; /* Overrides custom colors when selected for readability */
+                    color: var(--color-accent_text,var(--color-text)) !important; /* Theme foreground for accent selection. */
                 }
                 .horizontal_select_btn.disabled {
                     opacity: 0.4;
                     cursor: not-allowed;
                     filter: grayscale(100%);
                 }
-                .horizontal_select_icon {
+                .light_manager_horizontal_select .horizontal_select_icon {
                     display: flex;
+                    flex:0 0 auto;
                     align-items: center;
                     justify-content: center;
                     font-size: 1.1em;
@@ -13258,9 +20527,12 @@ function initializeLightManagerPlugin() {
                 .horizontal_select_btn:not(.icon_only) .horizontal_select_icon {
                     margin-right: 6px;
                 }
-                .horizontal_select_label {
+                .light_manager_horizontal_select .horizontal_select_label {
                     font-size: 13px;
-                    white-space: nowrap;
+                    min-width:0; flex:0 1 auto;
+                    white-space:normal;
+                    overflow-wrap:anywhere;
+                    line-height:1.3;
                 }
             `
             );
@@ -13293,11 +20565,13 @@ function initializeLightManagerPlugin() {
 
             // Safe until the panel factory below replaces it. Keeping this in
             // the element scope lets select/unselect refresh immediately.
-            let refreshLightPropertiesPanel = () => {};
+            let refreshLightPropertiesPanel = () => { };
 
             class LightElement extends OutlinerElement {
                 constructor(data, uuid) {
                     super(data, uuid);
+                    this.children = [];
+                    this.isOpen = false;
                     for (let key in LightElement.properties) {
                         LightElement.properties[key].reset(this);
                     }
@@ -13326,6 +20600,9 @@ function initializeLightManagerPlugin() {
                     for (let key in LightElement.properties) {
                         LightElement.properties[key].merge(this, object);
                     }
+                    if (object.shadow_normal_bias_auto === undefined && Object.prototype.hasOwnProperty.call(object, 'shadow_normal_bias')) {
+                        this.shadow_normal_bias_auto = LightManagerUtils.isAutomaticShadowNormalBiasValue(object.shadow_normal_bias, this);
+                    }
                     LightManagerUtils.sanitizeLight(this);
                     this.sanitizeName();
                     this.updateLightIcon(); // Call update on extend/undo changes
@@ -13347,6 +20624,28 @@ function initializeLightManagerPlugin() {
                     el.type = 'light';
                     el.uuid = this.uuid;
                     return el;
+                }
+
+                duplicate() {
+                    const copy = super.duplicate();
+                    for (const child of copy.children) {
+                        if (child.type === 'lightflow_god_ray' && child.light_uuid === this.uuid) {
+                            child.light_uuid = copy.uuid;
+                            child.preview_controller?.updateTransform?.(child);
+                        }
+                    }
+                    return copy;
+                }
+
+                forEachChild(callback, type = OutlinerElement, includeSelf = false) {
+                    if (includeSelf && this instanceof type) callback(this);
+                    const visit = child => { if (child instanceof type) callback(child); for (const nested of child.children || []) visit(nested); };
+                    this.children.forEach(visit);
+                }
+                openUp() {
+                    this.isOpen = true;
+                    if (this.parent && this.parent !== 'root') this.parent.openUp?.();
+                    return this;
                 }
 
                 select(event, isOutlinerClick) {
@@ -13371,6 +20670,9 @@ function initializeLightManagerPlugin() {
                 }
 
                 static behavior = {
+                    parent: true,
+                    child_types: ['lightflow_god_ray'],
+                    select_children: 'self_first',
                     unique_name: true,
                     movable: true,
                     rotatable: true, // Allowing rotation is now necessary to orient Directional and Spot lights
@@ -13390,7 +20692,10 @@ function initializeLightManagerPlugin() {
 
             LightElement.prototype.menu = new Menu([
                 'edit_light_properties',
+                'lightflow_god_ray_from_light',
+                'light_manager_edit_target', 'light_manager_target_position', 'light_manager_aim_selection', 'light_manager_release_target',
                 'fit_light_bounds_to_selection',
+                'light_manager_reset_gizmo',
                 '_',
                 ...Outliner.control_menu_group,
                 '_',
@@ -13410,6 +20715,8 @@ function initializeLightManagerPlugin() {
                 new Property(LightElement, 'vector', 'position'),
                 new Property(LightElement, 'vector', 'rotation'),
                 new Property(LightElement, 'vector', 'render_rotation', { default: [0, 0, 0] }),
+                new Property(LightElement, 'boolean', 'aim_target_enabled', { default: false }),
+                new Property(LightElement, 'vector', 'aim_target', { default: [0, 0, 0] }),
                 new Property(LightElement, 'vector', 'color', { default: [255, 255, 255] }),
                 new Property(LightElement, 'vector', 'render_color', { default: [255, 255, 255] }),
                 new Property(LightElement, 'number', 'intensity', { default: 1, min: 0 }),
@@ -13424,16 +20731,26 @@ function initializeLightManagerPlugin() {
                 new Property(LightElement, 'boolean', 'has_shadow', { default: true }),
                 new Property(LightElement, 'number', 'shadow_resolution', { default: 1024 }),
                 new Property(LightElement, 'number', 'studio_shadow_resolution', { default: 0 }),
+                new Property(LightElement, 'string', 'shadow_camera_quality', { default: 'balanced' }),
+                new Property(LightElement, 'number', 'shadow_camera_distance', { default: 256, min: 8 }),
+                new Property(LightElement, 'boolean', 'shadow_scene_fit', { default: false }),
+                new Property(LightElement, 'boolean', 'shadow_region_locked', { default: false }),
+                new Property(LightElement, 'array', 'shadow_region_bounds', { default: [] }),
                 new Property(LightElement, 'number', 'shadow_bias', { default: DEFAULT_SHADOW_BIAS }),
+                new Property(LightElement, 'boolean', 'shadow_normal_bias_auto', { default: true }),
                 new Property(LightElement, 'number', 'shadow_normal_bias', { default: DEFAULT_SHADOW_NORMAL_BIAS, description: 'property.shadow_normal_bias.desc' }),
                 new Property(LightElement, 'number', 'shadow_softness', { default: DEFAULT_SHADOW_SOFTNESS, min: 0, description: 'property.shadow_softness.desc' }),
+                new Property(LightElement, 'string', 'shadow_softness_mode', { default: 'hard' }),
+                new Property(LightElement, 'number', 'shadow_blur', { default: DEFAULT_SHADOW_BLUR, min: 0, max: 64 }),
                 new Property(LightElement, 'number', 'shadow_near', { default: 0.1, min: 0 }),
                 new Property(LightElement, 'number', 'shadow_far', { default: 200, min: 0 }),
                 new Property(LightElement, 'number', 'shadow_bounds', { default: 35, min: 0 })
             ];
             deletables.push(...lightElementProperties);
 
-            OutlinerElement.registerType(LightElement, 'light');
+            const reloadedLightElements = prepareReloadedLightManagerElements(LightElement, 'light');
+            const reloadedLightElementIds = new Set(reloadedLightElements.map(element => element.uuid));
+            const reloadProject = window.Project || null;
 
             class ArtKeyElement extends OutlinerElement {
                 constructor(data, uuid) {
@@ -13539,7 +20856,7 @@ function initializeLightManagerPlugin() {
             window.ArtKeyElement = ArtKeyElement;
             ArtKeyElement.prototype.title = 'Art Key';
             ArtKeyElement.prototype.type = 'art_key';
-            ArtKeyElement.prototype.icon = 'flare';
+            ArtKeyElement.prototype.icon = 'lightflow:key-light-rim';
             ArtKeyElement.prototype.movable = true;
             ArtKeyElement.prototype.scalable = true;
             ArtKeyElement.prototype.resizable = true;
@@ -13578,18 +20895,37 @@ function initializeLightManagerPlugin() {
                 new Property(ArtKeyElement, 'boolean', 'locked', { default: false })
             ];
             deletables.push(...artKeyElementProperties);
+            class ArtKeyInspectionAnimator extends BoneAnimator {
+                constructor(...args) { super(...args); this.position = []; this.rotation = []; this.scale = []; this.getGroup(); }
+                select() { this.getGroup(); return this; }
+                doRender() { return false; }
+            }
+            ArtKeyInspectionAnimator.prototype.channels = {};
+            ArtKeyInspectionAnimator.prototype.type = 'lightflow_inspection';
+            ArtKeyElement.animator = ArtKeyInspectionAnimator;
+            const reloadedArtKeyElements = prepareReloadedLightManagerElements(ArtKeyElement, 'art_key');
+            const reloadedArtKeyElementIds = new Set(reloadedArtKeyElements.map(element => element.uuid));
+            // Both surviving Light Manager element families must be core-safe before
+            // the first registerType dispatch. Blockbench's registration listeners
+            // refresh highlights across the whole Outliner, not only the type being
+            // registered, so a stale Art Key can otherwise break Light registration.
+            OutlinerElement.registerType(LightElement, 'light');
             OutlinerElement.registerType(ArtKeyElement, 'art_key');
 
             const updateArtKeyPreview = element => {
                 const mesh = element?.mesh;
                 if (!mesh) return;
+                let hidden = element.visibility === false;
+                for (let parent = element.parent; parent && typeof parent === 'object'; parent = parent.parent) {
+                    if (parent.visibility === false) hidden = true;
+                }
                 const helperVisible = lightManagerUIApi?.workspace?.helperVisible || (options => options.visible !== false);
                 const visible = helperVisible({
-                    visible: element.visibility !== false,
+                    visible: !hidden,
                     selected: !!element.selected
                 });
                 const markerVisible = helperVisible({
-                    visible: element.visibility !== false,
+                    visible: !hidden,
                     selected: !!element.selected,
                     kind: 'marker'
                 });
@@ -13606,6 +20942,7 @@ function initializeLightManagerPlugin() {
                     mesh.sourceGizmo.visible = markerVisible && element.art_mode !== 'direction';
                     mesh.updateWorldMatrix(true, false);
                     mesh.getWorldPosition(mesh.sourceGizmo.position);
+                    mesh.sourceGizmo.parent?.worldToLocal(mesh.sourceGizmo.position);
                     mesh.sourceGizmo.scale.setScalar(radius);
                 }
                 const scale = [0, 1, 2].map(index => Math.max(0.001, Math.abs(Number(element.scale?.[index]) || 1)));
@@ -13613,12 +20950,18 @@ function initializeLightManagerPlugin() {
                     mesh.directionGizmo.visible = markerVisible && element.art_mode === 'direction';
                     mesh.directionGizmo.scale.set(1 / scale[0], 1 / scale[1], 1 / scale[2]);
                 }
-                if (mesh.selectionProxy) mesh.selectionProxy.visible = element.visibility !== false;
+                if (mesh.selectionProxy) {
+                    mesh.selectionProxy.visible = markerVisible;
+                    mesh.selectionProxy.material.color.setRGB(...color);
+                    mesh.selectionProxy.material.opacity = element.selected ? 0.95 : 0.7;
+                }
             };
 
             artKeyPreviewController = new NodePreviewController(ArtKeyElement, {
+                ownedMeshes: new Map(),
                 setup(element) {
                     const mesh = new THREE.Object3D();
+                    this.ownedMeshes.set(element, mesh);
                     Project.nodes_3d[element.uuid] = mesh;
                     mesh.name = element.uuid;
                     mesh.type = element.type;
@@ -13630,7 +20973,7 @@ function initializeLightManagerPlugin() {
                     const boxSource = new THREE.BoxGeometry(window.LightManagerArtKeys.baseSize, window.LightManagerArtKeys.baseSize, window.LightManagerArtKeys.baseSize);
                     mesh.boxGizmo = new THREE.LineSegments(new THREE.EdgesGeometry(boxSource), lineMaterial);
                     boxSource.dispose();
-                    mesh.boxGizmo.raycast = () => {};
+                    mesh.boxGizmo.raycast = () => { };
                     mesh.add(mesh.boxGizmo);
 
                     const ringPoints = [];
@@ -13642,7 +20985,7 @@ function initializeLightManagerPlugin() {
                         new THREE.BufferGeometry().setFromPoints(ringPoints),
                         lineMaterial.clone()
                     );
-                    mesh.sourceGizmo.raycast = () => {};
+                    mesh.sourceGizmo.raycast = () => { };
                     mesh.sourceGizmo.frustumCulled = false;
                     mesh.sourceGizmo.name = `art_key_glow_point_gizmo_${element.uuid}`;
                     mesh.sourceGizmo.renderOrder = 1002;
@@ -13650,36 +20993,76 @@ function initializeLightManagerPlugin() {
                     mesh.sourceGizmo.onBeforeRender = (_renderer, _scene, camera) => {
                         mesh.updateWorldMatrix(true, false);
                         mesh.getWorldPosition(mesh.sourceGizmo.position);
-                        mesh.sourceGizmo.quaternion.copy(camera.quaternion);
+                        const parent = mesh.sourceGizmo.parent;
+                        parent?.worldToLocal(mesh.sourceGizmo.position);
+                        mesh.sourceGizmo.quaternion.copy(camera.getWorldQuaternion(new THREE.Quaternion()));
+                        if (parent) mesh.sourceGizmo.quaternion.premultiply(parent.getWorldQuaternion(new THREE.Quaternion()).invert());
                         mesh.sourceGizmo.updateMatrixWorld(true);
                     };
-                    (Canvas.scene || mesh).add(mesh.sourceGizmo);
+                    // Keep the billboard with its project, even while its own
+                    // position and rotation are evaluated in world space.
+                    (Project.model_3d || mesh).add(mesh.sourceGizmo);
+                    registerLightManagerCanvasGizmo(mesh.sourceGizmo);
 
-                    const arrowVertices = new Float32Array([0,0,0, 0,0,-12, 0,0,-12, -1.5,0,-9.5, 0,0,-12, 1.5,0,-9.5, 0,0,-12, 0,-1.5,-9.5, 0,0,-12, 0,1.5,-9.5]);
+                    const arrowVertices = new Float32Array([0, 0, 0, 0, 0, -12, 0, 0, -12, -1.5, 0, -9.5, 0, 0, -12, 1.5, 0, -9.5, 0, 0, -12, 0, -1.5, -9.5, 0, 0, -12, 0, 1.5, -9.5]);
                     const arrowGeometry = new THREE.BufferGeometry();
                     arrowGeometry.setAttribute('position', new THREE.BufferAttribute(arrowVertices, 3));
                     mesh.directionGizmo = new THREE.LineSegments(arrowGeometry, lineMaterial.clone());
-                    mesh.directionGizmo.raycast = () => {};
+                    mesh.directionGizmo.raycast = () => { };
                     mesh.add(mesh.directionGizmo);
 
-                    const proxyMaterial = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, colorWrite: false, depthWrite: false, side: THREE.DoubleSide });
-                    mesh.selectionProxy = new THREE.Mesh(new THREE.BoxGeometry(window.LightManagerArtKeys.baseSize, window.LightManagerArtKeys.baseSize, window.LightManagerArtKeys.baseSize), proxyMaterial);
+                    // A small center marker owns selection; the influence box
+                    // and radius guides remain visual aids, not click targets.
+                    const proxyMaterial = new THREE.MeshBasicMaterial({ color: 0xffd28c, transparent: true, opacity: 0.7, depthTest: false, depthWrite: false });
+                    mesh.selectionProxy = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 8), proxyMaterial);
                     mesh.selectionProxy.name = element.uuid;
                     mesh.selectionProxy.type = element.type;
                     mesh.selectionProxy.isElement = true;
                     mesh.selectionProxy.userData.lightflowNoShadow = true;
+                    mesh.selectionProxy.renderOrder = 1003;
+                    mesh.selectionProxy.frustumCulled = false;
+                    mesh.selectionProxy.onBeforeRender = (renderer, _scene, camera) => {
+                        mesh.updateWorldMatrix(true, false);
+                        const scale = mesh.getWorldScale(new THREE.Vector3());
+                        const radius = getLightManagerScreenWorldSize(mesh, camera, renderer, 6);
+                        mesh.selectionProxy.scale.set(
+                            radius / Math.max(0.0001, Math.abs(scale.x)),
+                            radius / Math.max(0.0001, Math.abs(scale.y)),
+                            radius / Math.max(0.0001, Math.abs(scale.z))
+                        );
+                        mesh.selectionProxy.updateMatrixWorld(true);
+                    };
                     mesh.add(mesh.selectionProxy);
+                    registerLightManagerCanvasGizmo(mesh.selectionProxy);
                     mesh.geometry = new THREE.BufferGeometry();
                     mesh.geometry.boundingBox = new THREE.Box3().makeEmpty();
-                    mesh.raycast = function(raycaster, intersects) {
-                        if (!this.selectionProxy || this.visible === false) return;
-                        this.selectionProxy.updateMatrixWorld(true);
-                        this.selectionProxy.raycast(raycaster, intersects);
+                    mesh.raycast = function (raycaster, intersects) {
+                        if (!this.selectionProxy?.visible || this.visible === false) return;
+                        const camera = raycaster.camera;
+                        if (!camera) return;
+                        this.updateWorldMatrix(true, false);
+                        const preview = window.Preview?.all?.find(view => view.camera === camera) || window.Preview?.selected;
+                        const center = this.getWorldPosition(new THREE.Vector3());
+                        // Pick in world space so nonuniform or inherited scale
+                        // cannot turn the center back into an oversized box.
+                        const radius = getLightManagerScreenWorldSize(this, camera, preview?.renderer, 10);
+                        const point = raycaster.ray.intersectSphere(new THREE.Sphere(center, radius), new THREE.Vector3());
+                        if (!point) return;
+                        const distance = raycaster.ray.origin.distanceTo(point);
+                        if (distance < raycaster.near || distance > raycaster.far) return;
+                        intersects.push({ distance, point, object: this.selectionProxy });
                     };
+                    // NodePreviewController.updateTransform expects these helpers on
+                    // transformable custom elements. Lights already initialize them;
+                    // Art Keys need the same state, especially when Cinematics drives
+                    // offline frame evaluation and refreshes all scene transforms.
+                    mesh.fix_position = new THREE.Vector3();
+                    mesh.fix_rotation = new THREE.Euler();
                     this.updateTransform(element);
                     this.dispatchEvent('setup', { element });
                 },
                 updateTransform(element) {
+                    if (!element?.mesh) return;
                     NodePreviewController.prototype.updateTransform.call(this, element);
                     updateArtKeyPreview(element);
                     window.ShaderArchitectInvalidateArtKeys?.();
@@ -13690,18 +21073,33 @@ function initializeLightManagerPlugin() {
                     updateArtKeyPreview(element);
                     this.dispatchEvent('update_selection', { element });
                 },
+                updateVisibility(element) {
+                    NodePreviewController.prototype.updateVisibility.call(this, element);
+                    updateArtKeyPreview(element);
+                },
                 remove(element) {
-                    const mesh = element?.mesh;
+                    const mesh = this.ownedMeshes.get(element) || element?.mesh;
+                    this.ownedMeshes.delete(element);
+                    unregisterLightManagerCanvasGizmo(mesh?.sourceGizmo);
+                    unregisterLightManagerCanvasGizmo(mesh?.selectionProxy);
                     [mesh?.boxGizmo, mesh?.sourceGizmo, mesh?.directionGizmo, mesh?.selectionProxy].forEach(object => {
+                        object?.removeFromParent?.();
                         object?.geometry?.dispose?.();
                         object?.material?.dispose?.();
                     });
                     mesh?.geometry?.dispose?.();
                     mesh?.removeFromParent?.();
-                    if (Project?.nodes_3d?.[element.uuid] === mesh) delete Project.nodes_3d[element.uuid];
+                    for (const project of window.ModelProject?.all || [window.Project]) {
+                        if (project?.nodes_3d?.[element.uuid] === mesh) delete project.nodes_3d[element.uuid];
+                    }
                     this.dispatchEvent('remove', { element });
                 }
             });
+            rebuildReloadedLightManagerElementPreviews(reloadedArtKeyElements, artKeyPreviewController);
+            const refreshArtKeyHelpers = () => ArtKeyElement.all.forEach(updateArtKeyPreview);
+            for (const event of ['update_view', 'update_selection', 'select_project']) deletables.push(Blockbench.on(event, refreshArtKeyHelpers));
+            window.addEventListener('lightflow_gizmo_visibility_changed', refreshArtKeyHelpers);
+            deletables.push({ delete() { window.removeEventListener('lightflow_gizmo_visibility_changed', refreshArtKeyHelpers); } });
 
             const armatureBoneChildTypes = window.ArmatureBone?.behavior?.child_types;
             const ownsArmatureBoneLightChildType = Array.isArray(armatureBoneChildTypes) &&
@@ -13718,10 +21116,12 @@ function initializeLightManagerPlugin() {
             }
             if (Array.isArray(armatureBoneChildTypes) && !armatureBoneChildTypes.includes('art_key')) {
                 armatureBoneChildTypes.push('art_key');
-                deletables.push({ delete() {
-                    const index = armatureBoneChildTypes.indexOf('art_key');
-                    if (index >= 0) armatureBoneChildTypes.splice(index, 1);
-                }});
+                deletables.push({
+                    delete() {
+                        const index = armatureBoneChildTypes.indexOf('art_key');
+                        if (index >= 0) armatureBoneChildTypes.splice(index, 1);
+                    }
+                });
             }
 
             lightPreviewController = new NodePreviewController(LightElement, {
@@ -13807,6 +21207,24 @@ function initializeLightManagerPlugin() {
 
                     mesh.add(gizmo);
                     mesh.gizmo = gizmo;
+                    mesh.directionMarker = new THREE.LineSegments(arrowGeometry.clone(), gizmoMaterial.clone());
+                    mesh.directionMarker.raycast = () => { };
+                    mesh.intensityMarker = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(Array.from({ length: 32 }, (_, i) => new THREE.Vector3(Math.cos(i / 32 * Math.PI * 2), Math.sin(i / 32 * Math.PI * 2), 0))), gizmoMaterial.clone());
+                    mesh.intensityMarker.raycast = () => { };
+                    mesh.add(mesh.directionMarker, mesh.intensityMarker);
+                    mesh.directionMarker.onBeforeRender = (_renderer, _scene, camera) => {
+                        const physical = window.three_lights?.[element.uuid];
+                        const direction = physical?.target ? physical.target.getWorldPosition(new THREE.Vector3()).sub(physical.getWorldPosition(new THREE.Vector3())) : new THREE.Vector3(0, 0, -1).applyQuaternion(mesh.getWorldQuaternion(new THREE.Quaternion()));
+                        if (direction.lengthSq() < 1e-6) return;
+                        mesh.directionMarker.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), direction.normalize()).premultiply(mesh.getWorldQuaternion(new THREE.Quaternion()).invert());
+                        const size = getLightManagerScreenWorldSize(mesh, camera, _renderer, 28) / 8;
+                        mesh.directionMarker.scale.setScalar(size / mesh.scale.x);
+                    };
+                    mesh.intensityMarker.onBeforeRender = (_renderer, _scene, camera) => {
+                        mesh.intensityMarker.quaternion.copy(camera.getWorldQuaternion(new THREE.Quaternion())).premultiply(mesh.getWorldQuaternion(new THREE.Quaternion()).invert());
+                        const pixels = 8 + Math.min(10, Math.log2(Math.max(2, element.intensity) / 2) * 3);
+                        mesh.intensityMarker.scale.setScalar(getLightManagerScreenWorldSize(mesh, camera, _renderer, pixels) / mesh.scale.x);
+                    };
 
                     mesh.fix_position = new THREE.Vector3();
                     mesh.fix_rotation = new THREE.Euler();
@@ -13833,22 +21251,25 @@ function initializeLightManagerPlugin() {
                             material.dispose?.();
                         });
                     });
+                    for (const marker of [mesh?.directionMarker, mesh?.intensityMarker]) { marker?.geometry?.dispose?.(); marker?.material?.dispose?.(); }
                     mesh?.sprite?.material?.dispose?.();
 
                     NodePreviewController.prototype.remove.call(this, element);
                 },
                 updateTransform(element) {
+                    const mesh = element?.mesh;
+                    if (!mesh) return;
                     NodePreviewController.prototype.updateTransform.call(this, element);
                     if (
                         element.parent?.type === 'armature_bone' &&
                         element.parent.mesh &&
-                        element.mesh.parent !== element.parent.mesh
+                        mesh.parent !== element.parent.mesh
                     ) {
-                        element.parent.mesh.add(element.mesh);
-                        element.mesh.updateMatrixWorld(true);
+                        element.parent.mesh.add(mesh);
+                        mesh.updateMatrixWorld(true);
                     }
-                    element.mesh.fix_position.copy(element.mesh.position);
-                    element.mesh.fix_rotation.copy(element.mesh.rotation);
+                    mesh.fix_position?.copy?.(mesh.position);
+                    mesh.fix_rotation?.copy?.(mesh.rotation);
                     this.updateWindowSize(element);
                     window.update_light_element_callback?.({
                         shadows: true,
@@ -13905,14 +21326,17 @@ function initializeLightManagerPlugin() {
                         }
                     }
 
-                    const meshScale = element.selected ? 1.15 : 0.9;
+                    const meshScale = element.children?.length ? 1 : element.selected ? 1.15 : 0.9;
                     mesh.scale.setScalar(meshScale);
 
                     // Marker size is a UI affordance, not a brightness meter.
                     // Keep the world-space guide independent from its screen marker.
                     if (mesh.gizmo) mesh.gizmo.scale.setScalar(1 / meshScale);
-                    if (mesh.gizmo) mesh.gizmo.visible = lightManagerUIApi.workspace.helperVisible({visible: element.visibility !== false, selected: !!element.selected});
-                    mesh.sprite.visible = lightManagerUIApi.workspace.helperVisible({visible: element.visibility !== false, selected: !!element.selected, kind: 'marker'});
+                    if (mesh.gizmo) mesh.gizmo.visible = lightManagerUIApi.workspace.helperVisible({ visible: element.visibility !== false, selected: !!element.selected });
+                    mesh.sprite.visible = lightManagerUIApi.workspace.helperVisible({ visible: element.visibility !== false, selected: !!element.selected, kind: 'marker' });
+                    mesh.directionMarker.visible = mesh.sprite.visible && !element.selected && ['spot', 'directional'].includes(element.light_type);
+                    mesh.intensityMarker.visible = mesh.sprite.visible && !element.selected && Number(element.intensity) > 2;
+                    for (const marker of [mesh.directionMarker, mesh.intensityMarker]) { marker.material.color.setRGB(r, g, b); marker.material.opacity = .35; }
 
                     mesh.sprite.material.depthTest = !element.selected;
                     mesh.renderOrder = element.selected ? 100 : 0;
@@ -13936,6 +21360,7 @@ function initializeLightManagerPlugin() {
                     }
                 }
             });
+            rebuildReloadedLightManagerElementPreviews(reloadedLightElements, lightPreviewController);
 
             const migrateLegacyArtKeyTemplate = template => {
                 const position = new THREE.Vector3().fromArray(template.position || template.origin || [0, 0, 0]);
@@ -13958,21 +21383,29 @@ function initializeLightManagerPlugin() {
 
             const lightProjectHydrator = lightflowLifecycle?.registerHydrator?.(
                 'light_manager_elements',
-                ({ project, model, isCurrent, deferred }) => {
+                ({ project, model, reason, isCurrent, deferred }) => {
                     cancelLightManagerElementUpdate();
                     if (deferred) return;
                     if (project && !isCurrent()) return;
                     disposeRetiredLightManagerLights();
                     if (project) {
                         const modelElements = Array.isArray(model?.elements) ? model.elements : [];
+                        const preserveReloadedLiveState = reason === 'plugin_ready' && project === reloadProject;
                         const physicalModel = {
                             ...model,
-                            elements: modelElements.filter(template => !(template?.type === 'light' && template?.light_type === 'art_key'))
+                            elements: modelElements.filter(template => (
+                                !(template?.type === 'light' && template?.light_type === 'art_key') &&
+                                (!preserveReloadedLiveState || !reloadedLightElementIds.has(template?.uuid))
+                            ))
                         };
                         const artKeyModel = {
                             ...model,
-                            elements: modelElements.filter(template => template?.type === 'art_key').concat(
+                            elements: modelElements.filter(template => (
+                                template?.type === 'art_key' &&
+                                (!preserveReloadedLiveState || !reloadedArtKeyElementIds.has(template?.uuid))
+                            )).concat(
                                 modelElements.filter(template => template?.type === 'light' && template?.light_type === 'art_key').map(migrateLegacyArtKeyTemplate)
+                                    .filter(template => !preserveReloadedLiveState || !reloadedArtKeyElementIds.has(template?.uuid))
                             )
                         };
                         lightflowLifecycle.restoreCustomElements(physicalModel, 'light', LightElement);
@@ -14004,15 +21437,16 @@ function initializeLightManagerPlugin() {
             const originalZDefault = KeyframeDataPoint.properties.z.default;
 
             const lightManagerYCondition = point => {
-                if (point.keyframe.channel === 'intensity') return false;
+                if (point.keyframe.animator?.type === 'light' && point.keyframe.channel === 'intensity') return false;
                 return typeof originalYCondition === 'function' ? originalYCondition(point) : true;
             };
             const lightManagerZCondition = point => {
-                if (point.keyframe.channel === 'intensity') return false;
+                if (point.keyframe.animator?.type === 'light' && point.keyframe.channel === 'intensity') return false;
                 return typeof originalZCondition === 'function' ? originalZCondition(point) : true;
             };
 
             const lightManagerXDefault = point => {
+                if (point.keyframe.animator?.type !== 'light') return typeof originalXDefault === 'function' ? originalXDefault(point) : (originalXDefault || 0);
                 let el = point.keyframe.animator.element;
                 if (point.keyframe.channel === 'intensity') return el?.intensity ?? 1;
                 if (point.keyframe.channel === 'color') return el?.color[0] ?? 255;
@@ -14020,12 +21454,14 @@ function initializeLightManagerPlugin() {
                 return typeof originalXDefault === 'function' ? originalXDefault(point) : (originalXDefault || 0);
             };
             const lightManagerYDefault = point => {
+                if (point.keyframe.animator?.type !== 'light') return typeof originalYDefault === 'function' ? originalYDefault(point) : (originalYDefault || 0);
                 let el = point.keyframe.animator.element;
                 if (point.keyframe.channel === 'color') return el?.color[1] ?? 255;
                 if (point.keyframe.channel === 'rotation') return el?.rotation[1] ?? 0;
                 return typeof originalYDefault === 'function' ? originalYDefault(point) : (originalYDefault || 0);
             };
             const lightManagerZDefault = point => {
+                if (point.keyframe.animator?.type !== 'light') return typeof originalZDefault === 'function' ? originalZDefault(point) : (originalZDefault || 0);
                 let el = point.keyframe.animator.element;
                 if (point.keyframe.channel === 'color') return el?.color[2] ?? 255;
                 if (point.keyframe.channel === 'rotation') return el?.rotation[2] ?? 0;
@@ -14182,10 +21618,36 @@ function initializeLightManagerPlugin() {
             LightAnimator.prototype.channels = {
                 position: { name: tl('timeline.position'), mutable: true, transform: true, max_data_points: 3 },
                 rotation: { name: tl('timeline.rotation'), mutable: true, transform: true, max_data_points: 3 },
-                color: { name: tl('property.light_color'), mutable: true, transform: true, max_data_points: 3 },
-                intensity: { name: tl('property.light_intensity'), mutable: true, transform: true, max_data_points: 1 },
+                color: { name: tl('property.light_color'), mutable: true, transform: true, max_data_points: 3, component_labels: ['R (0–255)', 'G (0–255)', 'B (0–255)'] },
+                intensity: { name: tl('property.light_intensity'), mutable: true, transform: true, max_data_points: 1, component_labels: [tl('property.light_intensity')] },
             };
             LightElement.animator = LightAnimator;
+
+            // Keep the native editors, Molang context menu and Undo. Channels can
+            // declare component labels without changing global XYZ properties.
+            const keyframeVue = window.Panels?.keyframe?.inside_vue;
+            const keyframeRender = keyframeVue?.$options?.render;
+            if (typeof keyframeRender === 'function') {
+                const render = function (...args) {
+                    const tree = keyframeRender.apply(this, args);
+                    const labels = this.firstKeyframe?.animator?.channels[this.channel]?.component_labels;
+                    if (labels) {
+                        const visit = vnode => {
+                            const axis = ['keyframe_bar_x', 'keyframe_bar_y', 'keyframe_bar_z'].indexOf(vnode?.data?.attrs?.id);
+                            if (axis >= 0 && labels[axis]) {
+                                const label = vnode.children?.find(child => child.tag === 'label');
+                                if (label?.children?.[0]) label.children[0].text = labels[axis];
+                            }
+                            vnode?.children?.forEach(visit);
+                        };
+                        visit(tree);
+                    }
+                    return tree;
+                };
+                keyframeVue.$options.render = render;
+                keyframeVue.$forceUpdate();
+                deletables.push({ delete() { if (keyframeVue.$options.render === render) keyframeVue.$options.render = keyframeRender; keyframeVue.$forceUpdate(); } });
+            }
 
             let modeObserver = Blockbench.on('select_mode', (arg) => {
                 if (arg.mode.id === 'animate') return;
@@ -14200,8 +21662,23 @@ function initializeLightManagerPlugin() {
             });
             deletables.push(modeObserver);
 
+            const nextLocalizedLightName = lightType => {
+                const type = ['point', 'directional', 'spot'].includes(lightType) ? lightType : 'point';
+                const base = translateLightManager(`light_manager.name.${type}`);
+                const used = new Set((LightElement.all || []).map(item => String(item?.name || '').toLocaleLowerCase()));
+                let index = 1;
+                let candidate;
+                do {
+                    candidate = `${base} ${String(index++).padStart(2, '0')}`;
+                } while (used.has(candidate.toLocaleLowerCase()));
+                return candidate;
+            };
+
             const createLightFromProfile = (profileKey, undoLabel) => {
                 const isArtKey = profileKey === 'art_key';
+                if (!isArtKey && !lightManagerSafeGet('lightflow_creation_guide_v1_light', '')) {
+                    lightManagerSafeSet('lightflow_creation_guide_v1_light', 'pending');
+                }
                 const profile = isArtKey ? { light_type: 'art_key', intensity: 1, color: [255, 210, 140], art_radius: 8 } : (LIGHT_MANAGER_PROFILES[profileKey] || LIGHT_MANAGER_PROFILES.point_fill);
                 Undo.initEdit({ outliner: true, elements: [], selection: true });
 
@@ -14225,6 +21702,7 @@ function initializeLightManagerPlugin() {
                     ArtKeyElement.preview_controller?.updateTransform?.(light);
                 } else {
                     LightManagerUtils.applyConfig(light, profile);
+                    light.name = nextLocalizedLightName(light.light_type);
                     light.updateLightIcon();
                 }
 
@@ -14423,7 +21901,7 @@ function initializeLightManagerPlugin() {
             let blockSnapAction;
             const blockSnapToolConfig = new ToolConfig('lightflow_block_snap_options', {
                 title: 'light_manager.action.block_snap',
-                form: {
+                form: prepareLightflowForm({
                     enabled: {
                         type: 'checkbox',
                         label: 'light_manager.block_snap.enabled',
@@ -14456,11 +21934,12 @@ function initializeLightManagerPlugin() {
                         description: 'light_manager.block_snap.grid.desc',
                         value: false
                     }
-                },
+                }),
                 onFormChange(result) {
                     if (blockSnapAction && blockSnapAction.value !== !!result.enabled) {
                         blockSnapAction.set(!!result.enabled);
                     }
+                    Blockbench.dispatchEvent('lightflow_block_snap_changed');
                 }
             });
             blockSnapAction = new LightManagerActionToggle('lightflow_block_snap', {
@@ -14476,13 +21955,14 @@ function initializeLightManagerPlugin() {
                     blockSnapToolConfig.options.enabled = value;
                     blockSnapToolConfig.form?.setValues?.({ enabled: value });
                     blockSnapToolConfig.save();
+                    Blockbench.dispatchEvent('lightflow_block_snap_changed');
                 }
             });
             blockSnapToolConfig.options.enabled = blockSnapAction.value;
             blockSnapToolConfig.save();
             deletables.push(blockSnapToolConfig, blockSnapAction);
             MenuBar.menus.edit.addAction(blockSnapAction, '9');
-            Toolbars.main_tools?.add?.(blockSnapAction);
+            removeLightflowToolbarAction(blockSnapAction, ['main_tools']);
             deletables.push(installBlockSnapRuntime(blockSnapAction));
 
             const textureMeshEnhancements = installLightManagerTextureMeshEnhancements();
@@ -14491,14 +21971,13 @@ function initializeLightManagerPlugin() {
             if (billboardEnhancements) deletables.push(billboardEnhancements);
 
             const addArtKeyAction = new Action('add_art_key', {
-                name: 'light_manager.art.add', icon: 'flare', category: 'edit',
+                name: 'light_manager.art.add', icon: 'lightflow:key-light-rim', category: 'edit',
                 description: 'light_manager.art.hint', condition: () => Modes.edit || Modes.render,
                 click() {
                     return createLightFromProfile('art_key', translateLightManager('light_manager.art.add'));
                 }
             });
             deletables.push(addArtKeyAction);
-            BarItems.add_element.side_menu.addAction(addArtKeyAction, '3');
             MenuBar.menus.edit.addAction(addArtKeyAction, '9');
 
             let addLightAction = new Action('add_light', {
@@ -14506,13 +21985,13 @@ function initializeLightManagerPlugin() {
                 description: 'light_manager.action.add_point.desc',
                 icon: 'lightbulb',
                 category: 'edit',
+                keybind: new Keybind({}),
                 condition: () => Modes.edit || Modes.render,
                 click() {
                     return createLightFromProfile('point_fill', translateLightManager('light_manager.undo.add_point'));
                 }
             });
             deletables.push(addLightAction);
-            BarItems.add_element.side_menu.addAction(addLightAction, '3');
             MenuBar.menus.edit.addAction(addLightAction, '9');
 
             let addSpotLightAction = new Action('add_spot_light', {
@@ -14520,13 +21999,13 @@ function initializeLightManagerPlugin() {
                 description: 'light_manager.action.add_spot.desc',
                 icon: 'highlight',
                 category: 'edit',
+                keybind: new Keybind({}),
                 condition: () => Modes.edit || Modes.render,
                 click() {
                     return createLightFromProfile('spot_key', translateLightManager('light_manager.undo.add_spot'));
                 }
             });
             deletables.push(addSpotLightAction);
-            BarItems.add_element.side_menu.addAction(addSpotLightAction, '3');
             MenuBar.menus.edit.addAction(addSpotLightAction, '9');
 
             let addDirectionalLightAction = new Action('add_directional_light', {
@@ -14534,14 +22013,61 @@ function initializeLightManagerPlugin() {
                 description: 'light_manager.action.add_directional.desc',
                 icon: 'light_mode',
                 category: 'edit',
+                keybind: new Keybind({}),
                 condition: () => Modes.edit || Modes.render,
                 click() {
                     return createLightFromProfile('directional_sun', translateLightManager('light_manager.undo.add_directional'));
                 }
             });
             deletables.push(addDirectionalLightAction);
-            BarItems.add_element.side_menu.addAction(addDirectionalLightAction, '3');
             MenuBar.menus.edit.addAction(addDirectionalLightAction, '9');
+
+            const addLightMenuAction = new Action('light_manager_add_light_menu', {
+                name: 'light_manager.ui.scene_create',
+                icon: 'auto_awesome',
+                category: 'edit',
+                condition: () => Modes.edit || Modes.render,
+                side_menu: new Menu([
+                    'add_light',
+                    'add_spot_light',
+                    'add_directional_light',
+                    new MenuSeparator('light_manager_art'),
+                    'add_art_key',
+                    new MenuSeparator('lightflow_effects'),
+                    'add_lightflow_volume', 'add_lightflow_god_ray', 'lightflow_particle_create', 'lightflow_scene_link_add'
+                ]),
+                click() {
+                    const fallback = this.side_menu.structure
+                        .map(id => BarItems[id])
+                        .find(item => item && Condition(item.condition));
+                    if (fallback) fallback.click();
+                }
+            });
+            deletables.push(addLightMenuAction);
+            const outlinerToolbar = Toolbars.outliner;
+            if (outlinerToolbar) {
+                // Previous instances can survive in a user-customized toolbar after reload.
+                while (outlinerToolbar.children.some(item => item?.id === addLightMenuAction.id)) {
+                    outlinerToolbar.remove(addLightMenuAction.id, false);
+                }
+                const addElementPosition = outlinerToolbar.children.indexOf(BarItems.add_element);
+                outlinerToolbar.add(addLightMenuAction, addElementPosition >= 0 ? addElementPosition + 1 : undefined);
+                deletables.push({ delete() { outlinerToolbar.remove(addLightMenuAction, false); } });
+            }
+            const addLightContextItem = {
+                id: 'light_manager_add_light_context',
+                name: addLightMenuAction.name,
+                description: addLightMenuAction.description,
+                icon: addLightMenuAction.icon,
+                condition: addLightMenuAction.condition,
+                children: addLightMenuAction.side_menu.structure
+            };
+            Panels.outliner.menu.addAction(addLightContextItem, '1');
+            deletables.push({
+                delete() {
+                    Panels.outliner.menu.removeAction(addLightContextItem);
+                }
+            });
 
             let lightManagerEditTool = new Tool('light_manager_edit_tool', {
                 name: 'light_manager.tool.edit_gizmos',
@@ -14550,6 +22076,7 @@ function initializeLightManagerPlugin() {
                 category: 'tools',
                 modes: ['edit', 'render'],
                 selectElements: true,
+                condition: () => !!(Modes.edit || Modes.render) && getSelectedLights().some(light => light.selected),
                 onSelect() {
                     window.LightManagerViewportControls?.updateAll();
                 },
@@ -14558,6 +22085,61 @@ function initializeLightManagerPlugin() {
                 }
             });
             deletables.push(lightManagerEditTool);
+            // Owned contextual tools live in the viewport rail, including users
+            // upgrading with these entries saved in their native toolbar.
+            removeLightflowToolbarAction(lightManagerEditTool);
+
+            const selectedTargetLight = () => {
+                const lights = window.LightManagerViewportControls?.getSelectedLights() || [];
+                return lights.length === 1 && window.LightManagerViewportControls.supportsAimTarget(lights[0]) ? lights[0] : null;
+            };
+            const targetCondition = () => (Modes.edit || Modes.render) && !!selectedTargetLight();
+            const activeTargetCondition = () => targetCondition() && window.LightManagerViewportControls.hasAimTarget(selectedTargetLight());
+            const targetTool = new Tool('light_manager_target_tool', {
+                name: 'light_manager.target.edit', description: 'light_manager.target.move', icon: 'open_with',
+                category: 'tools', modes: ['edit', 'render'], selectElements: true, condition: activeTargetCondition,
+                onSelect: () => window.LightManagerViewportControls.updateAll(),
+                onUnselect: () => window.LightManagerViewportControls.updateAll()
+            });
+            const editTargetAction = new Action('light_manager_edit_target', {
+                name: 'light_manager.target.edit', description: 'light_manager.target.hint', icon: 'my_location',
+                category: 'edit', condition: targetCondition, keybind: new Keybind({}),
+                click() {
+                    const light = selectedTargetLight(); if (!light) return;
+                    const controls = window.LightManagerViewportControls;
+                    if (!controls.hasAimTarget(light)) controls.setAimTargetEnabled(light, true);
+                    Canvas.show_gizmos = true;
+                    targetTool.select();
+                    Blockbench.showQuickMessage(translateLightManager('light_manager.target.move'));
+                }
+            });
+            const releaseTargetAction = new Action('light_manager_release_target', {
+                name: 'light_manager.target.release', icon: 'link_off', category: 'edit', condition: activeTargetCondition,
+                click() {
+                    window.LightManagerViewportControls.setAimTargetEnabled(selectedTargetLight(), false);
+                    if (Toolbox.selected === targetTool) lightManagerEditTool.select();
+                }
+            });
+            const targetPositionAction = new Action('light_manager_target_position', {
+                name: 'light_manager.target.position', icon: 'tune', category: 'edit', condition: activeTargetCondition,
+                click: () => window.LightManagerViewportControls.editAimTargetPosition()
+            });
+            const aimSelectionAction = new Action('light_manager_aim_selection', {
+                name: 'light_manager.target.selection', icon: 'center_focus_strong', category: 'edit',
+                condition: () => targetCondition() && window.LightManagerFitTool.getSelectedTargets().length > 0,
+                click() {
+                    const light = selectedTargetLight(); if (!light) return;
+                    const points = window.LightManagerFitTool.collectTargetPoints(window.LightManagerFitTool.getSelectedTargets());
+                    if (!points?.length) return;
+                    const center = new THREE.Box3().setFromPoints(points).getCenter(new THREE.Vector3());
+                    Undo.initEdit({ elements: [light] }); light.aim_target = center.toArray(); light.aim_target_enabled = true;
+                    window.LightManagerViewportControls.refreshLight(light, 'aim_target');
+                    Undo.finishEdit(translateLightManager('light_manager.target.undo')); updateSelection();
+                    Blockbench.dispatchEvent('lightflow_aim_target_changed');
+                }
+            });
+            deletables.push(targetTool, editTargetAction, releaseTargetAction, targetPositionAction, aimSelectionAction);
+            removeLightflowToolbarAction(targetTool);
 
             let lightManagerFreeMoveAction = new Action('light_manager_free_move', {
                 name: 'light_manager.action.free_move',
@@ -14565,7 +22147,7 @@ function initializeLightManagerPlugin() {
                 icon: 'open_with',
                 category: 'edit',
                 keybind: new Keybind({ key: 'g', shift: true }),
-                condition: () => Modes.edit,
+                condition: () => !!Modes.edit && window.LightManagerViewportControls.getMovableSelection().length > 0,
                 click(event) {
                     window.LightManagerViewportControls?.requestFreeMove(event);
                 }
@@ -14608,10 +22190,66 @@ function initializeLightManagerPlugin() {
                 }
             });
 
+            const refreshLightGizmoActionState = () => {
+                const action = window.BarItems?.toggle_light_area_gizmos;
+                if (action) updateAreaGizmoActionState(action);
+                refreshLightPropertiesPanel();
+            };
+            const toggleLightAreaGizmosAction = new Action('toggle_light_area_gizmos', {
+                name: window.LightManagerAreaGizmos.enabled
+                    ? 'light_manager.action.hide_area_gizmos'
+                    : 'light_manager.action.show_area_gizmos',
+                description: window.LightManagerAreaGizmos.enabled
+                    ? 'light_manager.action.hide_area_gizmos'
+                    : 'light_manager.action.show_area_gizmos',
+                icon: window.LightManagerAreaGizmos.enabled ? 'visibility' : 'visibility_off',
+                category: 'view',
+                keybind: new Keybind({}),
+                condition: () => !!window.Project && (!!Modes?.edit || !!Modes?.render),
+                click() {
+                    window.LightManagerAreaGizmos.toggle();
+                    refreshLightGizmoActionState();
+                }
+            });
+            updateAreaGizmoActionState(toggleLightAreaGizmosAction);
+            deletables.push(toggleLightAreaGizmosAction);
+            MenuBar.menus.view.addAction(toggleLightAreaGizmosAction, '9');
+
+            const resetSelectedLightGizmos = () => {
+                const lights = Array.isArray(LightElement.selected) ? LightElement.selected.filter(Boolean) : [];
+                if (!lights.length) return false;
+                Undo.initEdit({ elements: lights });
+                lights.forEach(light => {
+                    const previousShadowContext = { ...light };
+                    light.distance = 0;
+                    light.angle = 45;
+                    light.penumbra = 0;
+                    light.shadow_near = 0.1;
+                    light.shadow_far = 200;
+                    light.shadow_bounds = 35;
+                    LightManagerUtils.applyAutomaticShadowNormalBias(light, previousShadowContext);
+                    LightElement.preview_controller?.updateSelection(light);
+                });
+                Undo.finishEdit(translateLightManager('light_manager.undo.reset_gizmo'));
+                window.update_light_element_callback?.({ elements: lights, shadows: true, scene: false, gizmos: true, cleanup: false });
+                refreshLightPropertiesPanel();
+                return true;
+            };
+            const resetLightGizmoAction = new Action('light_manager_reset_gizmo', {
+                name: 'light_manager.action.reset_gizmo',
+                description: 'light_manager.action.reset_gizmo.desc',
+                icon: 'restart_alt',
+                category: 'view',
+                condition: () => Array.isArray(LightElement.selected) && LightElement.selected.length > 0,
+                click: resetSelectedLightGizmos
+            });
+            deletables.push(resetLightGizmoAction);
+            MenuBar.menus.view.addAction(resetLightGizmoAction, '9');
+
             let fitLightBoundsAction = new Action('fit_light_bounds_to_selection', {
                 name: 'light_manager.action.fit_to_selection',
                 description: 'light_manager.action.fit_to_selection.desc',
-                icon: 'center_focus_strong',
+                icon: 'fit_screen',
                 category: 'edit',
                 condition: () => window.LightManagerFitTool.getSelectedLights().length > 0,
                 click() {
@@ -14626,8 +22264,9 @@ function initializeLightManagerPlugin() {
                 description: 'light_manager.action.edit_properties.desc',
                 icon: 'settings',
                 category: 'edit',
-                condition: () => (Array.isArray(LightElement.selected) && LightElement.selected.length > 0) ||
-                    (Array.isArray(ArtKeyElement.selected) && ArtKeyElement.selected.length > 0),
+                condition: () => !!(Modes.edit || Modes.render) && (
+                    LightElement.selected.some(light => light.selected && LightElement.all.includes(light)) ||
+                    ArtKeyElement.selected.some(light => light.selected && ArtKeyElement.all.includes(light))),
                 click() {
                     if (Array.isArray(ArtKeyElement.selected) && ArtKeyElement.selected.length) {
                         lightManagerUIApi.workspace.select(lightPropertiesPanel);
@@ -14641,7 +22280,7 @@ function initializeLightManagerPlugin() {
                     let currentHex = LightManagerUtils.colorHex(firstLight.color);
                     const selectedCount = LightElement.selected.length;
 
-                    new Dialog('edit_light_properties_dialog', {
+                    const lightDialogConfig = {
                         title: selectedCount === 1
                             ? translateLightManager('light_manager.dialog.edit.title_one')
                             : formatLightManagerMessage('light_manager.dialog.edit.title_many', { count: selectedCount }),
@@ -14722,10 +22361,23 @@ function initializeLightManagerPlugin() {
                                 value: firstLight.studio_shadow_resolution ? firstLight.studio_shadow_resolution.toString() : '0',
                                 description: translateLightManager('property.studio_shadow_resolution.desc')
                             },
+                            shadow_softness_mode: {
+                                type: 'select', label: translateLightManager('property.shadow_softness_mode'),
+                                description: translateLightManager('property.shadow_softness_mode.desc'),
+                                options: { hard: translateLightManager('property.shadow_mode.hard'), artistic: translateLightManager('property.shadow_mode.artistic'), distance: translateLightManager('property.shadow_mode.distance'), legacy: translateLightManager('property.shadow_mode.legacy') },
+                                value: firstLight.shadow_softness_mode || 'legacy'
+                            },
+                            shadow_blur: {
+                                type: 'number', label: translateLightManager('property.shadow_blur'),
+                                description: translateLightManager('property.shadow_blur.desc'),
+                                value: firstLight.shadow_blur ?? DEFAULT_SHADOW_BLUR, min: 0, max: 64, step: 0.25,
+                                condition: form => form.shadow_softness_mode === 'artistic'
+                            },
                             shadow_softness: {
                                 label: translateLightManager('property.shadow_softness'),
                                 type: 'number',
                                 value: firstLight.shadow_softness !== undefined ? firstLight.shadow_softness : DEFAULT_SHADOW_SOFTNESS,
+                                condition: form => ['distance', 'legacy'].includes(form.shadow_softness_mode),
                                 min: 0,
                                 max: 16,
                                 step: 0.05,
@@ -14760,7 +22412,22 @@ function initializeLightManagerPlugin() {
                             updateSelection();
                             window.update_light_element_callback?.();
                         }
-                    }).show();
+                    };
+                    const fields = lightDialogConfig.form;
+                    fields.distance.condition = form => form.light_type !== 'directional';
+                    fields.angle.condition = fields.penumbra.condition = form => form.light_type === 'spot';
+                    fields.shadow_bounds.condition = form => form.light_type === 'directional';
+                    for (const [key, max] of Object.entries({ intensity: 8, distance: 128, angle: 89.9, penumbra: 1, shadow_softness: 16, key_light_weight: 10 })) {
+                        Object.assign(fields[key], { type: 'combo_slider', max, full_track: true, allow_higher: ['intensity', 'distance', 'key_light_weight'].includes(key) });
+                    }
+                    lightDialogConfig.width = 560;
+                    lightDialogConfig.form = taskDialogForm(fields, [
+                        { id: 'basic', label: 'light_manager.ui.basic', entries: ['profile', 'light_type', 'color', 'intensity', 'key_light_enabled', 'key_light_weight'] },
+                        { id: 'shape', label: 'light_manager.ui.shape', entries: ['distance', 'angle', 'penumbra'] },
+                        { id: 'shadows', label: 'light_manager.ui.shadows', entries: ['shadow_preset', 'has_shadow', 'shadow_resolution', 'studio_shadow_resolution', 'shadow_softness_mode', 'shadow_blur', 'shadow_softness'] },
+                        { id: 'advanced', label: 'light_manager.ui.advanced', entries: ['shadow_bias', 'shadow_normal_bias', 'shadow_near', 'shadow_far', 'shadow_bounds'] }
+                    ]);
+                    showTaskDialog('edit_light_properties_dialog', lightDialogConfig);
                 }
             });
             deletables.push(editLightPropertiesAction);
@@ -14799,19 +22466,20 @@ function initializeLightManagerPlugin() {
                     ...(Array.isArray(Outliner.elements) ? Outliner.elements : []),
                     ...(Array.isArray(window.Group?.all) ? Group.all : [])
                 ])).filter(node => node?.type !== 'light' && node?.type !== 'art_key');
-                const form = {};
-                nodes.forEach((node, i) => { form['target_' + i] = { type: 'select', label: node.name,
-                    options: { auto: artLabel('auto'), include: artLabel('include'), exclude: artLabel('exclude') },
-                    value: light.art_exclude.includes(node.uuid) ? 'exclude' : light.art_include.includes(node.uuid) ? 'include' : 'auto' }; });
-                new Dialog({ id: 'art_key_targets', title: artLabel('targets'), form,
+                const targets = Object.fromEntries([
+                    ...light.art_include.map(id => [id, 'include']), ...light.art_exclude.map(id => [id, 'exclude'])
+                ]);
+                showTaskDialog('art_key_targets', {
+                    title: artLabel('targets'), width: 640,
+                    form: { targets: { type: 'outliner_select', label: artLabel('targets'), nodes: () => nodes, value: targets } },
                     onConfirm(result) {
                         Undo.initEdit({ elements: [light] });
-                        light.art_include = nodes.filter((node, i) => result['target_' + i] === 'include').map(node => node.uuid);
-                        light.art_exclude = nodes.filter((node, i) => result['target_' + i] === 'exclude').map(node => node.uuid);
+                        light.art_include = Object.entries(result.targets).filter(([, state]) => state === 'include').map(([id]) => id);
+                        light.art_exclude = Object.entries(result.targets).filter(([, state]) => state === 'exclude').map(([id]) => id);
                         Undo.finishEdit(artLabel('targets'));
                         window.update_light_element_callback?.({ elements: [light], shadows: false, scene: false, gizmos: true, cleanup: false, artKey: true });
                     }
-                }).show();
+                });
             };
             const spotLightCondition = () => {
                 const light = getSelectedLight();
@@ -14874,8 +22542,13 @@ function initializeLightManagerPlugin() {
                         return LightManagerUtils.studioShadowResolution(value);
                     case 'shadow_bias':
                         return LightManagerUtils.num(value, light.shadow_bias ?? DEFAULT_SHADOW_BIAS, -1, 1);
+                    case 'shadow_normal_bias_auto': return !!value;
                     case 'shadow_normal_bias':
                         return LightManagerUtils.num(value, light.shadow_normal_bias ?? DEFAULT_SHADOW_NORMAL_BIAS, -1, 1);
+                    case 'shadow_softness_mode':
+                        return LightManagerUtils.shadowSoftnessMode(value);
+                    case 'shadow_blur':
+                        return LightManagerUtils.shadowBlur(value);
                     case 'shadow_softness':
                         return LightManagerUtils.shadowSoftness(value);
                     case 'shadow_near':
@@ -14916,13 +22589,18 @@ function initializeLightManagerPlugin() {
                 if (['distance'].includes(property)) {
                     return {
                         ...partial,
-                        shadows: false,
+                        // Both native point/spot cameras track light.distance.
+                        shadows: ['spot', 'point'].includes(light?.light_type),
                         scene: false,
                         gizmos: true
                     };
                 }
 
-                if (['shadow_bias', 'shadow_normal_bias', 'shadow_softness'].includes(property)) {
+                if (['shadow_softness_mode', 'shadow_blur'].includes(property)) {
+                    return { ...partial, shadows: false, scene: false, gizmos: false };
+                }
+
+                if (['shadow_bias', 'shadow_normal_bias', 'shadow_softness', 'shadow_softness_mode', 'shadow_blur'].includes(property)) {
                     return {
                         ...partial,
                         shadows: true,
@@ -14957,13 +22635,17 @@ function initializeLightManagerPlugin() {
 
                 const plans = selectedLights.map(light => {
                     const nextValue = normalizeLightPanelValue(light, property, value);
+                    const disableZeroKey = property === 'key_light_weight' && Number(nextValue) <= 0 && light.key_light_enabled !== false;
+                    const restoreZeroKey = property === 'key_light_enabled' && nextValue === true && Number(light.key_light_weight) <= 0;
                     const updateAutomaticNormalBias = (
                         LIGHT_MANAGER_AUTO_NORMAL_BIAS_PROPERTIES.includes(property) &&
-                        LightManagerUtils.isAutomaticShadowNormalBiasValue(light.shadow_normal_bias, light)
+                        light.shadow_normal_bias_auto !== false
                     );
                     let nextAutomaticNormalBias = null;
                     let normalBiasNeedsAutoUpdate = false;
                     const valueChanged = !lightValuesEqual(light[property], nextValue);
+                    const activatesDistanceSoftness = property === 'shadow_softness' && valueChanged &&
+                        light.shadow_softness_mode === SHADOW_SOFTNESS_MODEL_LEGACY;
                     if (updateAutomaticNormalBias) {
                         const nextNormalBiasContext = { ...light, [property]: nextValue };
                         if (property === 'shadow_near' && nextNormalBiasContext.shadow_far <= nextNormalBiasContext.shadow_near) {
@@ -14978,7 +22660,10 @@ function initializeLightManagerPlugin() {
                         nextAutomaticNormalBias,
                         updateAutomaticNormalBias,
                         normalBiasNeedsAutoUpdate,
-                        willChange: valueChanged || normalBiasNeedsAutoUpdate
+                        disableZeroKey,
+                        restoreZeroKey,
+                        activatesDistanceSoftness,
+                        willChange: valueChanged || activatesDistanceSoftness || normalBiasNeedsAutoUpdate || disableZeroKey || restoreZeroKey
                     };
                 }).filter(plan => plan.willChange);
                 if (!plans.length) return false;
@@ -14992,9 +22677,24 @@ function initializeLightManagerPlugin() {
                 let gizmos = false;
                 let artKey = false;
                 let automaticNormalBiasChanged = false;
+                let keyParticipationChanged = false;
                 plans.forEach(plan => {
-                    const { light, nextValue, updateAutomaticNormalBias, nextAutomaticNormalBias } = plan;
+                    const { light, nextValue, updateAutomaticNormalBias, nextAutomaticNormalBias, disableZeroKey, restoreZeroKey, activatesDistanceSoftness } = plan;
+                    if (property === 'shadow_region_locked' && nextValue && !light.shadow_region_locked) {
+                        light.shadow_region_bounds = LightManagerShadowRegions.captureRegion(window.three_lights?.[light.uuid], light);
+                    }
                     light[property] = Array.isArray(nextValue) ? nextValue.slice() : nextValue;
+                    if (property === 'shadow_normal_bias') light.shadow_normal_bias_auto = false;
+                    if (activatesDistanceSoftness) {
+                        light.shadow_softness_mode = SHADOW_SOFTNESS_MODEL_DISTANCE;
+                    }
+                    if (disableZeroKey) {
+                        light.key_light_enabled = false;
+                        keyParticipationChanged = true;
+                    } else if (restoreZeroKey) {
+                        light.key_light_weight = 1;
+                        keyParticipationChanged = true;
+                    }
                     if (updateAutomaticNormalBias) {
                         light.shadow_normal_bias = nextAutomaticNormalBias;
                         automaticNormalBiasChanged ||= plan.normalBiasNeedsAutoUpdate;
@@ -15037,7 +22737,7 @@ function initializeLightManagerPlugin() {
                 if (gizmos) window.LightManagerViewportControls?.updateAll();
 
                 const referenceLight = getSelectedLight();
-                if (referenceLight && ['light_type', 'has_shadow', 'key_light_enabled', 'art_mode'].includes(property)) {
+                if (referenceLight && (keyParticipationChanged || ['light_type', 'has_shadow', 'key_light_enabled', 'art_mode', 'shadow_softness_mode', 'shadow_normal_bias_auto', 'shadow_normal_bias'].includes(property))) {
                     syncLightSettingsPanel(referenceLight);
                 } else if (referenceLight && automaticNormalBiasChanged) {
                     const normalBiasControl = lightPropertiesPanel?.form?.form_data?.shadow_normal_bias;
@@ -15051,7 +22751,7 @@ function initializeLightManagerPlugin() {
 
             let renderWorkspaceMode = new Mode('render', {
                 name: tl('mode.render'),
-                icon: 'photo_camera_back',
+                icon: 'lightflow:preview_mode',
                 category: 'navigate',
                 condition: () => Project,
                 onSelect() {
@@ -15066,6 +22766,17 @@ function initializeLightManagerPlugin() {
             });
             deletables.push(renderWorkspaceMode);
             lightManagerUIApi.workspace.installScene();
+            const wideCanvasAction = new Action('lightflow_toggle_wide_canvas', {
+                name: 'light_manager.ui.wide_canvas',
+                description: 'light_manager.ui.wide_canvas_desc',
+                icon: 'view_sidebar',
+                category: 'view',
+                keybind: new Keybind({}),
+                condition: () => !!window.Project && (!!Modes?.edit || !!Modes?.render),
+                click: () => lightManagerUIApi.workspace.toggleWideCanvas()
+            });
+            MenuBar.menus.view.addAction(wideCanvasAction, '9');
+            deletables.push(wideCanvasAction);
 
             if (!Panels.outliner.condition.modes.includes('render')) {
                 Panels.outliner.condition.modes.push('render');
@@ -15083,6 +22794,30 @@ function initializeLightManagerPlugin() {
             // Keep the panel shell alive in Render mode, but build its contents from
             // the current selection. This mirrors Atmosphere's panel contract and
             // prevents controls for a previously selected light from going stale.
+            const lightPanelSectionStorageKey = 'lightflow_light_panel_sections_v1';
+            const lightPanelSectionsOpen = { shape: true, shadows: false, advanced: false, art_shape: true, art_scope: false };
+            try {
+                const savedSections = JSON.parse(lightManagerSafeGet(lightPanelSectionStorageKey, '{}') || '{}');
+                Object.keys(lightPanelSectionsOpen).forEach(key => {
+                    if (typeof savedSections?.[key] === 'boolean') lightPanelSectionsOpen[key] = savedSections[key];
+                });
+            } catch (_) { /* Keep comfortable defaults if storage is malformed. */ }
+            const lightPanelSectionKey = section => `_light_section_${section}`;
+            const lightPanelSectionCondition = (section, originalCondition) => form => {
+                const sectionKey = lightPanelSectionKey(section);
+                const open = form && Object.prototype.hasOwnProperty.call(form, sectionKey)
+                    ? form[sectionKey] !== false
+                    : lightPanelSectionsOpen[section] !== false;
+                if (!open) return false;
+                if (originalCondition === undefined || originalCondition === null) return true;
+                if (typeof Condition === 'function') return Condition(originalCondition, form);
+                return typeof originalCondition === 'function' ? !!originalCondition(form) : !!originalCondition;
+            };
+            const inLightPanelSection = (section, config) => {
+                const originalCondition = config.show_condition !== undefined ? config.show_condition : config.condition;
+                const sectionCondition = lightPanelSectionCondition(section, originalCondition);
+                return Object.assign({}, config, { condition: sectionCondition, show_condition: sectionCondition });
+            };
             const panelForm = (light) => {
                 if (!light) {
                     return {
@@ -15093,28 +22828,54 @@ function initializeLightManagerPlugin() {
                             paragraph: true,
                             expand: true,
                             color: 'var(--color-text)'
-                        }
+                        },
+                        add_light: { type: 'action_button', semantic_button: true, text: translateLightManager('light_manager.ui.scene_light'), icon: 'add', click: () => BarItems.add_light.trigger() }
                     };
                 }
 
-                return {
-                    /*light_panel_search: LightManagerFormDesign.search({
+                const form = {
+                    light_panel_search: LightManagerFormDesign.search({
                         placeholder: 'Find setting', active_label: 'Active only', collapse_label: 'Collapse all'
-                    }),*/
-                    light_gizmo_action: {type: 'action_button', icon: 'control_camera', description: tl('light_manager.tool.edit_gizmos'), click: () => BarItems.light_manager_edit_tool.select(), show_condition: physicalLightCondition},
+                    }),
+                    light_gizmo_label: {
+                        type: 'bar_display', value: translateLightManager('light_manager.ui.edit_gizmos'), icon: 'control_camera',
+                        paragraph: false, expand: true, color: 'var(--color-subtle_text)', show_condition: physicalLightCondition
+                    },
+                    light_gizmo_action: {
+                        type: 'action_button', icon: 'control_camera', description: tl('light_manager.tool.edit_gizmos.desc'),
+                        aria_label: translateLightManager('light_manager.ui.edit_gizmos'),
+                        click: () => BarItems.light_manager_edit_tool.select(), show_condition: physicalLightCondition
+                    },
+                    light_focus_action: {
+                        type: 'action_button', icon: 'center_focus_weak', description: translateLightManager('light_manager.ui.focus_selection'),
+                        aria_label: translateLightManager('light_manager.ui.focus_selection'),
+                        click: () => BarItems.focus_on_selection?.trigger?.({ ctrlKey: true }), show_condition: physicalLightCondition
+                    },
+                    light_bounds_action: {
+                        type: 'action_button', icon: window.LightManagerAreaGizmos?.enabled ? 'visibility' : 'visibility_off',
+                        description: translateLightManager('light_manager.ui.toggle_bounds'),
+                        aria_label: translateLightManager('light_manager.ui.toggle_bounds'),
+                        click: () => BarItems.toggle_light_area_gizmos?.trigger?.(), show_condition: physicalLightCondition
+                    },
+                    light_reset_gizmo_action: {
+                        type: 'action_button', icon: 'restart_alt',
+                        description: translateLightManager('light_manager.action.reset_gizmo.desc'),
+                        aria_label: translateLightManager('light_manager.action.reset_gizmo'),
+                        click: () => BarItems.light_manager_reset_gizmo?.trigger?.(), show_condition: physicalLightCondition
+                    },
                     light_properties_label: {
                         type: 'bar_display',
                         variant: 'subsection',
                         value: light.name || tl('property.light_settings.compact'),
                         description: artLightCondition() ? artLabel('transform_hint') : tl('property.light_settings'),
-                        icon: artLightCondition() ? 'flare' : 'light',
+                        icon: artLightCondition() ? 'lightflow:key-light-rim' : 'light',
                         icon_color: 'var(--color-warning)',
                         separator: true,
                         separator_color: 'color-mix(in srgb, var(--color-warning) 48%, var(--color-border))',
                         paragraph: false,
                         expand: true,
                         color: 'var(--color-text)',
-                        show_condition: () => { return selectedLightCondition(); }
+                        show_condition: () => { return (window.LightElement?.selected?.length || 0) + (window.ArtKeyElement?.selected?.length || 0) > 1; }
                     },
                     light_type: {
                         type: 'compact_select',
@@ -15144,7 +22905,7 @@ function initializeLightManagerPlugin() {
                         icon: 'thermostat',
                         background: 'transparent',
                         color: 'var(--color-warning)',
-                        compact: true,
+                        compact: false,
                         popup_width: '340px',
                         value: light.temperature || 6500,
                         resettable: true,
@@ -15167,18 +22928,18 @@ function initializeLightManagerPlugin() {
                         animate: false,
                         icon_on: 'stroke_partial',
                         icon_off: 'contrast_rtl_off',
-                        bg_on: 'var(--color-accent)',       // Red background when locked
+                        bg_on: 'var(--color-accent)',
                         bg_off: 'transparent',
-                        color_on: 'var(--color-ui)',    // White icon when locked
-                        color_off: 'var(--color-subtle_text)', // Dimmed icon when unlocked
+                        color_on: 'var(--color-ui)',
+                        color_off: 'var(--color-subtle_text)',
                         value: light.has_shadow !== false,
                         show_condition: () => { return physicalLightCondition(); }
                     },
                     shadow_resolution: {
                         type: 'compact_select',
                         value: String(LightManagerUtils.shadowResolution(light.shadow_resolution)),
-                        label: tl('property.shadow_resolution'),
-                        hide_label: true,
+                        label: tl('light_manager.ui.shadow_preview_short'),
+                        hide_label: false,
                         description: tl('property.shadow_resolution.desc'),
                         background: 'transparent',
                         icon_mode: true,
@@ -15199,8 +22960,8 @@ function initializeLightManagerPlugin() {
                     studio_shadow_resolution: {
                         type: 'compact_select',
                         value: String(LightManagerUtils.studioShadowResolution(light.studio_shadow_resolution)),
-                        label: tl('property.studio_shadow_resolution'),
-                        hide_label: true,
+                        label: tl('light_manager.ui.shadow_studio_short'),
+                        hide_label: false,
                         description: tl('property.studio_shadow_resolution.desc'),
                         background: 'transparent',
                         icon_mode: true,
@@ -15237,36 +22998,79 @@ function initializeLightManagerPlugin() {
                         slider_fill: true,
                     },
 
-                    art_enabled: { type: 'action_toggle', icon_on: 'flare', icon_off: 'flare', animate: false,
+                    _light_section_shape: LightManagerFormDesign.group({
+                        label: translateLightManager('light_manager.ui.shape'),
+                        label_icon: 'tune',
+                        value: lightPanelSectionsOpen.shape,
+                        description: translateLightManager('light_manager.ui.shape'),
+                        show_condition: distanceLightCondition
+                    }),
+                    _light_section_shadows: LightManagerFormDesign.group({
+                        label: tl('property.shadow_settings.compact'),
+                        label_icon: 'sunny_snowing',
+                        value: lightPanelSectionsOpen.shadows,
+                        description: tl('property.shadow_settings'),
+                        show_condition: physicalLightCondition
+                    }),
+                    _light_section_advanced: LightManagerFormDesign.group({
+                        label: translateLightManager('light_manager.ui.advanced'),
+                        label_icon: 'settings',
+                        value: lightPanelSectionsOpen.advanced,
+                        description: translateLightManager('light_manager.ui.advanced'),
+                        show_condition: physicalLightCondition
+                    }),
+
+                    art_enabled: {
+                        type: 'action_toggle', icon_on: 'lightflow:key-light-rim', icon_off: 'lightflow:key-light-rim', animate: false,
                         description: translateLightManager('light_manager.property.key_light_enabled'), bg_off: 'transparent',
                         color_off: 'var(--color-subtle_text)', value: light.key_light_enabled !== false,
-                        condition: artLightCondition, show_condition: artLightCondition },
-                    art_strength: { type: 'combo_slider', label: artLabel('strength'), value: light.intensity, min: 0, max: 10, step: 0.1, resettable: true, reset_value: 1,
+                        condition: artLightCondition, show_condition: artLightCondition
+                    },
+                    art_strength: {
+                        type: 'combo_slider', label: artLabel('strength'), value: light.intensity, min: 0, max: 10, step: 0.1, resettable: true, reset_value: 1,
+                        color: 'var(--color-axis-w)', slider_fill: true,
                         onBefore: () => beginLightEdit(artLabel('edit')), onAfter: () => finishLightEdit(artLabel('edit')),
-                        condition: artLightCondition, show_condition: artLightCondition },
-                    art_mode: { type: 'select', label: artLabel('source'), value: light.art_mode || 'point',
+                        condition: artLightCondition, show_condition: artLightCondition
+                    },
+                    art_mode: {
+                        type: 'select', label: artLabel('source'), value: light.art_mode || 'point',
                         options: { point: artLabel('point'), direction: artLabel('direction') },
-                        condition: artLightCondition, show_condition: artLightCondition },
-                    art_radius: { type: 'combo_slider', label: artLabel('radius'), description: artLabel('radius.desc'), value: light.art_radius ?? 8,
+                        condition: artLightCondition, show_condition: artLightCondition
+                    },
+                    art_radius: {
+                        type: 'combo_slider', label: artLabel('radius'), description: artLabel('radius.desc'), value: light.art_radius ?? 8,
+                        icon: 'radio_button_unchecked', color: '#A6DCB5', slider_fill: true,
                         min: 0, max: 64, step: 0.5, allow_higher: true, resettable: true, reset_value: 8,
                         onBefore: () => beginLightEdit(artLabel('edit')), onAfter: () => finishLightEdit(artLabel('edit')),
                         condition: () => artLightCondition() && getSelectedLight()?.art_mode !== 'direction',
-                        show_condition: () => artLightCondition() && getSelectedLight()?.art_mode !== 'direction' },
-                    art_softness: { type: 'combo_slider', label: artLabel('softness'), value: light.art_softness ?? 0.15, min: 0, max: 1, step: 0.01,
+                        show_condition: () => artLightCondition() && getSelectedLight()?.art_mode !== 'direction'
+                    },
+                    art_softness: {
+                        type: 'combo_slider', label: artLabel('softness'), value: light.art_softness ?? 0.15, min: 0, max: 1, step: 0.01,
+                        icon: 'blur_on', color: '#C5AFE9', slider_fill: true, resettable: true, reset_value: 0.15,
                         onBefore: () => beginLightEdit(artLabel('edit')), onAfter: () => finishLightEdit(artLabel('edit')),
-                        condition: artLightCondition, show_condition: artLightCondition },
-                    art_influence: { type: 'combo_slider', label: translateLightManager('light_manager.property.key_light_weight'),
+                        condition: result => artLightCondition() && (result.art_scope ?? getSelectedLight()?.art_scope) !== 'include',
+                        show_condition: result => artLightCondition() && (result.art_scope ?? getSelectedLight()?.art_scope) !== 'include'
+                    },
+                    art_influence: {
+                        type: 'combo_slider', label: translateLightManager('light_manager.property.key_light_weight'),
+                        icon: 'light_mode', color: 'var(--color-axis-w)', slider_fill: true,
                         description: translateLightManager('light_manager.property.key_light_weight.desc'), value: light.key_light_weight ?? 1,
                         min: 0, max: 10, step: 0.25, allow_higher: true, resettable: true, reset_value: 1,
                         onBefore: () => beginLightEdit(artLabel('edit')), onAfter: () => finishLightEdit(artLabel('edit')),
-                        condition: artLightCondition, show_condition: artLightCondition },
-                    art_scope: { type: 'select', label: artLabel('scope'), value: light.art_scope || 'box',
+                        condition: artLightCondition, show_condition: artLightCondition
+                    },
+                    art_scope: {
+                        type: 'select', label: artLabel('scope'), value: light.art_scope || 'box',
                         options: { box: artLabel('box'), include: artLabel('only') },
-                        condition: artLightCondition, show_condition: artLightCondition },
-                    art_targets: { type: 'action_button', icon: 'filter_alt', label: '', description: artLabel('targets'), click: editArtTargets,
-                        condition: artLightCondition, show_condition: artLightCondition },
+                        condition: artLightCondition, show_condition: artLightCondition
+                    },
+                    art_targets: {
+                        type: 'action_button', icon: 'filter_alt', label: '', description: artLabel('targets'), click: editArtTargets,
+                        condition: artLightCondition, show_condition: artLightCondition
+                    },
                     key_light_enabled: {
-                        type: 'action_toggle', icon_on: 'flare', icon_off: 'flare', animate: false,
+                        type: 'action_toggle', icon_on: 'lightflow:key-light-rim', icon_off: 'lightflow:key-light-rim', animate: false,
                         description: translateLightManager('light_manager.property.key_light_enabled'),
                         bg_off: 'transparent', color_off: 'var(--color-subtle_text)',
                         value: light.key_light_enabled !== false, show_condition: physicalLightCondition
@@ -15278,7 +23082,7 @@ function initializeLightManagerPlugin() {
                         allow_higher: true, allow_lower: false, resettable: true, reset_value: 1,
                         onBefore: () => beginLightEdit(translateLightManager('light_manager.property.key_light_weight')),
                         onAfter: () => finishLightEdit(translateLightManager('light_manager.property.key_light_weight')),
-                        show_condition: () => physicalLightCondition() && LightElement.selected.some(entry => entry.key_light_enabled !== false)
+                        show_condition: physicalLightCondition
                     },
                     light_area_label: {
                         type: 'bar_display',
@@ -15298,7 +23102,7 @@ function initializeLightManagerPlugin() {
                         background: 'transparent',
                         color: markerColors ? (markerColors.length >= 7 ? markerColors[7].pastel : '#BDFFA6') : '#BDFFA6',
                         icon_color: markerColors ? (markerColors.length >= 7 ? markerColors[7].pastel : '#BDFFA6') : '#BDFFA6',
-                        compact: true,
+                        compact: false,
                         popup_width: '340px',
                         value: light.distance,
                         resettable: true,
@@ -15331,7 +23135,7 @@ function initializeLightManagerPlugin() {
                         background: 'transparent',
                         color: markerColors ? (markerColors.length >= 1 ? markerColors[1].pastel : '#FFF899') : '#FFF899',
                         icon_color: markerColors ? (markerColors.length >= 1 ? markerColors[1].pastel : '#FFF899') : '#FFF899',
-                        compact: true,
+                        compact: false,
                         popup_width: '340px',
                         value: light.angle,
                         resettable: true,
@@ -15356,7 +23160,7 @@ function initializeLightManagerPlugin() {
                         background: 'transparent',
                         color: markerColors ? (markerColors.length >= 0 ? markerColors[0].pastel : '#A2EBFF') : '#A2EBFF',
                         icon_color: markerColors ? (markerColors.length >= 0 ? markerColors[0].pastel : '#A2EBFF') : '#A2EBFF',
-                        compact: true,
+                        compact: false,
                         popup_width: '340px',
                         value: light.penumbra,
                         resettable: true,
@@ -15392,6 +23196,25 @@ function initializeLightManagerPlugin() {
                         show_condition: () => { return physicalLightCondition(); }
                     },
 
+                    shadow_softness_mode: {
+                        type: 'enum_select', label: tl('property.shadow_softness_mode'),
+                        options: { hard: tl('property.shadow_mode.hard'), artistic: tl('property.shadow_mode.artistic'), distance: tl('property.shadow_mode.distance'), legacy: tl('property.shadow_mode.legacy') }, value: light.shadow_softness_mode || 'legacy',
+                        description: tl('property.shadow_softness_mode.desc'),
+                        show_condition: () => physicalLightCondition(),
+                        disable_condition: () => !shadowLightCondition(),
+                        onBefore: () => beginLightEdit(tl('property.shadow_softness_mode')),
+                        onAfter: () => finishLightEdit(tl('property.shadow_softness_mode'))
+                    },
+                    shadow_blur: {
+                        type: 'combo_slider', label: tl('property.shadow_blur'),
+                        description: tl('property.shadow_blur.desc'),
+                        value: light.shadow_blur ?? DEFAULT_SHADOW_BLUR,
+                        min: 0, max: 64, step: 0.25, resettable: true, reset_value: DEFAULT_SHADOW_BLUR,
+                        show_condition: () => physicalLightCondition() && getSelectedLight()?.shadow_softness_mode === 'artistic',
+                        disable_condition: () => !shadowLightCondition(), slider_fill: true,
+                        onBefore: () => beginLightEdit(tl('property.shadow_blur')),
+                        onAfter: () => finishLightEdit(tl('property.shadow_blur'))
+                    },
                     shadow_softness: {
                         type: 'combo_slider',
                         label: tl('property.shadow_softness'),
@@ -15410,7 +23233,7 @@ function initializeLightManagerPlugin() {
                         disable_desc: tl('property.cast_shadows_off.desc'),
                         onBefore: () => beginLightEdit(translateLightManager('light_manager.undo.change_shadow_softness')),
                         onAfter: () => finishLightEdit(translateLightManager('light_manager.undo.change_shadow_softness')),
-                        show_condition: () => { return physicalLightCondition(); },
+                        show_condition: () => physicalLightCondition() && ['distance', 'legacy'].includes(getSelectedLight()?.shadow_softness_mode || 'legacy'),
                         slider_fill: true,
                     },
                     shadow_clip_label: {
@@ -15429,7 +23252,7 @@ function initializeLightManagerPlugin() {
                         background: 'transparent',
                         color: markerColors ? (markerColors.length >= 2 ? markerColors[2].pastel : '#F1BB75') : '#F1BB75',
                         icon_color: markerColors ? (markerColors.length >= 2 ? markerColors[2].pastel : '#F1BB75') : '#F1BB75',
-                        compact: true,
+                        compact: false,
                         popup_width: '340px',
                         value: light.shadow_near,
                         resettable: true,
@@ -15452,7 +23275,7 @@ function initializeLightManagerPlugin() {
                         background: 'transparent',
                         color: markerColors ? (markerColors.length >= 3 ? markerColors[3].pastel : '#FF9B97') : '#FF9B97',
                         icon_color: markerColors ? (markerColors.length >= 3 ? markerColors[3].pastel : '#FF9B97') : '#FF9B97',
-                        compact: true,
+                        compact: false,
                         popup_width: '340px',
                         value: light.shadow_far,
                         resettable: true,
@@ -15476,7 +23299,7 @@ function initializeLightManagerPlugin() {
                         background: 'transparent',
                         color: markerColors ? (markerColors.length >= 4 ? markerColors[4].pastel : '#C5A6E8') : '#C5A6E8',
                         icon_color: markerColors ? (markerColors.length >= 4 ? markerColors[4].pastel : '#C5A6E8') : '#C5A6E8',
-                        compact: true,
+                        compact: false,
                         popup_width: '340px',
                         value: light.shadow_bounds,
                         resettable: true,
@@ -15491,6 +23314,29 @@ function initializeLightManagerPlugin() {
                         onBefore: () => beginLightEdit(translateLightManager('light_manager.undo.change_shadow_bounds')),
                         onAfter: () => finishLightEdit(translateLightManager('light_manager.undo.change_shadow_bounds')),
                         show_condition: () => { return directionalShadowCondition(); }
+                    },
+                    shadow_scene_fit: {
+                        type: 'checkbox', label: tl('property.shadow_scene_fit'), value: !!light.shadow_scene_fit,
+                        description: tl('property.shadow_scene_fit.desc'), show_condition: directionalShadowCondition,
+                        onBefore: () => beginLightEdit(tl('property.shadow_scene_fit')),
+                        onAfter: () => finishLightEdit(tl('property.shadow_scene_fit'))
+                    },
+                    shadow_region_locked: {
+                        type: 'checkbox', label: tl('property.shadow_region_locked'), value: !!light.shadow_region_locked,
+                        description: tl('property.shadow_region_locked.desc'), show_condition: directionalShadowCondition,
+                        onBefore: () => beginLightEdit(tl('property.shadow_region_locked')),
+                        onAfter: () => finishLightEdit(tl('property.shadow_region_locked'))
+                    },
+                    shadow_camera_quality: {
+                        type: 'select', label: tl('property.shadow_camera_quality'), description: tl('property.shadow_camera_quality.desc'),
+                        value: light.shadow_camera_quality || 'balanced',
+                        options: { off: tl('property.camera_shadow.off'), balanced: tl('property.camera_shadow.balanced'), high: tl('property.camera_shadow.high') },
+                        show_condition: directionalShadowCondition
+                    },
+                    shadow_camera_distance: {
+                        type: 'number', label: tl('property.shadow_camera_distance'), description: tl('property.shadow_camera_distance.desc'),
+                        value: light.shadow_camera_distance || 256, min: 8, max: 100000, step: 8,
+                        show_condition: directionalShadowCondition
                     },
                     shadow_biases_label: {
                         type: 'bar_display',
@@ -15509,7 +23355,7 @@ function initializeLightManagerPlugin() {
                         background: 'transparent',
                         color: markerColors ? (markerColors.length >= 5 ? markerColors[5].pastel : '#A6C8FF') : '#A6C8FF',
                         icon_color: markerColors ? (markerColors.length >= 5 ? markerColors[5].pastel : '#A6C8FF') : '#A6C8FF',
-                        compact: true,
+                        compact: false,
                         popup_width: '340px',
                         value: light.shadow_bias,
                         resettable: true,
@@ -15525,6 +23371,8 @@ function initializeLightManagerPlugin() {
                         onAfter: () => finishLightEdit(translateLightManager('light_manager.undo.change_shadow_bias')),
                         show_condition: () => { return physicalLightCondition(); }
                     },
+                    shadow_normal_bias_auto: { type: 'checkbox', label: tl('property.shadow_normal_bias_auto'), value: light.shadow_normal_bias_auto !== false,
+                        onBefore: () => beginLightEdit(tl('property.shadow_normal_bias_auto')), onAfter: () => finishLightEdit(tl('property.shadow_normal_bias_auto')), show_condition: physicalLightCondition },
                     shadow_normal_bias: {
                         type: 'combo_slider',
                         label: tl('property.shadow_normal_bias'),
@@ -15533,14 +23381,14 @@ function initializeLightManagerPlugin() {
                         background: 'transparent',
                         color: markerColors ? (markerColors.length >= 6 ? markerColors[6].pastel : '#7BFFA3') : '#7BFFA3',
                         icon_color: markerColors ? (markerColors.length >= 6 ? markerColors[6].pastel : '#7BFFA3') : '#7BFFA3',
-                        compact: true,
+                        compact: false,
                         popup_width: '340px',
                         value: light.shadow_normal_bias,
                         resettable: true,
                         reset_value: DEFAULT_SHADOW_NORMAL_BIAS,
                         min: -1.0,
                         max: 1.0,
-                        step: 0.05,
+                        step: 0.0005,
                         allow_higher: false,
                         allow_lower: false,
                         disable_condition: () => { return !shadowLightCondition(); },
@@ -15550,35 +23398,95 @@ function initializeLightManagerPlugin() {
                         show_condition: () => { return selectedLightCondition(); }
                     }
                 };
+
+                const sectionControls = {
+                    shape: ['light_distance', 'light_cone_angle', 'light_cone_penumbra'],
+                    shadows: ['cast_shadows', 'shadow_scene_fit', 'shadow_region_locked', 'shadow_resolution', 'studio_shadow_resolution', 'shadow_camera_quality', 'shadow_camera_distance', 'shadow_softness_mode', 'shadow_blur', 'shadow_softness'],
+                    advanced: ['key_light_enabled', 'key_light_weight', 'shadow_near', 'shadow_far', 'shadow_bounds', 'shadow_bias', 'shadow_normal_bias_auto', 'shadow_normal_bias'],
+                    art_shape: ['art_mode', 'art_radius'],
+                    art_scope: ['art_influence', 'art_scope', 'art_targets', 'art_softness']
+                };
+                form._light_section_art_shape = LightManagerFormDesign.group({ label: translateLightManager('light_manager.ui.art_source_section'), label_icon: 'wb_incandescent', value: lightPanelSectionsOpen.art_shape, show_condition: artLightCondition });
+                form._light_section_art_scope = LightManagerFormDesign.group({ label: translateLightManager('light_manager.ui.art_scope_section'), label_icon: 'filter_alt', value: lightPanelSectionsOpen.art_scope, show_condition: artLightCondition });
+                Object.entries(sectionControls).forEach(([section, keys]) => keys.forEach(key => {
+                    if (form[key]) form[key] = inLightPanelSection(section, form[key]);
+                }));
+                // Viewport actions now live on the contextual rail.
+                ['light_gizmo_label', 'light_gizmo_action', 'light_focus_action', 'light_bounds_action', 'light_reset_gizmo_action']
+                    .forEach(key => delete form[key]);
+                ['light_area_label', 'light_cone_settings_label', 'shadow_properties_label', 'shadow_clip_label', 'shadow_biases_label']
+                    .forEach(key => delete form[key]);
+
+                // Form order is also the semantic parent order used by panel_search.
+                // Keep global controls before the first disclosure, then place each
+                // section immediately before its own children so search can temporarily
+                // expand a collapsed section without exposing unrelated settings.
+                const orderedKeys = [
+                    'light_panel_search',
+                    'light_properties_label', 'light_type', 'light_color',
+                    'light_temperature', 'light_intensity',
+                    'light_target_state',
+                    'light_gizmo_label', 'light_gizmo_action', 'light_focus_action', 'light_bounds_action', 'light_reset_gizmo_action',
+                    'art_enabled', 'art_strength',
+                    '_light_section_art_shape', ...sectionControls.art_shape,
+                    '_light_section_art_scope', ...sectionControls.art_scope,
+                    '_light_section_shape', ...sectionControls.shape,
+                    '_light_section_shadows', ...sectionControls.shadows,
+                    '_light_section_advanced', ...sectionControls.advanced
+                ];
+                form.light_target_state = {
+                    type: 'action_button', semantic_button: true, text: translateLightManager('light_manager.target.fixed'),
+                    icon: 'my_location', description: translateLightManager('light_manager.target.hint'),
+                    show_condition: () => window.LightManagerViewportControls.hasAimTarget(getSelectedLight()),
+                    click: () => BarItems.light_manager_target_position?.trigger?.()
+                };
+                const orderedForm = {};
+                for (const key of ['shadow_near', 'shadow_far', 'shadow_bounds']) {
+                    const control = form[key], previousShow = control?.show_condition;
+                    if (!control) continue;
+                    control.show_condition = () => {
+                        const selected = getSelectedLight();
+                        if (selected?.light_type === 'directional' && (selected.shadow_scene_fit || selected.shadow_region_locked)) return false;
+                        return typeof previousShow === 'function' ? previousShow() : previousShow !== false;
+                    };
+                }
+                orderedKeys.forEach(key => {
+                    if (form[key]) orderedForm[key] = form[key];
+                });
+                Object.entries(form).forEach(([key, config]) => {
+                    if (config.type === 'combo_slider') config.full_track = true;
+                    if (!Object.prototype.hasOwnProperty.call(orderedForm, key)) orderedForm[key] = config;
+                });
+                return orderedForm;
             };
 
             lightPropertiesPanel = new Panel('light_properties', {
                 icon: 'lightbulb',
-                growable: false,
+                growable: true,
                 resizable: true,
-                fixed_height: true,
+                fixed_height: false,
                 min_height: 230,
                 condition: {
-                    modes: ['render'],
+                    modes: ['edit', 'render'],
                     project: true,
-                    method: () => Modes.render
+                    method: () => Modes.render || (Modes.edit && getSelectedLights().length > 0)
                 },
                 default_position: {
                     slot: 'right_bar',
                     float_position: [0, 0],
-                    float_size: [340, 300],
-                    height: 300,
-                    fixed_height: true,
+                    float_size: [340, 360],
+                    height: 360,
+                    fixed_height: false,
                     attached_to: '',
                     attached_index: 0,
                     sidebar_index: 2,
                 },
                 mode_positions: {
-                    edit: { slot: 'right_bar', height: 300, folded: false, fixed_height: true, sidebar_index: 1, attached_to: '', attached_index: 0 },
-                    render: { slot: 'right_bar', height: 300, folded: false, fixed_height: true, sidebar_index: 1, attached_to: '', attached_index: 0 }
+                    edit: { slot: 'right_bar', height: 360, folded: false, fixed_height: false, sidebar_index: 1, attached_to: '', attached_index: 0 },
+                    render: { slot: 'right_bar', height: 360, folded: false, fixed_height: false, sidebar_index: 1, attached_to: '', attached_index: 0 }
                 },
                 insert_after: 'transform',
-                form: panelForm(getSelectedLight())
+                form: (window.LightManagerUI?.prepareForm || (form => form))(panelForm(getSelectedLight()))
             });
             window.light_properties_panel = lightPropertiesPanel;
 
@@ -15592,16 +23500,22 @@ function initializeLightManagerPlugin() {
 
             const lightPanelFormGroups = [
                 {
-                    elements: ['light_properties_label', '+', 'light_type', 'light_color', 'light_temperature', 'light_gizmo_action'],
+                    elements: ['light_properties_label', '+', 'light_type', 'light_color'],
                     gap: '2px',
                     class_name: 'lf-light-toolbar-row lf-light-primary-row',
                     aria_label: tl('property.light_settings'),
                     flex: {
                         light_properties_label: '1 1 auto',
                         light_type: '0 0 auto',
-                        light_color: '0 0 auto',
-                        light_temperature: '0 0 auto'
+                        light_color: '0 0 auto'
                     }
+                },
+                {
+                    elements: ['light_temperature'],
+                    gap: '2px',
+                    class_name: 'lf-light-value-row lf-light-temperature-row',
+                    aria_label: tl('property.light_temperature'),
+                    flex: { light_temperature: '1 1 100%' }
                 },
                 {
                     elements: ['light_intensity'],
@@ -15610,6 +23524,19 @@ function initializeLightManagerPlugin() {
                     aria_label: tl('property.light_intensity'),
                     flex: {
                         light_intensity: '1 1 100%'
+                    }
+                },
+                {
+                    elements: ['light_gizmo_label', '+', 'light_gizmo_action', 'light_focus_action', 'light_bounds_action', 'light_reset_gizmo_action'],
+                    gap: '2px',
+                    class_name: 'lf-light-toolbar-row lf-light-gizmo-row',
+                    aria_label: translateLightManager('light_manager.ui.edit_gizmos'),
+                    flex: {
+                        light_gizmo_label: '1 1 auto',
+                        light_gizmo_action: '0 0 30px',
+                        light_focus_action: '0 0 30px',
+                        light_bounds_action: '0 0 30px',
+                        light_reset_gizmo_action: '0 0 30px'
                     }
                 },
                 {
@@ -15649,60 +23576,46 @@ function initializeLightManagerPlugin() {
                     aria_label: translateLightManager('light_manager.art.targets'), flex: { art_scope: '1 1 0%', art_targets: '0 0 auto' }
                 },
                 {
-                    elements: ['key_light_enabled', 'key_light_weight'], gap: '4px',
-                    class_name: 'lf-light-value-row',
-                    aria_label: translateLightManager('light_manager.property.key_light_weight'),
-                    flex: { key_light_enabled: '0 0 30px', key_light_weight: '1 1 0%' }
-                },
-                {
-                    elements: ['light_area_label', 'light_distance', '+', '_', '+', 'light_cone_settings_label', 'light_cone_angle', 'light_cone_penumbra'],
-                    gap: '2px',
-                    divider_color: 'var(--color-grid)',
-                    class_name: 'lf-light-toolbar-row lf-light-shape-row',
-                    aria_label: tl('property.light_settings'),
+                    elements: ['_light_section_shape', '#', 'light_distance', '#', 'light_cone_angle', '#', 'light_cone_penumbra'],
+                    gap: '0',
+                    class_name: 'lf-light-section-row lf-light-shape-section',
+                    aria_label: translateLightManager('light_manager.ui.shape'),
                     flex: {
-                        light_area_label: '0 0 auto',
-                        light_distance: '0 0 auto',
-                        light_cone_settings_label: '0 0 auto',
-                        light_cone_angle: '0 0 auto',
-                        light_cone_penumbra: '0 0 auto'
+                        _light_section_shape: '1 1 100%',
+                        light_distance: '1 1 100%',
+                        light_cone_angle: '1 1 100%',
+                        light_cone_penumbra: '1 1 100%'
                     }
                 },
                 {
-                    elements: ['shadow_properties_label', '+', 'cast_shadows', 'shadow_resolution', 'studio_shadow_resolution'],
-                    gap: '2px',
-                    class_name: 'lf-light-toolbar-row lf-light-shadow-header-row',
+                    elements: ['_light_section_shadows', 'cast_shadows', '#', 'shadow_resolution', 'studio_shadow_resolution', '#', 'shadow_softness_mode', 'shadow_blur', 'shadow_softness'],
+                    gap: '0',
+                    class_name: 'lf-light-section-row lf-light-shadows-section',
                     aria_label: tl('property.shadow_settings'),
                     flex: {
-                        shadow_properties_label: '1 1 auto',
-                        cast_shadows: '0 0 auto',
-                        shadow_resolution: '0 0 auto',
-                        studio_shadow_resolution: '0 0 auto'
-                    }
-                },
-                {
-                    elements: ['shadow_softness'],
-                    gap: '2px',
-                    class_name: 'lf-light-value-row lf-light-softness-row',
-                    aria_label: tl('property.shadow_softness'),
-                    flex: {
+                        _light_section_shadows: '1 1 calc(100% - 30px)',
+                        cast_shadows: '0 0 30px',
+                        shadow_resolution: '1 1 50%',
+                        studio_shadow_resolution: '1 1 50%',
+                        shadow_softness_mode: '1 1 100%',
+                        shadow_blur: '1 1 100%',
                         shadow_softness: '1 1 100%'
                     }
                 },
                 {
-                    elements: ['shadow_clip_label', 'shadow_near', 'shadow_far', 'shadow_bounds', '+', '_', '+', 'shadow_biases_label', 'shadow_bias', 'shadow_normal_bias'],
-                    gap: '2px',
-                    divider_color: 'var(--color-grid)',
-                    class_name: 'lf-light-toolbar-row lf-light-shadow-technical-row',
-                    aria_label: tl('property.shadow_settings'),
+                    elements: ['_light_section_advanced', 'key_light_enabled', '#', 'key_light_weight', '#', 'shadow_near', '#', 'shadow_far', '#', 'shadow_bounds', '#', 'shadow_bias', '#', 'shadow_normal_bias_auto', '#', 'shadow_normal_bias'],
+                    gap: '0',
+                    class_name: 'lf-light-section-row lf-light-advanced-section',
+                    aria_label: translateLightManager('light_manager.ui.advanced'),
                     flex: {
-                        shadow_clip_label: '0 0 auto',
-                        shadow_near: '0 0 auto',
-                        shadow_far: '0 0 auto',
-                        shadow_bounds: '0 0 auto',
-                        shadow_biases_label: '0 0 auto',
-                        shadow_bias: '0 0 auto',
-                        shadow_normal_bias: '0 0 auto'
+                        _light_section_advanced: '1 1 calc(100% - 30px)',
+                        key_light_enabled: '0 0 30px',
+                        key_light_weight: '1 1 100%',
+                        shadow_near: '1 1 100%',
+                        shadow_far: '1 1 100%',
+                        shadow_bounds: '1 1 100%',
+                        shadow_bias: '1 1 100%',
+                        shadow_normal_bias: '1 1 100%'
                     }
                 }
             ];
@@ -15729,16 +23642,25 @@ function initializeLightManagerPlugin() {
                     min-height: 0;
                     overflow-y: auto;
                     overflow-x: hidden;
-                    padding: 3px 2px 6px;
+                    padding: 0 2px 6px;
                     box-sizing: border-box;
                 }
                 #panel_light_properties .light_manager_panel_search_bar {
+                    position: sticky !important;
+                    top: 0;
+                    z-index: 8;
                     margin: 0 2px 3px !important;
+                    padding: 3px 0 4px !important;
+                    background: var(--color-ui) !important;
+                    box-shadow: 0 1px 0 color-mix(in srgb, var(--color-border) 78%, transparent);
+                    box-sizing: border-box;
                 }
                 #panel_light_properties .light_manager_panel_search {
                     display: grid;
-                    grid-template-columns: minmax(78px, 1fr) minmax(30px, auto) 30px;
+                    grid-template-columns: minmax(0, 1fr) minmax(0, 80px) 30px;
                     gap: 4px;
+                    width: 100% !important;
+                    min-width: 0;
                 }
                 #panel_light_properties .light_manager_panel_search_input,
                 #panel_light_properties .light_manager_panel_search_active,
@@ -15760,7 +23682,7 @@ function initializeLightManagerPlugin() {
                     padding: 0 6px;
                 }
                 #panel_light_properties .light_manager_panel_search_input input {
-                    width: 100%; min-width: 0; height: 26px; padding: 0; border: 0;
+                    flex: 1 1 0; width: 0; min-width: 0; height: 26px; padding: 0; border: 0;
                     outline: 0; background: transparent; color: var(--color-text); font: inherit;
                 }
                 #panel_light_properties .light_manager_panel_search_active,
@@ -15803,28 +23725,108 @@ function initializeLightManagerPlugin() {
                 #panel_light_properties .light_manager_panel_filter_hidden {
                     display: none !important;
                 }
-                @container (max-width: 285px) {
-                    #panel_light_properties .light_manager_panel_search_active > span { display: none; }
-                    #panel_light_properties .light_manager_panel_search_active { width: 30px; padding: 0; }
+                #panel_light_properties .light_manager_panel_search_active.bb-select {
+                    justify-content: flex-start; padding: 0 24px 0 8px;
+                    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
                 }
                 #panel_light_properties .lf-light-toolbar-row,
                 #panel_light_properties .lf-light-value-row {
                     width: 100% !important;
                     min-height: 30px;
-                    margin: 2px 0 !important;
-                    padding: 1px 2px !important;
-                    border: 1px solid color-mix(in srgb, var(--color-border) 82%, transparent);
-                    border-radius: 4px;
-                    background: color-mix(in srgb, var(--color-button) 16%, transparent) !important;
+                    margin: 0 !important;
+                    padding: 3px 4px !important;
+                    border: 0;
+                    border-bottom: 1px solid color-mix(in srgb, var(--color-border) 72%, transparent);
+                    border-radius: 0;
+                    background: transparent !important;
                 }
                 #panel_light_properties .lf-light-primary-row {
-                    border-left-color: color-mix(in srgb, var(--color-warning) 72%, var(--color-border));
+                    padding-top: 4px !important;
                 }
-                #panel_light_properties .lf-light-shadow-header-row,
-                #panel_light_properties .lf-light-softness-row,
-                #panel_light_properties .lf-light-shadow-technical-row {
-                    border-left-color: color-mix(in srgb, var(--color-axis-z) 64%, var(--color-border));
+                #panel_light_properties .lf-light-section-row {
+                    width: 100% !important;
+                    margin: 3px 0 0 !important;
+                    padding: 0 !important;
+                    border: 0 !important;
+                    background: transparent !important;
+                    align-items: stretch !important;
                 }
+                #panel_light_properties .lf-light-section-row > .dialog_bar {
+                    width: 100% !important;
+                    min-width: 0 !important;
+                    min-height: 30px !important;
+                    margin: 0 !important;
+                    padding: 3px 5px !important;
+                    border: 0 !important;
+                    border-bottom: 1px solid color-mix(in srgb, var(--color-border) 68%, transparent) !important;
+                    border-radius: 0 !important;
+                    background: transparent !important;
+                    box-sizing: border-box;
+                }
+                #panel_light_properties .lf-light-value-row .combo_slider_label,
+                #panel_light_properties .lf-light-section-row .combo_slider_label {
+                    flex: 0 1 84px !important;
+                    min-width: 34px !important;
+                    max-width: 84px !important;
+                    overflow: visible;
+                    text-overflow: clip;
+                    white-space: normal !important;
+                    overflow-wrap: break-word;
+                    word-break: normal;
+                    line-height: 1.15;
+                    font-size: 12px !important;
+                }
+                #panel_light_properties .lf-light-value-row .slider_input_combo,
+                #panel_light_properties .lf-light-section-row .slider_input_combo {
+                    flex: 1 1 102px !important;
+                    min-width: 102px !important;
+                    margin-left: 3px !important;
+                    margin-right: 3px !important;
+                }
+                #panel_light_properties .lf-light-value-row .slider_input_combo > input[type="range"],
+                #panel_light_properties .lf-light-section-row .slider_input_combo > input[type="range"] {
+                    min-width: 52px !important;
+                }
+                #panel_light_properties .lf-light-value-row .slider_input_combo > .numeric_input,
+                #panel_light_properties .lf-light-section-row .slider_input_combo > .numeric_input {
+                    flex: 0 0 64px !important;
+                    width: 64px !important;
+                }
+                @container (max-width: 285px) {
+                    #panel_light_properties .lf-light-value-row .combo_slider_label,
+                    #panel_light_properties .lf-light-section-row .combo_slider_label {
+                        flex-basis: 64px !important;
+                        max-width: 64px !important;
+                    }
+                    #panel_light_properties .lf-light-value-row .slider_input_combo,
+                    #panel_light_properties .lf-light-section-row .slider_input_combo {
+                        flex-basis: 94px !important;
+                        min-width: 94px !important;
+                    }
+                }
+                #panel_light_properties .lf-light-section-row > .light_manager_form_variant_group {
+                    min-height: 30px !important;
+                    padding: 0 !important;
+                    border-bottom-color: var(--color-border) !important;
+                    background: color-mix(in srgb, var(--color-button) 10%, transparent) !important;
+                }
+                #panel_light_properties .lf-light-section-row > .light_manager_form_variant_group .custom_checkbox {
+                    min-height: 30px !important;
+                    height: 30px !important;
+                    padding: 2px 6px !important;
+                    font-weight: 600;
+                }
+                #panel_light_properties .lf-light-section-row .light_manager_form_separator.linebreak {
+                    flex-basis: 100% !important;
+                    width: 100% !important;
+                    height: 0 !important;
+                    margin: 0 !important;
+                }
+                #panel_light_properties .lf-light-shadows-section > :is(.form_bar_shadow_resolution,.form_bar_studio_shadow_resolution) > div { gap: 4px !important; padding: 0 !important; }
+                #panel_light_properties .lf-light-shadows-section > :is(.form_bar_shadow_resolution,.form_bar_studio_shadow_resolution) > div > span { font-size: 11px !important; color: var(--color-subtle_text) !important; }
+                #panel_light_properties .lf-light-shadows-section :is(.form_bar_shadow_resolution,.form_bar_studio_shadow_resolution) .dialog_form_description { display: none; }
+                #panel_light_properties .lf-light-shadows-section :is(.form_bar_shadow_resolution,.form_bar_studio_shadow_resolution) .compact_dropdown_select { padding: 2px 3px !important; }
+                #panel_light_properties .lf-light-shadows-section :is(.form_bar_shadow_resolution,.form_bar_studio_shadow_resolution) .main_icon_wrapper > .icon { font-size: 18px !important; }
                 #panel_light_properties [class*="lf-art-key-"] {
                     margin: 0 !important;
                     padding: 4px 5px !important;
@@ -15835,8 +23837,8 @@ function initializeLightManagerPlugin() {
                 }
                 #panel_light_properties .lf-art-key-strength-row {
                     margin-top: 2px !important;
-                    border-left: 2px solid var(--color-warning) !important;
-                    background: color-mix(in srgb, var(--color-warning) 7%, transparent) !important;
+                    border-left: 0 !important;
+                    background: transparent !important;
                 }
                 #panel_light_properties .lf-art-key-mode-row .dialog_bar,
                 #panel_light_properties .lf-art-key-filter-row .dialog_bar {
@@ -16067,8 +24069,21 @@ function initializeLightManagerPlugin() {
                 colorpicker.onAfter = () => finishLightEdit(translateLightManager('light_manager.undo.change_color'));
             };
             bindLightPanelColorControl();
-            const lightPropertiesPanelListener = lightPropertiesPanel.form.on('change', ({ result }) => {
+            const lightPropertiesPanelListener = lightPropertiesPanel.form.on('change', ({ result, changed_keys }) => {
                 if (syncingLightSettings) return;
+
+                const changedKeys = Array.isArray(changed_keys) ? changed_keys : [];
+                const changedSections = changedKeys.filter(key => key.startsWith('_light_section_'));
+                if (changedSections.length) {
+                    changedSections.forEach(key => {
+                        const section = key.slice('_light_section_'.length);
+                        if (Object.prototype.hasOwnProperty.call(lightPanelSectionsOpen, section)) {
+                            lightPanelSectionsOpen[section] = result?.[key] !== false;
+                        }
+                    });
+                    lightManagerSafeSet(lightPanelSectionStorageKey, JSON.stringify(lightPanelSectionsOpen));
+                    if (changedSections.length === changedKeys.length) return;
+                }
 
                 if (result.light_type !== undefined && physicalLightCondition()) {
                     applyLightPanelValue('light_type', result.light_type, translateLightManager('light_manager.undo.change_type'));
@@ -16091,10 +24106,24 @@ function initializeLightManagerPlugin() {
                     if (result[property] !== undefined && artLightCondition()) applyLightPanelValue(property, result[property], artLabel('edit'));
                 }
                 if (result.art_strength !== undefined && artLightCondition()) applyLightPanelValue('intensity', result.art_strength, artLabel('edit'));
-                if (result.art_enabled !== undefined && artLightCondition()) applyLightPanelValue('key_light_enabled', result.art_enabled, artLabel('edit'));
-                if (result.art_influence !== undefined && artLightCondition()) applyLightPanelValue('key_light_weight', Math.max(0, Math.min(100, Number(result.art_influence) || 0)), artLabel('edit'));
-                if (result.key_light_enabled !== undefined) applyLightPanelValue('key_light_enabled', result.key_light_enabled, translateLightManager('light_manager.property.key_light_enabled'));
-                if (result.key_light_weight !== undefined) applyLightPanelValue('key_light_weight', Math.max(0, Math.min(100, Number(result.key_light_weight) || 0)));
+                // Form change results contain every current value, not only the
+                // field that initiated the change. Gate the paired Key Light
+                // controls by changed_keys so re-enabling a zero-weight key can
+                // restore its neutral weight without the stale zero from the
+                // same event immediately disabling it again.
+                const keyChanged = key => !changedKeys.length || changedKeys.includes(key);
+                if (result.art_enabled !== undefined && artLightCondition() && keyChanged('art_enabled')) {
+                    applyLightPanelValue('key_light_enabled', result.art_enabled, artLabel('edit'));
+                }
+                if (result.art_influence !== undefined && artLightCondition() && keyChanged('art_influence')) {
+                    applyLightPanelValue('key_light_weight', Math.max(0, Math.min(100, Number(result.art_influence) || 0)), artLabel('edit'));
+                }
+                if (result.key_light_enabled !== undefined && keyChanged('key_light_enabled')) {
+                    applyLightPanelValue('key_light_enabled', result.key_light_enabled, translateLightManager('light_manager.property.key_light_enabled'));
+                }
+                if (result.key_light_weight !== undefined && keyChanged('key_light_weight')) {
+                    applyLightPanelValue('key_light_weight', Math.max(0, Math.min(100, Number(result.key_light_weight) || 0)));
+                }
 
                 if (result.light_distance !== undefined) {
                     applyLightPanelValue('distance', result.light_distance);
@@ -16120,8 +24149,17 @@ function initializeLightManagerPlugin() {
                     applyLightPanelValue('studio_shadow_resolution', result.studio_shadow_resolution, translateLightManager('light_manager.undo.change_studio_shadow_resolution'));
                 }
 
+                if (result.shadow_softness_mode !== undefined) {
+                    applyLightPanelValue('shadow_softness_mode', result.shadow_softness_mode);
+                }
+                if (result.shadow_blur !== undefined) {
+                    applyLightPanelValue('shadow_blur', result.shadow_blur);
+                }
                 if (result.shadow_softness !== undefined) {
                     applyLightPanelValue('shadow_softness', result.shadow_softness);
+                }
+                for (const property of ['shadow_scene_fit', 'shadow_region_locked', 'shadow_camera_quality', 'shadow_camera_distance']) {
+                    if (result[property] !== undefined && directionalShadowCondition() && keyChanged(property)) applyLightPanelValue(property, result[property]);
                 }
 
                 if (result.shadow_near !== undefined) {
@@ -16140,6 +24178,7 @@ function initializeLightManagerPlugin() {
                     applyLightPanelValue('shadow_bias', result.shadow_bias);
                 }
 
+                if (result.shadow_normal_bias_auto !== undefined) applyLightPanelValue('shadow_normal_bias_auto', result.shadow_normal_bias_auto);
                 if (result.shadow_normal_bias !== undefined) {
                     applyLightPanelValue('shadow_normal_bias', result.shadow_normal_bias);
                 }
@@ -16173,11 +24212,18 @@ function initializeLightManagerPlugin() {
                     lightPropertiesPanel.form.form_data.cast_shadows?.setValue(light.has_shadow !== false);
                     lightPropertiesPanel.form.form_data.shadow_resolution.setValue(String(LightManagerUtils.shadowResolution(light.shadow_resolution)));
                     lightPropertiesPanel.form.form_data.studio_shadow_resolution.setValue(String(LightManagerUtils.studioShadowResolution(light.studio_shadow_resolution)));
+                    lightPropertiesPanel.form.form_data.shadow_camera_quality?.setValue(light.shadow_camera_quality || 'balanced');
+                    lightPropertiesPanel.form.form_data.shadow_scene_fit?.setValue(!!light.shadow_scene_fit);
+                    lightPropertiesPanel.form.form_data.shadow_region_locked?.setValue(!!light.shadow_region_locked);
+                    lightPropertiesPanel.form.form_data.shadow_camera_distance?.setValue(light.shadow_camera_distance || 256);
                     lightPropertiesPanel.form.form_data.shadow_near.setValue(light.shadow_near);
                     lightPropertiesPanel.form.form_data.shadow_far.setValue(light.shadow_far);
                     lightPropertiesPanel.form.form_data.shadow_bounds.setValue(light.shadow_bounds);
+                    lightPropertiesPanel.form.form_data.shadow_softness_mode?.setValue(light.shadow_softness_mode || 'legacy');
+                    lightPropertiesPanel.form.form_data.shadow_blur?.setValue(light.shadow_blur ?? DEFAULT_SHADOW_BLUR);
                     lightPropertiesPanel.form.form_data.shadow_softness.setValue(light.shadow_softness);
                     lightPropertiesPanel.form.form_data.shadow_bias.setValue(light.shadow_bias);
+                    lightPropertiesPanel.form.form_data.shadow_normal_bias_auto?.setValue(light.shadow_normal_bias_auto !== false);
                     lightPropertiesPanel.form.form_data.shadow_normal_bias.setResetValue(LightManagerUtils.defaultShadowNormalBias(light));
                     lightPropertiesPanel.form.form_data.shadow_normal_bias.setValue(light.shadow_normal_bias);
                 } finally {
@@ -16190,7 +24236,7 @@ function initializeLightManagerPlugin() {
                 if (!lightPropertiesPanel?.form) return;
                 syncingLightSettings = true;
                 try {
-                    lightPropertiesPanel.form.form_config = panelForm(light);
+                    lightPropertiesPanel.form.form_config = (window.LightManagerUI?.prepareForm || (form => form))(panelForm(light));
                     lightPropertiesPanel.form.buildForm();
                     applyLightPanelFormGroups();
                     bindLightPanelColorControl();
@@ -16416,6 +24462,7 @@ function initializeLightManagerPlugin() {
                 'TextInputWidget',
                 'AdvancedColorPicker',
                 'applyIndestructibleFormGroups',
+                'LightManagerIcons',
                 'LightManagerUI',
                 'LightManagerRefreshIconTextures',
                 'LightElement',
@@ -16431,15 +24478,32 @@ function initializeLightManagerPlugin() {
         },
 
         onunload() {
+            Array.from(lightflowMediaViewers).forEach(dispose => dispose());
             cancelLightManagerElementUpdate();
             cancelScheduledLightManagerTasks();
             disposeDocumentInteractions();
             const ownedLightElement = lightManagerOwnedWindowBindings.get('LightElement');
             const ownedArtKeyElement = lightManagerOwnedWindowBindings.get('ArtKeyElement');
+            if (ownedArtKeyElement?.animator?.prototype.type === 'lightflow_inspection') delete ownedArtKeyElement.animator;
+            for (const project of window.ModelProject?.all || []) window.LightflowLifecycle?.preserveLiveElements?.(project, ['light', 'art_key']);
+            const ownedLightAnimator = lightManagerOwnedWindowBindings.get('LightAnimator');
             lightManagerOwnedWindowBindings.get('LightManagerAreaGizmos')?.clear?.();
             lightManagerOwnedWindowBindings.get('LightManagerViewportControls')?.dispose?.();
-            disposeLightElementPreviewResources(ownedLightElement);
+            const fitTool = lightManagerOwnedWindowBindings.get('LightManagerFitTool');
+            fitTool?.dialog?.delete();
+            if (fitTool) fitTool.dialog = null;
+            // Blockbench's Animator.showDefaultPose assumes an element with a static
+            // animator always has a live preview mesh. Plugin reload tears meshes down
+            // before the new class/controller are installed, so remove only our own
+            // animator binding before disposing previews to close that unload window.
+            if (ownedLightElement && ownedLightAnimator && ownedLightElement.animator === ownedLightAnimator) {
+                delete ownedLightElement.animator;
+            }
+            // Deleting the active Render mode may synchronously ask Blockbench to
+            // refresh selection/highlights. Release registered UI/mode resources
+            // while preview meshes are still valid, then tear the previews down.
             disposeLightManagerResources();
+            disposeLightElementPreviewResources(ownedLightElement);
             cleanupLightManagerRegistries();
 
             Object.keys(window.three_lights || {}).forEach(uuid => {
@@ -16477,7 +24541,7 @@ function initializeLightManagerPlugin() {
                 lightPreviewController.delete();
             }
             lightPreviewController = null;
-            (ownedArtKeyElement?.all || []).slice().forEach(element => {
+            Array.from(artKeyPreviewController?.ownedMeshes?.keys?.() || ownedArtKeyElement?.all || []).forEach(element => {
                 artKeyPreviewController?.remove?.(element);
             });
             if (OutlinerElement.types.art_key === ownedArtKeyElement) {
@@ -16496,6 +24560,7 @@ function initializeLightManagerPlugin() {
             restoreLightManagerAnimatorPreview();
             restoreLightManagerRendererShadowSettings();
             resetLightManagerShadowState();
+            restoreLightManagerIconBridge();
             clearOwnedLightManagerWindowBindings();
         }
     });

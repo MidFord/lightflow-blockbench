@@ -90,9 +90,13 @@
 
     function isVisible(element) {
         if (!(element instanceof Element) || !element.isConnected) return false;
+        for (let parent = element.parentElement; parent; parent = parent.parentElement) {
+            if (parent.tagName === 'DETAILS' && !parent.open && !parent.querySelector(':scope > summary')?.contains(element)) return false;
+        }
         const style = getComputedStyle(element);
         if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) <= 0.001) return false;
         const rect = element.getBoundingClientRect();
+        if (rect.width <= 1 && rect.height <= 1 && (style.clipPath === 'inset(50%)' || style.clip === 'rect(0px, 0px, 0px, 0px)')) return false;
         return rect.width > 0.5 && rect.height > 0.5;
     }
 
@@ -151,14 +155,28 @@
         return String(element.textContent || '').replace(/\s+/g, ' ').trim();
     }
 
+    function codeTextMirror(element) {
+        const root=element.closest?.('.lf-code-source');
+        const input=root?.querySelector('textarea.lf-code-input'),mirror=root?.querySelector('pre.lf-code-highlight');
+        return input && mirror && mirror.getClientRects().length && mirror.textContent===input.value+'\n' ? {input,mirror} : null;
+    }
+
     function isTextBearing(element) {
         if (!(element instanceof Element)) return false;
+        if (element.matches('.icon,.material-icons,.material-icons-outlined,.fa,.fas,.far,[aria-hidden="true"]')) return false;
+        if (element.matches('input[type=range],input[type=checkbox],input[type=radio],input[type=color]')) return false;
+        // Transparent editing text is painted by the synchronized visible mirror;
+        // inspect its tokens, while retaining input semantics and target/focus checks.
+        if(element.matches('textarea.lf-code-input') && codeTextMirror(element) && getComputedStyle(element).color==='rgba(0, 0, 0, 0)')return false;
         const tag = element.tagName;
         if (['SCRIPT', 'STYLE', 'SVG', 'PATH', 'CANVAS'].includes(tag)) return false;
         const text = elementText(element);
         if (!text) return false;
         if (element.children.length === 0) return true;
-        if (['BUTTON', 'LABEL', 'OPTION', 'A', 'P', 'SPAN', 'H1', 'H2', 'H3', 'H4'].includes(tag)) return true;
+        if (['BUTTON', 'LABEL', 'OPTION', 'A', 'P', 'SPAN', 'H1', 'H2', 'H3', 'H4'].includes(tag)) {
+            return [...element.childNodes].some(node => node.nodeType === 3 && node.textContent.trim())
+                || [...element.children].some(isTextBearing);
+        }
         return false;
     }
 
@@ -248,6 +266,11 @@
 
     function parseColor(input) {
         if (!input || input === 'transparent') return { r: 0, g: 0, b: 0, a: 0 };
+        const srgb=String(input).match(/^color\(srgb\s+([^)]+)\)$/i);
+        if (srgb) {
+            const parts=srgb[1].split(/[\s/]+/).filter(Boolean).map(Number);
+            return {r:clamp(parts[0]*255,0,255),g:clamp(parts[1]*255,0,255),b:clamp(parts[2]*255,0,255),a:parts.length>3?clamp(parts[3],0,1):1};
+        }
         const rgba = String(input).match(/rgba?\(([^)]+)\)/i);
         if (rgba) {
             const parts = rgba[1].split(/[\s,\/]+/).filter(Boolean).map(Number);
@@ -288,10 +311,9 @@
         let color = { r: 0, g: 0, b: 0, a: 0 };
         let current = element;
         const layers = [];
-        while (current && current !== root.parentElement) {
+        while (current) {
             const bg = parseColor(getComputedStyle(current).backgroundColor);
             if (bg.a > 0) layers.push(bg);
-            if (current === root) break;
             current = current.parentElement;
         }
         layers.reverse().forEach(layer => { color = composite(layer, color); });
@@ -302,7 +324,7 @@
     function luminance(color) {
         const channel = value => {
             const s = value / 255;
-            return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+            return s <= 0.04045 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
         };
         return 0.2126 * channel(color.r) + 0.7152 * channel(color.g) + 0.0722 * channel(color.b);
     }
@@ -466,9 +488,10 @@
         if (verticalOverflow > 1) {
             const style = getComputedStyle(root);
             const scrollable = /(auto|scroll)/.test(style.overflowY);
+            const visibleOverflow = style.overflowY === 'visible';
             addIssue(report, {
-                type: 'overflow', severity: scrollable ? 'info' : 'error', element: root,
-                title: scrollable ? 'Scrollable vertical content' : 'Hidden vertical overflow',
+                type: 'overflow', severity: scrollable || visibleOverflow ? 'info' : 'error', element: root,
+                title: scrollable ? 'Scrollable vertical content' : visibleOverflow ? 'Visible vertical overflow' : 'Hidden vertical overflow',
                 message: `Content is ${round(verticalOverflow)} px taller than the visible target.`,
                 why: scrollable ? 'This can be valid, but dense nested scrolling often hurts panel usability.' : `The target uses overflow-y:${style.overflowY}, so lower controls may be clipped.`,
                 fix: scrollable ? 'Keep one clear scrolling surface and avoid nested scroll containers.' : 'Use overflow-y:auto on the intended content surface or remove the fixed height.',
@@ -481,12 +504,19 @@
         const root = report.target.element;
         for (const element of elements) {
             if (element === root) continue;
+            // The animated fill deliberately travels through a clipped track;
+            // audit the progressbar itself, rather than its decorative paint.
+            if (element.matches('.lightflow_progress_fill') && element.parentElement?.getAttribute('role') === 'progressbar') continue;
+            // The graph's pan/zoom world and connection SVG deliberately exceed
+            // their viewport. Continue auditing its node cards and controls.
+            if (element.matches('.vsg-graph-world,.vsg-connections') && element.closest('.vsg-graph-viewport')) continue;
             const rect = rectOf(element);
             const style = getComputedStyle(element);
 
             const ownXOverflow = element.scrollWidth - element.clientWidth;
             const ownYOverflow = element.scrollHeight - element.clientHeight;
-            if (ownXOverflow > 2 && !['visible', 'clip'].includes(style.overflowX)) {
+            const mirroredScroll=element.matches('pre.lf-code-highlight')&&codeTextMirror(element);
+            if (ownXOverflow > 2 && !mirroredScroll && !['visible', 'clip'].includes(style.overflowX)) {
                 const textLike = isTextBearing(element);
                 addIssue(report, {
                     type: textLike ? 'text_clip' : 'overflow',
@@ -511,17 +541,22 @@
             }
 
             let ancestor = element.parentElement;
+            let reachableX = false, reachableY = false;
             while (ancestor && ancestor !== root.parentElement) {
                 if (!isVisible(ancestor)) break;
                 const ancestorStyle = getComputedStyle(ancestor);
+                // Content outside the current scroll viewport remains reachable.
+                // An outer panel's clipping must not turn that into lost content.
+                reachableX ||= /(auto|scroll)/.test(ancestorStyle.overflowX) && ancestor.scrollWidth > ancestor.clientWidth;
+                reachableY ||= /(auto|scroll)/.test(ancestorStyle.overflowY) && ancestor.scrollHeight > ancestor.clientHeight;
                 // auto/scroll intentionally clips the current viewport while keeping the
                 // content reachable. Hidden/clip is the dangerous case: content can be lost.
                 const clipsX = /(hidden|clip)/.test(ancestorStyle.overflowX);
                 const clipsY = /(hidden|clip)/.test(ancestorStyle.overflowY);
                 if (clipsX || clipsY) {
                     const aRect = rectOf(ancestor);
-                    const xClipped = clipsX && (rect.left < aRect.left - 1 || rect.right > aRect.right + 1);
-                    const yClipped = clipsY && (rect.top < aRect.top - 1 || rect.bottom > aRect.bottom + 1);
+                    const xClipped = clipsX && !reachableX && (rect.left < aRect.left - 1 || rect.right > aRect.right + 1);
+                    const yClipped = clipsY && !reachableY && (rect.top < aRect.top - 1 || rect.bottom > aRect.bottom + 1);
                     if (xClipped || yClipped) {
                         addIssue(report, {
                             type: 'clipping', severity: 'error', element,
@@ -569,7 +604,18 @@
 
     function analyzeCollisions(report, elements) {
         const root = report.target.element;
-        const candidates = collisionCandidates(elements, root).map(element => ({ element, rect: rectOf(element) }));
+        const visibleRect = element => {
+            const rect = rectOf(element);
+            for (let ancestor=element.parentElement;ancestor&&ancestor!==root.parentElement;ancestor=ancestor.parentElement) {
+                const style=getComputedStyle(ancestor), bounds=rectOf(ancestor);
+                if (/(auto|scroll|hidden|clip)/.test(style.overflowX)) {rect.left=Math.max(rect.left,bounds.left);rect.right=Math.min(rect.right,bounds.right);}
+                if (/(auto|scroll|hidden|clip)/.test(style.overflowY)) {rect.top=Math.max(rect.top,bounds.top);rect.bottom=Math.min(rect.bottom,bounds.bottom);}
+                if (rect.right<=rect.left||rect.bottom<=rect.top) return null;
+            }
+            rect.width=rect.right-rect.left;rect.height=rect.bottom-rect.top;rect.area=rect.width*rect.height;
+            return rect;
+        };
+        const candidates = collisionCandidates(elements, root).map(element => ({ element, rect: visibleRect(element) })).filter(item=>item.rect);
         const cellSize = 96;
         const buckets = new Map();
         const checked = new Set();
@@ -697,6 +743,7 @@
         let failures = 0;
         for (const element of elements) {
             if (!isTextBearing(element)) continue;
+            if (element.closest('[aria-disabled="true"],:disabled')) continue;
             const style = getComputedStyle(element);
             if (Number(style.opacity) < 0.55) continue;
             const fontSize = parseFloat(style.fontSize) || 12;
@@ -704,7 +751,7 @@
             const foreground = effectiveTextColor(element);
             const background = effectiveBackground(element, root);
             const ratio = contrastRatio(foreground, background);
-            const large = fontSize >= 18 || (fontSize >= 14 && weight >= 700);
+            const large = fontSize >= 24 || (fontSize >= (14 * 96 / 72) && weight >= 700);
             const threshold = large ? 3 : 4.5;
             checked++;
             if (ratio < threshold) {
@@ -727,20 +774,21 @@
         const controls = elements.filter(isPrimaryInteractive);
         let tiny = 0;
         for (const element of controls) {
+            if (element.closest('[aria-disabled="true"],:disabled')) continue;
             const rect = rectOf(element);
             const style = getComputedStyle(element);
             const effectiveWidth = rect.width;
             const effectiveHeight = rect.height;
             const iconOnly = !elementText(element) || elementText(element).length <= 2 || element.matches('.tool, .panel_control');
-            if ((effectiveWidth < 22 || effectiveHeight < 22) && !element.matches('input[type="range"]')) {
+            if ((effectiveWidth < 24 || effectiveHeight < 24) && !element.matches('input[type="range"]')) {
                 tiny++;
                 addIssue(report, {
                     type: 'target_size', severity: effectiveWidth < 16 || effectiveHeight < 16 ? 'error' : 'warning', element,
                     title: 'Small interactive target',
                     message: `Interactive area is ${round(effectiveWidth)}×${round(effectiveHeight)} px.`,
                     why: 'Very small controls are harder to hit and make dense panels feel cramped.',
-                    fix: 'Increase min-width/min-height or padding; icon-only controls should normally have a comfortable square hit area.',
-                    metrics: { width: round(effectiveWidth), height: round(effectiveHeight), iconOnly }
+                    fix: 'Check the WCAG 2.2 target-size exceptions (spacing, equivalent controls, inline or user-agent controls); otherwise increase the hit area to at least 24 CSS px.',
+                    metrics: { width: round(effectiveWidth), height: round(effectiveHeight), iconOnly, referenceMinimum:24, exceptionsRequireReview:true }
                 });
             }
 
@@ -994,7 +1042,7 @@
             if (element.matches('button, [role="button"], .tool, .light_manager_action_button')) {
                 const text = elementText(element);
                 const name = element.getAttribute('aria-label') || element.getAttribute('title') || text;
-                if (!name && isInteractive(element)) {
+                if (!name && isPrimaryInteractive(element)) {
                     addIssue(report, {
                         type: 'accessibility', severity: 'info', element,
                         title: 'Icon/action has no accessible name',
@@ -1007,7 +1055,7 @@
             }
             if (element.matches('input:not([type="hidden"]), select, textarea')) {
                 const id = element.id;
-                const label = id ? root.querySelector(`label[for="${cssEscape(id)}"]`) : null;
+                const label = (id ? root.querySelector(`label[for="${cssEscape(id)}"]`) : null) || element.closest('label');
                 const aria = element.getAttribute('aria-label') || element.getAttribute('aria-labelledby');
                 const barLabel = element.closest('.form_bar')?.querySelector('label');
                 if (!label && !aria && !barLabel) {

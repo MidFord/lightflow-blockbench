@@ -20,7 +20,7 @@
 
 
     const HUB_ID = 'lightflow_hub';
-    const HUB_VERSION = '1.0.1';
+    const HUB_VERSION = '1.1.0';
     const MODULE_ICONS = Object.freeze({
         lightflow_hub: LIGHTFLOW_HUB_ICON,
         light_manager: LIGHTFLOW_LIGHT_MANAGER_ICON,
@@ -72,16 +72,17 @@
     });
 
     const FALLBACK_MODULES = Object.freeze([
-        {id: 'light_manager', file: 'light_manager.js', title: 'Light Manager', description: 'Lights, gizmos, animation, and shadows for the entire suite.', description_es: 'Luces, gizmos, animación y sombras para toda la suite.', version: '1.8.2', min_blockbench: '4.9.0', icon: 'light_mode', group: 'essential', recommended: true, dependencies: []},
-        {id: 'shader_architect', file: 'shader_architect.js', title: 'Shader Architect', description: 'Lightflow, PBR, and Rendercraft materials, instances, and screen effects.', description_es: 'Materiales Lightflow, PBR, Rendercraft, instancias y efectos de pantalla.', version: '3.2.6', min_blockbench: '4.9.0', icon: 'architecture', group: 'essential', recommended: true, dependencies: ['light_manager']},
-        {id: 'lightflow_environment', file: 'lightflow_environment.js', title: 'Lightflow Environment', description: 'Sky, sun, moon, clouds, reflections, and environment lighting.', description_es: 'Cielo, sol, luna, nubes, reflejos e iluminación ambiental.', version: '1.9.0', min_blockbench: '4.9.0', icon: 'wb_twilight', group: 'essential', recommended: true, dependencies: ['light_manager']},
-        {id: 'lightflow_atmosphere', file: 'lightflow_atmosphere.js', title: 'Lightflow Atmosphere', description: 'Local fog, light shafts, dust, and procedural volumes.', description_es: 'Niebla local, haces de luz, polvo y volúmenes procedurales.', version: '2.0.0', min_blockbench: '4.9.0', icon: 'blur_on', group: 'essential', recommended: true, dependencies: ['light_manager']},
-        {id: 'studio_render', file: 'studio_render.js', title: 'Studio Render', description: 'High-resolution scene composition and supersampled image export.', description_es: 'Composición y exportación de imágenes con alta resolución y supersampling.', version: '1.9.10', min_blockbench: '4.9.0', icon: 'photo_camera_back', group: 'essential', recommended: true, dependencies: []},
+        {id: 'light_manager', file: 'light_manager.js', title: 'Light Manager', description: 'Lights, gizmos, animation, and shadows for the entire suite.', description_es: 'Luces, gizmos, animación y sombras para toda la suite.', version: '1.9.0', min_blockbench: '4.9.0', icon: 'light_mode', group: 'essential', recommended: true, dependencies: []},
+        {id: 'shader_architect', file: 'shader_architect.js', title: 'Shader Architect', description: 'Lightflow, PBR, and Rendercraft materials, instances, and screen effects.', description_es: 'Materiales Lightflow, PBR, Rendercraft, instancias y efectos de pantalla.', version: '3.3.0', min_blockbench: '4.9.0', icon: 'architecture', group: 'essential', recommended: true, dependencies: ['light_manager']},
+        {id: 'lightflow_environment', file: 'lightflow_environment.js', title: 'Lightflow Environment', description: 'Sky, sun, moon, clouds, reflections, and environment lighting.', description_es: 'Cielo, sol, luna, nubes, reflejos e iluminación ambiental.', version: '1.10.0', min_blockbench: '4.9.0', icon: 'wb_twilight', group: 'essential', recommended: true, dependencies: ['light_manager']},
+        {id: 'lightflow_atmosphere', file: 'lightflow_atmosphere.js', title: 'Lightflow Atmosphere', description: 'Local fog, light shafts, dust, and procedural volumes.', description_es: 'Niebla local, haces de luz, polvo y volúmenes procedurales.', version: '2.1.0', min_blockbench: '4.9.0', icon: 'blur_on', group: 'essential', recommended: true, dependencies: ['light_manager']},
+        {id: 'studio_render', file: 'studio_render.js', title: 'Studio Render', description: 'High-resolution scene composition and supersampled image export.', description_es: 'Composición y exportación de imágenes con alta resolución y supersampling.', version: '1.10.0', min_blockbench: '4.9.0', icon: 'photo_camera_back', group: 'essential', recommended: true, dependencies: []},
         {id: 'lightflow_scene_links', file: 'lightflow_scene_links.js', title: 'Scene Links', variant: 'desktop', description: 'Compose scenes from linked Blockbench projects with independent poses.', description_es: 'Compón escenas con proyectos de Blockbench vinculados y poses independientes.', version: '0.1.0', min_blockbench: '4.9.0', icon: 'kid_star', group: 'creative', maturity: 'experimental', recommended: false, dependencies: ['light_manager']},
-        {id: 'lightflow_cinematic', file: 'lightflow_cinematic.js', title: 'Lightflow Cinematic', description: 'Deterministic sequences, physical cameras, and animation rendering.', description_es: 'Secuencias deterministas, cámaras físicas y render de animación.', version: '0.1.0', min_blockbench: '4.9.0', icon: 'movie_creation', group: 'creative', maturity: 'experimental', recommended: false, dependencies: ['studio_render']},
-        {id: 'visual_shader_graph', file: 'visual_shader_graph.js', title: 'Visual Shader Graph', description: 'A visual shader editor connected to Shader Architect.', description_es: 'Editor visual de shaders conectado con Shader Architect.', version: '1.2.0', min_blockbench: '4.9.0', icon: 'schema', group: 'creative', maturity: 'beta', recommended: false, dependencies: ['light_manager', 'shader_architect']},
-        {id: 'bedrock_structure_studio', file: 'bedrock_structure_studio.js', title: 'Bedrock Structure Studio', description: 'Open, edit, and export Bedrock .mcstructure files.', description_es: 'Abrir, editar y exportar estructuras .mcstructure de Bedrock.', version: '2.5.0', min_blockbench: '5.0.0', icon: 'view_in_ar', group: 'specialized', maturity: 'beta', recommended: false, dependencies: ['light_manager']},
+        {id: 'lightflow_cinematic', file: 'lightflow_cinematic.js', title: 'Lightflow Cinematic', description: 'Deterministic sequences, physical cameras, and animation rendering.', description_es: 'Secuencias deterministas, cámaras físicas y render de animación.', version: '0.2.0', min_blockbench: '4.9.0', icon: 'movie_creation', group: 'creative', maturity: 'experimental', recommended: false, dependencies: ['studio_render']},
+        {id: 'visual_shader_graph', file: 'visual_shader_graph.js', title: 'Visual Shader Graph', description: 'A visual shader editor connected to Shader Architect.', description_es: 'Editor visual de shaders conectado con Shader Architect.', version: '1.3.0', min_blockbench: '4.9.0', icon: 'schema', group: 'creative', maturity: 'beta', recommended: false, dependencies: ['light_manager', 'shader_architect']},
+        {id: 'bedrock_structure_studio', file: 'dist/bedrock_structure_studio.js', title: 'Lightflow Terrain Render', description: 'Compose terrain with Bedrock and Java structures and local resource packs.', description_es: 'Abrir, editar y exportar estructuras .mcstructure de Bedrock.', version: '2.6.0', min_blockbench: '5.0.0', icon: 'view_in_ar', group: 'specialized', maturity: 'beta', recommended: false, dependencies: ['light_manager']},
         {id: 'lightflow_test_lab', file: 'lightflow_test_lab.js', title: 'Lightflow Test Lab', description: 'Renderer diagnostics and benchmarks for development.', description_es: 'Diagnósticos y benchmarks del renderer para desarrollo.', version: '2.0.0', min_blockbench: '4.9.0', icon: 'speed', group: 'developer', maturity: 'developer', recommended: false, dependencies: ['light_manager', 'shader_architect']},
+        {id: 'lightflow_ui_lab', file: 'lightflow_ui_lab.js', title: 'Lightflow UI Lab', description: 'Development-only fixtures using real shared controls in a Panel and Dialog.', description_es: 'Fixtures de desarrollo con controles compartidos reales en un Panel y un Dialog.', version: '1.0.0', min_blockbench: '4.9.0', icon: 'widgets', group: 'developer', maturity: 'developer', recommended: false, dependencies: ['light_manager']},
         {id: 'lightflow_ui_diagnostics', file: 'lightflow_ui_diagnostics.js', title: 'Lightflow UI Diagnostics', description: 'Visual and accessibility auditing for panels and dialogs.', description_es: 'Auditoría visual y de accesibilidad de paneles y diálogos.', version: '1.1.0', min_blockbench: '4.9.0', icon: 'troubleshoot', group: 'developer', maturity: 'developer', recommended: false, dependencies: ['light_manager']}
     ]);
 
@@ -328,6 +329,18 @@
         return /^[A-Za-z0-9._/-]+\.js$/.test(file) && !file.includes('..') && !file.startsWith('/') ? file : '';
     }
 
+    // Blockbench's native loadFromURL/loadFromFile derives the plugin ID from
+    // the final filename before executing Plugin.register(). A valid bundle
+    // must therefore be named <id>.js even when it lives in dist/.
+    function assertPluginSourceFilename(id, source) {
+        const cleanPath = String(source || '').split(/[?#]/, 1)[0].replace(/\\/g, '/');
+        const filename = cleanPath.split('/').pop() || '';
+        if (filename !== `${id}.js`) {
+            throw new Error(`Plugin ${id} requires the filename ${id}.js; received ${filename || '(empty)'}. Use the canonical plugin file (bundled plugins may be stored in dist/).`);
+        }
+        return source;
+    }
+
     function sanitizeImagePath(value) {
         const path = String(value || '').trim();
         return /^[A-Za-z0-9_/-]+\.(?:png|jpe?g|webp)$/i.test(path) && !path.startsWith('/') && !path.includes('..') ? path : '';
@@ -383,7 +396,12 @@
         if (!raw || typeof raw !== 'object') return null;
         const id = String(raw.id || '').trim();
         const file = sanitizeFile(raw.file);
-        if (!/^[a-z][a-z0-9_]{1,63}$/.test(id) || !file || file.split('/').pop() !== `${id}.js`) return null;
+        const filename = file ? file.split('/').pop() : '';
+        // Bedrock Studio bundles its optional reference-model readers into one
+        // self-contained script for URL installation. Keep every other module's
+        // canonical filename validation intact.
+        const validFilename = filename === `${id}.js`;
+        if (!/^[a-z][a-z0-9_]{1,63}$/.test(id) || !file || !validFilename) return null;
         const dependencies = Array.isArray(raw.dependencies)
             ? [...new Set(raw.dependencies.map(String).filter(value => /^[a-z][a-z0-9_]{1,63}$/.test(value) && value !== id))]
             : [];
@@ -475,7 +493,20 @@
 
     function stableReleaseCandidates(releases) {
         if (!Array.isArray(releases)) return [];
-        return releases.filter(release => release && !release.draft && !release.prerelease && sanitizeRef(release.tag_name));
+        const candidates = releases.filter(release => release && !release.draft && !release.prerelease && sanitizeRef(release.tag_name));
+        // A later Hub-only maintenance release must not downgrade the suite.
+        // Explicit release selection remains untouched in fetchStableManifest.
+        const suiteVersion = release => /^v(\d+)\.(\d+)\.(\d+)$/.exec(release.tag_name);
+        return candidates.sort((a, b) => {
+            const av = suiteVersion(a), bv = suiteVersion(b);
+            if (!!av !== !!bv) return av ? -1 : 1;
+            if (!av) return 0;
+            for (let index = 1; index <= 3; index++) {
+                const delta = Number(bv[index]) - Number(av[index]);
+                if (delta) return delta;
+            }
+            return 0;
+        });
     }
 
     async function fetchPublishedReleases() {
@@ -703,6 +734,7 @@
     }
 
     async function replacePlugin(module, kind, path, options = {}) {
+        assertPluginSourceFilename(module.id, path);
         if (!options.preflighted) {
             if (kind === 'github') await probeRemotePlugin(path, module.id);
             else {
@@ -723,6 +755,10 @@
         if (!plugin) plugin = new Plugin(module.id, {disabled: previous?.disabled});
         try {
             if (previous && !plugin.disabled) plugin.unload?.();
+            // Native Plugin.reload increments this before loading a local file.
+            // Reusing the same path/version without it can evaluate cached code,
+            // even though preflight just read the updated source from disk.
+            if (previous) plugin.cache_version = (Number(plugin.cache_version) || 0) + 1;
             resetPluginMetadata(plugin);
             plugin.version = '';
             plugin.installed = false;
@@ -737,9 +773,10 @@
             if (previous) {
                 try {
                     if (!plugin.disabled) plugin.unload?.();
+                    plugin.cache_version = (Number(plugin.cache_version) || 0) + 1;
                     resetPluginMetadata(plugin); plugin.version = ''; plugin.installed = false;
                     plugin.disabled = !!previous.disabled;
-                    if (previous.source === 'file') await plugin.loadFromFile({path: previous.path, name: module.file.split('/').pop(), content: ''}, false);
+                    if (previous.source === 'file') await plugin.loadFromFile({path: previous.path, name: String(previous.path).replace(/\\/g, '/').split('/').pop(), content: ''}, false);
                     else if (previous.source === 'url') await plugin.loadFromURL(previous.path, false);
                     else if (typeof plugin.load === 'function') { plugin.source = previous.source; await plugin.load(); }
                     verifyLoaded(plugin, {...module, version: previous.version}, previous.path);
@@ -758,9 +795,9 @@
     function moduleSource(module, preferences) {
         if (preferences.source === 'local') {
             if (!module.localPath || !module.localExists) throw new Error(`${tr('missingLocal')}: ${module.file}`);
-            return {kind: 'local', value: module.localPath};
+            return {kind: 'local', value: assertPluginSourceFilename(module.id, module.localPath)};
         }
-        return {kind: 'github', value: rawUrl(currentRef, module.file)};
+        return {kind: 'github', value: assertPluginSourceFilename(module.id, rawUrl(currentRef, module.file))};
     }
 
 
@@ -906,6 +943,431 @@
         return message;
     }
 
+    // Learning stays inside the standalone Hub: no download, separate plugin or
+    // modal tour is needed. Checkpoints inspect the same tools artists use.
+    // Learning is postponed for this release; keep lessons and saved progress intact.
+    const LEARNING_AVAILABLE = false;
+    const LEARNING_KEY = 'lightflow_learning_v1';
+    const learnText = (es, en) => language() === 'es' ? es : en;
+    const storedLearningProgress = readJsonStorage(LEARNING_KEY, {});
+    const learningProgress = storedLearningProgress && typeof storedLearningProgress === 'object' && !Array.isArray(storedLearningProgress) ? storedLearningProgress : {};
+    let learningSession = null;
+    let learningView = null;
+    let learningNode = null;
+    let learningTimer = null;
+    let learningRenderListener = null;
+    let learningRenderStarts = null;
+    let learningRenderCount = 0;
+    let learningHighlight = null;
+    let learningDragCleanup = null;
+    let learningProjectProperty = null;
+    let learningStarting = false;
+    const learningRenderProjects = new WeakMap();
+    const learningProjectId = () => globalThis.Project?.lightflow_learning_project_id || globalThis.Project?.uuid || '';
+
+    function learningLessons() {
+        const text = learnText;
+        const step = (id, title, body, tip, kind, target, action) => ({id, title, body, tip, kind, target, action});
+        const quiz = (id, title, body, answers, correct, explanation) => ({id, title, body, kind:'quiz', answers, correct, tip:explanation});
+        const lesson = (id, icon, title, outcome, minutes, modules, steps) => ({id, icon, title, outcome, minutes, modules, steps});
+        const modeStep = (id, title, body, tip) => step(id, title, body, tip, 'mode', '[toolbar_item="sa_global_mode"]', 'mode');
+        const renderStep = () => step('render', text('Tu imagen, de verdad', 'Your actual image'), text('Haz un render de prueba. Espera a que Studio Render termine y abre la imagen para revisar silueta, luz y encuadre.', 'Make a test render. Wait for Studio Render to finish and inspect the image for silhouette, light and framing.'), text('La prueba usa 480 × 270 y 1 muestra. Para entregar, configura resolución y AA en Studio Render; una captura del viewport no sustituye el render final.', 'The test uses 480 × 270 and 1 sample. Set resolution and AA in Studio Render for delivery; a viewport screenshot does not replace the final render.'), 'render', '.studio_render_frame', 'render-preview');
+        return [
+            lesson('first-image', 'auto_awesome', text('Tu primera imagen con Lightflow', 'Your first Lightflow image'), text('De un pequeño escenario a una imagen que puedes revisar.', 'Turn a small stage into an image you can inspect.'), 8, ['light_manager','shader_architect','studio_render'], [
+                quiz('welcome', text('Un pequeño estudio, una gran diferencia', 'A small studio, a big difference'), text('Vas a dirigir una imagen: modelo → material → luz → encuadre → render. El tutorial acompaña tus acciones sin bloquear Blockbench. Puedes pausarlo y volver desde el HUB.', 'You will direct an image: model → material → light → framing → render. The guide follows your actions without blocking Blockbench. Pause and return from the HUB.'), [text('Primero compruebo luz y encuadre en una prueba pequeña.', 'First I check light and framing in a small test.'),text('Empiezo con la máxima resolución y todos los efectos.', 'I start at maximum resolution with every effect.')], 0, text('Una prueba rápida te deja explorar. Cada taller añade una herramienta a tu proceso.', 'A quick test gives you room to explore. Every workshop adds a tool to your process.')),
+                modeStep('lightflow', text('Enciende el estudio', 'Turn on the studio'), text('Abre el selector de material global del viewport y elige RenderCraft / Lightflow. Espera a que se prepare el shader.', 'Open the viewport global material selector and choose RenderCraft / Lightflow. Wait for shader preparation.'), text('El modo global da una base a la escena. Los Overrides podrán dar otro material a objetos concretos.', 'Global mode supplies a scene baseline. Overrides can give individual objects a different material.')),
+                step('sun', text('Una luz revela el volumen', 'Light reveals volume'), text('Añade una luz direccional. Selecciónala en el Outliner: sus propiedades y su gizmo son tu punto de partida.', 'Add a directional light. Select it in the Outliner: its properties and gizmo are your starting point.'), text('La direccional ilumina como un sol; su orientación importa más que su distancia.', 'Directional light acts like a sun; its orientation matters more than distance.'), 'add-directional', '#light_properties', 'add_directional_light'),
+                step('shape', text('Dirige la luz', 'Direct the light'), text('Con la luz seleccionada, cambia su rotación, intensidad o color en Propiedades. Busca distinguir la cara iluminada y la cara en sombra.', 'With the light selected, change rotation, intensity or color in Properties. Look for a distinct lit face and shadow face.'), text('Si todo queda plano, mueve la luz hacia un lado antes de añadir más luces.', 'If everything looks flat, move the light to one side before adding more lights.'), 'light-edit', '#light_properties', 'edit_light_properties'),
+                step('frame', text('Tu compañero: Studio Renderer Frame', 'Your companion: Studio Renderer Frame'), text('Abre Studio Renderer Frame. El rectángulo define qué entra en la imagen; sus controles te acompañan mientras colocas la cámara.', 'Open Studio Renderer Frame. The rectangle defines what enters the image; its controls follow you while positioning the camera.'), text('Deja aire alrededor del sujeto. El frame y la cámara cumplen funciones distintas: recortar y mirar.', 'Leave space around the subject. The frame crops; the camera looks.'), 'frame', '.studio_render_frame', 'studio_render_export'),
+                renderStep(),
+                quiz('finish', text('Ya tienes un proceso', 'You now have a process'), text('Cuando una imagen no convence, ¿por dónde empezarías?', 'When an image feels wrong, where would you start?'), [text('Añadiendo Bloom y más muestras.', 'Adding Bloom and more samples.'),text('Revisando silueta, luz y encuadre; luego materiales y acabado.', 'Reviewing silhouette, light and framing; then materials and finish.')], 1, text('Guarda la escena como .bbmodel para conservar elementos y ajustes del proyecto. Sigue con Luces: aprenderás a decidir qué luz necesitas.', 'Save the scene as .bbmodel to retain elements and project settings. Continue with Lights to learn which light you need.'))
+            ]),
+            lesson('lights', 'lightbulb', text('Luces que cuentan una historia', 'Lights that tell a story'), text('Construye luz principal, relleno y acento con intención.', 'Build intentional key, fill and accent lighting.'), 7, ['light_manager','shader_architect','studio_render'], [
+                modeStep('lightflow', text('Trabaja con iluminación', 'Work with lighting'), text('Elige RenderCraft / Lightflow en el selector global.', 'Choose RenderCraft / Lightflow in the global selector.'), text('Selecciona siempre la luz que quieras editar en el Outliner.', 'Always select the light you want to edit in the Outliner.')),
+                step('point', text('Rellena una sombra', 'Fill a shadow'), text('Añade una luz puntual: ilumina alrededor de su posición. Colócala cerca del lado oscuro del sujeto.', 'Add a point light: it shines around its position. Place it near the dark side of the subject.'), text('Empieza con poca intensidad. El relleno debe conservar la forma que dibuja la luz principal.', 'Start with low intensity. Fill should preserve the shape drawn by the key light.'), 'add-point', '#light_properties', 'add_light'),
+                step('edit', text('Hazla tuya', 'Make it yours'), text('Modifica posición, intensidad o color de la nueva luz. Observa la respuesta del modelo.', 'Change the new light position, intensity or color. Observe the model response.'), text('Una luz puede estar fuera de su alcance o desactivada. Comprueba visibilidad, distancia y modo de render si no contribuye.', 'A light can be out of range or disabled. Check visibility, distance and render mode if it contributes nothing.'), 'light-edit', '#light_properties', 'edit_light_properties'),
+                step('spot', text('Un acento con dirección', 'A directional accent'), text('Añade un Spot. Su cono sirve para concentrar atención; ajusta orientación, ángulo y penumbra en Propiedades.', 'Add a Spot. Its cone concentrates attention; adjust orientation, angle and penumbra in Properties.'), text('La penumbra suaviza el borde del cono. Las sombras tienen sus propios controles de calidad.', 'Penumbra softens the cone edge. Shadows have their own quality controls.'), 'add-spot', '#light_properties', 'add_spot_light'),
+                quiz('choice', text('Elige por función', 'Choose by function'), text('¿Qué luz usarías para una iluminación solar que no depende de la distancia?', 'Which light would you use for sunlight that does not depend on distance?'), [text('Puntual', 'Point'),text('Spot', 'Spot'),text('Direccional', 'Directional')], 2, text('Puntual: alrededor de un punto. Spot: un cono. Direccional: una dirección común. Usa pocas luces y explica la función de cada una.', 'Point: around a point. Spot: a cone. Directional: a shared direction. Use few lights and define a purpose for each.')),
+                renderStep()
+            ]),
+            lesson('global-modes', 'view_in_ar', text('Modos globales: compara y decide', 'Global modes: compare and decide'), text('Ve el mismo escenario con Classic, PBR y RenderCraft.', 'See the same stage with Classic, PBR and RenderCraft.'), 6, ['light_manager','shader_architect'], [
+                modeStep('classic', 'Classic', text('Elige Classic. Es la base familiar de Blockbench para ver textura y forma. La respuesta a luz depende de sus ajustes.', 'Choose Classic. It is the familiar Blockbench baseline for texture and form. Lighting response depends on its settings.'), text('No confundas el selector global con los modos nativos Textured, Solid o Wireframe. Para evaluar Lightflow usa la vista Lightflow.', 'Do not confuse the global selector with native Textured, Solid or Wireframe views. Use Lightflow view to evaluate Lightflow.')),
+                modeStep('pbr_metallic_roughness', 'PBR · Metallic / Roughness', text('Cambia a PBR. Observa cómo reflejos y rugosidad describen la superficie.', 'Switch to PBR. Observe how reflections and roughness describe the surface.'), text('Rugosidad alta dispersa el brillo. Metallic distingue materiales metálicos; no es un control genérico de brillo.', 'High roughness spreads highlights. Metallic distinguishes metals; it is not a generic brightness control.')),
+                modeStep('vibrant_visuals_pbr', 'Vibrant Visuals PBR', text('Prueba Vibrant Visuals PBR. Es otra familia disponible para trabajar con superficies PBR; compara sus controles y su respuesta bajo la misma luz.', 'Try Vibrant Visuals PBR. It is another available family for PBR surfaces; compare its controls and response under the same light.'), text('El modo prepara una apariencia en Lightflow. La entrega a un juego requiere sus propios archivos y convenciones de materiales.', 'The mode prepares an appearance in Lightflow. Delivery to a game requires its own files and material conventions.')),
+                modeStep('lightflow', 'RenderCraft / Lightflow', text('Cambia a RenderCraft / Lightflow. Es el punto de partida para dirigir la iluminación y el estilo de Lightflow.', 'Switch to RenderCraft / Lightflow. It is the starting point for directing Lightflow lighting and style.'), text('Compara con la misma cámara y las mismas luces para entender qué cambió de verdad.', 'Compare with the same camera and lights to understand what actually changed.')),
+                modeStep('cinematic_craft', 'Cinematic Craft', text('Prueba Cinematic Craft como otra familia de acabado. No cambia por sí solo tu composición ni sustituye las luces.', 'Try Cinematic Craft as another finish family. It does not compose the shot or replace lights.'), text('Elige el material por la imagen que quieres conseguir. Puedes volver a cualquiera de las familias.', 'Choose the material for the image you want. You can return to any family.')),
+                quiz('global', text('Una base, varias excepciones', 'One baseline, several exceptions'), text('¿Qué sucede con un objeto que tiene un Material Override válido?', 'What happens to an object with a valid Material Override?'), [text('Puede conservar su material propio al cambiar el global.', 'It can retain its own material when global mode changes.'),text('Siempre debe usar el material global.', 'It must always use the global material.')], 0, text('En la vista Lightflow, el global es la base y los Overrides definen excepciones. Si una comparación parece no cambiar, revisa los Overrides.', 'In Lightflow view, global mode is the baseline and Overrides define exceptions. If a comparison seems unchanged, inspect Overrides.'))
+            ]),
+            lesson('materials', 'format_paint', text('Material Overrides sin perderte', 'Material Overrides without getting lost'), text('Crea, asigna y ajusta un material independiente.', 'Create, assign and edit an independent material.'), 8, ['light_manager','shader_architect','studio_render'], [
+                step('select', text('Primero, el destinatario', 'First, the recipient'), text('Selecciona un cubo del escenario en el Outliner. El material se asigna a una selección: confirma qué estás editando.', 'Select a stage cube in the Outliner. Material assignment follows selection: confirm what you are editing.'), text('Un Override puede pertenecer a un objeto o una cara. Empieza por el objeto completo.', 'An Override can belong to an object or face. Start with the whole object.'), 'select-cube', '#outliner'),
+                step('instance', text('Crea una instancia', 'Create an instance'), text('Abre Crear material. Elige una familia base, ponle un nombre reconocible y confirma el diálogo.', 'Open Create material. Choose a base family, give it a recognizable name and confirm the dialog.'), text('Una instancia guarda sus propios parámetros. Un nombre como Cerámica mate explica mejor su función que Material 2.', 'An instance stores its own parameters. A name like Matte ceramic communicates more than Material 2.'), 'instance', '#material_properties', 'sa_create_material_instance'),
+                step('assign', text('Comparte el material', 'Share the material'), text('Crear una instancia la asigna a tu selección. Selecciona ahora otro cubo y asígnale esa misma instancia desde Material Overrides.', 'Creating an instance assigns it to your selection. Now select another cube and assign the same instance in Material Overrides.'), text('Dos objetos con la misma instancia cambian juntos. Usa el selector de caras cuando necesites una excepción local.', 'Two objects sharing an instance change together. Use the face selector for a local exception.'), 'override', '#material_properties'),
+                step('material-edit', text('Describe la superficie', 'Describe the surface'), text('Cambia un parámetro de la instancia en Propiedades del material. Observa la superficie bajo la misma luz.', 'Change an instance parameter in Material Properties. Observe the surface under the same light.'), text('Prueba un control a la vez. Emisión no significa automáticamente Bloom: la contribución y el compositor también importan.', 'Try one control at a time. Emission does not automatically mean Bloom: contribution and compositor settings also matter.'), 'material-edit', '#material_properties'),
+                renderStep()
+            ]),
+            lesson('frame-camera', 'crop_free', text('Frame y cámara: compón tu toma', 'Frame and camera: compose your shot'), text('Encuadra, guarda una cámara y vuelve a ella.', 'Frame a shot, save a camera and return to it.'), 7, ['light_manager','studio_render'], [
+                step('frame', text('Abre tu mesa de render', 'Open your rendering desk'), text('Abre Studio Renderer Frame. Podrás encuadrar sin perder el viewport ni los controles nativos.', 'Open Studio Renderer Frame. Frame the shot while keeping the viewport and native controls.'), text('El Frame será tu compañero habitual: composición, configuración y render en el mismo lugar.', 'The Frame becomes your regular companion: composition, settings and rendering in one place.'), 'frame', '.studio_render_frame', 'studio_render_export'),
+                step('camera', text('Encuentra la silueta', 'Find the silhouette'), text('Orbita o desplaza la cámara del viewport. Busca separar sujeto, fondo y suelo.', 'Orbit or pan the viewport camera. Separate subject, background and floor.'), text('Una toma clara se lee incluso en pequeño. Evita que el sujeto toque accidentalmente el borde.', 'A clear shot reads at small sizes. Avoid accidentally touching the image border.'), 'camera', '#preview'),
+                step('crop', text('Ajusta el rectángulo', 'Adjust the rectangle'), text('Arrastra el Frame o uno de sus bordes para ajustar el recorte. La cámara conserva su punto de vista.', 'Drag the Frame or one of its edges to adjust the crop. The camera keeps its viewpoint.'), text('Revisa el área de captura y la proporción de salida. Una proporción distinta puede cambiar el recorte.', 'Check capture area and output aspect ratio. A different aspect ratio may change the crop.'), 'frame-edit', '.studio_render_frame'),
+                step('preset', text('Guarda una toma', 'Save a shot'), text('Abre Cámaras de Studio Render y guarda la vista actual con un nombre.', 'Open Studio Render Cameras and save the current view with a name.'), text('Guardar una cámara te permite comparar materiales y luz desde una toma consistente.', 'Saving a camera lets you compare materials and lighting from a consistent shot.'), 'camera-preset', '.studio_render_frame', 'studio_render_camera_presets'),
+                renderStep()
+            ]),
+            lesson('environment', 'wb_twilight', text('Environment: luz y profundidad', 'Environment: light and depth'), text('Haz que cielo y luz acompañen al sujeto.', 'Make sky and light support the subject.'), 5, ['light_manager','lightflow_environment','studio_render'], [
+                step('environment', text('Pon el escenario en contexto', 'Give the stage context'), text('Abre Environment y activa el entorno. Explora un preset de cielo.', 'Open Environment and enable the environment. Explore a sky preset.'), text('El fondo también cuenta: busca contraste con la silueta antes de añadir efectos.', 'The background matters: seek silhouette contrast before adding effects.'), 'environment-enabled', '#lightflow_environment_panel', 'lightflow_environment_composer'),
+                step('environment-edit', text('Elige la hora de tu imagen', 'Choose the hour of your image'), text('Cambia un preset o un parámetro del entorno. Observa la relación entre cielo y sujeto.', 'Change a preset or environment parameter. Observe the relationship between sky and subject.'), text('Revisa dirección solar y sombras. La niebla por distancia ayuda a separar planos; no corrige una luz principal mal colocada.', 'Review sun direction and shadows. Distance fog separates layers; it does not fix a poorly placed key light.'), 'environment-edit', '#lightflow_environment_panel', 'lightflow_environment_composer'),
+                quiz('sky', text('Fondo con propósito', 'A purposeful background'), text('¿Qué revisarías si el sujeto se confunde con el cielo?', 'What would you review if the subject blends into the sky?'), [text('Contraste de silueta, dirección de luz y fondo.', 'Silhouette contrast, light direction and background.'),text('Solo aumentar las muestras de AA.', 'Only increase AA samples.')], 0, text('Composición y contraste van antes del acabado. Valida también el entorno en Studio Render.', 'Composition and contrast come before finish. Validate the environment in Studio Render too.')),
+                renderStep()
+            ]),
+            lesson('atmosphere', 'cloud', text('Atmósfera: deja que la luz respire', 'Atmosphere: give light room to breathe'), text('Añade un volumen y controla su densidad.', 'Add a volume and control its density.'), 6, ['light_manager','shader_architect','lightflow_atmosphere','studio_render'], [
+                step('volume', text('Un espacio para la atmósfera', 'A space for atmosphere'), text('Añade un dominio volumétrico y selecciónalo. Ajusta su tamaño para cubrir la zona que quieres iluminar.', 'Add a volumetric domain and select it. Size it to cover the area you want to light.'), text('El dominio define dónde vive el efecto. Un volumen enorme consume recursos sin ayudar necesariamente a la imagen.', 'The domain defines where the effect lives. A huge volume consumes resources without necessarily helping the image.'), 'volume', '#lightflow_atmosphere_properties', 'add_lightflow_volume'),
+                step('volume-edit', text('Empieza con poca densidad', 'Start with low density'), text('Cambia una propiedad del volumen seleccionado. Mantén visible al sujeto y observa qué sucede con la luz.', 'Change a property of the selected volume. Keep the subject visible and observe the light.'), text('Viewport y Studio Render tienen ajustes de calidad propios. Usa una prueba final antes de subir los pasos de integración.', 'Viewport and Studio Render have their own quality settings. Test the final output before increasing integration steps.'), 'volume-edit', '#lightflow_atmosphere_properties', 'edit_lightflow_volume'),
+                quiz('vfx', text('Escoge el efecto por su función', 'Choose the effect by its purpose'), text('¿Qué herramienta crea una región de niebla iluminada?', 'Which tool creates a region of lit fog?'), [text('Un dominio volumétrico.', 'A volumetric domain.'),text('Bloom, por sí solo.', 'Bloom by itself.')], 0, text('Los rayos y las partículas son otros elementos de VFX en el menú de creación. Cada uno tiene forma, escala y coste: añádelos cuando la imagen los pida.', 'Rays and particles are other VFX elements in the creation menu. Each has shape, scale and cost: add them when the image needs them.')),
+                renderStep()
+            ]),
+            lesson('art-direction', 'highlight', text('Keylight: dirige la atención', 'Keylight: direct attention'), text('Descubre el control artístico por selección.', 'Discover artistic control by selection.'), 4, ['light_manager','shader_architect'], [
+                step('key', text('Una intención artística', 'An artistic intention'), text('Añade un Keylight / Art Key y selecciónalo en el Outliner. Sus propiedades controlan su influencia artística.', 'Add a Keylight / Art Key and select it in the Outliner. Its properties control artistic influence.'), text('El Keylight es una herramienta de dirección artística. Comprueba qué objetos incluye y excluye.', 'Keylight is an art direction tool. Check which objects it includes and excludes.'), 'art-key', '#light_properties', 'add_art_key'),
+                step('key-edit', text('Ajusta una influencia', 'Adjust an influence'), text('Modifica una propiedad del Keylight. Compara el sujeto antes y después.', 'Change a Keylight property. Compare the subject before and after.'), text('Los controles de orientación, centro y selección deben servir a la lectura del sujeto.', 'Orientation, center and selection controls should support readability.'), 'art-key-edit', '#light_properties'),
+                quiz('restraint', text('Una decisión por vez', 'One decision at a time'), text('¿Cómo evaluarías un ajuste artístico?', 'How would you evaluate an artistic adjustment?'), [text('Cambio varios controles y también la cámara.', 'I change several controls and the camera.'),text('Mantengo la toma y cambio una influencia.', 'I keep the shot and change one influence.')], 1, text('Una comparación estable te ayuda a reconocer qué aporta cada control.', 'A stable comparison helps you recognize what each control contributes.'))
+            ]),
+            lesson('rays-particles', 'auto_awesome', text('Rayos y partículas con intención', 'Purposeful rays and particles'), text('Crea un haz y un efecto de partículas desde un preset.', 'Create a beam and a particle effect from a preset.'), 6, ['light_manager','lightflow_atmosphere','studio_render'], [
+                step('ray', text('Dibuja un haz', 'Draw a beam'), text('Añade un rayo de luz. Selecciónalo y coloca su forma sobre una zona del escenario.', 'Add a light ray. Select it and position its shape over an area of the stage.'), text('Un rayo es un elemento de VFX con su propia forma. Colócalo donde ayude a dirigir la mirada.', 'A ray is a VFX element with its own shape. Place it where it helps direct the eye.'), 'ray', '#lightflow_god_ray_properties', 'add_lightflow_god_ray'),
+                step('ray-edit', text('Controla su presencia', 'Control its presence'), text('Cambia un parámetro del rayo en Propiedades. Observa el tamaño y la intensidad del efecto.', 'Change a ray parameter in Properties. Observe its size and intensity.'), text('Empieza suave. Un efecto puede ocultar el sujeto si ocupa demasiado espacio o es demasiado brillante.', 'Start gently. An effect can hide the subject if it occupies too much space or is too bright.'), 'ray-edit', '#lightflow_god_ray_properties', 'edit_lightflow_god_ray'),
+                step('particle', text('Un poco de movimiento', 'A little movement'), text('Abre Crear partículas y elige Nieve, Lluvia o Chispas. Se creará un elemento que puedes editar y reproducir.', 'Open Create particles and choose Snow, Rain or Sparks. This creates an element you can edit and play.'), text('También puedes importar un .particle.json. Revisa textura, escala y reproducción antes de usarlo en la entrega.', 'You can also import a .particle.json. Review texture, scale and playback before using it in delivery.'), 'particle', '#lightflow_particle_properties', 'lightflow_particle_create'),
+                renderStep()
+            ]),
+            lesson('delivery', 'photo_camera', text('De la prueba a la entrega', 'From test to delivery'), text('Prepara resolución, AA y una imagen terminada.', 'Prepare resolution, AA and a finished image.'), 5, ['light_manager','studio_render'], [
+                step('settings', text('Configura tu entrega', 'Configure delivery'), text('Abre la configuración de Studio Render. Revisa resolución, área de captura, fondo y formato antes de renderizar.', 'Open Studio Render settings. Review resolution, capture area, background and format before rendering.'), text('Guarda antes la escena .bbmodel. El archivo del proyecto y la imagen final cumplen funciones distintas.', 'Save the .bbmodel scene first. The project file and the final image serve different purposes.'), 'studio-settings', '#studio_render_dialog', 'studio-settings'),
+                step('settings-edit', text('Calidad con criterio', 'Intentional quality'), text('Cambia un ajuste y aplícalo. Para aprender basta una resolución pequeña; ajusta después la entrega a su destino.', 'Change a setting and apply it. A small resolution is enough for learning; adapt delivery to its destination later.'), text('AA Samples suaviza mediante muestras; Spatial Scale cambia la escala espacial de cálculo. Sombras, atmósfera y Bloom tienen otros costes.', 'AA Samples smooths through sampling; Spatial Scale changes spatial computation scale. Shadows, atmosphere and Bloom have other costs.'), 'studio-settings-edit', '#studio_render_dialog', 'studio-settings'),
+                quiz('quality', text('Diagnostica antes de subir calidad', 'Diagnose before increasing quality'), text('La imagen está oscura. ¿Qué revisas primero?', 'The image is dark. What do you review first?'), [text('Luz, materiales, exposición y encuadre.', 'Light, materials, exposure and framing.'),text('Aumento AA Samples.', 'I increase AA Samples.')], 0, text('Más muestras no añade luz. Si falta Bloom, revisa emisión, contribución y si el efecto está activo.', 'More samples do not add light. If Bloom is missing, check emission, contribution and whether the effect is enabled.')),
+                renderStep()
+            ]),
+            lesson('scene-links', 'link', text('Scene Links: monta una escena', 'Scene Links: assemble a scene'), text('Aprende cómo reutilizar modelos sin perder su identidad.', 'Learn how to reuse models while retaining their identity.'), 4, ['light_manager','lightflow_scene_links'], [
+                step('links', text('Una biblioteca para tu escena', 'A library for your scene'), text('Abre Scene Links. Revisa los controles para añadir fuentes y organizar sus instancias.', 'Open Scene Links. Review the controls for adding sources and organizing instances.'), text('Trabaja con copias de práctica de tus modelos para explorar importación y actualización.', 'Use practice copies of your models to explore importing and updating.'), 'links-open', '#lightflow_scene_links_panel', 'scene-links'),
+                step('link-source', text('Trae un modelo a tu escenario', 'Bring a model into your stage'), text('Elige un .bbmodel guardado desde el selector de Scene Links y confirma su importación. Usa un archivo distinto de la escena receptora.', 'Choose a saved .bbmodel in the Scene Links picker and confirm import. Use a different file from the receiving scene.'), text('Antes de este taller, ten a mano un modelo .bbmodel de práctica. Puedes guardar una copia de un modelo simple desde Archivo.', 'Have a practice .bbmodel ready before this workshop. You can save a copy of a simple model from File.'), 'link-source', '#outliner', 'scene-links'),
+                step('link-transform', text('Sitúa la instancia', 'Position the instance'), text('Selecciona la instancia vinculada en el Outliner. Usa Mover o sus propiedades para cambiar su posición.', 'Select the linked instance in the Outliner. Use Move or its properties to change position.'), text('Su posición pertenece a esta escena. La fuente conserva el modelo; refrescarla actualiza su contenido.', 'Its position belongs to this scene. The source retains the model; refreshing updates its content.'), 'link-transform', '#lightflow_scene_links_inspector'),
+                quiz('instances', text('Fuente e instancia', 'Source and instance'), text('¿Qué quieres controlar al colocar varias copias de un modelo?', 'What do you want to control when placing several copies of a model?'), [text('La fuente compartida y las transformaciones de cada instancia.', 'The shared source and each instance transform.'),text('Solo el nombre de la imagen final.', 'Only the final image name.')], 0, text('Una fuente define el contenido; las instancias sitúan ese contenido en la escena. Revisa materiales de origen y Overrides si cambia su apariencia.', 'A source defines content; instances place it in the scene. Review source materials and Overrides if appearance changes.'))
+            ]),
+            lesson('cinematic', 'movie', text('Cinematic: de una toma a una secuencia', 'Cinematic: from a shot to a sequence'), text('Conoce cámaras, secuencias y su salida.', 'Meet cameras, sequences and their output.'), 4, ['light_manager','studio_render','lightflow_cinematic'], [
+                step('cinematic', text('Abre la línea de tiempo', 'Open the timeline'), text('Abre Lightflow Cinematic. Localiza cámaras, secuencias y controles de reproducción.', 'Open Lightflow Cinematic. Locate cameras, sequences and playback controls.'), text('Domina una imagen estática antes de multiplicarla en una secuencia.', 'Master one still image before multiplying it into a sequence.'), 'cinematic-open', '#lightflow_cinematic_panel', 'lightflow_cinematic_open'),
+                step('camera', text('Una cámara dentro del proyecto', 'A camera inside the project'), text('Cierra el administrador y crea una cámara desde la vista actual. Aparecerá en el Outliner y se asociará a una secuencia.', 'Close the manager and create a camera from the current view. It appears in the Outliner and joins a sequence.'), text('La cámara guarda el punto de vista. Selecciónala para acceder a sus controles; el Frame sigue definiendo la imagen de salida.', 'The camera stores the viewpoint. Select it to access its controls; the Frame still defines the output image.'), 'cinematic-camera', '#lightflow_cinematic_camera', 'lightflow_cinematic_camera_from_view'),
+                step('camera-edit', text('Ajusta el punto de vista', 'Adjust the viewpoint'), text('Con la cámara seleccionada, cambia una propiedad de cámara en su panel. Revisa lente, posición y encuadre.', 'With the camera selected, change a camera property in its panel. Review lens, position and framing.'), text('Mantén pequeños los cambios de lente y posición hasta comprender cómo afectan al sujeto.', 'Keep lens and position changes small until you understand their effect on the subject.'), 'cinematic-camera-edit', '#lightflow_cinematic_camera'),
+                quiz('sequence', text('Prueba corta, decisión clara', 'Short test, clear decision'), text('¿Cómo empezarías una secuencia costosa?', 'How would you start an expensive sequence?'), [text('Con una prueba corta y resolución pequeña.', 'With a short test at low resolution.'),text('Con toda la secuencia a máxima calidad.', 'With the entire sequence at maximum quality.')], 0, text('Revisa cámara, duración y rango antes de entregar. Una secuencia renderiza varios frames; el tiempo crece con su cantidad y calidad.', 'Review camera, duration and range before delivery. A sequence renders several frames; time grows with frame count and quality.'))
+            ])
+        ];
+    }
+
+    function learningMissing(lesson) {
+        return lesson.modules.filter(id => {
+            const plugin = getPlugin(id);
+            return !plugin || plugin.disabled || !plugin.installed;
+        });
+    }
+    function saveLearning() {
+        try { localStorage.setItem(LEARNING_KEY, JSON.stringify(learningProgress)); } catch (_) { /* session still works */ }
+    }
+    function learningSnapshot() {
+        const kind=learningSession?.lesson.steps[learningSession.index]?.kind || '';
+        const project = globalThis.Project;
+        const elements = project?.elements || [];
+        const lights = /light-edit|add-/.test(kind) ? elements.filter(e => e.type === 'light') : [];
+        const cubes = /select-cube|override/.test(kind) ? elements.filter(e => e.type === 'cube') : [];
+        const volumes = /volume/.test(kind) ? elements.filter(e => /volume/.test(e.type)) : [];
+        const keys = /art-key/.test(kind) ? elements.filter(e => e.type === 'art_key') : [];
+        const rays=/ray/.test(kind) ? elements.filter(e=>e.type==='lightflow_god_ray') : [];
+        const particles=kind==='particle' ? elements.filter(e=>e.type==='lightflow_particle_effect') : [];
+        const links=/link-source|link-transform/.test(kind) ? elements.filter(e=>e.type==='lightflow_scene_instance') : [];
+        const cinematic=/cinematic-camera/.test(kind) ? globalThis.LightflowCinematic?.document : null;
+        const fingerprint = values => JSON.stringify(values.map(e => typeof e.getSaveCopy === 'function' ? e.getSaveCopy() : e));
+        const preview = globalThis.Preview?.selected;
+        return {
+            project: learningProjectId(), mode: globalThis.ShaderEngine?.globalRenderMode,
+            lights: lights.map(e => ({id:e.uuid, type:e.light_type})), lightState:kind==='light-edit' ? fingerprint(lights) : '',
+            selectedCube: cubes.some(e => e.selected),
+            instances: /instance|material-edit/.test(kind) ? Object.keys(globalThis.MaterialManager?.instances || {}) : [],
+            materialState: kind==='material-edit' ? JSON.stringify(globalThis.MaterialManager?.serializeMaterialInstances?.() || {}) : '',
+            overrides: cubes.map(e => ({id:e.uuid, material:e.sa_material_id, instance:e.sa_material_instance_id, faces:Object.values(e.faces || {}).map(f => [f.sa_material_id,f.sa_material_instance_id])})),
+            frame: !!globalThis.StudioRender?.frameOwner || !!document.querySelector('.studio_render_frame'),
+            frameState: kind==='frame-edit' ? JSON.stringify(globalThis.StudioRender?.getFrameState?.() || {}) : '',
+            camera: kind==='camera' ? JSON.stringify([preview?.camera?.position?.toArray?.(), preview?.controls?.target?.toArray?.(), preview?.camera?.zoom]) : '',
+            presets: kind==='camera-preset' ? (globalThis.StudioRender?.cameraPresets || []).map(p => p.id) : [],
+            environment: kind==='environment-edit' ? JSON.stringify(globalThis.LightflowEnvironment?.settings || {}) : '',
+            environmentEnabled: !!globalThis.LightflowEnvironment?.settings?.enabled,
+            volumes: volumes.map(e=>e.uuid), volumeState:kind==='volume-edit' ? fingerprint(volumes) : '', keys:keys.map(e=>e.uuid), keyState:kind==='art-key-edit' ? fingerprint(keys) : '',
+            rays:rays.map(e=>e.uuid),rayState:kind==='ray-edit' ? fingerprint(rays) : '',particles:particles.map(e=>e.uuid),
+            links:links.map(e=>e.uuid),linkState:kind==='link-transform' ? fingerprint(links) : '',
+            cinematicCameras:(cinematic?.cameras||[]).map(c=>c.id),cinematicState:JSON.stringify(cinematic?.cameras||[]),
+            settings: kind==='studio-settings-edit' ? JSON.stringify(globalThis.StudioRender?.settings || {}) : '',
+            dialog: globalThis.Dialog?.open?.id || '', renders:learningRenderCount
+        };
+    }
+    function learningCheckpoint(step, now, baseline) {
+        if (!now.project || now.project !== baseline.project) return false;
+        const added = (values, previous) => values.some(id => !previous.includes(id));
+        switch (step.kind) {
+            case 'mode': return now.mode === step.id;
+            case 'add-directional': case 'add-point': case 'add-spot': {
+                const type = step.kind.slice(4);
+                return now.lights.some(l => l.type === type && !baseline.lights.some(b => b.id === l.id));
+            }
+            case 'light-edit': return now.lights.length > 0 && now.lightState !== baseline.lightState;
+            case 'select-cube': return now.selectedCube;
+            case 'instance': return added(now.instances, baseline.instances);
+            case 'override': return JSON.stringify(now.overrides) !== JSON.stringify(baseline.overrides) && now.overrides.some(e => !!e.material || !!e.instance || e.faces.some(f => f[0] || f[1]));
+            case 'material-edit': return now.instances.length > 0 && now.materialState !== baseline.materialState;
+            case 'frame': return now.frame;
+            case 'frame-edit': return now.frame && now.frameState !== baseline.frameState;
+            case 'camera': return now.camera !== baseline.camera;
+            case 'camera-preset': return added(now.presets, baseline.presets);
+            case 'environment-enabled': return now.environmentEnabled;
+            case 'environment-edit': return now.environmentEnabled && now.environment !== baseline.environment;
+            case 'volume': return added(now.volumes, baseline.volumes);
+            case 'volume-edit': return now.volumes.length > 0 && now.volumeState !== baseline.volumeState;
+            case 'art-key': return added(now.keys, baseline.keys);
+            case 'art-key-edit': return now.keys.length > 0 && now.keyState !== baseline.keyState;
+            case 'ray': return added(now.rays,baseline.rays);
+            case 'ray-edit': return now.rays.length>0 && now.rayState!==baseline.rayState;
+            case 'particle': return added(now.particles,baseline.particles);
+            case 'link-source': return added(now.links,baseline.links);
+            case 'link-transform': return now.links.length>0 && now.linkState!==baseline.linkState;
+            case 'cinematic-camera': return added(now.cinematicCameras,baseline.cinematicCameras);
+            case 'cinematic-camera-edit': return now.cinematicCameras.length>0 && now.cinematicState!==baseline.cinematicState;
+            case 'studio-settings': return /studio_render/.test(now.dialog);
+            case 'studio-settings-edit': return now.settings !== baseline.settings;
+            case 'links-open': return !!document.querySelector('#lightflow_scene_links_panel')?.getBoundingClientRect().width || /scene_link/.test(now.dialog);
+            case 'cinematic-open': return !!document.querySelector('#lightflow_cinematic_panel')?.getBoundingClientRect().width || /cinematic/.test(now.dialog);
+            case 'render': return now.renders > baseline.renders;
+            default: return false;
+        }
+    }
+    function clearLearningHighlight() {
+        learningHighlight?.classList?.remove('lflearn-target'); learningHighlight = null;
+    }
+    function hideLearningDock() {
+        if (learningTimer !== null) clearInterval(learningTimer); learningTimer = null;
+        clearLearningHighlight(); learningDragCleanup?.(); learningDragCleanup = null;
+        learningView?.$destroy?.(); learningView = null;
+        learningNode?.remove?.(); learningNode = null;
+    }
+    function learningResumeState(session) {
+        return {id:session.lesson.id,index:session.index,project:session.project,ready:session.ready,answer:learningView?.answer ?? -1,
+            checked:Object.fromEntries(Object.entries(session.checkpoints).filter(([,value])=>value.ready).map(([index,value])=>[index,{ready:true,answer:value.answer}]))};
+    }
+    function pauseLearning() {
+        if (learningSession) {
+            learningProgress.resume = learningResumeState(learningSession);
+            saveLearning();
+        }
+        hideLearningDock(); learningSession = null;
+    }
+    function learningEnterStep() {
+        const session = learningSession;
+        const checkpoint = session.checkpoints[session.index] ||= {baseline:learningSnapshot(), ready:false, answer:-1};
+        session.baseline = checkpoint.baseline; session.ready = checkpoint.ready;
+        learningView.index = session.index; learningView.ready = checkpoint.ready; learningView.answer = checkpoint.answer; learningView.error = ''; learningView.finished = false;
+        clearLearningHighlight();
+        learningProgress.resume = learningResumeState(session); saveLearning();
+        const view=learningView,node=learningNode;
+        view.$nextTick(()=>{if(learningView!==view||!node?.isConnected)return;const body=node.querySelector('.lflearn-body');if(body)body.scrollTop=0;node.querySelector('h2')?.focus({preventScroll:true});});
+    }
+    async function createLearningScene() {
+        if (!globalThis.Formats?.free || typeof globalThis.newProject !== 'function') throw new Error(learnText('Crea un proyecto Generic Model y vuelve al HUB.', 'Create a Generic Model project and return to the HUB.'));
+        await newProject(Formats.free);
+        if (!globalThis.Project) throw new Error(learnText('No se pudo abrir el escenario de práctica.', 'The practice stage could not be opened.'));
+        if (learningProjectProperty) Project.lightflow_learning_project_id=Project.uuid;
+        Project.name = learnText('Lightflow · Estudio de práctica', 'Lightflow · Practice studio');
+        Undo.initEdit({elements:[], textures:[], outliner:true});
+        const palette = document.createElement('canvas');palette.width=24;palette.height=8;
+        const paint=palette.getContext('2d');
+        ['#e6ded0','#44777d','#e5a15c'].forEach((color,i)=>{paint.fillStyle=color;paint.fillRect(i*8,0,8,8);});
+        const texture=new Texture({name:learnText('Paleta de práctica','Practice palette'),width:24,height:8,uv_width:24,uv_height:8}).fromDataURL(palette.toDataURL()).add(false);
+        Project.texture_width=24;Project.texture_height=8;
+        const shapes = [
+            ['Stage', [-16,-2,-12], [16,0,12], 0],
+            ['Subject', [-4,0,-3], [4,9,3], 4],
+            ['Accent', [6,0,0], [10,4,4], 2]
+        ];
+        const cubes = shapes.map(([name,from,to,color],i) => {
+            const cube=new Cube({name,from,to,color,box_uv:false});
+            Object.values(cube.faces).forEach(face=>{face.texture=texture.uuid;face.uv=[i*8,0,i*8+8,8];});
+            return cube.init();
+        });
+        Undo.finishEdit(learnText('Crear escenario de práctica', 'Create practice stage'), {elements:cubes,textures:[texture],outliner:true});
+        cubes[1].select(); Canvas.updateAll();
+        globalThis.Preview?.selected?.loadAnglePreset?.({position:[35,26,40],target:[0,3,0],projection:'perspective'});
+        return Project;
+    }
+    function learningPoll() {
+        const session = learningSession;
+        if (!session || !learningView) return;
+        learningView.projectChanged = learningProjectId() !== session.project;
+        learningView.modalOpen = !!globalThis.Dialog?.open;
+        learningView.rendering = !!globalThis.StudioRender?.isRendering;
+        learningView.missing = learningMissing(session.lesson);
+        if (learningView.projectChanged || learningView.missing.length || session.ready) return;
+        try {
+            const step = session.lesson.steps[session.index];
+            if (step.kind !== 'quiz' && learningCheckpoint(step, learningSnapshot(), session.baseline)) {
+                session.ready = true; learningView.ready = true;
+                session.checkpoints[session.index].ready = true;
+                learningProgress.resume = learningResumeState(session); saveLearning();
+            }
+        } catch (error) { learningView.error = String(error.message || error); }
+    }
+    async function startLearning(id, useCurrent = false, resume = false) {
+        if (!LEARNING_AVAILABLE) return false;
+        const lesson = learningLessons().find(l=>l.id===id);
+        if (!lesson || learningMissing(lesson).length || disposed || learningStarting) return false;
+        if (globalThis.StudioRender?.isRendering) return false;
+        learningStarting=true;
+        try {
+            const saved = learningProgress.resume;
+            const canResume = resume && saved?.id === id && saved.project === learningProjectId();
+            pauseLearning();
+            const dialog = hubDialog; hubDialog = null; dialog?.hide?.(); dialog?.delete?.();
+            if (!canResume && !useCurrent) await createLearningScene();
+            if (!globalThis.Project || disposed) return false;
+            globalThis.Modes?.options?.render?.select?.();
+            const index = canResume ? Math.min(Math.max(0, Number(saved.index)||0),lesson.steps.length-1) : 0;
+            if(learningProjectProperty && !Project.lightflow_learning_project_id) {Project.lightflow_learning_project_id=Project.uuid;Project.saved=false;}
+            learningSession = {lesson,index,project:learningProjectId(),baseline:null,ready:false,checkpoints:{}};
+            mountLearningDock(); learningEnterStep();
+            if (canResume && saved.ready) {
+                const step=lesson.steps[index];
+                const ready=step.kind!=='quiz' || saved.answer===step.correct;
+                Object.assign(learningSession.checkpoints[index],{ready,answer:step.kind==='quiz' ? saved.answer ?? -1 : -1});
+                learningSession.ready=ready;learningView.ready=ready;learningView.answer=learningSession.checkpoints[index].answer;
+            }
+            if(canResume && saved.checked && typeof saved.checked==='object') {
+                for(const [key,value] of Object.entries(saved.checked)) {
+                    const i=Number(key),step=lesson.steps[i];
+                    if(!Number.isInteger(i)||!step||!value?.ready || (step.kind==='quiz' && value.answer!==step.correct))continue;
+                    learningSession.checkpoints[i]={baseline:learningSnapshot(),ready:true,answer:step.kind==='quiz' ? value.answer : -1};
+                }
+            }
+            learningTimer = setInterval(learningPoll, 350); learningPoll();
+            return true;
+        } finally {learningStarting=false;}
+    }
+    function mountLearningDock() {
+        const text = learnText;
+        learningNode = document.createElement('aside'); document.body.append(learningNode);
+        const lesson = learningSession.lesson;
+        learningView = new Vue({
+            el:learningNode,
+            data: {lesson,index:0,ready:false,answer:-1,error:'',finished:false,projectChanged:false,modalOpen:false,rendering:false,missing:[],collapsed:false},
+            computed: {
+                step(){return this.lesson.steps[this.index];},
+                nextLesson(){const lessons=learningLessons(),index=lessons.findIndex(l=>l.id===this.lesson.id);return [...lessons.slice(index+1),...lessons.slice(0,index)].find(l=>!learningProgress.completed?.[l.id]) || null;}
+            },
+            methods: {
+                text,
+                keyboard(event){
+                    if(event.key==='Escape'){event.preventDefault();this.pause();return;}
+                    if(event.key!=='Enter'&&event.key!==' ')return;
+                    const button=event.target.closest?.('button');
+                    if(button&&this.$el.contains(button)){event.preventDefault();event.stopPropagation();if(!button.disabled)button.click();}
+                },
+                actionLabel(step){
+                    if(step.action==='render-preview') return text('Render de prueba · 480 × 270','Test render · 480 × 270');
+                    if(step.action==='mode') return text('Abrir selector global','Open global selector');
+                    if(step.action==='studio-settings') return text('Configurar salida','Configure output');
+                    if(step.action==='scene-links') return text('Elegir modelo vinculado','Choose linked model');
+                    const item=globalThis.BarItems?.[step.action];
+                    return item?.name ? (globalThis.tl?.(item.name)||item.name) : text('Abrir herramienta','Open tool');
+                },
+                pause(){pauseLearning();},
+                hub(id=this.lesson.id){pauseLearning();openHub();hubDialog.content_vue.learningSelect(typeof id==='string' ? id : this.lesson.id);hubDialog.content_vue.showPage('learn');},
+                locate(){
+                    clearLearningHighlight();
+                    const nodes = this.step.target ? [...document.querySelectorAll(this.step.target)] : [];
+                    learningHighlight = nodes.find(n=>n.getBoundingClientRect().width && n.getBoundingClientRect().height);
+                    if (learningHighlight) {learningHighlight.classList.add('lflearn-target');learningHighlight.scrollIntoView({block:'nearest'});}
+                    else this.error = text('Selecciona el elemento correspondiente para mostrar este control; usa también el buscador de acciones de Blockbench.', 'Select the corresponding element to show this control; you can also use the Blockbench action finder.');
+                },
+                choose(index){
+                    if(this.projectChanged || this.missing.length || !learningSession) return;
+                    this.answer = index; this.ready = index === this.step.correct;
+                    learningSession.ready = this.ready;
+                    Object.assign(learningSession.checkpoints[this.index],{ready:this.ready,answer:index});
+                    learningProgress.resume=learningResumeState(learningSession);saveLearning();
+                    this.error = this.ready ? '' : text('Piensa en el resultado que quieres conseguir. Puedes volver a intentarlo.', 'Think about the result you want. You can try again.');
+                },
+                async perform(){
+                    if (this.projectChanged || this.missing.length || this.rendering) return;
+                    this.error = '';
+                    try {
+                        const action = this.step.action;
+                        if (action === 'mode') {this.locate();globalThis.BarItems?.sa_global_mode?.open?.();}
+                        else if (action === 'studio-settings') globalThis.StudioRender?.open?.();
+                        else if (action === 'scene-links') {
+                            const module = catalogModules().find(m=>m.id==='lightflow_scene_links');
+                            const item = globalThis.BarItems?.[MODULE_ACTIONS[module?.id]];
+                            if (!item) throw new Error(text('Scene Links no está disponible.', 'Scene Links is unavailable.')); item.trigger(new MouseEvent('click'));
+                        } else if (action === 'render-preview') {
+                            this.rendering = true;
+                            const result = await StudioRender.render({...StudioRender.settings,resolution_preset:'custom',resolution:[480,270],samples:'1',output_scale:1,capture_area:'frame',destination:'preview',angle_preset:'view',camera_preset_id:'',zoom:null}, {save:false});
+                            if (!result?.ok) throw new Error(result?.error || text('La prueba no terminó. Revisa los ajustes y vuelve a intentar.', 'The test did not finish. Check settings and try again.'));
+                        } else {
+                            const item = globalThis.BarItems?.[action];
+                            if (!item || (typeof Condition==='function' && !Condition(item.condition,item))) throw new Error(text('Selecciona el elemento correspondiente y vuelve a intentar.', 'Select the corresponding element and try again.'));
+                            item.trigger(new MouseEvent('click'));
+                        }
+                        learningPoll();
+                    } catch (error) {this.error = String(error.message || error);}
+                    finally {this.rendering = !!globalThis.StudioRender?.isRendering;}
+                },
+                back(){if(this.index > 0 && !this.rendering && !this.projectChanged && !this.missing.length){learningSession.index--;learningEnterStep();learningPoll();}},
+                next(){
+                    learningPoll();
+                    if (!this.ready || this.projectChanged || this.missing.length || this.rendering) return;
+                    if (this.index + 1 === this.lesson.steps.length) {
+                        learningProgress.completed = {...learningProgress.completed,[this.lesson.id]:Date.now()}; delete learningProgress.resume; saveLearning();
+                        this.finished = true; clearInterval(learningTimer); learningTimer=null;clearLearningHighlight();learningSession=null;
+                        this.$nextTick(()=>{if(learningView===this)this.$el.querySelector('h2')?.focus({preventScroll:true});});
+                    } else {learningSession.index++;learningEnterStep();learningPoll();}
+                }
+            },
+            template: `<aside class="lflearn-dock" :class="{'lflearn-compact':collapsed || modalOpen}" @keydown.capture="keyboard" @keydown.stop @keyup.stop aria-label="${text('Guía de Lightflow','Lightflow guide')}">
+                <header class="lflearn-handle"><i class="material-icons" aria-hidden="true">school</i><strong>{{ lesson.title }}</strong><button @click="collapsed=!collapsed" :aria-expanded="String(!collapsed)" :title="collapsed ? text('Expandir guía','Expand guide') : text('Contraer guía','Collapse guide')" :aria-label="collapsed ? text('Expandir guía','Expand guide') : text('Contraer guía','Collapse guide')"><i class="material-icons" aria-hidden="true">{{ collapsed ? 'expand_less' : 'expand_more' }}</i></button><button @click="pause" :title="text('Pausar y guardar progreso','Pause and save progress')" :aria-label="text('Pausar y guardar progreso','Pause and save progress')"><i class="material-icons" aria-hidden="true">close</i></button></header>
+                <div v-if="!collapsed && !modalOpen" class="lflearn-body">
+                    <template v-if="finished"><span class="lflearn-kicker">{{ text('Taller completado','Workshop complete') }}</span><h2 tabindex="-1">{{ text('Una herramienta más en tu estudio','One more tool in your studio') }}</h2><p>{{ lesson.outcome }}</p><p>{{ text('Tu escena sigue abierta. Guarda el .bbmodel para continuar trabajando con ella.','Your scene stays open. Save the .bbmodel to keep working on it.') }}</p><button class="accent" @click="hub(nextLesson?.id || lesson.id)">{{ nextLesson ? text('Siguiente taller: ','Next workshop: ') + nextLesson.title : text('Volver a los talleres','Back to workshops') }}</button></template>
+                    <template v-else><div class="lflearn-step-meta"><span>{{ text('Paso','Step') }} {{ index+1 }} / {{ lesson.steps.length }}</span><span>{{ text('A tu ritmo','At your pace') }}</span></div><progress :value="index+(ready ? 1 : 0)" :max="lesson.steps.length" :aria-label="text('Progreso del taller','Workshop progress')"></progress><h2 tabindex="-1">{{ step.title }}</h2><p>{{ step.body }}</p>
+                    <div v-if="projectChanged || missing.length" role="alert" class="lflearn-error">{{ projectChanged ? text('Vuelve al proyecto del taller para continuar. Para practicar en otro proyecto, inicia el taller desde el HUB.','Return to the workshop project to continue. To practice in another project, start the workshop from the HUB.') : text('Activa los módulos de este taller en el HUB: ','Enable the workshop modules in the HUB: ') + missing.join(', ') }}<button @click="hub">HUB</button></div>
+                    <template v-else><div v-if="step.kind==='quiz'" class="lflearn-answers"><button v-for="(label,i) in step.answers" :key="i" @click="choose(i)" :aria-pressed="String(answer===i)" :class="{chosen:answer===i}">{{ label }}<i v-if="answer===i && ready" class="material-icons">check</i></button></div><div v-else class="lflearn-tools"><button v-if="step.action" @click="perform" :disabled="rendering">{{ actionLabel(step) }}</button><button v-if="step.target" @click="locate">{{ text('Dónde está','Where is it') }}</button></div></template>
+                    <details class="lflearn-tip" :open="ready"><summary>{{ text('Consejo de taller','Workshop tip') }}</summary><p>{{ step.tip }}</p></details><p v-if="error" class="lflearn-error" role="alert">{{ error }}</p><p class="lflearn-status" role="status" aria-live="polite"><i class="material-icons">{{ ready ? 'check_circle' : rendering ? 'hourglass_empty' : 'radio_button_unchecked' }}</i>{{ ready ? text('Comprobado. Continúa cuando estés listo.','Verified. Continue when you are ready.') : rendering ? text('Studio Render está trabajando…','Studio Render is working…') : step.kind==='quiz' ? text('Elige una respuesta para continuar.','Choose an answer to continue.') : text('Completa la acción en Blockbench.','Complete the action in Blockbench.') }}</p></template>
+                </div><footer v-if="!collapsed && !modalOpen && !finished" class="lflearn-footer"><button @click="back" :disabled="index===0 || rendering || projectChanged || !!missing.length">{{ text('Atrás','Back') }}</button><button @click="hub" :title="text('Guardar progreso y volver a talleres','Save progress and return to workshops')">{{ text('Talleres','Workshops') }}</button><button class="accent" @click="next" :disabled="!ready || projectChanged || !!missing.length || rendering">{{ index+1===lesson.steps.length ? text('Terminar','Finish') : text('Continuar','Continue') }}</button></footer><p v-else-if="modalOpen && !collapsed" class="lflearn-modal-hint">{{ text('Usa el diálogo de Blockbench. La guía continúa al cerrarlo.','Use the Blockbench dialog. The guide continues when it closes.') }}</p>
+            </aside>`
+        });
+        learningNode = learningView.$el;
+        const previewNode=globalThis.Preview?.selected?.node,viewport=previewNode?.getBoundingClientRect();
+        if(viewport && viewport.width>learningNode.getBoundingClientRect().width+172) {
+            const rail=previewNode.querySelector('.lightflow_world_tools')?.getBoundingClientRect();
+            learningNode.style.left=(rail?.width ? rail.right+12 : viewport.left+52)+'px';
+        }
+        const handle = learningNode.querySelector('.lflearn-handle');
+        let drag = null;
+        const down = event => {
+            if (event.button !== 0 || event.target.closest('button')) return;
+            event.preventDefault();event.stopPropagation();const rect = learningNode.getBoundingClientRect();drag={x:event.clientX-rect.x,y:event.clientY-rect.y};handle.setPointerCapture?.(event.pointerId);
+        };
+        const move = event => {
+            if (!drag) return;
+            event.preventDefault();event.stopPropagation();
+            const rect=learningNode.getBoundingClientRect();
+            learningNode.style.left=Math.max(4,Math.min(innerWidth-rect.width-4,event.clientX-drag.x))+'px';
+            learningNode.style.top=Math.max(4,Math.min(innerHeight-rect.height-4,event.clientY-drag.y))+'px';learningNode.style.bottom='auto';
+        };
+        const up = ()=>{drag=null;};
+        handle.addEventListener('pointerdown',down);window.addEventListener('pointermove',move,true);window.addEventListener('pointerup',up,true);window.addEventListener('pointercancel',up,true);
+        const resize=()=>{
+            const rect=learningNode.getBoundingClientRect();
+            learningNode.style.left=Math.max(4,Math.min(innerWidth-rect.width-4,rect.left))+'px';
+            if(learningNode.style.top)learningNode.style.top=Math.max(4,Math.min(innerHeight-rect.height-4,rect.top))+'px';
+        };window.addEventListener('resize',resize);
+        const observer=typeof ResizeObserver==='function' ? new ResizeObserver(resize) : null;observer?.observe(learningNode);
+        learningDragCleanup=()=>{observer?.disconnect();window.removeEventListener('resize',resize);handle.removeEventListener('pointerdown',down);window.removeEventListener('pointermove',move,true);window.removeEventListener('pointerup',up,true);window.removeEventListener('pointercancel',up,true);};
+    }
+
     function createComponent() {
         return {
             data() {
@@ -924,6 +1386,7 @@
                     hubRemoteVersion: manifestState.hub.version,
                     sourceReady: false,
                     splashArt: HUB_SPLASH_ART, artFailed: false, selectedId: '', page: 'home', detailTab: 'aboutTab',
+                    learningSelected: learningProgress.selected || learningProgress.resume?.id || 'first-image', learningUseCurrent: false, learningRevision: 0, learningSearch: '', learningFilter: 'all',
                     progress: null, retryIds: [], retryOptions: {}, newsLoading: false, newsError: '', failedImage: '', checkedTime: lastCheckTime || preferences.lastAutomaticCheck
                 };
             },
@@ -959,6 +1422,15 @@
                 }
             },
             computed: {
+                learningEnabled() { return LEARNING_AVAILABLE; },
+                learningLessons() { void this.learningRevision; return learningLessons(); },
+                learningFilteredLessons() {
+                    const query=this.learningSearch.trim().toLocaleLowerCase(language());
+                    return this.learningLessons.filter(lesson=>(this.learningFilter==='all' || (this.learningFilter==='done')===this.learningDone(lesson.id)) && (!query || [lesson.title,lesson.outcome,...lesson.steps.map(step=>step.title)].join(' ').toLocaleLowerCase(language()).includes(query)));
+                },
+                learningSelectedLesson() { return this.learningLessons.find(l=>l.id===this.learningSelected) || this.learningLessons[0]; },
+                learningResume() { void this.learningRevision; const saved=learningSession ? {id:learningSession.lesson.id,index:learningSession.index,project:learningSession.project} : learningProgress.resume;return saved && learningLessons().some(l=>l.id===saved.id) ? saved : null; },
+                learningCompletedCount() { void this.learningRevision; return this.learningLessons.filter(l=>learningProgress.completed?.[l.id]).length; },
                 selectedModule() { return this.modulesAll.find(module => module.id === this.selectedId) || null; },
                 essentialsNeedActivation() { return this.essentials.some(module => module.disabled); },
                 artwork() { void this.revision; return !this.artFailed && imageUrl(manifestState.artwork) || this.splashArt; },
@@ -995,7 +1467,47 @@
             },
             methods: {
                 t: tr,
-                showPage(page) { this.page = page; this.selectedId = ''; },
+                learnText,
+                learningMissing,
+                learningDone(id) { void this.learningRevision; return !!learningProgress.completed?.[id]; },
+                learningHasProject() { return !!globalThis.Project; },
+                learningCanResume() { return this.learningResume?.project === learningProjectId(); },
+                learningSelect(id) {
+                    this.learningSelected=id; this.learningUseCurrent=false;learningProgress.selected=id;saveLearning();
+                },
+                learningListKeys(event) {
+                    const buttons=[...event.currentTarget.querySelectorAll('button[data-lesson]')];
+                    const current=buttons.indexOf(event.target.closest('button[data-lesson]'));
+                    if(current<0 || !['ArrowUp','ArrowDown','Home','End'].includes(event.key))return;
+                    event.preventDefault();event.stopPropagation();
+                    const index=event.key==='Home'?0:event.key==='End'?buttons.length-1:(current+(event.key==='ArrowDown'?1:-1)+buttons.length)%buttons.length;
+                    buttons[index]?.focus();buttons[index]?.click();
+                },
+                focusSearch() {
+                    this.$el.querySelector(this.page==='learn' ? '.lfhub-learning-search input' : '.lfhub-search input')?.focus();
+                },
+                hubKeyboard(event) {
+                    if(event.key==='Escape'){event.preventDefault();event.stopPropagation();hubDialog?.cancel();return;}
+                    if((event.ctrlKey||event.metaKey)&&event.key.toLowerCase()==='f'){event.preventDefault();event.stopPropagation();this.focusSearch();return;}
+                    if(event.key!=='Enter' && event.key!==' ')return;
+                    const button=event.target.closest?.('button');
+                    if(button&&this.$el.contains(button)){event.preventDefault();event.stopPropagation();if(!button.disabled)button.click();}
+                },
+                async learningStart(resume=false) {
+                    if (this.busy) return;
+                    this.error='';
+                    try {
+                        const id=resume ? this.learningResume?.id : this.learningSelected;
+                        const ok=await startLearning(id,this.learningUseCurrent,resume);
+                        if (!ok) this.error=learnText('Activa los módulos necesarios y espera a que termine cualquier render.', 'Enable the required modules and wait for any active render to finish.');
+                    } catch(error) {this.error=String(error.message||error);openHub();if(hubDialog?.content_vue)hubDialog.content_vue.error=this.error;}
+                },
+                learningPrepare(lesson) { const missing=learningMissing(lesson);this.selectModule(this.modulesAll.find(m=>m.id===missing[0])); },
+                learningRelated(module) { return this.learningLessons.filter(l=>l.modules.includes(module.id)); },
+                showPage(page) {
+                    this.page = page==='learn' && !LEARNING_AVAILABLE ? 'home' : page; this.selectedId = ''; this.learningRevision++;
+                    this.$nextTick(()=>{const content=this.$el.querySelector('.lfhub-content');if(content)content.scrollTop=0;});
+                },
                 selectModule(module) { this.page = 'tool'; this.selectedId = module.id; this.detailTab = 'aboutTab'; this.failedImage = ''; },
                 moduleImage(module) { return this.failedImage !== module.id ? imageUrl(module.image) : ''; },
                 dateLabel(value) { return value ? new Intl.DateTimeFormat(language(), {dateStyle: 'medium'}).format(new Date(value)) : ''; },
@@ -1157,8 +1669,12 @@
                             let count = 0;
                             for (const file of files) {
                                 if (disposed || this._hubDestroyed) return;
+                                if (String(file.name || '').toLowerCase() === 'bedrock_structure_studio.bundle.js') {
+                                    throw new Error('Bedrock Structure Studio: select dist/bedrock_structure_studio.js. Blockbench rejects the legacy .bundle.js filename.');
+                                }
                                 const module = manifestState.modules.find(item => item.file.split('/').pop() === file.name || item.id === String(file.name).replace(/\.js$/i, ''));
                                 if (!module) continue;
+                                assertPluginSourceFilename(module.id, file.path || file.name);
                                 count++;
                                 if (typeof require === 'function' && file.path) await replaceWithFile(module, file.path);
                                 else await new Plugin().loadFromFile(file, true);
@@ -1243,10 +1759,10 @@
                 openUrl
             },
             mounted() {
-                this._focusListener = () => this.bump();
+                this._focusListener = () => {this.bump();this.learningRevision++;};
                 window.addEventListener?.('focus', this._focusListener);
                 this._projectListeners = ['new_project', 'select_project', 'unselect_project', 'installed_plugin', 'uninstalled_plugin'].map(event => Blockbench.on?.(event, this._focusListener)).filter(Boolean);
-                this.$nextTick(() => { this.refresh(); this.$el?.querySelector('.lfhub-search input')?.focus(); });
+                this.$nextTick(() => { this.refresh(); this.focusSearch(); });
             },
             beforeDestroy() {
                 this._hubDestroyed = true;
@@ -1256,7 +1772,7 @@
             },
 
             template: `
-                <div class="lfhub-root" @keydown.ctrl.f.prevent="$el.querySelector('.lfhub-search input').focus()" @keydown.meta.f.prevent="$el.querySelector('.lfhub-search input').focus()">
+                <div class="lfhub-root" @keydown.capture="hubKeyboard" @keydown.stop @keyup.stop>
                     <div class="lfhub-topbar" role="banner"><hub-icon class="lfhub-hub-mark" :icon="hubIcon()"></hub-icon>
                         <span class="lfhub-wordmark">LIGHTFLOW <span>/ HUB</span></span>
                         <span class="lfhub-health"><i class="material-icons">{{ busy ? 'sync' : sourceReady ? 'check_circle_outline' : 'cloud_off' }}</i>{{ busy ? t('checking') : sourceReady ? t('essentialsProgress', {installed:essentialsInstalled,total:essentials.length}) : t('catalogOffline') }}</span>
@@ -1266,15 +1782,15 @@
                     <div v-if="error" class="lfhub-banner error" role="alert"><i class="material-icons">error_outline</i><span>{{ error }} <small v-if="retryIds.length">{{ t('retryHelp') }}</small></span><button @click="retry" :disabled="busy" v-if="retryIds.length || !sourceReady">{{ t('retry') }}</button><button @click="showPage('settings')">{{ t('settingsTitle') }}</button><button class="lfhub-icon-button" @click="error=''" :title="t('close')" :aria-label="t('close')"><i class="material-icons">close</i></button></div>
                     <div v-else-if="notice" class="lfhub-banner notice" role="status"><i class="material-icons">info_outline</i><span>{{ notice }}</span><button class="lfhub-icon-button" @click="notice=''" :title="t('close')" :aria-label="t('close')"><i class="material-icons">close</i></button></div>
                     <div v-if="progress" class="lfhub-progress" role="status" aria-live="polite"><span>{{ t(progress.phase, progress) }}</span><progress :value="progress.current - 1" :max="progress.total"></progress></div>
-                    <div class="lfhub-workspace">
+                    <div class="lfhub-workspace" :class="{learning:page==='learn'}">
                         <aside class="lfhub-catalog" :aria-label="t('tools')">
                             <div class="lfhub-toolbar">
                                 <label class="lfhub-search"><i class="material-icons">search</i><input v-model="search" :placeholder="t('search')" :aria-label="t('search')" type="search"></label>
-                                <nav class="lfhub-filters" :aria-label="t('tools')"><button v-for="item in ['all','installedFilter','availableFilter','changesFilter']" :key="item" :class="{active:stateFilter===item}" :aria-pressed="stateFilter===item" @click="stateFilter=item">{{ t(item) }}</button></nav>
+                                <nav class="lfhub-filters" :aria-label="t('tools')"><button v-for="item in ['all','installedFilter','availableFilter','changesFilter']" :key="item" :class="{active:stateFilter===item}" :aria-pressed="String(stateFilter===item)" @click="stateFilter=item">{{ t(item) }}</button></nav>
                                 <label class="lfhub-category"><span>{{ t('category') }}</span><select v-model="group" :aria-label="t('category')"><option v-for="item in ['all','essential','creative','specialized','developer']" :key="item" :value="item">{{ t(item) }}</option></select></label>
                             </div>
                             <div class="lfhub-list" :aria-busy="busy">
-                                <button v-for="module in modules" :key="module.id" class="lfhub-module" :class="{selected:selectedId===module.id,dimmed:module.disabled}" @click="selectModule(module)" :aria-pressed="selectedId===module.id">
+                                <button v-for="module in modules" :key="module.id" class="lfhub-module" :class="{selected:selectedId===module.id,dimmed:module.disabled}" @click="selectModule(module)" :aria-pressed="String(selectedId===module.id)">
                                     <hub-icon class="lfhub-icon" :icon="iconFor(module)" :revision="revision"></hub-icon>
                                     <span class="lfhub-copy"><span class="lfhub-module-title"><strong>{{ module.title }}</strong><span class="lfhub-maturity" v-if="module.maturity && module.maturity !== 'stable'">{{ module.maturity }}</span></span><span class="lfhub-description">{{ module.description }}</span><span class="lfhub-meta"><span class="lfhub-status" :class="statusClass(module)">{{ statusText(module) }}</span><span>v{{ module.installed ? module.installedVersion : module.version }}</span><i v-if="module.updateAvailable" class="material-icons">upgrade</i></span></span>
                                 </button>
@@ -1283,11 +1799,11 @@
                             <div class="lfhub-catalog-footer"><span>{{ t('moduleCount', {count:modules.length}) }}</span><button v-if="updates.length" @click="updateAll" :disabled="busy || !sourceReady" class="accent"><i class="material-icons">system_update_alt</i>{{ t('updateAll') }} · {{ updates.length }}</button></div>
                         </aside>
                         <main class="lfhub-main">
-                            <nav class="lfhub-navigation" :aria-label="t('title')"><button :class="{active:page==='home'}" @click="showPage('home')" :aria-pressed="page==='home'"><i class="material-icons">home</i>{{ t('home') }}</button><button :class="{active:page==='news'}" @click="loadNews" :aria-pressed="page==='news'"><i class="material-icons">feed</i>{{ t('news') }}</button><button :class="{active:page==='settings'}" @click="showPage('settings')" :aria-pressed="page==='settings'"><i class="material-icons">tune</i>{{ t('settingsTitle') }}</button></nav>
+                            <nav class="lfhub-navigation" :aria-label="t('title')"><button :class="{active:page==='home'}" @click="showPage('home')" :aria-pressed="String(page==='home')"><i class="material-icons">home</i>{{ t('home') }}</button><button v-if="learningEnabled" :class="{active:page==='learn'}" @click="showPage('learn')" :aria-pressed="String(page==='learn')"><i class="material-icons">school</i>{{ learnText('Aprender','Learn') }}</button><button :class="{active:page==='news'}" @click="loadNews" :aria-pressed="String(page==='news')"><i class="material-icons">feed</i>{{ t('news') }}</button><button :class="{active:page==='settings'}" @click="showPage('settings')" :aria-pressed="String(page==='settings')"><i class="material-icons">tune</i>{{ t('settingsTitle') }}</button></nav>
                             <div class="lfhub-content" :key="page + selectedId">
                                 <template v-if="page==='home'">
                                     <section class="lfhub-welcome">
-                                        <div class="lfhub-welcome-copy"><span class="lfhub-eyebrow">Lightflow for Blockbench</span><h1>{{ t('welcomeTitle') }}</h1><p>{{ t('welcomeCopy') }}</p><button v-if="recommendedMissing.length || essentialsNeedActivation" class="accent" @click="installRecommended" :disabled="busy || !sourceReady"><i class="material-icons">download</i>{{ t(essentialsNeedActivation ? 'repair' : 'installRecommended') }}</button><button v-else class="accent" @click="beginScene" :disabled="busy || (sceneAction==='new' && !canCreateScene)"><i class="material-icons">arrow_forward</i>{{ t(sceneAction==='scene' ? 'continueScene' : 'startScene') }}</button></div>
+                                        <div class="lfhub-welcome-copy"><span class="lfhub-eyebrow">Lightflow for Blockbench</span><h1>{{ learnText('Tu próximo render empieza aquí','Your next render starts here') }}</h1><p>{{ learnText('Prepara tus herramientas, organiza tu escena y dirige tus próximas imágenes.','Prepare your tools, organize your scene and direct your next images.') }}</p><div class="lfhub-welcome-actions"><button v-if="recommendedMissing.length || essentialsNeedActivation" class="accent" @click="installRecommended" :disabled="busy || !sourceReady"><i class="material-icons">download</i>{{ t(essentialsNeedActivation ? 'repair' : 'installRecommended') }}</button><button v-else class="accent" @click="beginScene" :disabled="busy || (sceneAction==='new' && !canCreateScene)"><i class="material-icons" aria-hidden="true">{{ sceneAction==='scene' ? 'arrow_forward' : 'add' }}</i>{{ t(sceneAction==='scene' ? 'continueScene' : 'startScene') }}</button><button v-if="recommendedMissing.length || essentialsNeedActivation" class="lfhub-text-button" @click="beginScene" :disabled="busy || (sceneAction==='new' && !canCreateScene)">{{ t(sceneAction==='scene' ? 'continueScene' : 'startScene') }}</button></div></div>
                                         <img class="lfhub-splash" :src="artwork" :alt="t('splashAlt')" @error="artFailed=true" draggable="false">
                                     </section>
                                     <section class="lfhub-onboarding">
@@ -1296,8 +1812,20 @@
                                         <p v-if="essentialsNeedActivation" class="lfhub-muted">{{ t('disabledEssentials') }}</p>
                                         <p class="lfhub-muted">{{ t('setupHint') }}</p>
                                     </section>
+                                    <section v-if="learningEnabled" class="lfhub-learning-entry"><i class="material-icons" aria-hidden="true">school</i><div><h2>{{ learningResume ? learnText('Tu taller te espera','Your workshop is waiting') : learnText('Aprende haciendo','Learn by doing') }}</h2><p>{{ learningLessons.length }} {{ learnText('talleres dentro de Blockbench. Luces, materiales, cámara y entrega, a tu ritmo.','workshops inside Blockbench. Lights, materials, camera and delivery, at your pace.') }}</p></div><button @click="showPage('learn')">{{ learningResume ? learnText('Retomar','Resume') : learnText('Explorar talleres','Explore workshops') }}</button></section>
                                     <section v-if="hubUpdateAvailable" class="lfhub-hub-update"><i class="material-icons">system_update</i><div><strong>{{ t('hubUpdate', {version:hubRemoteVersion}) }}</strong><p>{{ t('autoExplanation') }}</p></div><button @click="updateHub" :disabled="!canUpdateHub">{{ t('updateHub') }}</button></section>
                                 </template>
+                                <section v-else-if="learningEnabled && page==='learn'" class="lfhub-learning">
+                                    <div class="lfhub-section-heading"><div><span class="lfhub-eyebrow">LIGHTFLOW / {{ learnText('Aprender','Learn') }}</span><h1>{{ learnText('Aprende haciendo','Learn by doing') }}</h1><p>{{ learnText('Elige un taller. Practica en Blockbench y comprueba el resultado de cada paso.','Choose a workshop. Practice in Blockbench and check the result of each step.') }}</p></div><span class="lfhub-step-count" :aria-label="learnText('Talleres completados','Completed workshops')">{{ learningCompletedCount }}/{{ learningLessons.length }} <small>{{ learnText('completados','complete') }}</small></span></div>
+                                    <div v-if="learningResume" class="lfhub-learning-resume"><i class="material-icons" aria-hidden="true">history</i><div><strong>{{ learningLessons.find(l=>l.id===learningResume.id).title }}</strong><span>{{ learnText('Paso guardado','Saved step') }} {{ learningResume.index+1 }} / {{ learningLessons.find(l=>l.id===learningResume.id).steps.length }}</span><p v-if="!learningCanResume()">{{ learnText('Abre el proyecto de este taller para retomar. También puedes empezar en un escenario nuevo.','Open this workshop project to resume. You can also start in a new practice stage.') }}</p></div><button class="accent" :disabled="!learningCanResume() || busy" @click="learningStart(true)">{{ learnText('Retomar','Resume') }}</button><button @click="learningSelect(learningResume.id)">{{ learnText('Ver taller','View workshop') }}</button></div>
+                                    <div class="lfhub-learning-layout">
+                                        <div class="lfhub-learning-browser"><div class="lfhub-learning-filters"><label class="lfhub-search lfhub-learning-search"><i class="material-icons" aria-hidden="true">search</i><input type="search" v-model="learningSearch" :placeholder="learnText('Buscar talleres','Search workshops')" :aria-label="learnText('Buscar talleres','Search workshops')"></label><select v-model="learningFilter" :aria-label="learnText('Filtrar por progreso','Filter by progress')"><option value="all">{{ learnText('Todos los talleres','All workshops') }}</option><option value="pending">{{ learnText('Por completar','To complete') }}</option><option value="done">{{ learnText('Completados','Completed') }}</option></select></div>
+                                        <nav class="lfhub-learning-syllabus" @keydown="learningListKeys" :aria-label="learnText('Talleres disponibles; flechas para navegar','Available workshops; use arrows to navigate')"><button v-for="lesson in learningFilteredLessons" :key="lesson.id" :data-lesson="lesson.id" :aria-pressed="String(learningSelected===lesson.id)" :class="{selected:learningSelected===lesson.id}" @click="learningSelect(lesson.id)"><span class="lfhub-lesson-number">{{ (learningLessons.indexOf(lesson)+1).toString().padStart(2,'0') }}</span><span><strong>{{ lesson.title }}</strong><small>{{ lesson.minutes }} min · {{ lesson.steps.length }} {{ learnText('pasos','steps') }}<span v-if="learningDone(lesson.id)"> · {{ learnText('Completado','Completed') }}</span><span v-else-if="learningResume?.id===lesson.id"> · {{ learnText('En curso','In progress') }}</span></small></span><i class="material-icons" aria-hidden="true">{{ learningDone(lesson.id) ? 'check_circle_outline' : 'chevron_right' }}</i></button></nav><p v-if="!learningFilteredLessons.length" class="lfhub-learning-empty" role="status">{{ learnText('No hay talleres con estos filtros.','No workshops match these filters.') }} <button @click="learningSearch='';learningFilter='all'">{{ learnText('Mostrar todos','Show all') }}</button></p></div>
+                                        <article class="lfhub-learning-preview" :key="learningSelectedLesson.id"><div class="lfhub-learning-preview-body"><div class="lfhub-learning-preview-heading"><i class="material-icons lfhub-learning-icon" aria-hidden="true">{{ learningSelectedLesson.icon }}</i><span class="lfhub-eyebrow">{{ learningDone(learningSelected) ? learnText('Completado · puedes repetirlo','Completed · repeat anytime') : learningResume?.id===learningSelected ? learnText('Taller en curso','Workshop in progress') : learnText('Taller guiado','Guided workshop') }}</span></div><h2>{{ learningSelectedLesson.title }}</h2><p>{{ learningSelectedLesson.outcome }}</p><div class="lfhub-learning-meta">{{ learningSelectedLesson.minutes }} min · {{ learningSelectedLesson.steps.length }} {{ learnText('pasos · a tu ritmo','steps · at your pace') }}</div><details class="lfhub-learning-outline"><summary>{{ learnText('Lo que practicarás','What you will practice') }}</summary><ol><li v-for="step in learningSelectedLesson.steps" :key="step.id">{{ step.title }}</li></ol></details>
+                                        <template v-if="learningMissing(learningSelectedLesson).length"><div class="lfhub-learning-requirements" role="status"><strong>{{ learnText('Prepara estas herramientas','Prepare these tools') }}</strong><p>{{ learningMissing(learningSelectedLesson).map(id=>modulesAll.find(m=>m.id===id)?.title || id).join(', ') }}</p><button @click="learningPrepare(learningSelectedLesson)">{{ learnText('Revisar módulos','Review modules') }}</button></div></template>
+                                        <template v-else><fieldset class="lfhub-learning-project"><legend>{{ learnText('Dónde quieres practicar','Where to practice') }}</legend><label><input type="radio" :value="false" v-model="learningUseCurrent"><span>{{ learnText('Escenario nuevo','New practice stage') }}<small>{{ learnText('Recomendado. Se abre en otro proyecto y conserva tu trabajo actual.','Recommended. Opens in another project and keeps your current work.') }}</small></span></label><label v-if="learningHasProject()"><input type="radio" :value="true" v-model="learningUseCurrent"><span>{{ learnText('Proyecto actual','Current project') }}<small>{{ learnText('Las acciones del taller modificarán esta escena.','Workshop actions will modify this scene.') }}</small></span></label></fieldset></template></div><div v-if="!learningMissing(learningSelectedLesson).length" class="lfhub-learning-launch"><button class="accent lfhub-learning-start" :disabled="busy" @click="learningStart(false)"><i class="material-icons" aria-hidden="true">play_arrow</i>{{ learningDone(learningSelected) ? learnText('Repetir taller','Repeat workshop') : learnText('Comenzar taller','Start workshop') }}</button></div></article>
+                                    </div>
+                                </section>
                                 <article v-else-if="page==='tool' && selectedModule" class="lfhub-detail">
                                     <button class="lfhub-text-button" @click="showPage('home')"><i class="material-icons">arrow_back</i>{{ t('back') }}</button>
                                     <div class="lfhub-detail-heading"><hub-icon :icon="iconFor(selectedModule)" :revision="revision"></hub-icon><div><h1>{{ selectedModule.title }}</h1><span class="lfhub-status" :class="statusClass(selectedModule)">{{ statusText(selectedModule) }}</span><span class="lfhub-maturity" v-if="selectedModule.maturity && selectedModule.maturity !== 'stable'">{{ selectedModule.maturity }}</span></div></div>
@@ -1310,10 +1838,11 @@
                                         <button v-if="selectedModule.installed" class="lfhub-icon-button" @click="manage(selectedModule,$event)" :disabled="busy" :title="t('manage')" :aria-label="t('manage')"><i class="material-icons">more_horiz</i></button>
                                     </div>
                                     <p v-if="selectedModule.installed && !selectedModule.disabled && actionFor(selectedModule) && !canOpen(selectedModule)" class="lfhub-muted">{{ t('noProject') }}</p>
-                                    <nav class="lfhub-detail-tabs"><button v-for="tab in ['aboutTab','detailsTab']" :key="tab" @click="detailTab=tab" :class="{active:detailTab===tab}" :aria-pressed="detailTab===tab">{{ t(tab) }}</button></nav>
+                                    <nav class="lfhub-detail-tabs"><button v-for="tab in ['aboutTab','detailsTab']" :key="tab" @click="detailTab=tab" :class="{active:detailTab===tab}" :aria-pressed="String(detailTab===tab)">{{ t(tab) }}</button></nav>
                                     <section v-if="detailTab==='aboutTab'">
                                         <img v-if="moduleImage(selectedModule)" class="lfhub-module-art" :src="moduleImage(selectedModule)" :alt="selectedModule.title" @error="failedImage=selectedModule.id" draggable="false">
                                         <p v-if="selectedModule.recommended" class="lfhub-recommended"><i class="material-icons">check_circle_outline</i>{{ t('recommended') }}</p>
+                                        <div v-if="learningEnabled && learningRelated(selectedModule).length" class="lfhub-learning-related"><h3>{{ learnText('Aprende con este módulo','Learn with this module') }}</h3><button v-for="lesson in learningRelated(selectedModule)" :key="lesson.id" class="lfhub-text-button" @click="showPage('learn');learningSelect(lesson.id)"><i class="material-icons">school</i>{{ lesson.title }}</button></div>
                                         <h2>{{ t(selectedModule.group) }}</h2><p>{{ selectedModule.description }}</p>
                                         <div v-if="selectedModule.dependencies.length" class="lfhub-dependencies"><h3>{{ t('dependencies') }}</h3><button v-for="id in selectedModule.dependencies" :key="id" @click="selectModule(modulesAll.find(item=>item.id===id))"><i class="material-icons">extension</i>{{ modulesAll.find(item=>item.id===id).title }}<i class="material-icons">chevron_right</i></button></div>
                                         <p v-if="!selectedModule.compatible" class="lfhub-warning">{{ compatibilityHint(selectedModule) }}</p><p v-if="selectedModule.unavailableInSource" class="lfhub-muted">{{ t('unavailable') }}</p>
@@ -1335,14 +1864,14 @@
                         <div class="lfhub-control-group">
                             <span class="lfhub-control-label">{{ t('sourceLabel') }}</span>
                             <div class="lfhub-segment" role="group">
-                                <button :disabled="busy" :aria-pressed="preferences.source === 'github'" :class="{active: preferences.source === 'github'}" @click="preferences.source='github'; changeSource()">${BRAND_MARKS.github}{{ t('github') }}</button>
-                                <button :aria-pressed="preferences.source === 'local'" :class="{active: preferences.source === 'local'}" :disabled="busy || !desktopAvailable" @click="preferences.source='local'; changeSource()"><i class="material-icons">folder</i>{{ t('local') }}</button>
+                                <button :disabled="busy" :aria-pressed="String(preferences.source === 'github')" :class="{active: preferences.source === 'github'}" @click="preferences.source='github'; changeSource()">${BRAND_MARKS.github}{{ t('github') }}</button>
+                                <button :aria-pressed="String(preferences.source === 'local')" :class="{active: preferences.source === 'local'}" :disabled="busy || !desktopAvailable" @click="preferences.source='local'; changeSource()"><i class="material-icons">folder</i>{{ t('local') }}</button>
                             </div>
                         </div>
                         <div v-if="!localMode" class="lfhub-control-group lfhub-channel-group">
                             <span class="lfhub-control-label">{{ t('channelLabel') }}</span>
                             <div class="lfhub-segment lfhub-channels" role="group">
-                                <button v-for="channel in ['stable','main','experimental']" :key="channel" :disabled="busy" :aria-pressed="preferences.channel === channel" :class="{active: preferences.channel === channel}" @click="preferences.channel=channel; changeChannel()">{{ t(channel) }}</button>
+                                <button v-for="channel in ['stable','main','experimental']" :key="channel" :disabled="busy" :aria-pressed="String(preferences.channel === channel)" :class="{active: preferences.channel === channel}" @click="preferences.channel=channel; changeChannel()">{{ t(channel) }}</button>
                             </div>
                         </div>
                         <label v-if="!localMode && preferences.channel === 'experimental'" class="lfhub-branch"><span>{{ t('branch') }}</span><input :disabled="busy" v-model="preferences.experimentalBranch" @change="branchChanged(); refresh()"></label>
@@ -1376,7 +1905,7 @@
             hubDialog.show();
             hubDialog.content_vue.bump?.();
             const view = hubDialog.content_vue;
-            view.$nextTick?.(() => view.$el?.querySelector('.lfhub-search input')?.focus());
+            view.$nextTick?.(() => view.focusSearch());
             return;
         }
         hubDialog?.delete?.();
@@ -1395,21 +1924,64 @@
     function addStyles() {
 
         stylesheet = Blockbench.addCSS(`
+            /* Hub works standalone; use the shared Lightflow scale when available. */
+            .lfhub-root,.lflearn-dock {--lfhub-radius:var(--lf-radius-control,8px);--lfhub-surface:var(--lf-radius-surface,12px)}
+            .lfhub-welcome-actions {display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+            .lfhub-learning-entry {display:flex;align-items:center;gap:12px;margin:0 24px;padding:16px 0;border-top:1px solid var(--color-border)}
+            .lfhub-learning-entry>i {font-size:24px}.lfhub-learning-entry>div {flex:1;min-width:0}.lfhub-learning-entry h2 {margin:0 0 4px}.lfhub-learning-entry p {margin:0;font-size:13px}
+            .lfhub-workspace.learning {grid-template-columns:1fr}.lfhub-workspace.learning .lfhub-catalog {display:none}
+            .lfhub-workspace.learning .lfhub-content {overflow:hidden}
+            .lfhub-learning-related {padding:12px 0;border-block:1px solid var(--color-border)}.lfhub-learning-related button {margin:4px 4px 0 0}
+            .lfhub-root .lfhub-learning {display:flex;flex-direction:column;height:100%;min-height:0;padding:20px 24px}
+            .lfhub-root .lfhub-learning h1 {font-size:24px;font-weight:500;letter-spacing:0;line-height:1.25;margin:4px 0 8px}
+            .lfhub-learning .lfhub-step-count {text-align:right;flex:none;font-variant-numeric:tabular-nums}.lfhub-learning .lfhub-step-count small {display:block;font-size:11px;line-height:1.5}
+            .lfhub-learning-layout {display:grid;grid-template-columns:minmax(240px,34%) minmax(0,1fr);gap:24px;flex:1;min-height:0;margin-top:8px}
+            .lfhub-learning-browser {display:flex;flex-direction:column;min-height:0;min-width:0}.lfhub-learning-filters {display:grid;gap:8px;padding-bottom:12px}
+            .lfhub-learning-filters select {width:100%}.lfhub-learning-syllabus {display:flex;flex-direction:column;gap:4px;flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding:2px}
+            .lfhub-root .lfhub-learning-syllabus button {height:auto;min-height:60px;flex-shrink:0;white-space:normal;text-align:left;justify-content:flex-start;padding:10px 8px;background:transparent;border:1px solid transparent}
+            .lfhub-root .lfhub-learning-syllabus button.selected {background:var(--color-selected);border-color:var(--color-accent)}
+            .lfhub-learning-syllabus button>span:nth-child(2) {flex:1;min-width:0}.lfhub-learning-syllabus strong {display:block;font-size:13px;font-weight:500;line-height:1.4}.lfhub-learning-syllabus small {display:block;font-size:11px;line-height:1.5;margin-top:4px;font-variant-numeric:tabular-nums;color:var(--lfhub-secondary)}
+            .lfhub-lesson-number {font-variant-numeric:tabular-nums;min-width:22px;font-size:12px}.lfhub-learning-syllabus button.selected .lfhub-lesson-number {color:var(--color-accent)}
+            .lfhub-learning-preview {display:flex;flex-direction:column;min-width:0;min-height:0;padding-left:24px;border-left:1px solid var(--color-border)}
+            .lfhub-learning-preview-body {flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding:2px 12px 2px 0}.lfhub-learning-launch {flex:none;padding:12px 0 2px;border-top:1px solid var(--color-border)}
+            .lfhub-learning-preview-heading {display:flex;align-items:center;gap:8px;margin-bottom:12px}.lfhub-root .lfhub-learning-icon {font-size:24px;width:24px;height:24px;flex-basis:24px;line-height:24px}
+            .lfhub-root .lfhub-learning-preview h2 {font-size:22px;font-weight:500;line-height:1.3;margin:0 0 8px}.lfhub-learning-preview p {font-size:13px;line-height:1.5;margin:0 0 12px}
+            .lfhub-learning-meta {font-size:12px;color:var(--lfhub-secondary);margin-bottom:12px}.lfhub-learning-outline {border-block:1px solid var(--color-border);margin:12px 0}.lfhub-learning-outline summary {cursor:pointer;font-weight:500;padding:10px 0;line-height:1.5}.lfhub-learning-outline summary:focus-visible {outline:2px solid var(--color-text);outline-offset:-2px}
+            .lfhub-learning-preview ol {padding-left:22px;margin:0 0 12px;font-size:13px;line-height:1.5}.lfhub-learning-preview li {padding-left:4px;margin-bottom:6px}
+            .lfhub-learning-project {border:0;padding:0;margin:16px 0}.lfhub-learning-project legend {font-weight:500;font-size:13px;margin-bottom:8px}.lfhub-learning-project label {display:flex;align-items:flex-start;gap:8px;padding:8px;margin:4px 0;border:1px solid var(--color-border);border-radius:var(--lfhub-radius);line-height:1.5;cursor:pointer;background:var(--color-back)}
+            .lfhub-root .lfhub-learning-project input[type=radio] {width:20px;height:20px;min-width:20px;flex:none;margin:0;padding:0;border:0;background:transparent;border-radius:0;accent-color:var(--color-accent)}
+            .lfhub-learning-project label:has(input:checked) {border-color:var(--color-accent)}.lfhub-learning-project small {display:block;font-size:12px;color:var(--lfhub-secondary);line-height:1.5;margin-top:2px}
+            .lfhub-learning-resume {display:flex;gap:12px;align-items:center;flex-shrink:0;background:var(--color-back);border:1px solid var(--color-border);border-radius:var(--lfhub-radius);padding:12px;margin:4px 0 12px}.lfhub-learning-resume>div {flex:1;min-width:0}.lfhub-learning-resume strong {font-weight:500}.lfhub-learning-resume span {display:block;font-size:12px;margin-top:4px}.lfhub-learning-resume p {font-size:12px;line-height:1.5;margin:4px 0 0}
+            .lfhub-learning-empty {font-size:13px;line-height:1.5;padding:12px 2px}.lfhub-learning-empty button {margin-top:8px}
+            .lfhub-learning-requirements {padding:12px;background:var(--color-back);border:1px solid var(--color-border);border-radius:var(--lfhub-radius)}.lfhub-learning-requirements p {margin:8px 0}
+            .lflearn-dock {position:fixed;left:14px;bottom:42px;width:340px;max-width:calc(100vw - 28px);max-height:calc(100vh - 70px);z-index:20;display:flex;flex-direction:column;background:var(--color-ui);color:var(--color-text);border:1px solid var(--color-border);border-radius:var(--lfhub-surface);box-shadow:none;font-family:inherit;font-size:13px;overflow:hidden;box-sizing:border-box}
+            .lflearn-dock * {box-sizing:border-box}.lflearn-handle {display:flex;min-height:48px;height:auto;background:var(--color-ui);align-items:center;gap:8px;padding:8px;flex:none;border-bottom:1px solid var(--color-border);cursor:move;touch-action:none;user-select:none}.lflearn-handle>i {font-size:20px;width:20px;height:20px;line-height:20px}.lflearn-handle strong {flex:1;min-width:0;font-weight:500;font-size:12px;line-height:1.4}
+            .lflearn-dock button {display:inline-flex;align-items:center;justify-content:center;gap:6px;color:var(--color-text);background:var(--color-button);border:1px solid var(--color-border);border-radius:var(--lfhub-radius);box-shadow:none;min-height:32px;min-width:0;height:auto;width:auto;padding:6px 10px;font:inherit;line-height:1.4;white-space:normal;cursor:pointer}
+            .lflearn-dock button:hover:not(:disabled) {background:var(--color-selected)}.lflearn-dock button:disabled {opacity:.5;cursor:default}.lflearn-dock button:focus-visible,.lflearn-tip summary:focus-visible {outline:2px solid var(--color-text);outline-offset:-2px}.lflearn-dock button.accent {color:var(--color-accent_text);background:var(--color-accent);border-color:var(--color-accent)}
+            .lflearn-dock .lflearn-handle button {width:32px;height:32px;min-height:32px;padding:0;flex:none;border:0;background:transparent}.lflearn-dock .lflearn-handle button:hover {background:var(--color-selected)}.lflearn-handle button i {display:block;font-size:20px;width:20px;height:20px;line-height:20px;margin:0}
+            .lflearn-body {padding:16px;min-height:0;overflow:auto;overscroll-behavior:contain}.lflearn-step-meta {display:flex;justify-content:space-between;font-size:11px;font-variant-numeric:tabular-nums}.lflearn-body progress {display:block;width:100%;height:4px;accent-color:var(--color-accent);margin:8px 0 16px}.lflearn-body h2 {font-size:19px;line-height:1.3;margin:0 0 10px;font-weight:500}.lflearn-body h2:focus {outline:none}.lflearn-body p {line-height:1.55;margin:10px 0}.lflearn-tools {display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}.lflearn-tip {margin:16px 0;padding:12px 0;border-block:1px solid var(--color-border)}.lflearn-tip summary {cursor:pointer;font-weight:500;line-height:1.5}.lflearn-tip p {font-size:12px}.lflearn-status {display:flex;align-items:flex-start;gap:8px;font-size:12px}.lflearn-status i {font-size:18px;width:18px;height:18px;line-height:18px;flex:none;margin:0}
+            .lflearn-footer {display:flex;gap:8px;flex:none;padding:12px;border-top:1px solid var(--color-border)}.lflearn-footer button:last-child {margin-left:auto}.lflearn-answers {display:flex;flex-direction:column;gap:8px;margin:12px 0}.lflearn-answers button {justify-content:space-between;text-align:left;padding:10px}.lflearn-answers button i {font-size:18px;width:18px;flex:none;margin:0}.lflearn-answers button.chosen {border-color:var(--color-accent);background:var(--color-selected)}.lflearn-error {border-left:2px solid var(--color-error);padding-left:8px}.lflearn-modal-hint {margin:12px;line-height:1.5;font-size:12px}.lflearn-kicker {display:block;font-size:11px;margin-bottom:12px}.lflearn-target {outline:2px solid var(--color-accent)!important;outline-offset:-2px}
+            @container lightflow-hub (max-width:720px) {
+                .lfhub-workspace.learning .lfhub-content {overflow-y:auto}.lfhub-root .lfhub-learning {height:auto;padding:16px}.lfhub-learning-layout {grid-template-columns:1fr;gap:16px;flex:none}.lfhub-learning-preview {padding:16px 0 0;border-left:0;border-top:1px solid var(--color-border)}.lfhub-learning-preview-body {overflow:visible;flex:none;padding-right:0}.lfhub-learning-syllabus {max-height:240px;flex:none}.lfhub-learning-filters {grid-template-columns:minmax(0,1fr) minmax(110px,40%)}.lfhub-learning-entry,.lfhub-learning-resume {flex-wrap:wrap}.lfhub-learning-entry {margin-inline:16px}.lfhub-learning-entry button {margin-left:36px}
+            }
+            @container lightflow-hub (max-width:420px) {.lfhub-learning-filters {grid-template-columns:1fr}.lfhub-learning-resume>div {min-width:calc(100% - 36px)}.lfhub-root .lfhub-learning h1 {font-size:21px}}
             .lfhub-notifications {position:fixed;right:16px;bottom:40px;z-index:1000;max-width:min(440px,calc(100vw - 32px));list-style:none;padding:0;margin:0;color:var(--color-text);font-family:inherit}
-            .lfhub-notifications .toast_notification {display:flex;align-items:center;gap:10px;padding:12px 14px;background:var(--color-ui);border:1px solid var(--color-border);border-radius:4px;box-shadow:0 4px 18px #0005;cursor:pointer}
-            .lfhub-notifications .toast_notification:focus-visible {outline:2px solid var(--color-accent);outline-offset:3px}
+            .lfhub-notifications .toast_notification {display:flex;align-items:center;gap:10px;padding:12px 14px;background:var(--color-ui);border:1px solid var(--color-border);border-radius:8px;box-shadow:none;cursor:pointer}
+            .lfhub-notifications .toast_notification:focus-visible {outline:2px solid var(--color-text);outline-offset:3px}
             .lfhub-notifications .toast_notification span {flex:1;color:var(--color-text)}
             .lfhub-notifications .toast_notification .icon {color:var(--color-text)}
             .lfhub-notifications .toast_close_button {display:flex;margin-left:8px}
             #lightflow_hub_dialog {max-width:calc(100vw - 28px)}
-            #lightflow_hub_dialog .dialog_content {padding:0;overflow:hidden;max-height:none!important;margin:0!important}
+            #lightflow_hub_dialog .dialog_content {padding:0;overflow:hidden;max-height:none!important;margin:0!important;container-type:inline-size;container-name:lightflow-hub}
             #lightflow_hub_dialog .dialog_bar.button_bar:empty {display:none}
             .lfhub-root,.lfhub-root * {box-sizing:border-box}
+            .lfhub-root {--lfhub-secondary:var(--color-text);--lfhub-indicator:var(--color-text)}
+            @supports (color:color-mix(in srgb,black,white)) {.lfhub-root {--lfhub-secondary:color-mix(in srgb,var(--color-text) 88%,var(--color-ui));--lfhub-indicator:color-mix(in srgb,var(--color-accent) 80%,var(--color-text))}}
             .lfhub-root {height:min(740px,calc(100vh - 100px));min-height:0;display:flex;flex-direction:column;overflow:hidden;background:var(--color-ui);color:var(--color-text);font-size:14px}
-            .lfhub-root button {display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:32px;padding:5px 11px;border:1px solid var(--color-border);border-radius:3px;background:var(--color-button);color:var(--color-text);font:inherit;cursor:pointer;box-shadow:none!important;line-height:1.4;transition:background .15s}
+            .lfhub-root button {display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:32px;padding:5px 11px;border:1px solid var(--color-border);border-radius:var(--lfhub-radius);background:var(--color-button);color:var(--color-text);font:inherit;cursor:pointer;box-shadow:none!important;line-height:1.4;transition:background .15s}
             .lfhub-root button:hover:not(:disabled) {background:var(--color-selected)}
             .lfhub-root button:disabled {opacity:.5;cursor:default}
-            .lfhub-root button:focus-visible,.lfhub-root input:focus-visible,.lfhub-root select:focus-visible {outline:2px solid var(--color-accent);outline-offset:-2px}
+            .lfhub-root button:focus-visible,.lfhub-root input:focus-visible,.lfhub-root select:focus-visible {outline:2px solid var(--color-text);outline-offset:-2px}
             .lfhub-root button.accent {background:var(--color-accent);color:var(--color-accent_text);border-color:var(--color-accent)}
             .lfhub-root button.accent:hover:not(:disabled) {filter:brightness(1.08)}
             .lfhub-root .lfhub-text-button {background:transparent;border-color:transparent;padding-left:0}
@@ -1423,38 +1995,38 @@
             .lfhub-menu-brand {width:24px;height:24px;display:inline-block;background:currentColor;mask-size:contain;-webkit-mask-size:contain;mask-repeat:no-repeat;-webkit-mask-repeat:no-repeat}
             .lfhub-topbar {display:flex;align-items:center;gap:8px;padding:8px 14px;border-bottom:1px solid var(--color-border);flex-shrink:0}
             .lfhub-wordmark {font-size:13px;font-weight:600;letter-spacing:3px}
-            .lfhub-wordmark span {font-weight:400;letter-spacing:1px;color:var(--color-subtle_text)}
-            .lfhub-health {margin-left:auto;display:flex;align-items:center;gap:6px;color:var(--color-subtle_text);font-size:12px}
+            .lfhub-wordmark span {font-weight:400;letter-spacing:1px;color:var(--lfhub-secondary,var(--color-text))}
+            .lfhub-health {margin-left:auto;display:flex;align-items:center;gap:6px;color:var(--lfhub-secondary,var(--color-text));font-size:12px}
             .lfhub-workspace {display:grid;grid-template-columns:minmax(260px,33%) minmax(0,1fr);flex:1;min-height:0;overflow:hidden}
             .lfhub-catalog {display:flex;flex-direction:column;min-height:0;border-right:1px solid var(--color-border);background:var(--color-dark)}
             .lfhub-toolbar {padding:12px 12px 0;flex-shrink:0}
             .lfhub-search {position:relative;display:flex;align-items:center;width:100%}
-            .lfhub-search > i {position:absolute;left:8px;color:var(--color-subtle_text);pointer-events:none}
-            .lfhub-root input:not([type=checkbox]),.lfhub-root select {font:inherit;color:var(--color-text);background:var(--color-back);height:34px;border:1px solid var(--color-border);border-radius:3px;padding:4px 8px;min-width:0}
+            .lfhub-search > i {position:absolute;left:8px;color:var(--lfhub-secondary,var(--color-text));pointer-events:none}
+            .lfhub-root input:not([type=checkbox]):not([type=radio]),.lfhub-root select {font:inherit;color:var(--color-text);background:var(--color-back);height:34px;border:1px solid var(--color-border);border-radius:var(--lfhub-radius);padding:4px 8px;min-width:0}
             .lfhub-search input {width:100%;padding-left:34px!important}
             .lfhub-filters {display:flex;gap:0;margin:9px -12px 0;border-bottom:1px solid var(--color-border)}
             .lfhub-filters button {flex:1;min-width:0;padding:8px 3px;font-size:12px;border:0;border-radius:0;background:transparent;border-bottom:2px solid transparent}
-            .lfhub-filters button.active {border-bottom-color:var(--color-accent);background:var(--color-ui)}
-            .lfhub-category {display:flex;align-items:center;gap:8px;padding:8px 0;font-size:12px;color:var(--color-subtle_text)}
+            .lfhub-filters button.active {border-bottom-color:var(--lfhub-indicator);background:var(--color-ui)}
+            .lfhub-category {display:flex;align-items:center;gap:8px;padding:8px 0;font-size:12px;color:var(--lfhub-secondary,var(--color-text))}
             .lfhub-category select {margin-left:auto;max-width:68%;height:28px;font-size:12px}
             .lfhub-list {flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;scrollbar-gutter:stable;padding:0 8px 8px}
             .lfhub-root button.lfhub-module {display:flex;align-items:flex-start;text-align:left;width:100%;height:auto;gap:10px;margin:0 0 6px;padding:12px 10px;background:var(--color-ui);border:1px solid transparent;white-space:normal}
-            .lfhub-root button.lfhub-module.selected {background:var(--color-selected);border-color:var(--color-accent)}
+            .lfhub-root button.lfhub-module.selected {background:var(--color-selected);border-color:var(--lfhub-indicator)}
             .lfhub-root button.lfhub-module,.lfhub-root button.lfhub-module * {text-decoration:none}
-            .lfhub-root button.lfhub-module.dimmed {color:var(--color-subtle_text)}
+            .lfhub-root button.lfhub-module.dimmed {color:var(--lfhub-secondary,var(--color-text))}
             .lfhub-root .lfhub-icon {width:56px;height:56px;flex:0 0 56px;margin:0 2px 0 0}
             .lfhub-copy {min-width:0;flex:1;display:block}
             .lfhub-module-title {display:flex;gap:6px;flex-wrap:wrap;align-items:center}
             .lfhub-module-title strong {font-size:15px;font-weight:500;line-height:1.35}
-            .lfhub-description {display:block;font-size:12px;color:var(--color-subtle_text);line-height:1.5;margin:5px 0 6px;overflow-wrap:anywhere}
-            .lfhub-meta {display:flex;flex-wrap:wrap;align-items:center;gap:7px;font-size:11px;color:var(--color-subtle_text);font-variant-numeric:tabular-nums}
+            .lfhub-description {display:block;font-size:12px;color:var(--lfhub-secondary,var(--color-text));line-height:1.5;margin:5px 0 6px;overflow-wrap:anywhere}
+            .lfhub-meta {display:flex;flex-wrap:wrap;align-items:center;gap:7px;font-size:11px;color:var(--lfhub-secondary,var(--color-text));font-variant-numeric:tabular-nums}
             .lfhub-meta .material-icons {font-size:16px;width:16px;height:16px;line-height:16px;flex-basis:16px;color:var(--color-accent)}
             .lfhub-status {color:var(--color-text)}
-            .lfhub-status.update,.lfhub-recommended,.is-ready {color:var(--color-accent)}
+            .lfhub-status.update,.lfhub-recommended,.lfhub-root .is-ready {color:var(--color-text)}
             .lfhub-status.incompatible,.lfhub-warning {color:var(--color-error)}
-            .lfhub-status.disabled {font-style:italic;color:var(--color-subtle_text)}
-            .lfhub-maturity {display:inline-block;font-size:10px;line-height:1.5;padding:1px 5px;border:1px solid var(--color-border);border-radius:2px;color:var(--color-subtle_text)}
-            .lfhub-catalog-footer {display:flex;align-items:center;gap:8px;justify-content:space-between;padding:8px 12px;border-top:1px solid var(--color-border);color:var(--color-subtle_text);font-size:12px;flex-shrink:0}
+            .lfhub-status.disabled {font-style:italic;color:var(--lfhub-secondary,var(--color-text))}
+            .lfhub-maturity {display:inline-block;font-size:11px;line-height:1.5;padding:1px 5px;border:1px solid var(--color-border);border-radius:2px;color:var(--lfhub-secondary,var(--color-text))}
+            .lfhub-catalog-footer {display:flex;align-items:center;gap:8px;justify-content:space-between;padding:8px 12px;border-top:1px solid var(--color-border);color:var(--lfhub-secondary,var(--color-text));font-size:12px;flex-shrink:0}
             .lfhub-catalog-footer button {font-size:12px;padding:4px 7px}
             .lfhub-main {display:flex;flex-direction:column;min-height:0;min-width:0}
             .lfhub-navigation {display:flex;align-items:center;gap:6px;padding:8px 18px;border-bottom:1px solid var(--color-border);flex-wrap:wrap;flex-shrink:0}
@@ -1465,68 +2037,68 @@
             .lfhub-root h2 {font-size:20px;font-weight:500;line-height:1.3;margin:0 0 8px}
             .lfhub-root h3 {font-size:14px;font-weight:500;margin:0 0 10px}
             .lfhub-root p {line-height:1.6;margin:0 0 14px;max-width:65ch}
-            .lfhub-muted {color:var(--color-subtle_text)}
+            .lfhub-muted {color:var(--lfhub-secondary,var(--color-text))}
             .lfhub-welcome {position:relative;min-height:320px;overflow:hidden;background:var(--color-dark);padding:32px 28px 22px}
             .lfhub-welcome-copy {position:relative;z-index:1;width:47%;min-width:230px}
-            .lfhub-eyebrow {font-size:12px;color:var(--color-subtle_text);display:block;margin:0 0 18px}
+            .lfhub-eyebrow {font-size:12px;color:var(--lfhub-secondary,var(--color-text));display:block;margin:0 0 18px}
             .lfhub-welcome h1 {font-size:34px;max-width:340px;margin-bottom:14px;line-height:1.08}
-            .lfhub-welcome p {font-size:14px;color:var(--color-subtle_text);max-width:280px}
+            .lfhub-welcome p {font-size:14px;color:var(--lfhub-secondary,var(--color-text));max-width:280px}
             .lfhub-splash {position:absolute;width:52%;height:240px;object-fit:contain;object-position:right bottom;right:0;bottom:0;pointer-events:none}
             .lfhub-onboarding {padding:24px 28px 28px}
             .lfhub-section-heading {display:flex;align-items:flex-start;gap:12px;margin-bottom:12px}
             .lfhub-section-heading > div {flex:1;min-width:0}
-            .lfhub-section-heading p {color:var(--color-subtle_text);font-size:13px;margin:0}
-            .lfhub-step-count {font-size:21px;font-weight:300;color:var(--color-subtle_text);font-variant-numeric:tabular-nums}
+            .lfhub-section-heading p {color:var(--lfhub-secondary,var(--color-text));font-size:13px;margin:0}
+            .lfhub-step-count {font-size:21px;font-weight:300;color:var(--lfhub-secondary,var(--color-text));font-variant-numeric:tabular-nums}
             .lfhub-essential-list {display:grid;grid-template-columns:1fr 1fr;gap:0 16px;margin-bottom:20px}
             .lfhub-essential-list button {justify-content:flex-start;text-align:left;border:0;border-bottom:1px solid var(--color-border);border-radius:0;background:transparent;padding:9px 0;font-size:12px}
             .lfhub-essential-list button > span:not(.lfhub-native-icon) {flex:1}
-            .lfhub-essential-list .lfhub-native-icon {color:var(--color-subtle_text)}
+            .lfhub-essential-list .lfhub-native-icon {color:var(--lfhub-secondary,var(--color-text))}
             .lfhub-essential-list .lfhub-native-icon {width:32px;height:32px;flex-basis:32px;margin-right:4px}
             .lfhub-welcome-actions {display:flex;align-items:center;flex-wrap:wrap;gap:12px}
             .lfhub-welcome-actions button {min-height:40px;padding-inline:16px}
-            .lfhub-welcome-actions > span {color:var(--color-subtle_text);font-size:12px;flex:1;min-width:180px}
+            .lfhub-welcome-actions > span {color:var(--lfhub-secondary,var(--color-text));font-size:12px;flex:1;min-width:180px}
             .lfhub-hub-update {display:flex;align-items:center;gap:12px;padding:16px 28px;border-top:1px solid var(--color-border)}
             .lfhub-hub-update > div {flex:1}
-            .lfhub-hub-update p {color:var(--color-subtle_text);font-size:12px;margin:5px 0 0}
+            .lfhub-hub-update p {color:var(--lfhub-secondary,var(--color-text));font-size:12px;margin:5px 0 0}
             .lfhub-detail,.lfhub-news,.lfhub-settings {padding:24px 28px 30px}
-            .lfhub-detail > .lfhub-text-button {font-size:12px;margin-bottom:20px;color:var(--color-subtle_text)}
+            .lfhub-detail > .lfhub-text-button {font-size:12px;margin-bottom:20px;color:var(--lfhub-secondary,var(--color-text))}
             .lfhub-root .lfhub-detail-heading {display:flex;align-items:center;gap:20px;height:auto;min-height:80px;padding:0;background:transparent;overflow:visible;position:static}
             .lfhub-detail-heading > .lfhub-native-icon {width:80px;height:80px;flex:0 0 80px}
             .lfhub-detail-heading .material-icons {font-size:40px;width:40px;height:40px;line-height:40px}
             .lfhub-detail-heading > div {min-width:0;flex:1}
             .lfhub-detail-heading h1 {margin:0 0 8px;overflow-wrap:anywhere;line-height:1.2}
             .lfhub-detail-heading .lfhub-status {font-size:12px;margin-right:12px}
-            .lfhub-detail-description {margin:18px 0!important;font-size:15px;color:var(--color-subtle_text)}
+            .lfhub-detail-description {margin:18px 0!important;font-size:15px;color:var(--lfhub-secondary,var(--color-text))}
             .lfhub-actions {display:flex;gap:8px;flex-wrap:wrap;margin:0 0 16px}
             .lfhub-detail-tabs {display:flex;gap:12px;border-bottom:1px solid var(--color-border);margin:24px 0}
             .lfhub-detail-tabs button {background:transparent;border:0;border-radius:0;border-bottom:2px solid transparent;padding:8px 2px;font-size:16px}
-            .lfhub-detail-tabs button.active {border-bottom-color:var(--color-accent)}
+            .lfhub-detail-tabs button.active {border-bottom-color:var(--lfhub-indicator)}
             .lfhub-recommended {display:flex;align-items:center;gap:7px;font-size:13px}
             .lfhub-dependencies {margin:22px 0}
             .lfhub-dependencies button {margin:0 6px 6px 0}
-            .lfhub-module-art {display:block;width:100%;max-height:280px;object-fit:contain;border-radius:3px;margin-bottom:20px}
+            .lfhub-module-art {display:block;width:100%;max-height:280px;object-fit:contain;border-radius:var(--lfhub-radius);margin-bottom:20px}
             .lfhub-facts {display:grid;grid-template-columns:minmax(100px,40%) minmax(0,1fr);gap:12px 18px;line-height:1.5;margin:0 0 22px;font-size:13px}
-            .lfhub-facts dt {color:var(--color-subtle_text)}
+            .lfhub-facts dt {color:var(--lfhub-secondary,var(--color-text))}
             .lfhub-facts dd {margin:0;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
-            .lfhub-path {grid-column:1/-1;margin-top:-5px!important;background:var(--color-back);padding:10px;border-radius:3px}
+            .lfhub-path {grid-column:1/-1;margin-top:-5px!important;background:var(--color-back);padding:10px;border-radius:var(--lfhub-radius)}
             .lfhub-settings-section {padding-top:24px;margin-top:24px;border-top:1px solid var(--color-border)}
             .lfhub-sourcebar {display:flex;flex-wrap:wrap;gap:16px;padding:20px 0}
             .lfhub-control-group,.lfhub-branch {display:flex;flex-direction:column;gap:7px;min-width:0;max-width:100%}
-            .lfhub-control-label,.lfhub-branch > span {font-size:12px;color:var(--color-subtle_text)}
+            .lfhub-control-label,.lfhub-branch > span {font-size:12px;color:var(--lfhub-secondary,var(--color-text))}
             .lfhub-segment {display:flex;flex-wrap:wrap;gap:4px}
             .lfhub-segment button {font-size:13px}
-            .lfhub-segment button.active {background:var(--color-selected);border-color:var(--color-accent)}
+            .lfhub-segment button.active {background:var(--color-selected);border-color:var(--lfhub-indicator)}
             .lfhub-release {flex:1 1 100%}
             .lfhub-release select {width:100%}
-            .lfhub-release-help {font-size:12px;color:var(--color-subtle_text);display:flex;flex-wrap:wrap;gap:8px}
+            .lfhub-release-help {font-size:12px;color:var(--lfhub-secondary,var(--color-text));display:flex;flex-wrap:wrap;gap:8px}
             .lfhub-local-path {display:flex;gap:6px;flex-wrap:wrap;flex:1 1 100%;min-width:0}
-            .lfhub-local-path > span {width:100%;overflow-wrap:anywhere;font-size:12px;color:var(--color-subtle_text)}
-            .lfhub-context {display:flex;align-items:center;flex-wrap:wrap;gap:8px;color:var(--color-subtle_text);font-size:12px}
+            .lfhub-local-path > span {width:100%;overflow-wrap:anywhere;font-size:12px;color:var(--lfhub-secondary,var(--color-text))}
+            .lfhub-context {display:flex;align-items:center;flex-wrap:wrap;gap:8px;color:var(--lfhub-secondary,var(--color-text));font-size:12px}
             .lfhub-auto {display:flex;gap:8px;align-items:center;width:100%;margin:10px 0}
             .lfhub-pinned {display:flex;align-items:center;gap:4px}
             .lfhub-release-entry {margin-top:26px;padding-bottom:24px;border-bottom:1px solid var(--color-border)}
             .lfhub-release-entry .lfhub-release-heading {display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
-            .lfhub-release-entry time {font-size:12px;color:var(--color-subtle_text)}
+            .lfhub-release-entry time {font-size:12px;color:var(--lfhub-secondary,var(--color-text))}
             .lfhub-markdown {font-size:14px;line-height:1.7;overflow-wrap:anywhere;margin:20px 0;max-width:72ch}
             .lfhub-markdown > :first-child {margin-top:0!important}
             .lfhub-markdown > :last-child {margin-bottom:0!important}
@@ -1543,12 +2115,12 @@
             .lfhub-markdown li > p {margin:6px 0}
             .lfhub-markdown blockquote {margin:18px 0;padding:12px 16px;border-left:3px solid var(--color-accent);background:var(--color-back);color:var(--color-text)}
             .lfhub-markdown blockquote > :last-child {margin-bottom:0}
-            .lfhub-markdown code {font-family:var(--font-code,monospace);font-size:.9em;padding:2px 5px;background:var(--color-back);border-radius:3px}
-            .lfhub-markdown pre {max-width:100%;overflow-x:auto;margin:18px 0;padding:14px 16px;background:var(--color-back);border:1px solid var(--color-border);border-radius:3px;white-space:pre;line-height:1.6}
+            .lfhub-markdown code {font-family:var(--font-code,monospace);font-size:.9em;padding:2px 5px;background:var(--color-back);border-radius:var(--lfhub-radius)}
+            .lfhub-markdown pre {max-width:100%;overflow-x:auto;margin:18px 0;padding:14px 16px;background:var(--color-back);border:1px solid var(--color-border);border-radius:var(--lfhub-radius);white-space:pre;line-height:1.6}
             .lfhub-markdown pre code {padding:0;background:transparent;white-space:inherit}
             .lfhub-markdown a[href] {color:var(--color-accent);text-decoration:underline;text-underline-offset:3px;cursor:pointer}
             .lfhub-markdown a[href]:hover {filter:brightness(1.15)}
-            .lfhub-markdown img {display:block;max-width:100%;height:auto;max-height:360px;object-fit:contain;margin:18px 0;border-radius:3px}
+            .lfhub-markdown img {display:block;max-width:100%;height:auto;max-height:360px;object-fit:contain;margin:18px 0;border-radius:var(--lfhub-radius)}
             .lfhub-markdown table {display:block;max-width:100%;overflow-x:auto;border-collapse:collapse;margin:18px 0;font-size:13px}
             .lfhub-markdown :is(th,td) {padding:9px 12px;text-align:left;border:1px solid var(--color-border);line-height:1.5}
             .lfhub-markdown th {background:var(--color-back);font-weight:600}
@@ -1557,21 +2129,21 @@
             .lfhub-markdown summary {cursor:pointer;font-weight:500}
             .lfhub-banner {display:flex;align-items:center;gap:8px;padding:8px 14px;background:var(--color-back);border-bottom:1px solid var(--color-border);font-size:12px;flex-shrink:0;max-height:140px;overflow-y:auto}
             .lfhub-banner span {flex:1;min-width:0;overflow-wrap:anywhere}
-            .lfhub-banner small {display:block;color:var(--color-subtle_text);font-size:12px;margin-top:3px}
+            .lfhub-banner small {display:block;color:var(--lfhub-secondary,var(--color-text));font-size:12px;margin-top:3px}
             .lfhub-banner.error > i {color:var(--color-error)}
             .lfhub-banner button {font-size:12px;flex-shrink:0}
             .lfhub-progress {display:flex;align-items:center;gap:14px;padding:9px 14px;background:var(--color-back);font-size:12px;flex-shrink:0}
             .lfhub-progress span {flex:1;overflow-wrap:anywhere}
             .lfhub-progress progress {width:28%;height:6px;accent-color:var(--color-accent)}
-            .lfhub-empty {display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:32px 16px;text-align:center;color:var(--color-subtle_text);font-size:13px;min-height:160px}
-            .lfhub-footer {display:flex;align-items:center;gap:12px;padding:4px 14px;border-top:1px solid var(--color-border);font-size:11px;color:var(--color-subtle_text);flex-shrink:0}
+            .lfhub-empty {display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:32px 16px;text-align:center;color:var(--lfhub-secondary,var(--color-text));font-size:13px;min-height:160px}
+            .lfhub-footer {display:flex;align-items:center;gap:12px;padding:4px 14px;border-top:1px solid var(--color-border);font-size:11px;color:var(--lfhub-secondary,var(--color-text));flex-shrink:0}
             .lfhub-footer-source {margin-left:auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
             .lfhub-social {display:flex;gap:2px}
             .lfhub-social button {background:transparent;border-color:transparent;min-height:28px}
             .lfhub-root .spin {animation:lfhub-spin .9s linear infinite}
             @keyframes lfhub-spin {to {transform:rotate(360deg)}}
             @media (prefers-reduced-motion:reduce) {.lfhub-root .spin {animation:none}.lfhub-root button {transition:none}}
-            @media (max-width:860px) {
+            @container lightflow-hub (max-width:860px) {
                 .lfhub-workspace {grid-template-columns:260px minmax(0,1fr)}
                 .lfhub-navigation {padding-inline:10px;gap:0}
                 .lfhub-welcome {padding:24px 20px 0;min-height:360px}
@@ -1583,7 +2155,7 @@
                 .lfhub-essential-list {grid-template-columns:1fr}
                 .lfhub-health {font-size:11px}
             }
-            @media (max-width:600px) {
+            @container lightflow-hub (max-width:600px) {
                 .lfhub-root {height:calc(100vh - 96px)}
                 .lfhub-workspace {grid-template-columns:1fr}
                 .lfhub-catalog {max-height:42%;border-right:0;border-bottom:1px solid var(--color-border)}
@@ -1671,6 +2243,10 @@
     }
 
     function unload() {
+        pauseLearning();
+        learningRenderListener?.delete?.(); learningRenderListener = null;
+        learningRenderStarts?.delete?.(); learningRenderStarts = null;
+        learningProjectProperty?.delete?.(); learningProjectProperty = null;
         disposed = true;
         manifestEpoch++;
         clearTimeout(automaticTimer); automaticTimer = null;
@@ -1704,6 +2280,16 @@
         oninstall() { openHub(); },
         onload() {
             disposed = false;
+            if (globalThis.ModelProject && typeof globalThis.Property === 'function') learningProjectProperty = new Property(ModelProject,'string','lightflow_learning_project_id',{default:''});
+            learningRenderStarts = Blockbench.on?.('studio_render_pre_sample', event => {
+                if (event?.preview && globalThis.Project) learningRenderProjects.set(event.preview, learningProjectId());
+            });
+            learningRenderListener = Blockbench.on?.('studio_render_complete', event => {
+                if (learningSession && !event.cancelled && event.result?.ok && learningRenderProjects.get(event.preview) === learningSession.project && learningProjectId() === learningSession.project) {
+                    learningRenderCount++; learningPoll();
+                }
+                if (event?.preview) learningRenderProjects.delete(event.preview);
+            });
             // Standalone downloads include their About text; no store-side about.md exists.
             const plugin = globalThis.Plugins?.registered?.[HUB_ID];
             if (plugin && (plugin.source === 'file' || plugin.source === 'url')) plugin.new_repository_format = false;
@@ -1726,7 +2312,14 @@
                 },
                 getCatalog: () => manifestState.modules.map(module => ({...module, dependencies: [...module.dependencies]})),
                 getState: () => ({ref: currentRef, origin: manifestOrigin, preferences: loadPreferences()}),
-                __test: Object.freeze({compareVersions, sanitizeManifest, sanitizeRef, sanitizeFile, dependencyOrder, rawUrl, extractPluginVersion, stableReleaseCandidates, fetchPublishedReleases, fetchStableManifest, automaticCheck, validatePluginSource, installModules, sanitizeImagePath})
+                learning: Object.freeze({
+                    getLessons: learningLessons,
+                    getProgress: () => JSON.parse(JSON.stringify(learningProgress)),
+                    getSession: () => learningSession ? {id:learningSession.lesson.id,index:learningSession.index,project:learningSession.project,ready:learningSession.ready} : null,
+                    start: startLearning, pause:pauseLearning,
+                    open() { if (!LEARNING_AVAILABLE) return false;openHub();hubDialog.content_vue?.showPage?.('learn'); }
+                }),
+                __test: Object.freeze({compareVersions, sanitizeManifest, sanitizeRef, sanitizeFile, assertPluginSourceFilename, dependencyOrder, rawUrl, extractPluginVersion, stableReleaseCandidates, fetchPublishedReleases, fetchStableManifest, automaticCheck, validatePluginSource, installModules, sanitizeImagePath})
             });
             scheduleAutomaticCheck(3500);
         },

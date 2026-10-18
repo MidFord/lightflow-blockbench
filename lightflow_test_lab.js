@@ -81,6 +81,11 @@
         stressCubeCheckpoints: null,
         stressBatchCellSizes: null,
         stressBatchSourceVisibilityModes: null,
+        stressInteractionDiagnostics: false,
+        interactionMinFpsTarget: 60,
+        interactionMaxP95MsTarget: 16.667,
+        interactionMinBaselineFpsRatio: 0.8,
+        interactionMaxRenderToRafRatio: 1.1,
         gpuDrainTimeoutMs: 2500,
         runProjectSwitching: false,
         // Performance diagnostics own their temporary projects. They are never
@@ -127,7 +132,7 @@
 
     const MODE_LABELS = Object.freeze({
         classic: 'Classic',
-        pbr_metallic_roughness: 'Lightflow PBR',
+        pbr_metallic_roughness: 'CineFlow',
         lightflow: 'Lightflow',
         cinematic_craft: 'Rendercraft'
     });
@@ -444,12 +449,12 @@
             const element = root.document.createElement('div');
             element.id = 'lightflow_test_lab_progress_v2';
             Object.assign(element.style, {
-                position: 'fixed', right: '18px', bottom: '18px', width: '360px',
-                zIndex: '100000', padding: '14px 16px', borderRadius: '10px',
-                background: 'rgba(18, 21, 27, 0.96)', color: '#f2f4f8',
+                position: 'fixed', right: '18px', bottom: '18px', width: '360px', maxWidth: 'calc(100vw - 36px)', boxSizing: 'border-box',
+                zIndex: '100000', padding: '12px 16px', borderRadius: '12px',
+                background: 'var(--color-ui)', color: 'var(--color-text)',
                 boxShadow: '0 12px 38px rgba(0,0,0,0.42)',
-                fontFamily: 'Inter, Segoe UI, sans-serif', fontSize: '12px',
-                pointerEvents: 'none', border: '1px solid rgba(255,255,255,0.12)'
+                fontFamily: 'var(--font-main, Segoe UI, sans-serif)', fontSize: '12px',
+                pointerEvents: 'none', border: '1px solid var(--color-border)'
             });
             const header = root.document.createElement('div');
             Object.assign(header.style, { display: 'flex', justifyContent: 'space-between', gap: '12px', fontWeight: '600' });
@@ -461,18 +466,18 @@
             const track = root.document.createElement('div');
             Object.assign(track.style, {
                 height: '7px', margin: '10px 0', borderRadius: '999px',
-                overflow: 'hidden', background: 'rgba(255,255,255,0.12)'
+                overflow: 'hidden', background: 'var(--color-button)'
             });
             this.bar = root.document.createElement('div');
             Object.assign(this.bar.style, {
                 width: '0%', height: '100%', borderRadius: 'inherit',
-                background: '#66d9ef', transition: 'width 160ms linear, background 160ms ease'
+                background: 'var(--color-accent)', transition: 'width 160ms linear, background 160ms ease'
             });
             track.appendChild(this.bar);
             this.labelNode = root.document.createElement('div');
-            Object.assign(this.labelNode.style, { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' });
+            Object.assign(this.labelNode.style, { whiteSpace: 'normal', overflowWrap: 'anywhere', lineHeight: '1.4' });
             this.detailNode = root.document.createElement('div');
-            Object.assign(this.detailNode.style, { marginTop: '5px', color: 'rgba(242,244,248,0.68)' });
+            Object.assign(this.detailNode.style, { marginTop: '4px', color: 'var(--color-subtle_text)', lineHeight:'1.4' });
             element.append(header, track, this.labelNode, this.detailNode);
             root.document.body.appendChild(element);
             this.element = element;
@@ -689,7 +694,7 @@
                 'dynamicInstanceSourceDraws', 'savedDynamicInstanceDraws',
                 'batchingDiagnostics', 'sceneScalability', 'lightingScalability',
                 'aoMotionCadence', 'ambientOcclusion',
-                'rimMotionCadence',
+                'rimMotionCadence', 'rimSharedGlow',
                 'projectResourceReuse',
                 'materialRecipeCache', 'materialRecipeCacheHits', 'materialRecipeCacheMisses',
                 'shaderSourceHashCache', 'fragmentShaderVariantCache', 'warmupQueue',
@@ -1955,6 +1960,50 @@
             : null;
     }
 
+    function shaderStageName(type) {
+        if (type === 0x8B31) return 'vertex';
+        if (type === 0x8B30) return 'fragment';
+        return 'unknown';
+    }
+
+    function buildShaderProgramIdentity(sources = []) {
+        return sources.filter(Boolean).map(source => (
+            `${source.stage || 'unknown'}:${source.hash || 'unknown'}`
+        )).sort().join('|') || 'unknown';
+    }
+
+    function summarizeCompilationValues(values = []) {
+        const sorted = values.map(Number).filter(Number.isFinite).sort((left, right) => left - right);
+        return {
+            count: sorted.length,
+            min: sorted.length ? round(sorted[0]) : null,
+            median: sorted.length ? round(percentile(sorted, 0.5)) : null,
+            p95: sorted.length ? round(percentile(sorted, 0.95)) : null,
+            max: sorted.length ? round(sorted[sorted.length - 1]) : null
+        };
+    }
+
+    function summarizeShaderCompilationCapture(data = {}) {
+        const sources = Array.isArray(data.sources) ? data.sources : [];
+        const programs = Array.isArray(data.programs) ? data.programs : [];
+        const sourceSizeByStage = {};
+        ['vertex', 'fragment', 'unknown'].forEach(stage => {
+            const stageSources = sources.filter(source => (source.stage || 'unknown') === stage);
+            sourceSizeByStage[stage] = summarizeCompilationValues(stageSources.map(source => source.chars));
+        });
+        const coldObserved = programs.filter(program => program.temperature === 'cold_observed');
+        const warmRepeated = programs.filter(program => program.temperature === 'warm_repeated');
+        return {
+            classification: 'identity_first_observation_vs_repeat_within_capture',
+            uniqueSources: sources.length,
+            uniqueProgramIdentities: new Set(programs.map(program => program.identity).filter(Boolean)).size,
+            sourceSizeByStage,
+            coldObserved: summarizeCompilationValues(coldObserved.map(program => program.durationMs)),
+            warmRepeated: summarizeCompilationValues(warmRepeated.map(program => program.durationMs)),
+            allPrograms: summarizeCompilationValues(programs.map(program => program.durationMs))
+        };
+    }
+
     class ShaderCompilationCapture {
         constructor(report, context = () => ({})) {
             this.report = report;
@@ -1967,11 +2016,14 @@
             if (!gl || this.active) return false;
             this.active = true;
             const data = this.report.shaderCompilation = { scope: 'selected_preview_webgl_context', methods: {}, slowCalls: [], sources: [], programs: [], droppedPrograms: 0, droppedSlowCalls: 0 };
+            this.data = data;
             const sourceByShader = new WeakMap();
+            const shaderTypeByShader = new WeakMap();
             const sourcesByProgram = new WeakMap();
             const pendingLinks = new WeakMap();
-            const methods = ['shaderSource', 'compileShader', 'attachShader', 'linkProgram',
-                'getProgramParameter', 'getShaderParameter', 'getActiveUniform', 'getActiveAttrib',
+            const programIdentityObservations = new Map();
+            const methods = ['createShader', 'shaderSource', 'compileShader', 'attachShader', 'linkProgram',
+                'isProgram', 'getProgramParameter', 'getShaderParameter', 'getActiveUniform', 'getActiveAttrib',
                 'getUniformLocation', 'getAttribLocation', 'useProgram', 'drawElements', 'drawArrays',
                 'drawElementsInstanced', 'drawArraysInstanced',
                 // These existing queries/transfers may wait for queued GPU work.
@@ -1988,9 +2040,13 @@
                     if (name === 'shaderSource' && args[0] && typeof args[1] === 'string') {
                         let hash = 2166136261;
                         for (let i = 0; i < args[1].length; i++) hash = Math.imul(hash ^ args[1].charCodeAt(i), 16777619);
-                        const source = { hash: (hash >>> 0).toString(36), chars: args[1].length };
+                        const source = {
+                            hash: (hash >>> 0).toString(36),
+                            chars: args[1].length,
+                            stage: shaderStageName(shaderTypeByShader.get(args[0]))
+                        };
                         sourceByShader.set(args[0], source);
-                        if (!data.sources.some(item => item.hash === source.hash)) data.sources.push(source);
+                        if (!data.sources.some(item => item.hash === source.hash && item.stage === source.stage)) data.sources.push(source);
                     }
                     if (name === 'attachShader' && args[0] && args[1]) {
                         const sources = sourcesByProgram.get(args[0]) || [];
@@ -2002,17 +2058,28 @@
                     let result;
                     try { result = original.apply(this, args); return result; }
                     finally {
+                        if (name === 'createShader' && result && Number.isFinite(Number(args[0]))) {
+                            shaderTypeByShader.set(result, Number(args[0]));
+                        }
                         // KHR completion is asynchronous: cheap API calls can hide
                         // a minute of driver work between link and readiness.
                         if (name === 'getProgramParameter' && args[1] === 0x91B1 && result === true) {
                             const pending = pendingLinks.get(args[0]);
                             if (pending) {
+                                const sources = sourcesByProgram.get(args[0]) || [];
+                                const identity = buildShaderProgramIdentity(sources);
+                                const observation = programIdentityObservations.get(identity) || 0;
+                                programIdentityObservations.set(identity, observation + 1);
                                 if (data.programs.length < 512) data.programs.push({
                                     durationMs: round(now() - pending.started), ...pending.context,
-                                    sources: sourcesByProgram.get(args[0]) || [],
+                                    sources,
+                                    identity,
+                                    identityObservation: observation + 1,
+                                    temperature: observation === 0 ? 'cold_observed' : 'warm_repeated',
                                     completion: capture.context()
                                 });
                                 else data.droppedPrograms++;
+                                data.summary = summarizeShaderCompilationCapture(data);
                                 pendingLinks.delete(args[0]);
                             }
                         }
@@ -2045,6 +2112,7 @@
                 if (gl[name] === wrapped) gl[name] = original;
             });
             this.wrappers = [];
+            if (this.data) this.data.summary = summarizeShaderCompilationCapture(this.data);
         }
     }
 
@@ -2464,11 +2532,130 @@
             cleanup: false,
             shadows: options.shadows !== false,
             scene: options.scene !== false,
-            gizmos: options.gizmos === true
+            gizmos: options.gizmos === true,
+            render: options.render !== false
         }), null);
         changed.forEach(element => safe(() => element?.preview_controller?.updateTransform?.(element), null));
-        safe(() => root.LightManagerPrepareRender?.(getPreview(), { studio: false }), null);
-        safe(() => getPreview()?.render?.(), null);
+        if (options.renderNow !== false) {
+            safe(() => root.LightManagerPrepareRender?.(getPreview(), { studio: false }), null);
+            safe(() => getPreview()?.render?.(), null);
+        }
+    }
+
+    function buildStressInteractionLightFixtures(side) {
+        const resolvedSide = Math.max(1, Number(side) || 1);
+        const center = Math.max(0, (resolvedSide - 1) * 1.25 * 0.5);
+        const distance = Math.max(48, resolvedSide * 1.75);
+        return [
+            {
+                name: '__lightflow_test_stress_light_shadowed__',
+                position: [center - 6, 12, center + 4],
+                has_shadow: true,
+                distance,
+                shadow_resolution: 512
+            },
+            {
+                name: '__lightflow_test_stress_light_unshadowed__',
+                position: [center + 8, 10, center - 7],
+                has_shadow: false,
+                distance,
+                shadow_resolution: 512
+            }
+        ];
+    }
+
+    function captureInteractionRuntimeState() {
+        const diagnostics = safe(() => root.LightflowDiagnostics?.snapshot?.(), null) || {};
+        return {
+            warmup: toSerializable(getWarmupState()),
+            performance: toSerializable(diagnostics.performance || {}),
+            scheduling: toSerializable(root.ShaderEngine?.previewRenderSchedulingStats || {}),
+            animationRuntime: toSerializable(safe(() => root.LightflowAnimationRuntime?.snapshot?.(), null)),
+            renderer: getRendererSnapshot()
+        };
+    }
+
+    function beginShadowDirtyCapture(options = {}) {
+        const original = root.LightManagerMarkShadowsDirty;
+        let calls = 0;
+        if (typeof original !== 'function') {
+            return { stop: () => 0 };
+        }
+        const wrapped = function lightflowTestLabShadowDirtyCapture() {
+            calls++;
+            if (options.suppress === true) return undefined;
+            return original.apply(this, arguments);
+        };
+        root.LightManagerMarkShadowsDirty = wrapped;
+        return {
+            stop() {
+                if (root.LightManagerMarkShadowsDirty === wrapped) {
+                    root.LightManagerMarkShadowsDirty = original;
+                }
+                return calls;
+            }
+        };
+    }
+
+    function beginRenderBatchRebuildCapture() {
+        const engine = root.ShaderEngine;
+        const original = engine?.rebuildRenderBatches;
+        let calls = 0;
+        if (!engine || typeof original !== 'function') {
+            return { stop: () => 0 };
+        }
+        const wrapped = function lightflowTestLabRenderBatchRebuildCapture() {
+            calls++;
+            return original.apply(this, arguments);
+        };
+        engine.rebuildRenderBatches = wrapped;
+        return {
+            stop() {
+                if (engine.rebuildRenderBatches === wrapped) engine.rebuildRenderBatches = original;
+                return calls;
+            }
+        };
+    }
+
+    function summarizeInteractionRuntime(before, after, shadowDirtyCalls = 0, renderBatchRebuildCalls = 0) {
+        const beforePerformance = before?.performance || {};
+        const afterPerformance = after?.performance || {};
+        return {
+            shadowDirtyCalls: Math.max(0, Number(shadowDirtyCalls) || 0),
+            renderBatchRebuildCalls: Math.max(0, Number(renderBatchRebuildCalls) || 0),
+            programDelta: numericDelta(before?.renderer?.programs, after?.renderer?.programs),
+            warmupCompletedDelta: numericDelta(beforePerformance.warmupCompleted, afterPerformance.warmupCompleted),
+            warmupFailedDelta: numericDelta(beforePerformance.warmupFailed, afterPerformance.warmupFailed),
+            warmupStateBefore: before?.warmup?.state || null,
+            warmupStateAfter: after?.warmup?.state || null,
+            schedulingDelta: objectDelta(before?.scheduling, after?.scheduling, ['requests', 'reused', 'rendered']),
+            batchDelta: objectDelta(beforePerformance, afterPerformance, [
+                'renderBatches', 'renderBatchMembers', 'dynamicInstanceBatches', 'dynamicInstances'
+            ]),
+            interactiveBatchPromotionDelta: objectDelta(
+                beforePerformance.interactiveBatchPromotion,
+                afterPerformance.interactiveBatchPromotion,
+                ['attempts', 'localized', 'fallbacks', 'rebuiltBatches']
+            ),
+            interactiveBatchPromotionTiming: {
+                lastMs: Number.isFinite(Number(afterPerformance.interactiveBatchPromotion?.lastMs))
+                    ? Number(afterPerformance.interactiveBatchPromotion.lastMs)
+                    : null,
+                worstMs: Number.isFinite(Number(afterPerformance.interactiveBatchPromotion?.worstMs))
+                    ? Number(afterPerformance.interactiveBatchPromotion.worstMs)
+                    : null
+            },
+            aoMotionCadenceDelta: objectDelta(
+                beforePerformance.aoMotionCadence,
+                afterPerformance.aoMotionCadence,
+                ['evaluatedSignatures', 'reusedSignatures']
+            ),
+            rimMotionCadenceDelta: objectDelta(
+                beforePerformance.rimMotionCadence,
+                afterPerformance.rimMotionCadence,
+                ['evaluatedMasks', 'reusedMasks']
+            )
+        };
     }
 
     function restoreLightState(snapshot) {
@@ -4635,7 +4822,17 @@
                         });
                         if (this.config.suite === 'shader_compilation') return;
                     }
+                    // This scenario needs only the compact light-slot diagnostics.
+                    // Taking the full LightflowDiagnostics snapshot here also polls
+                    // frame-profiler GPU queries and walks every effect resource.
+                    // On a freshly changed ANGLE light topology that diagnostic read
+                    // can become the first driver synchronization point and distort
+                    // this topology benchmark by many seconds even though the actual
+                    // warm-up and preview render already completed. Prefer the exact
+                    // focused source and retain the full snapshot only as a legacy
+                    // compatibility fallback for older Shader Architect builds.
                     const lightPerformance = safe(() => (
+                        root.ShaderEngine?.getLightingScalabilityStats?.() ||
                         root.LightflowDiagnostics?.snapshot?.()?.performance?.lightingScalability
                     ), null);
                     scenario.lightingScalability = toSerializable(lightPerformance);
@@ -4850,6 +5047,7 @@
                     return;
                 }
                 const created = [];
+                const interactionLights = [];
                 const saved = root.Project?.saved;
                 const parent = safe(() => root.getCurrentGroup?.(), null);
                 const originalMode = getMode();
@@ -4881,6 +5079,7 @@
                             this.config.stressCubeCount
                         ].filter(count => count > 0))).sort((left, right) => left - right);
                     scenario.drawScaling = [];
+                    scenario.interactionScaling = [];
                     for (const checkpoint of checkpoints) {
                         const buildStarted = now();
                         const checkpointStart = created.length;
@@ -4897,6 +5096,47 @@
                         const added = created.slice(checkpointStart);
                         safe(() => root.ShaderEngine?.updateCubes?.(added, 'test_lab_stress_scene'), null);
                         safe(() => root.Canvas?.updateView?.({ elements: added, element_aspects: { geometry: true, faces: true } }), null);
+                        if (
+                            this.config.stressInteractionDiagnostics &&
+                            checkpoint === checkpoints[checkpoints.length - 1] &&
+                            !interactionLights.length &&
+                            typeof root.LightElement === 'function'
+                        ) {
+                            const lightFixtures = buildStressInteractionLightFixtures(side);
+                            lightFixtures.forEach(fixture => {
+                                const light = new root.LightElement({
+                                    name: fixture.name,
+                                    light_type: 'point',
+                                    position: fixture.position,
+                                    color: [255, 255, 255],
+                                    intensity: 1.0,
+                                    distance: fixture.distance,
+                                    has_shadow: fixture.has_shadow,
+                                    shadow_resolution: fixture.shadow_resolution,
+                                    studio_shadow_resolution: 0
+                                });
+                                if (typeof light.addTo === 'function') light.addTo(parent);
+                                if (typeof light.init === 'function') light.init();
+                                root.Blockbench?.dispatchEvent?.('add_light', {
+                                    object: light,
+                                    source: 'lightflow_test_lab_stress_interaction'
+                                });
+                                interactionLights.push(light);
+                            });
+                            notifyLightsChanged(interactionLights, {
+                                shadows: true,
+                                scene: true,
+                                gizmos: false,
+                                renderNow: false
+                            });
+                            scenario.interactionFixtureLights = interactionLights.map(light => ({
+                                uuid: light.uuid || null,
+                                name: light.name || null,
+                                type: light.light_type || null,
+                                hasShadow: light.has_shadow !== false,
+                                shadowResolution: light.shadow_resolution ?? null
+                            }));
+                        }
                         const buildCpuMs = round(now() - buildStarted);
                         await frames(4);
                         const checkpointWarmup = await waitForWarmupStable(
@@ -4974,7 +5214,7 @@
                             ));
                             const frameTiming = toSerializable(scenario.frameTiming);
                             const renderThroughput = toSerializable(scenario.renderThroughput);
-                            scenario.drawScaling.push({
+                            const scalingPoint = {
                                 objects: checkpoint,
                                 mode,
                                 batchCellSize,
@@ -4996,7 +5236,155 @@
                                     renderThroughput
                                 ),
                                 limiter
-                            });
+                            };
+                            scenario.drawScaling.push(scalingPoint);
+
+                            const shouldMeasureInteraction = !!(
+                                this.config.stressInteractionDiagnostics &&
+                                checkpoint === checkpoints[checkpoints.length - 1] &&
+                                mode === 'cinematic_craft' &&
+                                batchCellSize === requestedBatchCellSizes[0] &&
+                                hideSuppressedSources === (requestedSourceVisibilityModes[0] === true) &&
+                                scenario.interactionScaling.length === 0
+                            );
+                            if (shouldMeasureInteraction) {
+                                const makeInteractionScenario = (kind, label) => ({
+                                    id: `75.stress.scene_scalability.${kind}`,
+                                    label,
+                                    status: 'running',
+                                    telemetry: [],
+                                    operationTimings: {},
+                                    milestones: [],
+                                    errors: [],
+                                    warnings: []
+                                });
+                                const guardrailOptions = {
+                                    minFpsTarget: this.config.interactionMinFpsTarget,
+                                    maxP95MsTarget: this.config.interactionMaxP95MsTarget,
+                                    minBaselineFpsRatio: this.config.interactionMinBaselineFpsRatio,
+                                    maxRenderToRafRatio: this.config.interactionMaxRenderToRafRatio
+                                };
+                                const baseline = {
+                                    frameTiming: scalingPoint.frameTiming,
+                                    renderThroughput: scalingPoint.renderThroughput
+                                };
+
+                                const elementScenario = makeInteractionScenario(
+                                    'element_transform',
+                                    'Rendercraft heavy-scene element transform'
+                                );
+                                const transformTarget = created[Math.floor(created.length / 2)] || created[0] || null;
+                                await this.measureEditTransform(elementScenario, transformTarget);
+                                if (elementScenario.status === 'running') elementScenario.status = 'passed';
+                                elementScenario.guardrail = buildInteractionGuardrail(
+                                    elementScenario,
+                                    baseline,
+                                    guardrailOptions
+                                );
+                                scenario.interactionScaling.push(toSerializable({
+                                    objects: checkpoint,
+                                    mode,
+                                    kind: 'element_transform',
+                                    ...elementScenario
+                                }));
+                                if (elementScenario.guardrail.status === 'over_target') {
+                                    scenario.status = 'failed';
+                                    scenario.errors.push({
+                                        type: 'interaction_guardrail_failed',
+                                        kind: 'element_transform',
+                                        guardrail: toSerializable(elementScenario.guardrail)
+                                    });
+                                }
+                                await sleep(Math.max(250, this.config.settleDurationMs));
+                                await frames(2);
+
+                                const isolationCases = [
+                                    {
+                                        kind: 'element_transform_no_shadow_update',
+                                        label: 'Rendercraft element transform without shadow-map invalidation',
+                                        options: { suppressShadowUpdates: true }
+                                    },
+                                    {
+                                        kind: 'element_transform_no_ao',
+                                        label: 'Rendercraft element transform without AO pass',
+                                        options: { disableAo: true }
+                                    },
+                                    {
+                                        kind: 'element_transform_no_shadow_or_ao',
+                                        label: 'Rendercraft element transform without shadow-map invalidation or AO pass',
+                                        options: { suppressShadowUpdates: true, disableAo: true }
+                                    }
+                                ];
+                                for (const isolationCase of isolationCases) {
+                                    const isolationScenario = makeInteractionScenario(
+                                        isolationCase.kind,
+                                        isolationCase.label
+                                    );
+                                    isolationScenario.diagnosticOnly = true;
+                                    await this.measureEditTransform(
+                                        isolationScenario,
+                                        transformTarget,
+                                        isolationCase.options
+                                    );
+                                    if (isolationScenario.status === 'running') isolationScenario.status = 'passed';
+                                    isolationScenario.guardrail = buildInteractionGuardrail(
+                                        isolationScenario,
+                                        baseline,
+                                        guardrailOptions
+                                    );
+                                    scenario.interactionScaling.push(toSerializable({
+                                        objects: checkpoint,
+                                        mode,
+                                        kind: isolationCase.kind,
+                                        diagnosticOnly: true,
+                                        ...isolationScenario
+                                    }));
+                                    await sleep(Math.max(250, this.config.settleDurationMs));
+                                    await frames(2);
+                                }
+
+                                const availableLightTargets = interactionLights.length
+                                    ? interactionLights.slice().sort((left, right) => Number(left.has_shadow !== false) - Number(right.has_shadow !== false))
+                                    : (Array.isArray(root.LightElement?.all) ? root.LightElement.all : [])
+                                        .filter(light => Array.isArray(light?.position))
+                                        .slice(0, 1);
+                                for (const lightTarget of availableLightTargets) {
+                                    const fixtureLight = interactionLights.includes(lightTarget);
+                                    const shadowed = lightTarget.has_shadow !== false;
+                                    const lightKind = fixtureLight
+                                        ? `light_transform_${shadowed ? 'shadow_on' : 'shadow_off'}`
+                                        : 'light_transform';
+                                    const lightScenario = makeInteractionScenario(
+                                        lightKind,
+                                        fixtureLight
+                                            ? `Rendercraft heavy-scene light transform (${shadowed ? 'shadows on' : 'shadows off'})`
+                                            : 'Rendercraft heavy-scene light transform'
+                                    );
+                                    await this.measureLightTransform(lightScenario, lightTarget);
+                                    if (lightScenario.status === 'running') lightScenario.status = 'passed';
+                                    lightScenario.guardrail = buildInteractionGuardrail(
+                                        lightScenario,
+                                        baseline,
+                                        guardrailOptions
+                                    );
+                                    scenario.interactionScaling.push(toSerializable({
+                                        objects: checkpoint,
+                                        mode,
+                                        kind: lightKind,
+                                        ...lightScenario
+                                    }));
+                                    if (lightScenario.guardrail.status === 'over_target') {
+                                        scenario.status = 'failed';
+                                        scenario.errors.push({
+                                            type: 'interaction_guardrail_failed',
+                                            kind: lightKind,
+                                            guardrail: toSerializable(lightScenario.guardrail)
+                                        });
+                                    }
+                                    await sleep(Math.max(250, this.config.settleDurationMs));
+                                    await frames(2);
+                                }
+                            }
                         }
                         }
                         }
@@ -5033,6 +5421,16 @@
                     scenario.sceneScalabilityByMode = toSerializable(latestByMode);
                     const lastPoint = scenario.drawScaling[scenario.drawScaling.length - 1] || null;
                     scenario.sceneScalability = toSerializable(lastPoint?.performance || null);
+                    scenario.phase1ScalingGuardrails = toSerializable(buildRendercraftPhase1ScalingGuardrails(
+                        scenario.drawScaling,
+                        {
+                            checkpoints: [500, 1000, 2000].filter(count => count <= created.length),
+                            batchCellSize: requestedBatchCellSizes[0],
+                            hideSuppressedSources: requestedSourceVisibilityModes[0] === true,
+                            cpuP95RatioMax: 1.25,
+                            gpuP95RatioMax: 2.0
+                        }
+                    ));
                     const batchingGatePoints = requestedModes.length > 1
                         ? scenario.drawScaling.filter(point => (
                             point.objects === created.length &&
@@ -5073,6 +5471,26 @@
                     if (root.ShaderEngine) {
                         root.ShaderEngine.renderBatchSpatialCellSize = originalBatchCellSize;
                         root.ShaderEngine.renderBatchHideSuppressedSources = originalHideSuppressedSources;
+                    }
+                    if (interactionLights.length) {
+                        const cleanupLights = interactionLights.slice();
+                        cleanupLights.forEach(light => {
+                            safe(() => light.remove?.(), null);
+                            safe(() => root.Blockbench?.dispatchEvent?.('remove_light', {
+                                object: light,
+                                source: 'lightflow_test_lab_stress_interaction_cleanup'
+                            }), null);
+                        });
+                        safe(() => root.update_light_element_callback?.({
+                            elements: cleanupLights,
+                            cleanup: true,
+                            shadows: true,
+                            scene: true,
+                            gizmos: false,
+                            render: true
+                        }), null);
+                        await sleep(Math.max(400, this.config.settleDurationMs));
+                        await frames(2);
                     }
                     created.forEach(cube => safe(() => cube.remove?.(), null));
                     safe(() => root.ShaderEngine?.updateAllCubes?.('test_lab_stress_scene_cleanup'), null);
@@ -5671,8 +6089,8 @@
             }
         }
 
-        async measureEditTransform(scenario) {
-            const cube = (root.Cube?.selected?.[0] || root.Cube?.all?.find?.(item => item?.visibility !== false));
+        async measureEditTransform(scenario, targetElement = null, interactionOptions = {}) {
+            const cube = targetElement || root.Cube?.selected?.[0] || root.Cube?.all?.find?.(item => item?.visibility !== false);
             if (!cube) {
                 scenario.status = 'skipped';
                 scenario.reason = 'no_cube';
@@ -5687,7 +6105,23 @@
             const beforeStatistics = safe(() => root.LightflowFrameProfiler?.getStatistics?.(preview), null);
             const warmupBefore = getWarmupState();
             const performanceBefore = getArchitectureSnapshot()?.diagnostics?.performance || {};
+            const interactionBefore = captureInteractionRuntimeState();
+            const isolationBefore = toSerializable(safe(() => root.LightflowPerformanceIsolation?.get?.(), {})) || {};
+            if (interactionOptions.disableAo === true) {
+                root.LightflowPerformanceIsolation?.set?.('ao', false);
+                await frames(2);
+            }
+            const shadowCapture = beginShadowDirtyCapture({
+                suppress: interactionOptions.suppressShadowUpdates === true
+            });
+            const renderBatchRebuildCapture = beginRenderBatchRebuildCapture();
+            let shadowDirtyCalls = 0;
+            let renderBatchRebuildCalls = 0;
             scenario.expectedDurationMs = this.config.scenarioDurationMs;
+            scenario.interactionOptions = {
+                suppressShadowUpdates: interactionOptions.suppressShadowUpdates === true,
+                disableAo: interactionOptions.disableAo === true
+            };
             scenario.element = { uuid: cube.uuid || null, name: cube.name || null };
             scenario.transformMethod = 'Blockbench model data + Canvas.updateView(transform) + update_transform event';
             try {
@@ -5711,7 +6145,23 @@
                 scenario.frameTimestampsMs = sampler.timestamps.slice();
                 scenario.frameSampleStartMs = round(sampler.startedAt - this.capture.startedAt);
             } finally {
+                shadowDirtyCalls = shadowCapture.stop();
+                renderBatchRebuildCalls = renderBatchRebuildCapture.stop();
+                const interactionAfter = captureInteractionRuntimeState();
+                scenario.interactionAudit = summarizeInteractionRuntime(
+                    interactionBefore,
+                    interactionAfter,
+                    shadowDirtyCalls,
+                    renderBatchRebuildCalls
+                );
                 restoreCubeState(cube, state);
+                if (interactionOptions.disableAo === true) {
+                    const previousAoOverride = Object.prototype.hasOwnProperty.call(isolationBefore, 'ao')
+                        ? isolationBefore.ao
+                        : true;
+                    root.LightflowPerformanceIsolation?.set?.('ao', previousAoOverride !== false);
+                    await frames(2);
+                }
             }
             await frames(2);
             const warmupAfter = getWarmupState();
@@ -5947,9 +6397,9 @@
             }
         }
 
-        async measureLightTransform(scenario) {
+        async measureLightTransform(scenario, targetElement = null) {
             const lights = Array.isArray(root.LightElement?.all) ? root.LightElement.all : [];
-            const element = lights.find(light => Array.isArray(light?.position));
+            const element = targetElement || lights.find(light => Array.isArray(light?.position));
             if (!element) {
                 scenario.status = 'skipped';
                 scenario.reason = 'no_light';
@@ -5965,6 +6415,13 @@
             }
             scenario.light = { uuid: element.uuid || null, name: element.name || null, type: element.light_type || null };
             const sampler = new FrameSampler(this.config.scenarioDurationMs);
+            const preview = getPreview();
+            const beforeStatistics = safe(() => root.LightflowFrameProfiler?.getStatistics?.(preview), null);
+            const interactionBefore = captureInteractionRuntimeState();
+            const shadowCapture = beginShadowDirtyCapture();
+            const renderBatchRebuildCapture = beginRenderBatchRebuildCapture();
+            let shadowDirtyCalls = 0;
+            let renderBatchRebuildCalls = 0;
             scenario.expectedDurationMs = this.config.scenarioDurationMs;
             try {
                 scenario.frameTiming = await sampler.run((frameIndex, timestamp, elapsed) => {
@@ -5972,10 +6429,15 @@
                     element.position[0] = base[0] + Math.sin(t * Math.PI * 6) * 4;
                     element.position[2] = base[2] + Math.cos(t * Math.PI * 6) * 4;
                     const operationStarted = now();
-                    notifyLightsChanged([element], { shadows: true, scene: true });
+                    // Follow the same path as Blockbench's real light gizmo. The
+                    // preview controller queues one scoped Light Manager update;
+                    // forcing LightManagerPrepareRender + preview.render here used
+                    // to add synthetic work that native dragging does not perform.
+                    element.preview_controller?.updateTransform?.(element);
                     (scenario.operationTimings.lightUpdateMs ||= []).push(now() - operationStarted);
                     this.sampleTelemetry(scenario, elapsed);
                 });
+                this.captureRenderThroughput(scenario, beforeStatistics, preview);
                 scenario.operationTimings.lightUpdate = summarizeFrameDeltas(
                     scenario.operationTimings.lightUpdateMs || [],
                     (scenario.operationTimings.lightUpdateMs || []).reduce((sum, value) => sum + value, 0)
@@ -5985,6 +6447,15 @@
                 scenario.frameTimestampsMs = sampler.timestamps.slice();
                 scenario.frameSampleStartMs = round(sampler.startedAt - this.capture.startedAt);
             } finally {
+                shadowDirtyCalls = shadowCapture.stop();
+                renderBatchRebuildCalls = renderBatchRebuildCapture.stop();
+                const interactionAfter = captureInteractionRuntimeState();
+                scenario.interactionAudit = summarizeInteractionRuntime(
+                    interactionBefore,
+                    interactionAfter,
+                    shadowDirtyCalls,
+                    renderBatchRebuildCalls
+                );
                 restoreLightState(snapshot);
             }
         }
@@ -6165,6 +6636,11 @@
         output.stressBatchSourceVisibilityModes = Array.isArray(output.stressBatchSourceVisibilityModes)
             ? Array.from(new Set(output.stressBatchSourceVisibilityModes.map(Boolean)))
             : null;
+        output.stressInteractionDiagnostics = output.stressInteractionDiagnostics === true;
+        output.interactionMinFpsTarget = clamp(output.interactionMinFpsTarget, 1, 360);
+        output.interactionMaxP95MsTarget = clamp(output.interactionMaxP95MsTarget, 1, 1000);
+        output.interactionMinBaselineFpsRatio = clamp(output.interactionMinBaselineFpsRatio, 0.05, 1.5);
+        output.interactionMaxRenderToRafRatio = clamp(output.interactionMaxRenderToRafRatio, 1, 4);
         output.gpuDrainTimeoutMs = clamp(output.gpuDrainTimeoutMs, 250, 10000);
         output.runProjectSwitching = output.runProjectSwitching === true;
         output.bootstrapProject = output.bootstrapProject === true;
@@ -6321,6 +6797,146 @@
                 : (limiter?.id || 'collecting'),
             topCpuPasses,
             topGpuPasses
+        };
+    }
+
+    function buildRendercraftPhase1ScalingGuardrails(points = [], options = {}) {
+        const checkpoints = Array.isArray(options.checkpoints) && options.checkpoints.length
+            ? options.checkpoints.map(Number).filter(Number.isFinite)
+            : [500, 1000, 2000];
+        const batchCellSize = Number.isFinite(Number(options.batchCellSize))
+            ? Number(options.batchCellSize)
+            : null;
+        const hideSuppressedSources = options.hideSuppressedSources === true;
+        const cpuP95RatioMax = Number(options.cpuP95RatioMax) || 1.25;
+        const gpuP95RatioMax = Number(options.gpuP95RatioMax) || 2.0;
+        const finite = value => Number.isFinite(Number(value)) ? Number(value) : null;
+        const ratio = (numerator, denominator) => {
+            const top = finite(numerator);
+            const bottom = finite(denominator);
+            return top !== null && bottom !== null && bottom > 0 ? round(top / bottom, 3) : null;
+        };
+        const compactPoint = point => point ? {
+            cpuP95Ms: finite(point.analysis?.cpuP95Ms),
+            gpuP95Ms: finite(point.analysis?.gpuP95Ms),
+            effectiveFps: finite(point.renderThroughput?.effectiveFps),
+            rendererCalls: finite(point.performance?.rendererCallsLastFrame),
+            rendererTriangles: finite(point.performance?.rendererTrianglesLastFrame),
+            estimatedSceneDraws: finite(point.performance?.estimatedSceneDrawsPerFrame)
+        } : null;
+        const rows = checkpoints.map(objects => {
+            const candidates = points.filter(point => (
+                Number(point?.objects) === objects &&
+                (batchCellSize === null || Number(point?.batchCellSize) === batchCellSize) &&
+                (point?.hideSuppressedSources === true) === hideSuppressedSources
+            ));
+            const lightflow = candidates.find(point => point.mode === 'lightflow') || null;
+            const rendercraft = candidates.find(point => point.mode === 'cinematic_craft') || null;
+            const classic = candidates.find(point => point.mode === 'classic') || null;
+            const lightflowMetrics = compactPoint(lightflow);
+            const rendercraftMetrics = compactPoint(rendercraft);
+            const ratios = {
+                cpuP95: ratio(rendercraftMetrics?.cpuP95Ms, lightflowMetrics?.cpuP95Ms),
+                gpuP95: ratio(rendercraftMetrics?.gpuP95Ms, lightflowMetrics?.gpuP95Ms),
+                rendererCalls: ratio(rendercraftMetrics?.rendererCalls, lightflowMetrics?.rendererCalls),
+                rendererTriangles: ratio(rendercraftMetrics?.rendererTriangles, lightflowMetrics?.rendererTriangles)
+            };
+            const measuredRatios = [ratios.cpuP95, ratios.gpuP95].filter(Number.isFinite);
+            const overTarget = (
+                (ratios.cpuP95 !== null && ratios.cpuP95 > cpuP95RatioMax) ||
+                (ratios.gpuP95 !== null && ratios.gpuP95 > gpuP95RatioMax)
+            );
+            return {
+                objects,
+                batchCellSize,
+                hideSuppressedSources,
+                classic: compactPoint(classic),
+                lightflow: lightflowMetrics,
+                rendercraft: rendercraftMetrics,
+                ratios,
+                status: measuredRatios.length < 2 ? 'insufficient_data' : (overTarget ? 'over_target' : 'within_targets')
+            };
+        });
+        const measuredRows = rows.filter(row => row.status !== 'insufficient_data');
+        const maxCpuRatio = measuredRows.reduce((value, row) => Math.max(value, row.ratios.cpuP95 || 0), 0) || null;
+        const maxGpuRatio = measuredRows.reduce((value, row) => Math.max(value, row.ratios.gpuP95 || 0), 0) || null;
+        return {
+            phase: 'rendercraft_phase1',
+            reference: { batchCellSize, hideSuppressedSources },
+            targets: { cpuP95RatioMax, gpuP95RatioMax },
+            rows,
+            measuredRows: measuredRows.length,
+            maxCpuP95Ratio: maxCpuRatio === null ? null : round(maxCpuRatio, 3),
+            maxGpuP95Ratio: maxGpuRatio === null ? null : round(maxGpuRatio, 3),
+            status: !measuredRows.length
+                ? 'insufficient_data'
+                : (measuredRows.some(row => row.status === 'over_target') ? 'over_target' : 'within_targets')
+        };
+    }
+
+    function buildInteractionGuardrail(interaction = {}, baseline = {}, options = {}) {
+        const finite = value => Number.isFinite(Number(value)) ? Number(value) : null;
+        const interactionFps = finite(
+            interaction.renderThroughput?.effectiveFps ??
+            interaction.frameTiming?.activeEffectiveFps ??
+            interaction.frameTiming?.effectiveFps
+        );
+        const baselineFps = finite(
+            baseline.renderThroughput?.effectiveFps ??
+            baseline.frameTiming?.activeEffectiveFps ??
+            baseline.frameTiming?.effectiveFps
+        );
+        const interactionP95Ms = finite(interaction.frameTiming?.p95Ms);
+        const baselineP95Ms = finite(baseline.frameTiming?.p95Ms);
+        const renderToRafRatio = finite(interaction.renderThroughput?.renderToRafRatio);
+        const minFpsTarget = finite(options.minFpsTarget) ?? 60;
+        const maxP95MsTarget = finite(options.maxP95MsTarget) ?? 16.667;
+        const minBaselineFpsRatio = finite(options.minBaselineFpsRatio) ?? 0.8;
+        const maxRenderToRafRatio = finite(options.maxRenderToRafRatio) ?? 1.1;
+        const fpsRatio = interactionFps !== null && baselineFps !== null && baselineFps > 0
+            ? round(interactionFps / baselineFps, 3)
+            : null;
+        const relativeP95Limit = baselineP95Ms !== null
+            ? Math.max(maxP95MsTarget, baselineP95Ms * 1.25)
+            : maxP95MsTarget;
+        const audit = interaction.interactionAudit || interaction.transformWarmupAudit || {};
+        const warmupCompletedDelta = finite(audit.warmupCompletedDelta ?? audit.completedDelta) ?? 0;
+        const warmupFailedDelta = finite(audit.warmupFailedDelta ?? audit.failedDelta) ?? 0;
+        const warmupStateAfter = audit.warmupStateAfter || audit.after?.state || null;
+        const programDelta = finite(audit.programDelta);
+        const renderBatchRebuildCalls = finite(audit.renderBatchRebuildCalls);
+        const checks = {
+            relativeFps: fpsRatio === null ? null : fpsRatio >= minBaselineFpsRatio,
+            frameP95: interactionP95Ms === null ? null : interactionP95Ms <= relativeP95Limit,
+            renderToRaf: renderToRafRatio === null ? null : renderToRafRatio <= maxRenderToRafRatio,
+            noTransformWarmup: warmupCompletedDelta <= 0 && warmupFailedDelta <= 0 && warmupStateAfter !== 'COMPILING',
+            noProgramGrowth: programDelta === null ? null : programDelta <= 0,
+            noStructuralBatchRebuild: renderBatchRebuildCalls === null ? null : renderBatchRebuildCalls <= 0
+        };
+        const measuredChecks = Object.values(checks).filter(value => value !== null);
+        return {
+            targets: {
+                minFpsTarget,
+                maxP95MsTarget,
+                minBaselineFpsRatio,
+                maxRenderToRafRatio
+            },
+            baseline: {
+                effectiveFps: baselineFps,
+                p95Ms: baselineP95Ms
+            },
+            interaction: {
+                effectiveFps: interactionFps,
+                p95Ms: interactionP95Ms,
+                renderToRafRatio,
+                fpsRatioToBaseline: fpsRatio,
+                meetsAbsoluteFpsTarget: interactionFps === null ? null : interactionFps >= minFpsTarget,
+                meetsAbsoluteP95Target: interactionP95Ms === null ? null : interactionP95Ms <= maxP95MsTarget
+            },
+            checks,
+            status: !measuredChecks.length
+                ? 'insufficient_data'
+                : (measuredChecks.every(Boolean) ? 'within_targets' : 'over_target')
         };
     }
 
@@ -6969,6 +7585,7 @@
                 drawScaling: sceneScalabilityScenario.drawScaling || [],
                 performance: sceneScalabilityScenario.sceneScalability || null,
                 performanceByMode: sceneScalabilityScenario.sceneScalabilityByMode || null,
+                phase1Guardrails: sceneScalabilityScenario.phase1ScalingGuardrails || null,
                 warmup: sceneScalabilityScenario.sceneWarmupTask ? {
                     durationMs: sceneScalabilityScenario.sceneWarmupTask.durationMs ?? null,
                     liveScenePrimeMs: sceneScalabilityScenario.sceneWarmupTask.liveScenePrimeMs ?? null,
@@ -7095,6 +7712,7 @@
             ''
         ];
         if (report.shaderCompilation) {
+            const compilationSummary = report.shaderCompilation.summary || summarizeShaderCompilationCapture(report.shaderCompilation);
             lines.push('## Shader driver timing', '',
                 'Selected preview context; instrumentation enabled for this run.', '',
                 '| WebGL call | Calls | Total ms | Worst ms |',
@@ -7109,7 +7727,19 @@
                 '| Scenario at link | Elapsed ms | Shader fingerprints |', '| --- | ---: | --- |');
             (report.shaderCompilation.programs || []).slice()
                 .sort((a, b) => b.durationMs - a.durationMs).slice(0, 10)
-                .forEach(program => lines.push(`| ${program.scenarioId || ''} | ${program.durationMs} | ${(program.sources || []).filter(Boolean).map(source => `${source.hash} (${source.chars})`).join(', ')} |`));
+                .forEach(program => lines.push(`| ${program.scenarioId || ''} | ${program.durationMs} | ${(program.sources || []).filter(Boolean).map(source => `${source.stage || 'unknown'}:${source.hash} (${source.chars})`).join(', ')} |`));
+            lines.push('', '### Actual driver shader source sizes', '',
+                '| Stage | Unique sources | Median chars | p95 chars | Max chars |',
+                '| --- | ---: | ---: | ---: | ---: |');
+            ['vertex', 'fragment', 'unknown'].forEach(stage => {
+                const stats = compilationSummary.sourceSizeByStage?.[stage] || {};
+                lines.push(`| ${stage} | ${stats.count ?? 0} | ${stats.median ?? ''} | ${stats.p95 ?? ''} | ${stats.max ?? ''} |`);
+            });
+            lines.push('', '### Cold/warm identity observations', '',
+                `- Classification: ${compilationSummary.classification || 'unavailable'}`,
+                `- Unique program identities: ${compilationSummary.uniqueProgramIdentities ?? 'unavailable'}`,
+                `- First-observed completion median/p95/max: ${compilationSummary.coldObserved?.median ?? 'n/a'} / ${compilationSummary.coldObserved?.p95 ?? 'n/a'} / ${compilationSummary.coldObserved?.max ?? 'n/a'} ms`,
+                `- Repeated-identity completion median/p95/max: ${compilationSummary.warmRepeated?.median ?? 'n/a'} / ${compilationSummary.warmRepeated?.p95 ?? 'n/a'} / ${compilationSummary.warmRepeated?.max ?? 'n/a'} ms`);
             lines.push('');
         }
         const performanceDiagnostics = report.performanceDiagnostics || buildPerformanceDiagnosticSummary(report);
@@ -7302,6 +7932,17 @@
                             : '';
                         lines.push(`| ${point.mode || ''} | ${point.batchCellSize ?? ''} | ${reduction} | ${coverage} | ${diagnostics.minimumGroups ?? ''} | ${diagnostics.mergeFailedGroups ?? ''} | ${diagnostics.largestGroupSourceDraws ?? ''} | ${blockers.replace(/\|/g, '\\|')} |`);
                     });
+                    lines.push('');
+                }
+                const phase1 = scalability.phase1Guardrails;
+                if (phase1?.rows?.length) {
+                    lines.push('### Rendercraft Phase 1 scaling guardrails', '',
+                        `Reference batch cell: ${phase1.reference?.batchCellSize ?? 'default'}; hidden sources: ${phase1.reference?.hideSuppressedSources === true ? 'yes' : 'no'}. Targets are diagnostic only: CPU ratio ≤ ${phase1.targets?.cpuP95RatioMax ?? 1.25}×, GPU ratio ≤ ${phase1.targets?.gpuP95RatioMax ?? 2}×.`, '',
+                        '| Objects | LF CPU p95 | RC CPU p95 | CPU ratio | LF GPU p95 | RC GPU p95 | GPU ratio | Call ratio | Triangle ratio | Status |',
+                        '|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|');
+                    phase1.rows.forEach(row => lines.push(
+                        `| ${row.objects} | ${row.lightflow?.cpuP95Ms ?? ''} | ${row.rendercraft?.cpuP95Ms ?? ''} | ${row.ratios?.cpuP95 ?? ''} | ${row.lightflow?.gpuP95Ms ?? ''} | ${row.rendercraft?.gpuP95Ms ?? ''} | ${row.ratios?.gpuP95 ?? ''} | ${row.ratios?.rendererCalls ?? ''} | ${row.ratios?.rendererTriangles ?? ''} | ${row.status || ''} |`
+                    ));
                     lines.push('');
                 }
             }
@@ -8047,6 +8688,19 @@
             scenarioDurationMs: 2200, settleDurationMs: 600,
             profilerMode: 'normal', freezeAdaptiveBudget: true
         }, options),
+        runInteractionDiagnostics: options => runPreset({
+            suite: 'rendercraft_interaction', runCoreScenarios: false,
+            includeStudio: false, includeHeavyStudio: false,
+            runStress: true, stressSceneOnly: true,
+            stressCubeCount: 2000,
+            stressCubeCheckpoints: [2000],
+            stressSceneModes: ['cinematic_craft'],
+            stressInteractionDiagnostics: true,
+            runSoak: false, runContextRecovery: false,
+            runLeakAudit: true, captureScreenshots: false,
+            scenarioDurationMs: 2200, settleDurationMs: 500,
+            profilerMode: 'normal', freezeAdaptiveBudget: true
+        }, options),
         runSceneCullingDiagnostics: options => runPreset({
             suite: 'scene_culling', runCoreScenarios: false,
             includeStudio: false, includeHeavyStudio: false,
@@ -8221,6 +8875,8 @@
         summarizeFrameDeltas,
         summarizeFramePacing,
         buildPerformanceDiagnosticSummary,
+        buildInteractionGuardrail,
+        buildStressInteractionLightFixtures,
         classifyPerformanceBottlenecks,
         performanceFramesToCsv,
         buildPerformanceBootstrapFixture,
@@ -8235,6 +8891,10 @@
             TestRunner,
             RuntimeCapture,
             ShaderCompilationCapture,
+            summarizeShaderCompilationCapture,
+            buildRendercraftPhase1ScalingGuardrails,
+            buildInteractionGuardrail,
+            buildStressInteractionLightFixtures,
             getCompilationResponsivenessFailure,
             mapVolumeBoundsToCapture,
             FrameSampler,

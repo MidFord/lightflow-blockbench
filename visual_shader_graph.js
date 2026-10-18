@@ -134,6 +134,11 @@
         compiled_in: 'Compiled in',
         all_presets: 'All Presets',
         alpha_mode: 'Alpha Mode',
+        control_slider: 'slider',
+        control_value: 'value',
+        control_on: 'On',
+        control_off: 'Off',
+        resize_node: 'Resize node',
         title_override: 'Title Override',
         connected: 'Connected',
         preview_size: 'Preview Size',
@@ -259,6 +264,11 @@
         compiled_in: 'Compilado en',
         all_presets: 'Todos los Presets',
         alpha_mode: 'Modo Alfa',
+        control_slider: 'deslizador',
+        control_value: 'valor',
+        control_on: 'Activado',
+        control_off: 'Desactivado',
+        resize_node: 'Redimensionar nodo',
         title_override: 'Título Personalizado',
         connected: 'Conectado',
         preview_size: 'Tamaño del Preview',
@@ -1607,7 +1617,16 @@ bool vsgAutotileBasis(vec2 localUv, vec2 atlasUv, out mat2 localToAtlas) {
     localToAtlas = mat2(atlasPerLocalX, atlasPerLocalY);
     return true;
 }
-vec2 vsgResolveAutotileUv(vec2 atlasUv, vec2 localUv, vec2 faceSize, vec2 uvSize, float geometryAutoTile, vec2 manualTiling, float mode) {
+bool vsgExplicitAutotileBasis(vec4 packedBasis, out mat2 localToAtlas) {
+    localToAtlas = mat2(packedBasis.xy, packedBasis.zw);
+    float determinant = packedBasis.x * packedBasis.w - packedBasis.z * packedBasis.y;
+    float basisScale = max(
+        max(abs(packedBasis.x), abs(packedBasis.y)),
+        max(abs(packedBasis.z), abs(packedBasis.w))
+    );
+    return basisScale > 1e-12 && abs(determinant) > 1e-12;
+}
+vec2 vsgResolveAutotileUv(vec2 atlasUv, vec2 localUv, vec2 faceSize, vec2 uvSize, float geometryAutoTile, vec4 explicitAutoTileBasis, vec2 manualTiling, float mode) {
     vec2 repeatCount = manualTiling;
     if (mode > 1.5 || (mode > 0.5 && geometryAutoTile > 0.5)) {
         vec2 safeFace = max(abs(faceSize), vec2(0.000001));
@@ -1618,7 +1637,10 @@ vec2 vsgResolveAutotileUv(vec2 atlasUv, vec2 localUv, vec2 faceSize, vec2 uvSize
     if (abs(repeatCount.x - 1.0) > 0.000001) tiled.x = fract(localUv.x * repeatCount.x);
     if (abs(repeatCount.y - 1.0) > 0.000001) tiled.y = fract(localUv.y * repeatCount.y);
     mat2 localToAtlas;
-    if (!vsgAutotileBasis(localUv, atlasUv, localToAtlas)) return atlasUv;
+    if (
+        !vsgExplicitAutotileBasis(explicitAutoTileBasis, localToAtlas) &&
+        !vsgAutotileBasis(localUv, atlasUv, localToAtlas)
+    ) return atlasUv;
     return atlasUv + localToAtlas * (tiled - localUv);
 }`;
 
@@ -2040,8 +2062,9 @@ vec3 vsgBumpFromHeight(vec3 worldPosition, vec3 normalValue, float heightValue, 
                 const faceSize = geometryAttributeValue('globalFaceSize', 'vec2', stage);
                 const uvSize = geometryAttributeValue('uvSize', 'vec2', stage);
                 const autoTile = geometryAttributeValue('autoTile', 'float', stage);
+                const autoTileBasis = geometryAttributeValue('autoTileBasis', 'vec4', stage);
                 const mode = node.data?.mode === 'manual' ? 0.0 : node.data?.mode === 'geometry' ? 1.0 : 2.0;
-                result = { expr: `vsgResolveAutotileUv(${atlasUv.expr}, ${localUv.expr}, ${faceSize.expr}, ${uvSize.expr}, ${autoTile.expr}, ${manualTiling.expr}, ${mode.toFixed(1)})`, type: 'vec2' };
+                result = { expr: `vsgResolveAutotileUv(${atlasUv.expr}, ${localUv.expr}, ${faceSize.expr}, ${uvSize.expr}, ${autoTile.expr}, ${autoTileBasis.expr}, ${manualTiling.expr}, ${mode.toFixed(1)})`, type: 'vec2' };
             } else if (node.type === 'texture_relief') {
                 functions.fragment.add(VSG_RELIEF_GLSL);
                 const heightTexture = readInput(node, 'heightTexture', stage, 'texture');
@@ -4799,12 +4822,12 @@ void main() {
                                     <vsg-advanced-color v-if="parameterControlKind(node) === 'color'" :value="node.data.hex || '#ffffff'" :label="nodeTitle(node)"
                                         @begin="beginParameterColorEdit(node)" @input="previewParameterColor(node, $event)" @commit="finishParameterColorEdit(node, $event)"></vsg-advanced-color>
                                     <span v-else-if="parameterControlKind(node) === 'float'" class="vsg-node-number-control">
-                                        <input type="range" :min="parameterRange(node, 'min', 0)" :max="parameterRange(node, 'max', 1)" :step="parameterRange(node, 'step', 0.01)" :value="node.data.value" @change.stop="setParameterNumber(node, $event)" @mousedown.stop :aria-label="nodeTitle(node) + ' slider'">
-                                        <input class="dark_bordered vsg-node-number-input" type="number" :min="parameterRange(node, 'min', 0)" :max="parameterRange(node, 'max', 1)" :step="parameterRange(node, 'step', 0.01)" :value="node.data.value" @change.stop="setParameterNumber(node, $event)" @mousedown.stop :aria-label="nodeTitle(node) + ' value'">
+                                        <input type="range" :min="parameterRange(node, 'min', 0)" :max="parameterRange(node, 'max', 1)" :step="parameterRange(node, 'step', 0.01)" :value="node.data.value" @change.stop="setParameterNumber(node, $event)" @mousedown.stop :aria-label="nodeTitle(node) + ' ' + tr('control_slider')">
+                                        <input class="dark_bordered vsg-node-number-input" type="number" :min="parameterRange(node, 'min', 0)" :max="parameterRange(node, 'max', 1)" :step="parameterRange(node, 'step', 0.01)" :value="node.data.value" @change.stop="setParameterNumber(node, $event)" @mousedown.stop :aria-label="nodeTitle(node) + ' ' + tr('control_value')">
                                     </span>
                                     <label v-else-if="parameterControlKind(node) === 'bool'" class="vsg-node-bool-control">
                                         <input type="checkbox" :checked="node.data.value" @change.stop="setParameterBoolean(node, $event)" @mousedown.stop :aria-label="nodeTitle(node)">
-                                        <span>{{ node.data.value ? 'On' : 'Off' }}</span>
+                                        <span>{{ node.data.value ? tr('control_on') : tr('control_off') }}</span>
                                     </label>
                                     <code v-else-if="nodeSummary(node)">{{ nodeSummary(node) }}</code>
                                 </div>
@@ -4829,7 +4852,7 @@ void main() {
                                         </div>
                                     </div>
                                 </div>
-                                <span class="vsg-node-resize" title="Resize node" @mousedown.stop="beginNodeResize(node, $event)"></span>
+                                <span class="vsg-node-resize" :title="tr('resize_node')" @mousedown.stop="beginNodeResize(node, $event)"></span>
                             </article>
                         </div>
                     </div>
@@ -4958,8 +4981,8 @@ void main() {
                 createPreset(id) { Runtime.createFromPreset(id); },
                 openAllPresets(event) { showPresetMenu(event.currentTarget); }
             },
-            mounted() { Runtime.registerView(this); },
-            beforeDestroy() { Runtime.unregisterView(this); },
+            mounted() { Runtime.registerView(this); this._lightflowNumbers = window.LightManagerUI?.controls?.mountNumberEditors?.(this.$el); },
+            beforeDestroy() { this._lightflowNumbers?.dispose(); Runtime.unregisterView(this); },
             template: `
                 <div class="vsg-library">
                     <div class="vsg-library-search">
@@ -5066,6 +5089,16 @@ void main() {
                 tr,
                 getPortTypeColor,
                 setTab(tab) { this.activeTab = tab; },
+                onTabKey(event) {
+                    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+                    event.preventDefault();
+                    const tabs = ['graph', 'node', 'diagnostics'];
+                    const current = tabs.indexOf(this.activeTab);
+                    const index = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
+                        : (current + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+                    this.setTab(tabs[index]);
+                    this.$nextTick(() => this.$el.querySelector(`#vsg_inspector_tab_${tabs[index]}`)?.focus());
+                },
                 diagnosticTitle(message) {
                     const node = message.nodeId && this.graph?.nodes.find(entry => entry.id === message.nodeId);
                     return node ? getNodeDisplayTitle(node) : tr(message.severity || 'warning');
@@ -5206,18 +5239,18 @@ void main() {
                 },
                 openAllDiagnostics() { this.activeTab = 'diagnostics'; }
             },
-            mounted() { Runtime.registerView(this); },
-            beforeDestroy() { Runtime.unregisterView(this); },
+            mounted() { Runtime.registerView(this); this._lightflowNumbers = window.LightManagerUI?.controls?.mountNumberEditors?.(this.$el); },
+            beforeDestroy() { this._lightflowNumbers?.dispose(); Runtime.unregisterView(this); },
             template: `
                 <div class="vsg-inspector">
                     <template v-if="graph">
                         <nav class="vsg-inspector-tabs" role="tablist" :aria-label="tr('inspector')">
-                            <button role="tab" :aria-selected="activeTab === 'graph'" :class="{active: activeTab === 'graph'}" @click="setTab('graph')"><i class="material-icons">account_tree</i><span>{{ tr('graph') }}</span></button>
-                            <button role="tab" :aria-selected="activeTab === 'node'" :class="{active: activeTab === 'node'}" @click="setTab('node')"><i class="material-icons">tune</i><span>{{ tr('node') }}</span></button>
-                            <button role="tab" :aria-selected="activeTab === 'diagnostics'" :class="{active: activeTab === 'diagnostics'}" @click="setTab('diagnostics')"><i class="material-icons">fact_check</i><span>{{ tr('diagnostics') }}</span><small v-if="runtime.diagnostics.length">{{ runtime.diagnostics.length }}</small></button>
+                            <button id="vsg_inspector_tab_graph" role="tab" aria-controls="vsg_inspector_panel_graph" :tabindex="activeTab === 'graph' ? 0 : -1" :aria-selected="activeTab === 'graph'" :class="{active: activeTab === 'graph'}" @keydown="onTabKey" @click="setTab('graph')"><i class="material-icons">account_tree</i><span>{{ tr('graph') }}</span></button>
+                            <button id="vsg_inspector_tab_node" role="tab" aria-controls="vsg_inspector_panel_node" :tabindex="activeTab === 'node' ? 0 : -1" :aria-selected="activeTab === 'node'" :class="{active: activeTab === 'node'}" @keydown="onTabKey" @click="setTab('node')"><i class="material-icons">tune</i><span>{{ tr('node') }}</span></button>
+                            <button id="vsg_inspector_tab_diagnostics" role="tab" aria-controls="vsg_inspector_panel_diagnostics" :tabindex="activeTab === 'diagnostics' ? 0 : -1" :aria-selected="activeTab === 'diagnostics'" :class="{active: activeTab === 'diagnostics'}" @keydown="onTabKey" @click="setTab('diagnostics')"><i class="material-icons">fact_check</i><span>{{ tr('diagnostics') }}</span><small v-if="runtime.diagnostics.length">{{ runtime.diagnostics.length }}</small></button>
                         </nav>
 
-                        <div v-if="activeTab === 'graph'" class="vsg-inspector-tabpanel" role="tabpanel">
+                        <div v-if="activeTab === 'graph'" id="vsg_inspector_panel_graph" class="vsg-inspector-tabpanel" role="tabpanel" aria-labelledby="vsg_inspector_tab_graph">
                             <section class="vsg-inspector-section">
                                 <div class="vsg-section-heading"><div><i class="material-icons">analytics</i><h3>{{ tr('graph_summary') }}</h3></div><button class="tool vsg-more-button" @click="openGraphActions" :title="tr('graph_actions')" :aria-label="tr('graph_actions')"><i class="material-icons">more_vert</i></button></div>
                                 <dl class="vsg-summary-grid">
@@ -5242,7 +5275,7 @@ void main() {
                             </section>
                         </div>
 
-                        <div v-else-if="activeTab === 'node'" class="vsg-inspector-tabpanel" role="tabpanel">
+                        <div v-else-if="activeTab === 'node'" id="vsg_inspector_panel_node" class="vsg-inspector-tabpanel" role="tabpanel" aria-labelledby="vsg_inspector_tab_node">
                             <section class="vsg-inspector-section">
                                 <div class="vsg-section-heading"><div><i class="material-icons">tune</i><h3>{{ tr('selected_node') }}</h3></div></div>
                                 <div v-if="!node" class="vsg-inspector-empty">{{ tr('no_selection') }}</div>
@@ -5280,7 +5313,7 @@ void main() {
                             </section>
                         </div>
 
-                        <div v-else class="vsg-inspector-tabpanel" role="tabpanel">
+                        <div v-else id="vsg_inspector_panel_diagnostics" class="vsg-inspector-tabpanel" role="tabpanel" aria-labelledby="vsg_inspector_tab_diagnostics">
                             <section class="vsg-inspector-section vsg-diagnostics">
                                 <div class="vsg-section-heading"><div><i class="material-icons">fact_check</i><h3>{{ tr('diagnostics') }}</h3></div><small>{{ runtime.diagnostics.length }}</small></div>
                                 <div v-if="!runtime.diagnostics.length" class="vsg-diagnostic is-success"><i class="material-icons">check_circle</i><span>{{ tr('no_diagnostics') }}</span></div>
@@ -5466,7 +5499,8 @@ void main() {
                 white-space: nowrap;
             }
             .vsg-status .material-icons { font-size: 15px; }
-            .vsg-status.is-compiled { color: var(--color-axis-y); }
+            .vsg-status.is-compiled { color: var(--color-text); }
+            .vsg-status.is-compiled .material-icons { color: var(--color-axis-y); }
             .vsg-status.is-error { color: var(--color-close); }
             .vsg-status.is-compiling { color: var(--color-warning); }
             .vsg-graph-viewport {
@@ -5485,7 +5519,7 @@ void main() {
                 background-size: 20px 20px, 20px 20px, 100px 100px, 100px 100px;
             }
             .vsg-graph-viewport:focus-visible {
-                box-shadow: inset 0 0 0 2px var(--color-accent);
+                box-shadow: inset 0 0 0 2px var(--lf-focus-color, var(--color-text));
             }
             .vsg-graph-world {
                 position: absolute;
@@ -5543,7 +5577,7 @@ void main() {
             }
             .vsg-node.selected {
                 z-index: 3;
-                outline: 2px solid var(--color-accent);
+                outline: 2px solid var(--lf-focus-color, var(--color-text));
                 outline-offset: 1px;
             }
             .vsg-node-header {
@@ -5712,7 +5746,7 @@ void main() {
             .vsg-preset-button:focus-visible {
                 color: var(--color-text);
                 background: var(--color-button);
-                outline: 1px solid var(--color-accent);
+                outline: 1px solid var(--lf-focus-color, var(--color-text));
                 outline-offset: -1px;
             }
             .vsg-library-item > .material-icons,
@@ -5900,19 +5934,22 @@ void main() {
             .vsg-library *,
             .vsg-inspector * { box-sizing: border-box; }
             .vsg-canvas-panel {
-                grid-template-rows: 44px minmax(0, 1fr) 30px;
+                grid-template-rows: auto minmax(0, 1fr) 30px;
                 container: vsg-canvas / inline-size;
                 min-height: 260px;
                 overflow: hidden;
             }
             .vsg-toolbar {
                 min-height: 44px;
+                flex-wrap: wrap;
                 gap: 5px;
                 padding: 5px 7px;
-                overflow: hidden;
+                overflow: visible;
             }
             .vsg-toolbar-group {
                 display: inline-flex;
+                flex-wrap: wrap;
+                max-width: 100%;
                 align-items: center;
                 min-width: 0;
                 gap: 3px;
@@ -5989,7 +6026,7 @@ void main() {
             }
             .vsg-graph-viewport { isolation: isolate; }
             .vsg-graph-viewport.is-panning { cursor: grabbing; }
-            .vsg-graph-viewport:focus-visible { box-shadow: inset 0 0 0 2px var(--color-accent); }
+            .vsg-graph-viewport:focus-visible { box-shadow: inset 0 0 0 2px var(--lf-focus-color, var(--color-text)); }
             .vsg-connections { overflow: visible; }
             .vsg-connection { stroke-width: 2px; opacity: .9; }
             .vsg-connection.selected { stroke-width: 3px; opacity: 1; }
@@ -6012,11 +6049,11 @@ void main() {
             }
             .vsg-node.output { border-width: 1px; }
             .vsg-node.selected {
-                outline: 2px solid var(--color-accent);
+                outline: 2px solid var(--lf-focus-color, var(--color-text));
                 outline-offset: 2px;
                 box-shadow: 0 0 0 1px color-mix(in srgb, var(--node-color) 70%, transparent), 0 5px 18px color-mix(in srgb, var(--color-back) 55%, transparent);
             }
-            .vsg-node:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
+            .vsg-node:focus-visible { outline: 2px solid var(--lf-focus-color, var(--color-text)); outline-offset: 3px; }
             .vsg-node-header {
                 min-height: 34px;
                 grid-template-columns: 20px minmax(0, 1fr);
@@ -6032,7 +6069,7 @@ void main() {
                 min-height: 24px;
                 gap: 8px;
                 padding: 3px 9px;
-                color: var(--color-subtle_text);
+                color: var(--color-text);
                 background: color-mix(in srgb, var(--color-back) 24%, transparent);
                 font-size: 10.5px;
             }
@@ -6136,7 +6173,7 @@ void main() {
                 background: var(--port-color);
                 box-shadow: 0 0 0 3px color-mix(in srgb, var(--port-color) 25%, transparent);
             }
-            button.vsg-port:focus-visible { outline: 2px solid var(--color-accent) !important; outline-offset: -2px; }
+            button.vsg-port:focus-visible { outline: 2px solid var(--lf-focus-color, var(--color-text)) !important; outline-offset: -2px; }
             button.vsg-port:active::before { transform: scale(.86); }
             .vsg-port-input { margin-left: 0 !important; }
             .vsg-port-output { margin-right: 0 !important; }
@@ -6156,7 +6193,7 @@ void main() {
             .vsg-statusbar-group { display: inline-flex; align-items: center; min-width: 0; gap: 13px; }
             .vsg-statusbar-group > span { display: inline-flex; align-items: center; min-width: 0; gap: 4px; white-space: nowrap; }
             .vsg-statusbar .material-icons { font-size: 13px; }
-            .vsg-statusbar .is-compiled { color: var(--color-axis-y); }
+            .vsg-statusbar .is-compiled { color: var(--color-text); }
             .vsg-statusbar-tools { justify-content: flex-end; gap: 7px; }
             .vsg-segmented { display: inline-flex; height: 23px; border: 1px solid var(--color-border); border-radius: 3px; overflow: hidden; }
             .vsg-segmented button {
@@ -6233,7 +6270,7 @@ void main() {
             .vsg-recent-item:hover,
             .vsg-recent-item:focus-visible,
             .vsg-library-more:hover,
-            .vsg-library-more:focus-visible { background: var(--color-button); outline: 1px solid var(--color-accent); outline-offset: -1px; }
+            .vsg-library-more:focus-visible { background: var(--color-button); outline: 1px solid var(--lf-focus-color, var(--color-text)); outline-offset: -1px; }
             .vsg-recent-item small { color: var(--color-subtle_text); font: 9px var(--font-code, monospace); }
             .vsg-type-dot {
                 width: 11px;
@@ -6297,9 +6334,9 @@ void main() {
             }
             .vsg-inspector-tabs button:hover,
             .vsg-inspector-tabs button:focus-visible { color: var(--color-text); background: var(--color-button); outline: none; }
-            .vsg-inspector-tabs button:focus-visible { box-shadow: inset 0 0 0 2px var(--color-accent); }
+            .vsg-inspector-tabs button:focus-visible { box-shadow: inset 0 0 0 2px var(--lf-focus-color, var(--color-text)); }
             .vsg-inspector-tabs button.active { color: var(--color-text); }
-            .vsg-inspector-tabs button.active::after { background: var(--color-accent); }
+            .vsg-inspector-tabs button.active::after { background: var(--lf-accent-indicator, var(--color-text)); }
             .vsg-inspector-tabs .material-icons { flex: 0 0 auto; font-size: 15px; }
             .vsg-inspector-tabs span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
             .vsg-inspector-tabs small {
@@ -6331,7 +6368,7 @@ void main() {
             .vsg-summary-grid > div:last-child { grid-column: 1 / -1; }
             .vsg-summary-grid dt { min-width: 0; overflow: hidden; color: var(--color-subtle_text); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
             .vsg-summary-grid dd { margin: 0; color: var(--color-text); font: 10px var(--font-code, monospace); }
-            .vsg-summary-grid dd.is-compiled { color: var(--color-axis-y); }
+            .vsg-summary-grid dd.is-compiled { color: var(--color-text); }
             .vsg-field {
                 grid-template-columns: minmax(94px, .72fr) minmax(0, 1.28fr);
                 min-height: 34px;
@@ -6384,7 +6421,7 @@ void main() {
                 text-align: left;
             }
             .vsg-text-action:hover,
-            .vsg-text-action:focus-visible { background: var(--color-button); outline: 1px solid var(--color-accent); outline-offset: -1px; }
+            .vsg-text-action:focus-visible { background: var(--color-button); outline: 1px solid var(--lf-focus-color, var(--color-text)); outline-offset: -1px; }
             .vsg-text-action .material-icons { font-size: 15px; }
             .vsg-diagnostic-card { padding: 8px; border: 1px solid var(--color-border); border-radius: 3px; background: color-mix(in srgb, var(--color-back) 18%, var(--color-ui)); }
             .vsg-diagnostic-card + .vsg-diagnostic-card { margin-top: 7px; }
@@ -6511,7 +6548,7 @@ void main() {
                 text-align: left;
             }
             .vsg-resource-item:hover,
-            .vsg-resource-item:focus-visible { background: var(--color-button); outline: 1px solid var(--color-accent); outline-offset: -1px; }
+            .vsg-resource-item:focus-visible { background: var(--color-button); outline: 1px solid var(--lf-focus-color, var(--color-text)); outline-offset: -1px; }
             .vsg-resource-item > .material-icons { color: var(--color-subtle_text); font-size: 16px; }
             .vsg-resource-item > span:nth-child(2) { min-width: 0; }
             .vsg-resource-item strong,
@@ -6635,7 +6672,7 @@ void main() {
         author: 'MidFord327',
         description: 'Create production-ready staged vertex/fragment shader graphs for Lightflow with typed geometry attributes, custom varyings, exact uniforms, Shader Architect compilation, project persistence, and portable graph exports.',
         tags: ['Lightflow', 'Shaders', 'Materials'],
-        version: '1.2.0',
+        version: '1.3.0',
         min_version: '4.9.0',
         variant: 'both',
         dependencies: ['light_manager', 'shader_architect'],

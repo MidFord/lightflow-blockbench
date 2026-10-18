@@ -2,7 +2,7 @@
     'use strict';
 
     const PLUGIN_ID = 'lightflow_atmosphere';
-    const PLUGIN_VERSION = '2.0.0';
+    const PLUGIN_VERSION = '2.1.0';
     const MAX_VOLUMES = 4;
     const MAX_LIGHTS = 4;
     const MAX_SHADOWS = 2;
@@ -49,11 +49,11 @@
     const PREVIEW_STEPS = { draft: 16, balanced: 24, high: 36, ultra: 48 };
     const RENDER_STEPS = { draft: 28, balanced: 44, high: 64, ultra: 96, reference: 96 };
     const QUALITY_OPTIONS = {
-        draft: 'Draft',
-        balanced: 'Balanced',
-        high: 'High',
-        ultra: 'Ultra',
-        reference: 'Reference'
+        draft: 'lightflow_atmosphere.option.quality_draft',
+        balanced: 'lightflow_atmosphere.option.quality_balanced',
+        high: 'lightflow_atmosphere.option.quality_high',
+        ultra: 'lightflow_atmosphere.option.quality_ultra',
+        reference: 'lightflow_atmosphere.option.quality_reference'
     };
     const GLOBAL_FOG_OPTIONS = {
         none: 'Off',
@@ -182,6 +182,19 @@
     });
 
     let VolumeElement = null;
+    let GodRayElement = null;
+    let godRayController = null;
+    let godRayPanel = null;
+    let godRayRuntime = null;
+    let godRayPanelSyncing = false;
+    let ParticleEffectElement = null;
+    let particleEffectController = null;
+    let particleEffectScene = null;
+    let particleEffectPanel = null;
+    let particlePanelSyncing = false;
+    let particlePanelTab = 'emission';
+    const particleEffectRecords = new Map();
+    const retiredParticleConfigs = new Set();
     let atmospherePanel = null;
     let addVolumeAction = null;
     let editVolumeAction = null;
@@ -194,18 +207,28 @@
     let storageWriteFailureReported = false;
     let lastPreviewPatchCheck = 0;
     let syncingPanel = false;
-    let volumePanelMode = 'look';
+    let volumePanelMode = 'basic';
     let activeVolumePanelUndo = null;
     let scheduleVolumePanelAdaptiveLayout = () => {};
     let atmosphereRevision = 0;
     let atmosphereProject = null;
     let atmosphereProjectSettingsProperty = null;
     const deletables = [];
+    const effectDialogs = new Set();
+    deletables.push({delete() { for (const dialog of [...effectDialogs]) { dialog.cancel(); dialog.delete(); } }});
+    const showEffectDialog = (id, config, sections = null) => {
+        if (sections) config.form = window.LightManagerUI.taskDialogForm(config.form, sections);
+        return window.LightManagerUI.showTaskDialog(id, config, effectDialogs);
+    };
     const publishedWindowBindings = new Map();
     const volumePanelGroupsOpen = {
         look: true,
+        look_setup: false,
         light_response: false,
         shape: true,
+        height: false,
+        cloud: false,
+        motion: false,
         quality: true,
         quality_advanced: false
     };
@@ -247,6 +270,163 @@
             } catch (error) {
                 console.warn('[Lightflow Atmosphere] Failed to release a registered resource.', error);
             }
+        });
+    }
+
+    const ATMOSPHERE_ELEMENT_TYPES = new Set([
+        'lightflow_volume',
+        'lightflow_god_ray',
+        'lightflow_particle_effect'
+    ]);
+
+    function atmosphereProjects() {
+        const projects = [];
+        const seen = new Set();
+        const add = project => {
+            if (!project || seen.has(project)) return;
+            seen.add(project);
+            projects.push(project);
+        };
+        (window.ModelProject?.all || []).forEach(add);
+        add(window.Project);
+        return projects;
+    }
+
+    function ensureAtmosphereReloadPlaceholder(element, project = window.Project) {
+        if (!element || !project || !ATMOSPHERE_ELEMENT_TYPES.has(element.type) || typeof THREE === 'undefined') return null;
+        const nodes = project.nodes_3d;
+        if (!nodes) return null;
+        let mesh = nodes[element.uuid];
+        let createdPlaceholder = false;
+        if (!mesh) {
+            mesh = new THREE.Object3D();
+            nodes[element.uuid] = mesh;
+            createdPlaceholder = true;
+        }
+        // Do not relabel a surviving real preview from an interrupted/older
+        // reload as a generic bridge node. The replacement preview controller
+        // must be allowed to run its normal cleanup path for real previews.
+        if (!createdPlaceholder && !mesh.userData?.lightflowAtmosphereReloadPlaceholder) {
+            return mesh;
+        }
+        mesh.name = element.uuid;
+        mesh.type = element.type;
+        mesh.isElement = true;
+        mesh.visible = element.visibility !== false;
+        mesh.rotation.order = window.Format?.euler_order || 'ZYX';
+        if (!mesh.geometry) {
+            mesh.geometry = new THREE.BufferGeometry();
+            mesh.geometry.boundingBox = new THREE.Box3().makeEmpty();
+        }
+        mesh.fix_position = mesh.fix_position || new THREE.Vector3();
+        mesh.fix_rotation = mesh.fix_rotation || new THREE.Euler();
+        mesh.userData = mesh.userData || {};
+        mesh.userData.lightflowAtmosphereReloadPlaceholder = true;
+        mesh.userData.lightflowNoShadow = true;
+        if (!mesh.parent) {
+            const parentMesh = element.parent?.type === 'armature_bone'
+                ? element.parent.mesh
+                : project.model_3d;
+            parentMesh?.add?.(mesh);
+        }
+        return mesh;
+    }
+
+    function ensureAtmosphereReloadPlaceholders() {
+        const reloadPreviewBridge = {
+            setup() { },
+            remove() { },
+            updateAll() { },
+            updateTransform() { },
+            updateVisibility() { },
+            updateSelection() { },
+            updateRenderOrder() { }
+        };
+        atmosphereProjects().forEach(project => {
+            (project?.elements || []).forEach(element => {
+                if (ATMOSPHERE_ELEMENT_TYPES.has(element?.type)) {
+                    ensureAtmosphereReloadPlaceholder(element, project);
+                    // A surviving custom element still points at the constructor from
+                    // the previous plugin evaluation. Blockbench refreshes every
+                    // Outliner element synchronously from registerType(), so another
+                    // plugin can otherwise call that retired controller after its
+                    // closed-over runtime has already been disposed. Bridge only the
+                    // retired constructor; the replacement class installs its real
+                    // controller later in this same load.
+                    const constructor = element.constructor;
+                    if (constructor && constructor !== Object && constructor.preview_controller) {
+                        constructor.preview_controller = reloadPreviewBridge;
+                    }
+                }
+            });
+        });
+    }
+
+    function allowAnimationModeInspection(ElementType) {
+        // These effects have their own editors, not native keyframe channels.
+        // A channel-free adapter permits native Outliner selection in Animate.
+        class EffectInspectionAnimator extends BoneAnimator {
+            constructor(...args){super(...args);this.position=[];this.rotation=[];this.scale=[];this.getGroup();}
+            select(){this.getGroup();return this;}
+            doRender(){return false;}
+        }
+        EffectInspectionAnimator.prototype.channels={};
+        EffectInspectionAnimator.prototype.type='lightflow_inspection';
+        ElementType.animator=EffectInspectionAnimator;
+    }
+
+    function prepareReloadedAtmosphereElements(ElementType, type) {
+        if (!ElementType) return [];
+        const elements = [];
+        const seen = new Set();
+        [window.Project?.elements, window.Outliner?.elements].forEach(collection => {
+            if (!Array.isArray(collection)) return;
+            collection.forEach(element => {
+                if (!element || seen.has(element)) return;
+                seen.add(element);
+                elements.push(element);
+            });
+        });
+        const migrated = [];
+        elements.forEach(element => {
+            if (element?.type !== type || element instanceof ElementType) return;
+            Object.setPrototypeOf(element, ElementType.prototype);
+            ensureAtmosphereReloadPlaceholder(element, window.Project);
+            migrated.push(element);
+        });
+        if (migrated.length && !ElementType.preview_controller) {
+            // registerType dispatches synchronously and Blockbench may refresh every
+            // Outliner element before the real NodePreviewController exists.
+            ElementType.preview_controller = {
+                setup() { },
+                remove() { },
+                updateAll() { },
+                updateTransform() { },
+                updateVisibility() { },
+                updateSelection() { },
+                updateRenderOrder() { }
+            };
+        }
+        return migrated;
+    }
+
+    function rebuildReloadedAtmosphereElementPreviews(elements, controller) {
+        if (!controller || !Array.isArray(elements) || !elements.length) return;
+        elements.forEach(element => {
+            if (!element) return;
+            const mesh = element.mesh;
+            if (mesh?.userData?.lightflowAtmosphereReloadPlaceholder) {
+                mesh.geometry?.dispose?.();
+                mesh.parent?.remove?.(mesh);
+                if (window.Project?.nodes_3d?.[element.uuid] === mesh) {
+                    delete window.Project.nodes_3d[element.uuid];
+                }
+            } else if (mesh) {
+                controller.remove?.(element);
+            }
+            controller.setup?.(element);
+            controller.updateVisibility?.(element);
+            controller.updateSelection?.(element);
         });
     }
 
@@ -680,6 +860,8 @@
     function beginAtmosphereProject(project) {
         const nextProject = project || null;
         if (atmosphereProject === nextProject) return false;
+        godRayRuntime?.clear();
+        clearParticleEffects();
         AtmosphereManager.releaseProjectResources();
         atmosphereRevision += 1;
         atmosphereProject = nextProject;
@@ -1628,6 +1810,307 @@
         return texture;
     }
 
+    /* LIGHTFLOW_GOD_RAY_CORE_START */
+    // A separate scene element: no volume routing, depth capture or raymarch.
+    function createGodRayRuntime(THREE, onTopologyChange = () => {}) {
+        const fields = {
+            length: { default: 48, min: 0.01, max: 100000, label: 'Length', es: 'Longitud' },
+            width: { default: 4, min: 0, max: 100000, label: 'Source width', es: 'Ancho inicial' },
+            end_width: { default: 18, min: 0, max: 100000, label: 'End width', es: 'Ancho final' },
+            taper: { default: 1, min: 0.05, max: 8, step: 0.01, label: 'Expansion curve', es: 'Curva de apertura' },
+            roll: { default: 0, min: -180, max: 180, label: 'Ribbon roll', es: 'Giro del plano' },
+            opacity: { default: 0.22, min: 0, max: 1, step: 0.01, label: 'Opacity', es: 'Opacidad' },
+            intensity: { default: 1, min: 0, max: 32, step: 0.01, label: 'Brightness', es: 'Brillo' },
+            color: { type: 'vector', default: [255, 233, 185], label: 'Source color', es: 'Color inicial' },
+            end_color: { type: 'vector', default: [168, 200, 255], label: 'End color', es: 'Color final' },
+            gradient_curve: { default: 1, min: 0.05, max: 8, step: 0.01, label: 'Color gradient', es: 'Curva del degradado' },
+            edge_softness: { default: 0.12, min: 0, max: 1, step: 0.01, label: 'Edge softness', es: 'Suavidad lateral' },
+            fade_start: { default: 0.02, min: 0, max: 1, step: 0.01, label: 'Source fade', es: 'Desvanecimiento inicial' },
+            fade_end: { default: 0.7, min: 0, max: 1, step: 0.01, label: 'End fade', es: 'Desvanecimiento final' },
+            falloff: { default: 1, min: 0.05, max: 8, step: 0.01, label: 'Fade curve', es: 'Curva de desvanecimiento' },
+            bloom: { default: 0.15, min: 0, max: 8, step: 0.01, label: 'Bloom contribution', es: 'Contribucion a Bloom' },
+            near_fade: { default: 0, min: 0, max: 100000, label: 'Camera near fade', es: 'Desvanecer cerca de camara' },
+            far_start: { default: 0, min: 0, max: 100000, label: 'Distance fade start', es: 'Inicio del desvanecimiento por distancia' },
+            far_end: { default: 0, min: 0, max: 100000, label: 'Distance fade end (0: off)', es: 'Fin por distancia (0: desactivado)' },
+            orientation: { type: 'string', default: 'camera', options: { camera: 'Camera / ray axis', y: 'Camera / world Y', fixed: 'Fixed plane' }, label: 'Orientation', es: 'Orientacion' },
+            blend: { type: 'string', default: 'additive', options: { additive: 'Additive', normal: 'Alpha' }, label: 'Blend', es: 'Mezcla' },
+            light_uuid: { type: 'string', default: '', label: 'Light direction', es: 'Direccion de una luz' },
+            inherit_color: { type: 'boolean', default: false, label: 'Use light color', es: 'Usar color de la luz' },
+            occlusion: { type: 'string', default: 'scene', options: { scene: 'Scene depth', shadow: 'Scene + light shadows', none: 'Always visible' }, label: 'Occlusion', es: 'Oclusion' },
+            shadow_strength: { default: 1, min: 0, max: 1, step: 0.01, label: 'Shadow strength', es: 'Intensidad de oclusion' }
+        };
+        const number = (v, fallback) => Number.isFinite(Number(v)) ? Number(v) : fallback;
+        function sanitize(data) {
+            for (const [key, field] of Object.entries(fields)) {
+                if (field.type === 'vector') {
+                    data[key] = field.default.map((v, i) => Math.max(0, Math.min(255, number(data[key]?.[i], v))));
+                } else if (field.type === 'boolean') data[key] = data[key] === undefined ? field.default : !!data[key];
+                else if (field.type === 'string') data[key] = field.options
+                    ? (Object.hasOwn(field.options, data[key]) ? data[key] : field.default)
+                    : String(data[key] || '');
+                else data[key] = Math.max(field.min, Math.min(field.max, number(data[key], field.default)));
+            }
+            return data;
+        }
+        const vertexShader = `
+            uniform vec3 uOrigin, uAxis, uRight, uCamera, uCameraBack;
+            uniform vec4 uShape;
+            uniform float uOrientation, uOrtho, uRoll;
+            varying vec2 vRayUv;
+            varying vec3 vWorld;
+            void main() {
+                vRayUv = uv;
+                vec3 axis = normalize(uAxis);
+                vec3 right = normalize(uRight);
+                vec3 view = uOrtho > 0.5 ? uCameraBack : uCamera - (uOrigin + axis * uShape.x * 0.5);
+                if (uOrientation > 0.5) {
+                    if (uOrientation > 1.5) view.y = 0.0;
+                    vec3 candidate = cross(axis, view);
+                    // Looking along the ray must never produce NaNs or a sudden
+                    // zero-width ribbon. Keep the authored basis at the pole.
+                    if (dot(candidate, candidate) > 0.000001) right = normalize(candidate);
+                }
+                right = right * cos(uRoll) + cross(axis, right) * sin(uRoll);
+                float width = mix(uShape.y, uShape.z, pow(uv.y, uShape.w));
+                vWorld = uOrigin + axis * (uv.y * uShape.x) + right * ((uv.x - 0.5) * width);
+                gl_Position = projectionMatrix * viewMatrix * vec4(vWorld, 1.0);
+            }
+        `;
+        const fragmentShader = `
+            #include <packing>
+            uniform vec3 uColor, uEndColor, uCamera;
+            uniform vec4 uFade, uLook, uDistance;
+            uniform sampler2D uShadowMap;
+            uniform mat4 uShadowMatrix;
+            uniform vec4 uShadow;
+            uniform vec2 uShadowTexel;
+            uniform sampler2D uSceneDepth;
+            uniform vec2 uSceneViewport;
+            uniform float uSceneDepthActive, uBloomEncoded;
+            varying vec2 vRayUv;
+            varying vec3 vWorld;
+            float shadowSample(vec2 uv, float depth) {
+                vec4 sampleValue = texture2D(uShadowMap, uv);
+                if (uShadow.w > 0.5) {
+                    vec2 distribution = unpackRGBATo2Half(sampleValue);
+                    float hard = step(depth, distribution.x);
+                    float variance = max(0.00002, distribution.y * distribution.y);
+                    float delta = depth - distribution.x;
+                    float probability = variance / (variance + delta * delta);
+                    return max(hard, clamp((probability - 0.3) / 0.7, 0.0, 1.0));
+                }
+                return step(depth, unpackRGBAToDepth(sampleValue));
+            }
+            void main() {
+                if (uSceneDepthActive > 0.5 && gl_FragCoord.z > texture2D(uSceneDepth, gl_FragCoord.xy / uSceneViewport).r + 0.0000002) discard;
+                float x = abs(vRayUv.x * 2.0 - 1.0);
+                float aa = max(fwidth(x), 0.00001);
+                float edge = 1.0 - smoothstep(1.0 - max(uFade.x, aa), 1.0, x);
+                float start = uFade.y > 0.0 ? smoothstep(0.0, uFade.y, vRayUv.y) : 1.0;
+                float end = uFade.z > 0.0 ? 1.0 - smoothstep(1.0 - uFade.z, 1.0, vRayUv.y) : 1.0;
+                float distanceToCamera = length(uCamera - vWorld);
+                float distanceFade = uDistance.x > 0.0 ? smoothstep(0.0, uDistance.x, distanceToCamera) : 1.0;
+                if (uDistance.z > 0.0) distanceFade *= 1.0 - smoothstep(uDistance.y, max(uDistance.y + 0.001, uDistance.z), distanceToCamera);
+                float shadow = 1.0;
+                if (uShadow.x > 0.5) {
+                    vec4 projected = uShadowMatrix * vec4(vWorld, 1.0);
+                    vec3 coord = projected.xyz / max(projected.w, 0.00001);
+                    if (projected.w > 0.0 && all(greaterThanEqual(coord, vec3(0.0))) && all(lessThanEqual(coord, vec3(1.0)))) {
+                        float depth = coord.z + uShadow.y;
+                        float visibility = shadowSample(coord.xy, depth);
+                        visibility += shadowSample(coord.xy + vec2(uShadowTexel.x, 0.0), depth);
+                        visibility += shadowSample(coord.xy - vec2(uShadowTexel.x, 0.0), depth);
+                        visibility += shadowSample(coord.xy + vec2(0.0, uShadowTexel.y), depth);
+                        visibility += shadowSample(coord.xy - vec2(0.0, uShadowTexel.y), depth);
+                        shadow = mix(1.0, visibility * 0.2, uShadow.z);
+                    }
+                }
+                float alpha = clamp(edge * pow(max(start * end, 0.0), uFade.w) * uLook.x * distanceFade * shadow, 0.0, 1.0);
+                if (alpha < 0.00001) discard;
+                vec3 color = mix(uColor, uEndColor, pow(vRayUv.y, uLook.z)) * uLook.y;
+                #ifdef LIGHTFLOW_GOD_RAY_BLOOM
+                    vec3 emission = color * alpha * uLook.w;
+                    if (uBloomEncoded > 0.5) emission = clamp(log2(vec3(1.0) + max(emission, vec3(0.0))) / 4.0874628413, 0.0, 1.0);
+                    gl_FragColor = vec4(emission, 0.0);
+                #else
+                    gl_FragColor = vec4(color, alpha);
+                    #include <tonemapping_fragment>
+                    #include <encodings_fragment>
+                    gl_FragColor.rgb *= alpha;
+                #endif
+            }
+        `;
+        const resources = new Map();
+        const bloomScene = new THREE.Scene();
+        const group = new THREE.Group();
+        group.name = 'Lightflow God Rays';
+        group.userData.lightflowNoShadow = true;
+        const fallback = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1, THREE.RGBAFormat);
+        fallback.needsUpdate = true;
+        const scratch = { target: new THREE.Vector3(), position: new THREE.Vector3(), scale: new THREE.Vector3(), color: new THREE.Color() };
+        function make() {
+            const uniforms = {
+                uOrigin: { value: new THREE.Vector3() }, uAxis: { value: new THREE.Vector3(0, -1, 0) },
+                uRight: { value: new THREE.Vector3(1, 0, 0) }, uCamera: { value: new THREE.Vector3() },
+                uCameraBack: { value: new THREE.Vector3(0, 0, 1) }, uShape: { value: new THREE.Vector4() },
+                uOrientation: { value: 1 }, uOrtho: { value: 0 }, uRoll: { value: 0 },
+                uColor: { value: new THREE.Color() }, uEndColor: { value: new THREE.Color() },
+                uFade: { value: new THREE.Vector4() }, uLook: { value: new THREE.Vector4() },
+                uDistance: { value: new THREE.Vector4() }, uShadow: { value: new THREE.Vector4() },
+                uShadowTexel: { value: new THREE.Vector2() }, uShadowMatrix: { value: new THREE.Matrix4() },
+                uShadowMap: { value: fallback }, uSceneDepth: { value: fallback },
+                uSceneViewport: { value: new THREE.Vector2(1, 1) }, uSceneDepthActive: { value: 0 }, uBloomEncoded: { value: 1 }
+            };
+            const material = new THREE.ShaderMaterial({ uniforms, vertexShader, fragmentShader,
+                transparent: true, depthWrite: false, depthTest: true, side: THREE.DoubleSide,
+                blending: THREE.CustomBlending, blendSrc: THREE.OneFactor, blendDst: THREE.OneFactor,
+                blendSrcAlpha: THREE.OneFactor, blendDstAlpha: THREE.OneMinusSrcAlphaFactor,
+                extensions: { derivatives: true } });
+            material.userData.lightflowGodRay = true;
+            const bloom = new THREE.ShaderMaterial({ uniforms, vertexShader, fragmentShader,
+                defines: { LIGHTFLOW_GOD_RAY_BLOOM: 1 }, extensions: { derivatives: true },
+                transparent: true, depthWrite: false, depthTest: true, side: THREE.DoubleSide,
+                blending: THREE.CustomBlending, blendSrc: THREE.OneFactor, blendDst: THREE.OneFactor,
+                blendSrcAlpha: THREE.ZeroFactor, blendDstAlpha: THREE.OneFactor, toneMapped: false });
+            material.userData.lightflowBloomMaterial = bloom;
+            const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1, 1, 32), material);
+            mesh.name = 'God Ray';
+            mesh.frustumCulled = false; // Authored world-space vertices; the unit plane bounds do not apply.
+            mesh.castShadow = false;
+            mesh.receiveShadow = false;
+            mesh.userData.lightflowNoShadow = true;
+            mesh.userData.lightflowGodRay = true;
+            mesh.raycast = () => {};
+            mesh.onBeforeRender = (renderer, scene, camera) => {
+                camera.getWorldPosition(uniforms.uCamera.value);
+                uniforms.uCameraBack.value.setFromMatrixColumn(camera.matrixWorld, 2).normalize();
+                uniforms.uOrtho.value = camera.isOrthographicCamera ? 1 : 0;
+                const light = mesh.userData.linkedLight;
+                const shadow = light?.shadow;
+                const available = mesh.userData.shadowRequested && light?.visible !== false && light?.castShadow && shadow?.map?.texture;
+                uniforms.uShadow.value.set(available ? 1 : 0, shadow?.bias || 0, mesh.userData.shadowStrength || 0,
+                    renderer.shadowMap?.type === THREE.VSMShadowMap ? 1 : 0);
+                uniforms.uShadowMap.value = available ? shadow.map.texture : fallback;
+                if (available) {
+                    uniforms.uShadowMatrix.value.copy(shadow.matrix);
+                    uniforms.uShadowTexel.value.set(1 / shadow.map.width, 1 / shadow.map.height);
+                }
+                material.uniformsNeedUpdate = true;
+                bloom.uniformsNeedUpdate = true;
+            };
+            group.add(mesh);
+            const bloomMesh = new THREE.Mesh(mesh.geometry, bloom);
+            bloomMesh.frustumCulled = false;
+            bloomMesh.onBeforeRender = mesh.onBeforeRender;
+            bloomScene.add(bloomMesh);
+            mesh.userData.bloomMesh = bloomMesh;
+            onTopologyChange();
+            return mesh;
+        }
+        function remove(key, mesh) {
+            mesh.parent?.remove(mesh);
+            bloomScene.remove(mesh.userData.bloomMesh);
+            mesh.geometry.dispose();
+            mesh.material.userData.lightflowBloomMaterial.dispose();
+            mesh.material.dispose();
+            resources.delete(key);
+            onTopologyChange();
+        }
+        function sync(elements, scene, lights = {}) {
+            if (group.parent !== scene) scene?.add(group);
+            const active = new Set();
+            for (const element of elements || []) {
+                if (!element?.mesh || element.visibility === false || element.enabled === false || element.export === false) continue;
+                // The element's node is a hidden editor helper. Its own visible
+                // flag is deliberately ignored; hidden parent groups still apply.
+                let hidden = false;
+                for (let parent = element.parent; parent && typeof parent === 'object'; parent = parent.parent) {
+                    if (parent.visibility === false) { hidden = true; break; }
+                }
+                if (hidden) continue;
+                element.preview_controller?.updateAttachment?.(element);
+                active.add(element.uuid);
+                let mesh = resources.get(element.uuid);
+                if (!mesh) { mesh = make(); resources.set(element.uuid, mesh); }
+                mesh.visible = true;
+                const u = mesh.material.uniforms;
+                element.mesh.updateWorldMatrix(true, false);
+                const matrix = element.mesh.matrixWorld;
+                u.uOrigin.value.setFromMatrixPosition(matrix);
+                u.uAxis.value.set(0, -1, 0).transformDirection(matrix);
+                u.uRight.value.set(1, 0, 0).transformDirection(matrix);
+                scratch.scale.setFromMatrixScale(matrix);
+                const light = lights[element.light_uuid];
+                if ((light?.isDirectionalLight || light?.isSpotLight) && light.target) {
+                    light.getWorldPosition(scratch.position);
+                    light.target.getWorldPosition(scratch.target);
+                    scratch.target.sub(scratch.position);
+                    if (scratch.target.lengthSq() > 0.000001) u.uAxis.value.copy(scratch.target).normalize();
+                    // Project authored right onto the new axis' perpendicular plane.
+                    u.uRight.value.addScaledVector(u.uAxis.value, -u.uRight.value.dot(u.uAxis.value));
+                    if (u.uRight.value.lengthSq() < 0.000001) {
+                        u.uRight.value.set(Math.abs(u.uAxis.value.x) < 0.9 ? 1 : 0, Math.abs(u.uAxis.value.x) < 0.9 ? 0 : 1, 0);
+                        u.uRight.value.addScaledVector(u.uAxis.value, -u.uRight.value.dot(u.uAxis.value));
+                    }
+                    u.uRight.value.normalize();
+                }
+                u.uShape.value.set(element.length * scratch.scale.y, element.width * scratch.scale.x, element.end_width * scratch.scale.x, element.taper);
+                u.uOrientation.value = { fixed: 0, camera: 1, y: 2 }[element.orientation];
+                u.uRoll.value = element.roll * Math.PI / 180;
+                u.uFade.value.set(element.edge_softness, element.fade_start, element.fade_end, element.falloff);
+                u.uLook.value.set(element.opacity, element.intensity, element.gradient_curve, element.bloom);
+                u.uDistance.value.set(element.near_fade, element.far_start, element.far_end, 0);
+                u.uColor.value.fromArray(element.color.map(v => v / 255)).convertSRGBToLinear();
+                u.uEndColor.value.fromArray(element.end_color.map(v => v / 255)).convertSRGBToLinear();
+                if (element.inherit_color && light?.color) { u.uColor.value.copy(light.color); u.uEndColor.value.copy(light.color); }
+                mesh.material.blendDst = element.blend === 'normal' ? THREE.OneMinusSrcAlphaFactor : THREE.OneFactor;
+                mesh.material.depthTest = element.occlusion !== 'none';
+                mesh.material.userData.lightflowBloomMaterial.depthTest = mesh.material.depthTest;
+                mesh.userData.linkedLight = light;
+                mesh.userData.shadowRequested = element.occlusion === 'shadow';
+                mesh.userData.shadowStrength = element.shadow_strength;
+                // Sort translucent rays using their actual center, including tiles.
+                mesh.position.copy(u.uOrigin.value).addScaledVector(u.uAxis.value, element.length * scratch.scale.y * 0.5);
+                mesh.updateMatrixWorld(true);
+                mesh.userData.bloomMesh.position.copy(mesh.position);
+            }
+            for (const [key, mesh] of resources) if (!active.has(key)) remove(key, mesh);
+        }
+        function clear() { for (const [key, mesh] of resources) remove(key, mesh); }
+        function hasBloom() { return [...resources.values()].some(mesh => { const u = mesh.material.uniforms.uLook.value; return mesh.visible && u.x > 0 && u.y > 0 && u.w > 0; }); }
+        function renderBloomContribution(preview, { target, depthTexture } = {}) {
+            const renderer = preview?.renderer;
+            if (!renderer || !target || !hasBloom() || !depthTexture) return false;
+            const previousTarget = renderer.getRenderTarget();
+            const autoClear = renderer.autoClear;
+            try {
+                for (const mesh of resources.values()) {
+                    const u = mesh.material.uniforms;
+                    u.uSceneDepth.value = depthTexture;
+                    u.uSceneViewport.value.set(target.width, target.height);
+                    u.uSceneDepthActive.value = mesh.material.depthTest ? 1 : 0;
+                    u.uBloomEncoded.value = 0;
+                    mesh.userData.bloomMesh.visible = mesh.visible;
+                }
+                renderer.autoClear = false;
+                renderer.setRenderTarget(target);
+                renderer.render(bloomScene, preview.camera);
+                return true;
+            } finally {
+                for (const mesh of resources.values()) {
+                    mesh.material.uniforms.uSceneDepthActive.value = 0;
+                    mesh.material.uniforms.uBloomEncoded.value = 1;
+                    mesh.material.uniforms.uSceneDepth.value = fallback;
+                }
+                renderer.setRenderTarget(previousTarget);
+                renderer.autoClear = autoClear;
+            }
+        }
+        function dispose() { clear(); group.parent?.remove(group); fallback.dispose(); }
+        return { fields, sanitize, sync, clear, dispose, hasBloom, renderBloomContribution, group, resources, vertexShader, fragmentShader };
+    }
+    /* LIGHTFLOW_GOD_RAY_CORE_END */
+
     const AtmosphereManager = {
         version: 'adaptive-temporal-v2',
         architectureVersion: 'hybrid-router-v2',
@@ -1673,6 +2156,9 @@
                 lfAtmosphereFogParams: { value: [0, 0, 1, 0] },
                 lfAtmosphereHeightParams: { value: [0, 0, 1, 0] },
                 lfAtmosphereStyleParams: { value: [1, 0, 0, 0] },
+                lfAtmosphereGradeParams: { value: [0, 0, 1, 0] },
+                lfAtmosphereGradeLook: { value: [1, 1, 0, 0] },
+                lfAtmosphereGradeTint: { value: new THREE.Vector3(1, 1, 1) },
                 lfAtmosphereCameraHeight: { value: 0 }
             };
             this.updateSurfaceFogUniforms();
@@ -1812,6 +2298,7 @@
         updateSurfaceFogUniforms() {
             if (!this.surfaceFogUniforms) return;
             const fog = this.getGlobalFogConfig();
+            const grade = window.LightflowEnvironment?.getDistanceGradeConfig?.() || { enabled: false };
             const mode = fog.enabled
                 ? ({ linear: 1, minecraft: 1, distance: 1, exp: 2, exp2: 3, exponential: 3, height: 4, ground: 4 }[fog.mode] || 0)
                 : 0;
@@ -1842,6 +2329,19 @@
                 clamp(finite(fog.gradientStrength, 0), 0, 1),
                 0
             );
+            setVec4(this.surfaceFogUniforms.lfAtmosphereGradeParams,
+                grade.enabled ? 1 : 0,
+                Math.max(0, finite(grade.start, 32)),
+                Math.max(finite(grade.start, 32) + 0.001, finite(grade.end, 160)),
+                0
+            );
+            setVec4(this.surfaceFogUniforms.lfAtmosphereGradeLook,
+                clamp(finite(grade.saturation, 1), 0, 2),
+                clamp(finite(grade.contrast, 1), 0, 2),
+                clamp(finite(grade.tintStrength, 0), 0, 1),
+                0
+            );
+            colorArrayToVector(grade.tint || [255, 255, 255], this.surfaceFogUniforms.lfAtmosphereGradeTint.value);
         },
 
         decorateSurfaceProgram(program = {}) {
@@ -1853,7 +2353,10 @@
             const vertexEnd = vertexShader.lastIndexOf('}');
             const fragmentEnd = fragmentShader.lastIndexOf('}');
             if (vertexEnd < 0 || fragmentEnd < 0 || !fragmentShader.includes('gl_FragColor')) return null;
-            const glsl3 = /^\s*#version\s+300\s+es/m.test(vertexShader) || /^\s*#version\s+300\s+es/m.test(fragmentShader);
+            // Horizontal whitespace only: with /m, \s* rescans long runs of
+            // stripped shader lines quadratically on every material rebuild.
+            const version300 = /^[\t ]*#version[\t ]+300[\t ]+es\b/m;
+            const glsl3 = version300.test(vertexShader) || version300.test(fragmentShader);
             const vertexPreamble = `
 ${glsl3 ? 'out' : 'varying'} vec3 lfAtmosphereViewPosition;
 ${glsl3 ? 'out' : 'varying'} float lfAtmosphereWorldHeight;
@@ -1866,7 +2369,20 @@ uniform vec3 lfAtmosphereFogNearColor;
 uniform vec4 lfAtmosphereFogParams;
 uniform vec4 lfAtmosphereHeightParams;
 uniform vec4 lfAtmosphereStyleParams;
+uniform vec4 lfAtmosphereGradeParams;
+uniform vec4 lfAtmosphereGradeLook;
+uniform vec3 lfAtmosphereGradeTint;
 uniform float lfAtmosphereCameraHeight;
+vec3 lfAtmosphereDecodeDisplay(vec3 color) {
+    color = max(color, vec3(0.0));
+    return mix(color / 12.92, pow((color + 0.055) / 1.055, vec3(2.4)),
+        step(vec3(0.04045), color));
+}
+vec3 lfAtmosphereEncodeDisplay(vec3 color) {
+    color = max(color, vec3(0.0));
+    return mix(color * 12.92, 1.055 * pow(color, vec3(1.0 / 2.4)) - 0.055,
+        step(vec3(0.0031308), color));
+}
 float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
     float mode = lfAtmosphereFogParams.x;
     if (mode < 0.5) return 0.0;
@@ -1920,24 +2436,47 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             const decoratedFragment = fragmentShader.slice(0, fragmentEnd) + `
     // Interpolate position, then measure distance. Interpolated vertex lengths
     // change with triangulation and exaggerate fog on large merged terrain.
-    float lfFogFactor = lfAtmosphereFogFactor(length(lfAtmosphereViewPosition), lfAtmosphereWorldHeight);
+    float lfDistance = length(lfAtmosphereViewPosition);
+    if (lfAtmosphereGradeParams.x > 0.5) {
+        float lfGradeWeight = smoothstep(lfAtmosphereGradeParams.y, lfAtmosphereGradeParams.z, lfDistance);
+        vec3 lfSource = gl_FragColor.rgb;
+        float lfLuma = dot(lfSource, vec3(0.2126, 0.7152, 0.0722));
+        vec3 lfGraded = mix(vec3(lfLuma), lfSource, lfAtmosphereGradeLook.x);
+        lfGraded = (lfGraded - 0.5) * lfAtmosphereGradeLook.y + 0.5;
+        float lfTintLuma = max(dot(lfAtmosphereGradeTint, vec3(0.2126, 0.7152, 0.0722)), 0.001);
+        vec3 lfTinted = lfGraded * lfAtmosphereGradeTint / lfTintLuma;
+        lfGraded = mix(lfGraded, lfTinted, lfAtmosphereGradeLook.z);
+        gl_FragColor.rgb = mix(lfSource, max(lfGraded, vec3(0.0)), lfGradeWeight);
+    }
+    float lfFogFactor = lfAtmosphereFogFactor(lfDistance, lfAtmosphereWorldHeight);
     vec3 lfFogColor = lfAtmosphereFogColor;
     if (lfAtmosphereStyleParams.z > 0.0001) {
         float lfFogGradient = pow(clamp(lfFogFactor, 0.0, 1.0), 0.72);
         vec3 lfFogRampColor = mix(lfAtmosphereFogNearColor, lfAtmosphereFogColor, lfFogGradient);
         lfFogColor = mix(lfAtmosphereFogColor, lfFogRampColor, lfAtmosphereStyleParams.z);
     }
-    gl_FragColor.rgb = mix(gl_FragColor.rgb, lfFogColor, lfFogFactor);
+    // Beauty and authored fog colors are display encoded here. Mix light in
+    // display-linear space to avoid dark seams around bright silhouettes.
+    // The zero-fog path stays exact and does not pay for transfer functions.
+    if (lfFogFactor > 0.0) {
+        gl_FragColor.rgb = lfAtmosphereEncodeDisplay(mix(
+            lfAtmosphereDecodeDisplay(gl_FragColor.rgb),
+            lfAtmosphereDecodeDisplay(lfFogColor),
+            lfFogFactor
+        ));
+    }
 ` + fragmentShader.slice(fragmentEnd);
             return {
                 vertexShader: prependPreamble(decoratedVertex, vertexPreamble),
                 fragmentShader: prependPreamble(decoratedFragment, fragmentPreamble),
                 uniforms: this.surfaceFogUniforms,
-                family: 'lightflow_surface_fog_v3'
+                family: 'lightflow_surface_fog_v5'
             };
         },
 
         prepareSurfaceFog(preview, options = {}) {
+            godRayRuntime?.sync(GodRayElement?.all, window.Canvas?.scene, window.three_lights || {});
+            syncParticleEffects(preview?.camera);
             if (options.uniformsReady !== true) this.updateSurfaceFogUniforms();
             if (preview?.camera && this.surfaceFogUniforms) {
                 preview.camera.updateMatrixWorld?.(true);
@@ -4104,6 +4643,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
 
         prepareStudioTile(event) {
             if (!event?.preview) return;
+            godRayRuntime?.sync(GodRayElement?.all, window.Canvas?.scene, window.three_lights || {});
             this.studioTile = { preview: event.preview, tile: event.tile || {}, settings: event.settings || {} };
             const state = this.states.get(event.preview);
             if (state) state.lastNormalVolumeReady = false;
@@ -4253,6 +4793,1581 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         });
     }
 
+    function updateGodRayHelper(element, camera) {
+        const node = element.mesh;
+        if (!node) return;
+        godRayRuntime.sanitize(element);
+        node.visible = element.visibility !== false;
+        const shown = canShowVolumeGizmos() && (window.LightManagerUI?.workspace?.helperVisible({ selected: !!element.selected }) ?? true);
+        godRayController?.updateAttachment?.(element);
+        const frame = godRayFrame(element, camera?.isCamera ? camera : Preview.selected?.camera || window.main_preview?.camera);
+        const points = [];
+        // The outline follows both the rendered direction and the taper curve.
+        for (let index = 0; index < 12; index++) {
+            for (const sign of [-1, 1]) for (const t of [index / 12, (index + 1) / 12]) {
+                const width = THREE.MathUtils.lerp(frame.width, frame.endWidth, Math.pow(t, element.taper));
+                points.push(node.worldToLocal(frame.origin.clone().addScaledVector(frame.axis, t * frame.length).addScaledVector(frame.right, sign * width / 2)));
+            }
+        }
+        for (const t of [0, 1]) for (const sign of [-1, 1]) points.push(node.worldToLocal(frame.origin.clone().addScaledVector(frame.axis, t * frame.length).addScaledVector(frame.right, sign * (t ? frame.endWidth : frame.width) / 2)));
+        let attribute = node.rayGizmo.geometry.getAttribute('position');
+        if (!attribute || attribute.count !== points.length) {
+            attribute = new THREE.Float32BufferAttribute(new Float32Array(points.length*3),3);
+            node.rayGizmo.geometry.setAttribute('position',attribute);
+        }
+        points.forEach((point,index)=>attribute.setXYZ(index,point.x,point.y,point.z));
+        attribute.needsUpdate = true;
+        node.rayGizmo.geometry.computeBoundingSphere();
+        node.rayGizmo.visible = shown;
+        const proxy = node.raySelection;
+        proxy.position.copy(node.worldToLocal(frame.origin.clone().addScaledVector(frame.axis, frame.length / 2)));
+        const up = frame.axis.clone().negate(), back = new THREE.Vector3().crossVectors(frame.right, up).normalize();
+        proxy.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(frame.right, up, back)).premultiply(node.getWorldQuaternion(new THREE.Quaternion()).invert());
+        proxy.scale.set(Math.max(.5, frame.width, frame.endWidth) / frame.scale.x, element.length, .5 / frame.scale.z);
+        proxy.visible = shown;
+        const editing = shown && element.selected && !element.locked && Toolbox.selected?.id === 'lightflow_god_ray_gizmos';
+        const positions = {length:frame.origin.clone().addScaledVector(frame.axis,frame.length),width:frame.origin.clone().addScaledVector(frame.right,frame.width/2),end_width:frame.origin.clone().addScaledVector(frame.axis,frame.length).addScaledVector(frame.right,frame.endWidth/2)};
+        for (const [key, handle] of Object.entries(node.rayHandles || {})) {
+            handle.position.copy(node.worldToLocal(positions[key]));
+            const preview = Preview.selected || window.main_preview;
+            const size = Math.max(.12, (preview?.calculateControlScale?.(positions[key]) || .5) * .6);
+            handle.scale.set(size/frame.scale.x,size/frame.scale.y,size/frame.scale.z);
+            handle.visible = editing;
+        }
+        if (node.rayGizmo) {
+            node.rayGizmo.material.color.set(element.selected ? 0x5ba7ff : 0xffd99a);
+            node.rayGizmo.material.opacity = element.selected ? 0.8 : 0.3;
+        }
+    }
+
+    function godRayFrame(element, camera = Preview.selected?.camera || window.main_preview?.camera) {
+        const node = element.mesh;
+        node.updateWorldMatrix(true, false);
+        const origin = node.getWorldPosition(new THREE.Vector3());
+        const axis = new THREE.Vector3(0, -1, 0).transformDirection(node.matrixWorld);
+        const right = new THREE.Vector3(1, 0, 0).transformDirection(node.matrixWorld);
+        const light = window.three_lights?.[element.light_uuid];
+        if ((light?.isDirectionalLight || light?.isSpotLight) && light.target) {
+            const direction = light.target.getWorldPosition(new THREE.Vector3()).sub(light.getWorldPosition(new THREE.Vector3()));
+            if (direction.lengthSq() > 1e-6) axis.copy(direction.normalize());
+        }
+        right.addScaledVector(axis, -right.dot(axis));
+        if (right.lengthSq() < 1e-6) right.set(Math.abs(axis.x)<.9?1:0,Math.abs(axis.x)<.9?0:1,0).addScaledVector(axis,-right.dot(axis));
+        right.normalize();
+        const scale = node.getWorldScale(new THREE.Vector3());
+        if (element.orientation !== 'fixed' && camera) {
+            const view = camera.isOrthographicCamera ? new THREE.Vector3(0,0,1).applyQuaternion(camera.getWorldQuaternion(new THREE.Quaternion())) : camera.getWorldPosition(new THREE.Vector3()).sub(origin.clone().addScaledVector(axis,element.length*scale.y/2));
+            if (element.orientation === 'y') view.y = 0;
+            const candidate = new THREE.Vector3().crossVectors(axis, view);
+            if (candidate.lengthSq() > 1e-6) right.copy(candidate.normalize());
+        }
+        right.applyAxisAngle(axis, element.roll*Math.PI/180);
+        return {origin,axis,right,scale,length:element.length*scale.y,width:element.width*scale.x,endWidth:element.end_width*scale.x};
+    }
+
+    function setGodRayAttachment(element, attached, lightUUID = element.light_uuid) {
+        godRayController.updateAttachment(element);
+        const frame = godRayFrame(element), node = element.mesh;
+        element.light_uuid = lightUUID;
+        element.light_attached = attached;
+        const lightElement = window.LightElement?.all?.find(light=>light.uuid===lightUUID);
+        if (attached && lightElement) element.addTo(lightElement);
+        else if (!attached && element.parent?.type === 'light') element.addTo(element.parent.parent);
+        NodePreviewController.prototype.updateTransform.call(godRayController,element);
+        if (attached && lightElement?.mesh) lightElement.mesh.add(node);
+        const position = node.parent.worldToLocal(frame.origin.clone());
+        element.position = position.toArray();
+        if (attached) {
+            const lightNode = window.Project?.nodes_3d?.[lightUUID];
+            if (lightNode) {
+                const anchor = node.parent.worldToLocal(lightNode.getWorldPosition(new THREE.Vector3()));
+                element.attachment_position = anchor.toArray();
+                element.position = position.sub(anchor).toArray();
+            }
+        } else {
+            const right = frame.right.clone().applyAxisAngle(frame.axis,-element.roll*Math.PI/180);
+            const up = frame.axis.clone().negate(), back = new THREE.Vector3().crossVectors(right,up).normalize();
+            const quaternion = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(right,up,back));
+            quaternion.premultiply(node.parent.getWorldQuaternion(new THREE.Quaternion()).invert());
+            const rotation = new THREE.Euler().setFromQuaternion(quaternion,node.rotation.order);
+            element.rotation = [rotation.x,rotation.y,rotation.z].map(THREE.MathUtils.radToDeg);
+        }
+        godRayController.updateTransform(element);
+    }
+
+    function installGodRayGizmoControls() {
+        let drag = null, hovered = null, statusBefore = '';
+        const raycaster = new THREE.Raycaster();
+        const stop = event => {event.preventDefault();event.stopPropagation();event.stopImmediatePropagation();};
+        const restoreStatus = () => {if (hovered) {if(window.Prop?.file_name===hovered)Blockbench.setStatusBarText();hovered=null;}};
+        const project = (event, preview) => {
+            const rect=preview.canvas.getBoundingClientRect();
+            raycaster.setFromCamera(new THREE.Vector2((event.clientX-rect.left)/rect.width*2-1,1-(event.clientY-rect.top)/rect.height*2),preview.camera);
+        };
+        const finish = cancelled => {
+            if (!drag) return;
+            const current=drag;drag=null;
+            if(cancelled){current.element.extend(current.before);if(current.element.mesh)godRayController.updateTransform(current.element);if(Project===current.project)Undo.cancelEdit(false);}
+            else if(current.changed)Undo.finishEdit(uiText('edit_ray'));else Undo.cancelEdit(false);
+            syncGodRayPanel();requestPreviewRender();restoreStatus();
+        };
+        const move = event => {
+            if(drag){
+                stop(event);project(event,drag.preview);
+                const point=raycaster.ray.intersectPlane(drag.plane,new THREE.Vector3());if(!point)return;
+                let value=drag.before[drag.key]+point.sub(drag.start).dot(drag.axis)*drag.factor;
+                if(event.shiftKey||event.ctrlKey||event.metaKey){const step=typeof canvasGridSize==='function'?canvasGridSize(event.shiftKey,event.ctrlKey||event.metaKey):event.ctrlKey?.1:1;value=Math.round(value/step)*step;}
+                value=Math.max(drag.key==='length'?.01:0,Math.min(100000,value));drag.element[drag.key]=value;drag.changed=drag.before[drag.key]!==value;
+                updateGodRayHelper(drag.element);requestPreviewRender();return;
+            }
+            restoreStatus();
+            if(Toolbox.selected?.id!=='lightflow_god_ray_gizmos'||!event.target?.closest?.('.preview'))return;
+            const preview=Preview.all.find(p=>p.canvas===event.target)||Preview.selected;if(!preview)return;project(event,preview);
+            const handles=GodRayElement.selected.flatMap(e=>Object.values(e.mesh?.rayHandles||{}).filter(h=>h.visible&&h.parent?.visible));
+            const hit=raycaster.intersectObjects(handles,false)[0];
+            if(hit){hovered=tl('lightflow_god_ray.'+hit.object.userData.rayKey);Blockbench.setStatusBarText(hovered);}
+        };
+        const down = event => {
+            if(event.button!==0||Toolbox.selected?.id!=='lightflow_god_ray_gizmos'||!event.target?.closest?.('.preview'))return;
+            const preview=Preview.all.find(p=>p.canvas===event.target)||Preview.selected;if(!preview)return;project(event,preview);
+            for(const element of GodRayElement.selected){
+                if(element.locked||!element.mesh?.visible)continue;
+                const hit=raycaster.intersectObjects(Object.values(element.mesh.rayHandles||{}).filter(h=>h.visible),false)[0];if(!hit)continue;
+                const frame=godRayFrame(element,preview.camera),key=hit.object.userData.rayKey;
+                const plane=new THREE.Plane().setFromNormalAndCoplanarPoint(preview.camera.getWorldDirection(new THREE.Vector3()),hit.point);
+                drag={element,key,preview,project:Project,plane,start:hit.point.clone(),axis:key==='length'?frame.axis:frame.right,factor:key==='length'?1/frame.scale.y:2/frame.scale.x,before:{length:element.length,width:element.width,end_width:element.end_width},changed:false};
+                Undo.initEdit({elements:[element]});stop(event);return;
+            }
+        };
+        const up=event=>{if(drag){stop(event);finish(false);}};
+        const cancel=()=>finish(true);
+        const key=event=>{if(drag&&event.key==='Escape'){stop(event);finish(true);}};
+        document.addEventListener('pointerdown',down,true);document.addEventListener('pointermove',move,true);document.addEventListener('pointerup',up,true);document.addEventListener('pointercancel',cancel,true);document.addEventListener('keydown',key,true);window.addEventListener('blur',cancel);
+        const tool=new Tool('lightflow_god_ray_gizmos',{name:'lightflow_atmosphere.ui.ray_gizmos',icon:'control_camera',modes:['edit','render'],selectElements:false,condition:()=>!!(Modes.edit||Modes.render)&&!!GodRayElement?.selected?.some(ray=>ray.selected),onSelect(){GodRayElement.all.forEach(updateGodRayHelper);},onUnselect(){cancel();restoreStatus();GodRayElement?.all.forEach(updateGodRayHelper);}});
+        window.LightManagerUI?.removeToolbarAction?.(tool);
+        deletables.push(tool,Blockbench.on('unselect_project',cancel),Blockbench.on('select_project',cancel),Blockbench.on('update_selection',()=>{if(drag&&!drag.element.selected)cancel();GodRayElement?.all.forEach(updateGodRayHelper);}),{delete(){cancel();restoreStatus();document.removeEventListener('pointerdown',down,true);document.removeEventListener('pointermove',move,true);document.removeEventListener('pointerup',up,true);document.removeEventListener('pointercancel',cancel,true);document.removeEventListener('keydown',key,true);window.removeEventListener('blur',cancel);}});
+    }
+
+    let godRayTab = 'look';
+    let godRayUndo = null;
+    const inspectorFrames = new Set();
+    deletables.push({delete() {inspectorFrames.forEach(cancelAnimationFrame); inspectorFrames.clear();}});
+    const uiText = key => tr('lightflow_atmosphere.ui.' + key, key);
+    const effectTones = { light:'var(--color-axis-w)', space:'#A6DCB5', motion:'#8BD5E8', finish:'#C5AFE9' };
+    const effectControlIdentity = {
+        intensity:['light_mode','light'], opacity:['opacity','finish'], gradient_curve:['gradient','finish'], bloom:['flare','light'],
+        length:['straighten','space'], width:['swap_horiz','space'], end_width:['open_in_full','space'], taper:['show_chart','space'],
+        roll:['rotate_right','motion'], edge_softness:['blur_on','finish'], fade_start:['first_page','finish'], fade_end:['last_page','finish'],
+        falloff:['show_chart','finish'], shadow_strength:['tonality','light'], near_fade:['near_me','finish'], far_start:['first_page','finish'], far_end:['last_page','finish'],
+        density:['blur_on','space'], scattering_strength:['light_mode','light'], anisotropy:['sync_alt','light'], absorption:['tonality','light'],
+        ambient:['wb_twilight','light'], shadow_fill:['brightness_6','light'], edge_feather:['blur_on','finish'],
+        height_falloff:['height','space'], height_offset:['vertical_align_center','space'], noise_scale:['ac_unit','space'], coverage:['cloud','space'], erosion:['blur_on','finish'], wind_speed:['air','motion'],
+        particle_time:['schedule','motion'], spawn_rate:['scatter_plot','light'], max_particles:['filter_9_plus','finish'], lifetime:['hourglass_empty','motion'], speed:['speed','motion'],
+        active_time:['timelapse','motion'], sleep_time:['pause','motion'], emitter_radius:['radio_button_unchecked','space'], drag:['air','finish'],
+        particle_size:['open_in_full','space'], particle_bloom:['flare','light'], size_x:['swap_horiz','space'], size_y:['height','space'],
+        preview_scale:['preview','finish'], render_scale:['photo_size_select_large','finish']
+    };
+    function identifyEffectControls(form) {
+        for (const [key, control] of Object.entries(form)) {
+            const identity = effectControlIdentity[key.replace(/^quality_/, '')];
+            if (!identity || control?.type !== 'combo_slider') continue;
+            control.icon = identity[0];
+            control.color = effectTones[identity[1]];
+            control.slider_fill = true;
+        }
+        return form;
+    }
+    const effectAction = (text, icon, click, extra = {}) => ({type: 'action_button', semantic_button: true, text, icon, background:'var(--color-button)', click, ...extra});
+    function emptyEffectForm(ElementType, action, label) {
+        return {
+            _empty: {type:'bar_display', paragraph:true, expand:true, icon:ElementType?.prototype?.icon || 'touch_app', value:uiText('select_effect'), color:'var(--color-subtle_text)'},
+            _pick: effectAction(uiText('select_existing'), 'list', event => new Menu('lightflow_pick_effect', (ElementType?.all || []).map(element => ({name:element.name, icon:element.icon, click:()=>element.select()})), {searchable:true}).open(event?.target || document.activeElement), {condition:()=>!!ElementType?.all?.length}),
+            _create: effectAction(label, 'add', ()=>BarItems[action]?.trigger())
+        };
+    }
+    function rememberInspectorScroll(panel, key) {
+        const cache = panel._lightflowScroll || (panel._lightflowScroll = {key:null, positions:new Map()});
+        if (cache.key !== null) cache.positions.set(cache.key, panel.form.node.scrollTop);
+        cache.key = key;
+        const top = cache.positions.get(key) || 0;
+        return () => {
+            panel.form.node.scrollTop = top;
+            const frame = requestAnimationFrame(()=>{inspectorFrames.delete(frame); if(panel.form?.node?.isConnected && cache.key===key)panel.form.node.scrollTop=top;});
+            inspectorFrames.add(frame);
+        };
+    }
+    function beginGodRayUndo() {
+        if (godRayUndo || godRayPanelSyncing || !GodRayElement?.selected?.length) return false;
+        godRayUndo = { elements: GodRayElement.selected.slice(), changed: false };
+        Undo.initEdit({ elements: godRayUndo.elements, outliner: true });
+        return true;
+    }
+    function finishGodRayUndo() {
+        if (!godRayUndo) return;
+        const changed = godRayUndo.changed;
+        godRayUndo = null;
+        if (changed) Undo.finishEdit('Edit God Ray');
+        else Undo.cancelEdit(false);
+    }
+    const godRayGroupsOpen = { color:false, finish:false, direction:false, softness:false, shadows:false, depth:false };
+    function godRayForm(element, dialog = false) {
+        if (!element) return emptyEffectForm(GodRayElement, 'add_lightflow_god_ray', tr('lightflow_atmosphere.action.add_god_ray','Add God Ray'));
+        const design = window.LightManagerUI.formDesign;
+        const form = {
+            _ray_tab: design.tabs({ value: godRayTab, options: { look: { name: uiText('look') }, shape: { name: uiText('shape') }, light: { name: uiText('light') } } }),
+            _ray_search: design.search()
+        };
+        if (dialog) {delete form._ray_tab; delete form._ray_search;form.name={type:'text',label:'generic.name',value:element.name};form.enabled={type:'checkbox',label:'lightflow_atmosphere.field.enabled',value:element.enabled};}
+        else if(element.enabled===false)form._activate=effectAction(uiText('activate_effect'),'visibility',()=>{
+            Undo.initEdit({elements:[element]});element.extend({enabled:true,visibility:true});Undo.finishEdit(uiText('activate_effect'));syncGodRayPanel();requestPreviewRender();
+        });
+        const tabs = {
+            look: ['intensity', 'opacity', 'color', 'end_color', 'gradient_curve', 'blend', 'bloom'],
+            shape: ['length', 'width', 'end_width', 'taper', 'orientation', 'roll', 'edge_softness', 'fade_start', 'fade_end', 'falloff'],
+            light: ['light_uuid', 'light_attached', '_attachment_help', 'inherit_color', 'occlusion', 'shadow_strength', 'near_fade', 'far_start', 'far_end']
+        };
+        for (const key of Object.values(tabs).flat()) {
+            const field = godRayRuntime.fields[key];
+            if (!field) continue;
+            const base = { label: 'lightflow_god_ray.' + key, value: element[key], ...(!dialog ? {onBefore: beginGodRayUndo, onAfter: finishGodRayUndo} : {}) };
+            if (field.type === 'vector') form[key] = design.color({ ...base, value: colorArrayToHex(element[key]) });
+            else if (field.type === 'boolean') form[key] = { ...base, type: 'checkbox' };
+            else if (field.options || key === 'light_uuid') {
+                const optionKeys = {
+                    orientation: {camera:'ray_camera_axis',y:'ray_world_y',fixed:'ray_fixed'},
+                    blend: {additive:'ray_additive',normal:'ray_alpha'},
+                    occlusion: {scene:'ray_scene_depth',shadow:'ray_scene_shadows',none:'ray_always_visible'}
+                };
+                const options = field.options
+                    ? Object.fromEntries(Object.entries(field.options).map(([value,label]) => [value, optionKeys[key]?.[value] ? uiText(optionKeys[key][value]) : label]))
+                    : { '': uiText('ray_free_direction') };
+                if (key === 'light_uuid') {
+                    for (const light of window.LightElement?.all || []) {
+                        if (['directional', 'spot'].includes(light.light_type)) options[light.uuid] = light.name;
+                    }
+                    if (element.light_uuid && !options[element.light_uuid]) options[element.light_uuid] = uiText('ray_missing_light');
+                }
+                form[key] = design.enum({ ...base, options:getAtmosphereSelectOptions(key,options) });
+            } else {
+                const spatialMax = {length:128,width:32,end_width:64,near_fade:64,far_start:128,far_end:256}[key];
+                form[key] = { ...base, type:'combo_slider', full_track:true, min:field.min, max:spatialMax || field.max,
+                    allow_higher:!!spatialMax, step:field.step || 0.1, resettable:true, reset_value:field.default };
+                if (key==='roll') form[key].marks = [-180,0,180].map(value=>({value,label:value+'°',short_label:value+'°'}));
+            }
+            form[key].panel_category_visible = dialog || tabs[godRayTab].includes(key);
+        }
+        form._shadow_help = {
+            panel_category_visible: dialog || godRayTab==='light',
+            type: 'info', text: tr('lightflow_god_ray.shadow_help', 'Light shadows require a linked Directional or Spot light with shadows enabled. The ray stays at its own position. No linked shadow map: scene occlusion only.')
+        };
+        form.light_attached = {type:'checkbox',label:uiText('ray_attached'),value:element.light_attached,condition:result=>!!result.light_uuid,panel_category_visible:dialog||godRayTab==='light'};
+        form._attachment_help = {type:'info',text:uiText('ray_attachment_help'),condition:result=>result.light_attached,panel_category_visible:dialog||godRayTab==='light'};
+        // Keep the shared native control grammar, including slider transactions.
+        const enhanced = identifyEffectControls(enhanceAtmosphereDialogForm(form));
+        if (!dialog) {
+            const sections = {
+                look:[['intensity','opacity','color','end_color'],['color',uiText('ray_color_detail'),'gradient',['gradient_curve']],['finish',uiText('ray_compositing'),'flare',['blend','bloom']]],
+                shape:[['length','width','end_width','taper'],['direction',uiText('ray_plane'),'rotate_right',['orientation','roll']],['softness',uiText('ray_soft_edges'),'blur_on',['edge_softness','fade_start','fade_end','falloff']]],
+                light:[['light_uuid','light_attached','_attachment_help','inherit_color','occlusion'],['shadows',uiText('ray_shadow_detail'),'tonality',['shadow_strength','_shadow_help']],['depth',uiText('ray_camera_fade'),'distance',['near_fade','far_start','far_end']]]
+            };
+            const ordered = {_ray_tab:enhanced._ray_tab,_ray_search:enhanced._ray_search};
+            if (enhanced._activate) ordered._activate = enhanced._activate;
+            for (const [category, groups] of Object.entries(sections)) {
+                for (const spec of groups) {
+                    if (spec.length===4 && Array.isArray(spec[3])) {
+                        const [id,label,icon,keys]=spec,groupKey='_ray_group_'+id;
+                        ordered[groupKey]=design.group({label,label_icon:icon,value:godRayGroupsOpen[id],panel_category_visible:category===godRayTab});
+                        for (const key of keys) if (enhanced[key]) {
+                            const condition=enhanced[key].condition;
+                            ordered[key]={...enhanced[key],condition:result=>result[groupKey]===true&&(!condition||Condition(condition,result))};
+                        }
+                    } else for (const key of spec) if (enhanced[key]) ordered[key]=enhanced[key];
+                }
+            }
+            return ordered;
+        }
+        return dialog ? window.LightManagerUI.taskDialogForm(enhanced, Object.entries(tabs).map(([id,entries]) => ({id, label:uiText(id), entries:id==='light' ? [...entries,'_shadow_help'] : entries}))) : enhanced;
+    }
+    function applyGodRayValues(elements, result, keys) {
+        let changed = false;
+        for (const element of elements) {
+            const lightUUID = result.light_uuid === undefined ? element.light_uuid : result.light_uuid;
+            const attached = !!lightUUID && (result.light_attached === undefined ? element.light_attached : result.light_attached);
+            if (attached !== element.light_attached || (attached && lightUUID !== element.light_uuid)) {
+                setGodRayAttachment(element, attached, lightUUID); changed = true;
+            }
+            for (const key of keys) {
+                if (key === 'light_attached') continue;
+                if (!GodRayElement.properties[key]) continue;
+                const field = godRayRuntime.fields[key];
+                const value = field?.type === 'vector' ? hexToColorArray(result[key], element[key]) : result[key];
+                if (JSON.stringify(value) === JSON.stringify(element[key])) continue;
+                element[key] = Array.isArray(value) ? value.slice() : value;
+                changed = true;
+            }
+            element.sanitizeName();
+            godRayRuntime.sanitize(element);
+            godRayController.updateTransform(element);
+        }
+        if (changed) requestPreviewRender();
+        return changed;
+    }
+    function syncGodRayPanel() {
+        if (!godRayPanel?.form) return;
+        finishGodRayUndo();
+        const restore = rememberInspectorScroll(godRayPanel, `${GodRayElement.selected[0]?.uuid || 'empty'}:${godRayTab}`);
+        godRayPanelSyncing = true;
+        try {
+            godRayPanel.form.form_config = (window.LightManagerUI?.prepareForm || (form => form))(godRayForm(GodRayElement.selected[0]));
+            godRayPanel.form.buildForm();
+            restore();
+        } finally { godRayPanelSyncing = false; }
+    }
+    function registerGodRayElement() {
+        godRayRuntime = createGodRayRuntime(THREE, () => window.LightflowAmbientOcclusion?.invalidateSceneCache?.());
+        class LightflowGodRayElement extends OutlinerElement {
+            constructor(data, uuid) {
+                super(data, uuid);
+                for (const prop of Object.values(LightflowGodRayElement.properties)) prop.reset(this);
+                if (data) this.extend(data);
+                godRayRuntime.sanitize(this);
+            }
+            get origin() { return this.position; }
+            getWorldCenter() { return this.mesh.getWorldPosition(new THREE.Vector3()); }
+            extend(data) {
+                for (const prop of Object.values(LightflowGodRayElement.properties)) prop.merge(this, data);
+                godRayRuntime.sanitize(this);
+                this.sanitizeName();
+                return this;
+            }
+            getUndoCopy() { const copy = new LightflowGodRayElement(this, this.uuid); delete copy.parent; return copy; }
+            getSaveCopy() {
+                const copy = { type: 'lightflow_god_ray', uuid: this.uuid };
+                for (const prop of Object.values(LightflowGodRayElement.properties)) prop.copy(this, copy);
+                return copy;
+            }
+            select(...args) { super.select(...args); updateGodRayHelper(this); syncGodRayPanel(); return this; }
+            unselect(...args) { super.unselect(...args); updateGodRayHelper(this); syncGodRayPanel(); }
+            static behavior = { unique_name: true, movable: true, rotatable: true,
+                parent_types: ['root', 'group', 'armature_bone', 'light'], hide_in_screenshot: true };
+        }
+        GodRayElement = LightflowGodRayElement;
+        Object.assign(GodRayElement.prototype, { title: 'God Ray', type: 'lightflow_god_ray', icon: 'lightflow:godray', movable: true,
+            rotatable: true, needsUniqueName: true, name_regex: () => window.Format?.node_name_regex ?? 'a-zA-Z0-9_' });
+        GodRayElement.prototype.buttons = [Outliner.buttons.export, Outliner.buttons.locked, Outliner.buttons.visibility];
+        GodRayElement.prototype.menu = new Menu(['edit_lightflow_god_ray', '_', ...Outliner.control_menu_group, '_', 'rename', 'delete']);
+        for (const [key, type, value] of [['name', 'string', 'God Ray'], ['position', 'vector', [0, 32, 0]],
+            ['rotation', 'vector', [0, 0, 0]], ['visibility', 'boolean', true], ['enabled', 'boolean', true],
+            ['export', 'boolean', true], ['locked', 'boolean', false],
+            ['light_attached','boolean',false], ['attachment_position','vector',[0,0,0]]]) {
+            deletables.push(new Property(GodRayElement, type, key, { default: value }));
+        }
+        const en = {}, es = {};
+        for (const [key, field] of Object.entries(godRayRuntime.fields)) {
+            deletables.push(new Property(GodRayElement, field.type || 'number', key, { default: field.default }));
+            en['lightflow_god_ray.' + key] = field.label;
+            es['lightflow_god_ray.' + key] = field.es;
+        }
+        en['lightflow_god_ray.shadow_help'] = 'Light shadows require a linked Directional or Spot light with shadows enabled. The ray stays at its own position. No linked shadow map: scene occlusion only.';
+        es['lightflow_god_ray.shadow_help'] = 'La oclusion desde la luz requiere vincular una luz Directional o Spot con sombras activadas. El rayo conserva su posicion. Sin mapa de sombras se usa solo la oclusion de la escena.';
+        Language.addTranslations('en', en); Language.addTranslations('es', es);
+        allowAnimationModeInspection(GodRayElement);
+        const reloadedGodRayElements = prepareReloadedAtmosphereElements(GodRayElement, 'lightflow_god_ray');
+        OutlinerElement.registerType(GodRayElement, 'lightflow_god_ray');
+        publishWindowBinding('LightflowGodRayElement', GodRayElement);
+        publishWindowBinding('LightflowGodRays', godRayRuntime);
+        godRayController = new NodePreviewController(GodRayElement, {
+            setup(element) {
+                const node = new THREE.Object3D();
+                Project.nodes_3d[element.uuid] = node;
+                node.name = element.uuid; node.type = element.type; node.isElement = true;
+                node.userData.lightflowNoShadow = true;
+                node.rotation.order = window.Format?.euler_order || 'ZYX';
+                const box = new THREE.BoxGeometry(1, 1, 1);
+                node.rayGizmo = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0xffd99a, transparent: true, opacity: 0.4, depthWrite: false }));
+                node.rayGizmo.raycast = () => {};
+                const proxy = new THREE.Mesh(box, new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false, side: THREE.DoubleSide }));
+                proxy.name = element.uuid; proxy.type = element.type; proxy.isElement = true;
+                proxy.userData.lightflowNoShadow = true;
+                proxy.userData.lightflowVolumeSelectionProxy = true;
+                node.add(node.rayGizmo, proxy);
+                node.raySelection = proxy;
+                node.rayHandles = {};
+                for (const [key,color] of [['length',0x67d7e8],['width',0xffd99a],['end_width',0xb2a5ff]]) {
+                    const handle = new THREE.Mesh(key==='length'?new THREE.OctahedronGeometry(.5):new THREE.BoxGeometry(1,.55,.55), new THREE.MeshBasicMaterial({color,depthTest:false,depthWrite:false}));
+                    handle.userData.rayKey=key;handle.userData.lightflowNoShadow=true;handle.renderOrder=1100;node.rayHandles[key]=handle;node.add(handle);
+                }
+                node.rayGizmo.onBeforeRender = (_renderer,_scene,camera) => updateGodRayHelper(element,camera);
+                node.geometry = new THREE.BufferGeometry();
+                node.geometry.boundingBox = new THREE.Box3().makeEmpty();
+                node.raycast = (raycaster, hits) => {
+                    if (!proxy.visible || !node.visible) return;
+                    proxy.updateWorldMatrix(true, false); proxy.raycast(raycaster, hits);
+                };
+                this.updateTransform(element);
+                this.dispatchEvent('setup', { element });
+            },
+            updateTransform(element) {
+                NodePreviewController.prototype.updateTransform.call(this, element);
+                if (element.parent?.type === 'light' && element.parent.mesh) {
+                    element.parent.mesh.add(element.mesh);
+                    element.mesh.position.fromArray(element.position);
+                    element.mesh.updateMatrixWorld(true);
+                }
+                updateGodRayHelper(element);
+                requestPreviewRender();
+                this.dispatchEvent('update_transform', { element });
+            },
+            updateAttachment(element) {
+                if (!element.light_attached || !element.mesh?.parent) return;
+                const node=element.mesh,lightNode=window.Project?.nodes_3d?.[element.light_uuid];
+                const anchor=lightNode ? node.parent.worldToLocal(lightNode.getWorldPosition(new THREE.Vector3())) : new THREE.Vector3().fromArray(element.attachment_position);
+                element.attachment_position=anchor.toArray();
+                node.position.copy(anchor).add(new THREE.Vector3().fromArray(element.position));node.updateMatrixWorld(true);
+            },
+            remove(element) {
+                const node = element.mesh;
+                NodePreviewController.prototype.remove.call(this, element);
+                // Native remove only releases the root geometry, not helper children.
+                node?.children.forEach(child => { child.geometry?.dispose(); child.material?.dispose(); });
+                requestPreviewRender();
+            },
+            updateSelection(element) { updateGodRayHelper(element); this.dispatchEvent('update_selection', { element }); }
+        });
+        rebuildReloadedAtmosphereElementPreviews(reloadedGodRayElements, godRayController);
+        installGodRayGizmoControls();
+        const createAttached = new Action('lightflow_god_ray_from_light', {name:'lightflow_atmosphere.ui.ray_from_light',icon:'lightflow:godray',category:'edit',
+            condition:()=>window.LightElement?.selected?.some(light=>['spot','directional'].includes(light.light_type)),
+            click(){
+                const light=window.LightElement.selected.find(light=>['spot','directional'].includes(light.light_type));if(!light)return;
+                Undo.initEdit({outliner:true,elements:[],selection:true});
+                const ray=new GodRayElement({name:light.name+' Ray',light_uuid:light.uuid,light_attached:true,position:[0,0,0],inherit_color:true,occlusion:light.has_shadow?'shadow':'scene'}).addTo(light).init();
+                light.isOpen=true;light.preview_controller.updateSelection(light);
+                unselectAll();ray.select();
+                Undo.finishEdit(uiText('ray_from_light'),{outliner:true,elements:[ray],selection:true});
+                godRayPanel?.selectTab?.();BarItems.lightflow_god_ray_gizmos.select();requestPreviewRender();
+            }
+        });
+        const detach = new Action('lightflow_god_ray_detach',{name:'lightflow_atmosphere.ui.ray_detach',icon:'link_off',category:'edit',condition:()=>GodRayElement?.selected?.some(ray=>ray.light_attached),click(){
+            const rays=GodRayElement.selected.filter(ray=>ray.light_attached);Undo.initEdit({elements:rays,outliner:true});for(const ray of rays)setGodRayAttachment(ray,false,'');Undo.finishEdit(uiText('ray_detach'));syncGodRayPanel();requestPreviewRender();
+        }});
+        deletables.push(createAttached,detach);
+        GodRayElement.prototype.menu.structure.unshift('lightflow_god_ray_gizmos','lightflow_god_ray_detach','_');
+        const addAction = new Action('add_lightflow_god_ray', {
+            name: 'lightflow_atmosphere.action.add_god_ray', icon: 'lightflow:godray', category: 'edit', condition: () => !!window.Project && !!(Modes.edit || Modes.render),
+            click() {
+                Undo.initEdit({ outliner: true, elements: [], selection: true });
+                const ray = new GodRayElement().addTo().init();
+                unselectAll(); ray.select();
+                Undo.finishEdit('Add God Ray', { outliner: true, elements: [ray], selection: true });
+                godRayPanel?.selectTab?.(); requestPreviewRender();
+            }
+        });
+        const editAction = new Action('edit_lightflow_god_ray', {
+            name: 'Edit God Ray', icon: 'tune', category: 'edit', condition: () => !!GodRayElement.selected.length,
+            click() {
+                const elements = GodRayElement.selected.slice();
+                showEffectDialog('lightflow_god_ray_dialog', { title: 'God Ray', width: 560, form: godRayForm(elements[0], true),
+                    onConfirm(result) {
+                        Undo.initEdit({ elements, outliner: true });
+                        applyGodRayValues(elements, result, Object.keys(result));
+                        Undo.finishEdit('Edit God Ray'); syncGodRayPanel();
+                    }
+                });
+            }
+        });
+        deletables.push(addAction, editAction);
+        godRayPanel = new Panel('lightflow_god_ray_properties', { name: 'lightflow_atmosphere.ui.ray', icon: 'lightflow:godray', growable: true, resizable: true,
+            condition: { modes: ['render'], project: true },
+            default_position: { slot: 'right_bar', height: 480, folded: false, attached_to: 'light_properties', attached_index: 2 },
+            form: (window.LightManagerUI?.prepareForm || (form => form))(godRayForm(null)) });
+        const change = godRayPanel.form.on('change', ({ result, changed_keys }) => {
+            if (godRayPanelSyncing) return;
+            const keys = changed_keys?.length ? changed_keys : Object.keys(result);
+            if (keys.includes('_ray_tab')) { godRayTab = result._ray_tab; syncGodRayPanel(); return; }
+            if (keys.every(key=>key.startsWith('_ray_group_'))) {for (const key of keys) godRayGroupsOpen[key.slice('_ray_group_'.length)]=result[key]===true;return;}
+            const direct = beginGodRayUndo();
+            if (!godRayUndo) return;
+            godRayUndo.changed = applyGodRayValues(godRayUndo.elements, result, keys) || godRayUndo.changed;
+            if (direct) finishGodRayUndo();
+        });
+        deletables.push(change, godRayPanel, window.LightManagerUI.addDesignedPanelStyles('lightflow_god_ray_properties', { row_padding: '3px 4px' }));
+        window.LightManagerUI.workspace?.register(godRayPanel);
+        deletables.push(Blockbench.on('update_selection', syncGodRayPanel));
+        deletables.push(Blockbench.on('update_view', () => GodRayElement.all.forEach(updateGodRayHelper)));
+        const gizmos = () => GodRayElement.all.forEach(updateGodRayHelper);
+        window.addEventListener('lightflow_gizmo_visibility_changed', gizmos);
+        deletables.push({ delete() { window.removeEventListener('lightflow_gizmo_visibility_changed', gizmos); } });
+    }
+
+    function disposeGodRays() {
+        finishGodRayUndo();
+        godRayRuntime?.dispose();
+        for (const project of window.ModelProject?.all || [window.Project]) {
+            for (const element of project?.elements || []) {
+                if (element.type !== 'lightflow_god_ray') continue;
+                const node = project.nodes_3d?.[element.uuid];
+                node?.traverse(object => { object.geometry?.dispose(); object.material?.dispose(); });
+                node?.parent?.remove(node);
+                if (node) delete project.nodes_3d[element.uuid];
+            }
+        }
+        if (OutlinerElement.types.lightflow_god_ray === GodRayElement) delete OutlinerElement.types.lightflow_god_ray;
+        if (NodePreviewController.controllers?.lightflow_god_ray === godRayController) godRayController.delete();
+        godRayRuntime = null; godRayPanel = null; GodRayElement = null; godRayController = null;
+    }
+
+    function particleEffectRecordForIdentifier(identifier) {
+        for (const record of particleEffectRecords.values()) {
+            if (record.config.identifier === identifier) return record;
+        }
+        return null;
+    }
+
+    function ensureParticleEffectScene() {
+        if (!window.Wintersky?.Scene || !window.Wintersky?.Config || !window.Wintersky?.Emitter) return null;
+        if (!particleEffectScene) {
+            particleEffectScene = new window.Wintersky.Scene({
+                fetchTexture: config => config.preview_texture ||
+                    particleEffectRecordForIdentifier(config.identifier)?.element.particle_texture ||
+                    window.WinterskyScene?.fetchTexture?.(config),
+                fetchParticleFile: (identifier, config) => {
+                    const imported = particleEffectRecordForIdentifier(identifier);
+                    return imported ? { json: JSON.parse(imported.json), file_path: imported.path } :
+                        window.WinterskyScene?.fetchParticleFile?.(identifier, config);
+                }
+            });
+            particleEffectScene.global_options.scale = 16;
+            particleEffectScene.global_options.loop_mode = 'auto';
+            particleEffectScene.global_options.parent_mode = 'entity';
+            publishWindowBinding('LightflowParticleScene', particleEffectScene);
+            publishWindowBinding('LightflowParticleBloom', { hasBloom: hasParticleBloom, renderBloomContribution: renderParticleBloomContribution });
+        }
+        if (window.settings?.particle_tick_rate?.value) {
+            particleEffectScene.global_options.tick_rate = window.settings.particle_tick_rate.value;
+        }
+        const canvasScene = window.Canvas?.scene;
+        if (canvasScene && particleEffectScene.space.parent !== canvasScene) {
+            canvasScene.add(particleEffectScene.space);
+        }
+        return particleEffectScene;
+    }
+
+    function ensureParticleBloomMaterial(emitter) {
+        const material = emitter?.material;
+        if (!material) return null;
+        if (material.userData.lightflowParticleBloomMaterial) return material.userData.lightflowParticleBloomMaterial;
+        // Keep Wintersky's texture UV and per-particle color/alpha in Studio's
+        // selective emission pass, including emitters spawned by events.
+        const bloomMaterial = new THREE.ShaderMaterial({
+            uniforms: {
+                map: material.uniforms.map,
+                materialType: material.uniforms.materialType,
+                uBloom: { value: 0 },
+                uBloomEncoded: { value: 1 },
+                uSceneDepth: { value: material.uniforms.map.value },
+                uSceneViewport: { value: new THREE.Vector2(1, 1) },
+                uSceneDepthActive: { value: 0 }
+            },
+            vertexShader: 'attribute vec4 clr; varying vec2 vUv; varying vec4 vColor; void main() { vUv = uv; vColor = clr; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+            fragmentShader: `uniform sampler2D map; uniform int materialType; uniform float uBloom;
+                uniform sampler2D uSceneDepth; uniform vec2 uSceneViewport;
+                uniform float uSceneDepthActive, uBloomEncoded;
+                varying vec2 vUv; varying vec4 vColor;
+                void main() {
+                    if (uSceneDepthActive > 0.5 && gl_FragCoord.z > texture2D(uSceneDepth, gl_FragCoord.xy / uSceneViewport).r + 0.0000002) discard;
+                    vec4 texel = texture2D(map, vUv);
+                    if (materialType == 0 && texel.a < 0.5) discard;
+                    float alpha = materialType < 2 ? 1.0 : texel.a * vColor.a;
+                    vec3 emission = max(texel.rgb * vColor.rgb * alpha * uBloom, vec3(0.0));
+                    gl_FragColor = vec4(uBloomEncoded > 0.5 ? clamp(log2(vec3(1.0) + emission) / 4.0874628413, 0.0, 1.0) : emission, 0.0);
+                }`,
+            transparent: true, depthWrite: false, depthTest: true, toneMapped: false,
+            blending: THREE.CustomBlending, blendSrc: THREE.OneFactor, blendDst: THREE.OneFactor,
+            blendSrcAlpha: THREE.ZeroFactor, blendDstAlpha: THREE.OneFactor
+        });
+        material.depthWrite = material.uniforms.materialType.value < 2;
+        material.userData.lightflowParticleNative = true;
+        material.userData.lightflowParticleBloomMaterial = bloomMaterial;
+        // Wintersky changes its meshes outside Blockbench's element events.
+        // Refresh native MRT routing only when that topology changes; otherwise
+        // a newly spawned single-output shader can inherit MRT draw buffers.
+        let particleMeshes = new Set();
+        const syncTopology = () => {
+            const next = new Set((emitter.particles || []).map(particle => particle.mesh));
+            if (next.size !== particleMeshes.size || [...next].some(mesh => !particleMeshes.has(mesh))) {
+                particleMeshes = next;
+                window.LightflowAmbientOcclusion?.invalidateSceneCache?.();
+            }
+        };
+        const originalSpawn = emitter.spawnParticles;
+        if (typeof originalSpawn === 'function') emitter.spawnParticles = function(...args) {
+            const result = originalSpawn.apply(this, args); syncTopology(); return result;
+        };
+        emitter.on?.('ticked', syncTopology);
+        window.LightflowAmbientOcclusion?.invalidateSceneCache?.();
+        const originalDelete = emitter.delete;
+        let disposed = false;
+        emitter.delete = function(...args) {
+            if (!disposed) {
+                emitter.removeEventListener?.('ticked', syncTopology);
+                particleMeshes.clear();
+                bloomMaterial.dispose(); disposed = true;
+                window.LightflowAmbientOcclusion?.invalidateSceneCache?.();
+            }
+            return originalDelete.apply(this, args);
+        };
+        return bloomMaterial;
+    }
+
+    function hasParticleBloom() {
+        let active = false;
+        window.Canvas?.scene?.traverseVisible(object => {
+            if (object.isMesh && object.material?.visible !== false && Number(object.material?.userData?.lightflowParticleBloom) > 0) active = true;
+        });
+        return active;
+    }
+
+    function renderParticleBloomContribution(preview, { target, depthTexture } = {}) {
+        const renderer = preview?.renderer, scene = window.Canvas?.scene;
+        if (!renderer || !scene || !target || !depthTexture || !hasParticleBloom()) return false;
+        const changes = [], previousTarget = renderer.getRenderTarget(), autoClear = renderer.autoClear;
+        const background = scene.background, overrideMaterial = scene.overrideMaterial;
+        const shadowAutoUpdate = renderer.shadowMap?.autoUpdate, shadowNeedsUpdate = renderer.shadowMap?.needsUpdate;
+        try {
+            // Render particles in their actual scene hierarchy, including local
+            // emitters and event children. Geometry depth comes from the frame.
+            scene.traverseVisible(object => {
+                if (!(object.isMesh || object.isLine || object.isPoints || object.isSprite)) return;
+                const source = object.material, bloom = source?.userData?.lightflowParticleBloomMaterial;
+                changes.push({ object, source, visible: object.visible, bloom });
+            });
+            for (const { object, source, bloom } of changes) {
+                if (!bloom || source.visible === false || !(source.userData.lightflowParticleBloom > 0)) { object.visible = false; continue; }
+                const u = bloom.uniforms;
+                u.uSceneDepth.value = depthTexture;
+                u.uSceneViewport.value.set(target.width, target.height);
+                u.uSceneDepthActive.value = source.depthTest === false ? 0 : 1;
+                u.uBloomEncoded.value = 0;
+                object.material = bloom;
+            }
+            scene.background = null; scene.overrideMaterial = null;
+            if (renderer.shadowMap) { renderer.shadowMap.autoUpdate = false; renderer.shadowMap.needsUpdate = false; }
+            renderer.autoClear = false;
+            renderer.setRenderTarget(target);
+            renderer.render(scene, preview.camera);
+            return true;
+        } finally {
+            for (const { object, source, visible, bloom } of changes) {
+                object.material = source; object.visible = visible;
+                if (bloom) {
+                    bloom.uniforms.uSceneDepthActive.value = 0;
+                    bloom.uniforms.uBloomEncoded.value = 1;
+                    bloom.uniforms.uSceneDepth.value = source.uniforms.map.value;
+                }
+            }
+            scene.background = background; scene.overrideMaterial = overrideMaterial;
+            if (renderer.shadowMap) { renderer.shadowMap.autoUpdate = shadowAutoUpdate; renderer.shadowMap.needsUpdate = shadowNeedsUpdate; }
+            renderer.setRenderTarget(previousTarget); renderer.autoClear = autoClear;
+        }
+    }
+
+    function syncParticleEmitterBloom(emitter, element) {
+        const bloomMaterial = ensureParticleBloomMaterial(emitter);
+        if (bloomMaterial) {
+            emitter.material.depthWrite = emitter.material.uniforms.materialType.value < 2;
+            bloomMaterial.depthWrite = emitter.material.depthWrite;
+            bloomMaterial.uniforms.uBloom.value = Math.max(0, finite(element?.particle_bloom, 0));
+            bloomMaterial.side = emitter.material.side;
+            emitter.material.userData.lightflowParticleBloom = bloomMaterial.uniforms.uBloom.value;
+        }
+        for (const child of emitter?.child_emitters || []) {
+            syncParticleEmitterBloom(child, particleEffectRecordForIdentifier(child.config.identifier)?.element);
+        }
+    }
+
+    function releaseParticleEffect(uuid) {
+        const record = particleEffectRecords.get(uuid);
+        if (!record) return;
+        particleEffectRecords.delete(uuid);
+        record.emitter?.stopLoop?.();
+        record.emitter?.delete?.();
+        record.config?.texture?.dispose?.();
+        if (record.config?.identifier && particleEffectScene?.child_configs) {
+            const childConfig = particleEffectScene.child_configs[record.config.identifier];
+            if (childConfig) retiredParticleConfigs.add(childConfig);
+            delete particleEffectScene.child_configs[record.config.identifier];
+        }
+    }
+
+    function clearParticleEffects() {
+        for (const uuid of particleEffectRecords.keys()) releaseParticleEffect(uuid);
+        for (const config of Object.values(particleEffectScene?.child_configs || {})) retiredParticleConfigs.add(config);
+        for (const config of retiredParticleConfigs) config.texture?.dispose?.();
+        retiredParticleConfigs.clear();
+        if (particleEffectScene?.child_configs) particleEffectScene.child_configs = {};
+        particleEffectScene?.space?.parent?.remove(particleEffectScene.space);
+    }
+
+    function getParticlePreviewTexture(element, json) {
+        if (element.particle_texture) return window.LightManagerUI.textureSource.url(element.particle_texture) || element.particle_texture;
+        const packs = (window.LightflowTerrainRender || window.BedrockStructureStudio)?.packs;
+        return packs?.textureURL?.(json?.particle_effect?.description?.basic_render_parameters?.texture, window.Project) || '';
+    }
+
+    function syncParticleEffect(element) {
+        if (!element?.mesh || !element.particle_json) {
+            if (element?.uuid) releaseParticleEffect(element.uuid);
+            return;
+        }
+        const scene = ensureParticleEffectScene();
+        if (!scene) return;
+        let record = particleEffectRecords.get(element.uuid);
+        if (record && (record.json !== element.particle_json || record.path !== element.particle_path ||
+            record.texture !== element.particle_texture || record.node !== element.mesh)) {
+            releaseParticleEffect(element.uuid);
+            record = null;
+        }
+        if (!record) {
+            try {
+                const json = JSON.parse(element.particle_json);
+                if (!json?.particle_effect) return;
+                const config = new window.Wintersky.Config(scene, json, { path: element.particle_path || '' });
+                const textureSource = getParticlePreviewTexture(element, json);
+                if (textureSource) {
+                    config.preview_texture = textureSource;
+                    config.updateTexture();
+                }
+                const emitter = new window.Wintersky.Emitter(scene, config);
+                ensureParticleBloomMaterial(emitter);
+                const oldVariableHandler = emitter.Molang?.variableHandler;
+                if (typeof oldVariableHandler === 'function') {
+                    emitter.Molang.variableHandler = (key, params) => {
+                        const value = oldVariableHandler.call(emitter, key, params);
+                        return value !== undefined ? value : window.Animator?.MolangParser?.variableHandler?.(key);
+                    };
+                }
+                emitter.parent_mode = 'entity';
+                record = { json: element.particle_json, path: element.particle_path,
+                    texture: element.particle_texture, node: element.mesh, element, config, emitter,
+                    previewTime: null, previewAge: null, valid:!!json?.particle_effect?.components };
+                particleEffectRecords.set(element.uuid, record);
+            } catch (error) {
+                console.warn('[Lightflow Atmosphere] Invalid Bedrock particle effect.', error);
+                return;
+            }
+        }
+        const node = element.mesh;
+        const emitter = record.emitter;
+        // A one-shot Bedrock effect should still be useful as a looping art
+        // element. Keep the source JSON intact and override only the preview
+        // emitter's loop mode; artists can switch back to native behavior.
+        const loopMode=['once','looping'].includes(element.particle_preview_mode) ? element.particle_preview_mode : element.particle_loop ? 'looping' : 'auto';
+        if(emitter.loop_mode!==loopMode)record.previewTime=null;
+        emitter.loop_mode=loopMode;
+        node.updateWorldMatrix?.(true, false);
+        const worldPosition = node.getWorldPosition(new THREE.Vector3());
+        const worldRotation = node.getWorldQuaternion(new THREE.Quaternion());
+        const worldScale = node.getWorldScale(new THREE.Vector3());
+        const size = Math.max(0.01, finite(element.particle_size, 1));
+        syncParticleEmitterBloom(emitter, element);
+        // Wintersky adds local_space's world origin to global particles and
+        // again when spawning a child event. Parenting local_space to this
+        // element for global effects applies the element position twice (or
+        // three times for children). Keep the reference at scene origin while
+        // retaining the node's world rotation for initial directions.
+        if (emitter.config.space_local_position) {
+            if (emitter.local_space.parent !== node) node.add(emitter.local_space);
+            emitter.local_space.position.set(0, 0, 0);
+            emitter.local_space.quaternion.identity();
+            emitter.local_space.scale.setScalar(16 * size);
+        } else {
+            if (emitter.local_space.parent !== scene.space) scene.space.add(emitter.local_space);
+            emitter.local_space.position.set(0, 0, 0);
+            emitter.local_space.quaternion.copy(worldRotation);
+            emitter.local_space.scale.set(1, 1, 1);
+        }
+        emitter.global_space.position.copy(worldPosition);
+        if (emitter.config.space_local_position) emitter.global_space.quaternion.copy(worldRotation);
+        else emitter.global_space.quaternion.identity();
+        emitter.global_space.scale.set(16 * size * worldScale.x, 16 * size * worldScale.y, 16 * size * worldScale.z);
+        const visible = element.visibility !== false && element.enabled !== false;
+        emitter.global_space.visible = visible;
+        emitter.local_space.visible = visible;
+        const playing = element.enabled !== false && element.particle_playing !== false;
+        if (playing && !emitter.tick_interval) emitter.playLoop();
+        // toggleLoop pauses in place; stopLoop clears particles and age while
+        // leaving view_age intact, which breaks jumpTo at the saved pose.
+        if (!playing && emitter.tick_interval) emitter.toggleLoop();
+        if (!playing && element.enabled !== false) {
+            const previewTime = Math.max(0, finite(element.particle_time, 0));
+            // Undo/Redo and native emitter resets can rewind age without
+            // changing the requested still-frame time.
+            if (record.previewTime !== previewTime ||
+                Math.abs(finite(emitter.age, -1) - finite(record.previewAge, -2)) > 0.0001) {
+                emitter.jumpTo(previewTime);
+                record.previewTime = previewTime;
+                record.previewAge = emitter.age;
+            }
+        } else {
+            record.previewTime = null;
+            record.previewAge = null;
+        }
+        updateParticleHelper(element, record);
+    }
+
+    function updateParticleHelper(element, record, camera = Preview.selected?.camera || window.main_preview?.camera) {
+        const node=element.mesh;if(!node?.particleGizmo)return;
+        const workspace=window.LightManagerUI?.workspace;
+        const show=element.visibility!==false && canShowVolumeGizmos();
+        const marker=show && (workspace?.helperVisible({selected:!!element.selected,kind:'marker'})??true);
+        const bounds=show && (workspace?.helperVisible({selected:!!element.selected})??true);
+        node.particleOrigin.visible=marker;
+        const origin=node.getWorldPosition(new THREE.Vector3()), preview=Preview.all.find(p=>p.camera===camera)||Preview.selected;
+        const scale=Math.max(.08,(preview?.calculateControlScale?.(origin)||.5)*.65);
+        node.particleOrigin.scale.setScalar(scale);
+        node.particleSelection.visible=marker;node.particleSelection.scale.setScalar(scale*2);
+        node.particleOrigin.material.color.set(element.selected?0x5ba7ff:0x78ddff);
+        node.particleOrigin.material.opacity=element.selected ? .9 : .45;
+        const config=record?.config;
+        const literal=value=>typeof value==='number'&&Number.isFinite(value)?value:typeof value==='string'&&value.trim()!==''&&Number.isFinite(Number(value))?Number(value):null;
+        const vector=(value,fallback)=>Array.isArray(value)?value.map(literal):fallback;
+        const mode=config?.emitter_shape_mode||'point', offset=vector(config?.emitter_shape_offset,[0,0,0]);
+        const half=vector(config?.emitter_shape_half_dimensions,[0,0,0]),radius=literal(config?.emitter_shape_radius);
+        const dynamic=offset.includes(null)||(mode==='box'&&half.includes(null))||(['sphere','disc'].includes(mode)&&radius===null);
+        node.userData.particleShape=mode;node.userData.particleShapeDynamic=dynamic;
+        node.particleGizmo.visible=bounds&&!dynamic;
+        if(dynamic)return;
+        node.particleGizmo.material.color.set(element.selected?0x5ba7ff:0x78ddff);node.particleGizmo.material.opacity=element.selected ? .65 : .18;
+        const signature=JSON.stringify([mode,offset,half,radius,config?.emitter_shape_plane_normal,element.particle_size,element.selected,mode==='point'?scale:0]);
+        if(node.userData.particleShapeSignature===signature)return;
+        node.userData.particleShapeSignature=signature;
+        const unit=16*Math.max(.01,finite(element.particle_size,1)),center=new THREE.Vector3().fromArray(offset).multiplyScalar(unit),points=[];
+        const line=(a,b)=>points.push(a,b);
+        if(mode==='box'||mode==='entity_aabb') {
+            // The imported entity AABB is unavailable in a standalone scene.
+            if(mode==='entity_aabb'){node.particleGizmo.visible=false;return;}
+            const corners=Array.from({length:8},(_,i)=>center.clone().add(new THREE.Vector3((i&1?1:-1)*half[0]*unit,(i&2?1:-1)*half[1]*unit,(i&4?1:-1)*half[2]*unit)));
+            for(let i=0;i<8;i++)for(const bit of[1,2,4])if(!(i&bit))line(corners[i],corners[i|bit]);
+        } else if(mode==='sphere'||mode==='disc') {
+            let rotation=new THREE.Quaternion();
+            if(mode==='disc'){
+                const normal=vector(config.emitter_shape_plane_normal,[0,1,0]);
+                if(normal.includes(null)){node.particleGizmo.visible=false;return;}
+                const axis=new THREE.Vector3().fromArray(normal);if(axis.lengthSq()<1e-6)axis.set(0,1,0);
+                rotation.setFromUnitVectors(new THREE.Vector3(0,1,0),axis.normalize());
+            }
+            for(const plane of mode==='disc'?['xz']:['xy','xz','yz'])for(let i=0;i<48;i++) {
+                const point=angle=>{const p=new THREE.Vector3();p[plane[0]]=Math.cos(angle)*Math.max(0,radius)*unit;p[plane[1]]=Math.sin(angle)*Math.max(0,radius)*unit;return p.applyQuaternion(rotation).add(center);};
+                line(point(i/48*Math.PI*2),point((i+1)/48*Math.PI*2));
+            }
+        } else {
+            for(const axis of['x','y','z']){const a=center.clone(),b=center.clone();a[axis]-=scale;b[axis]+=scale;line(a,b);}
+        }
+        if(element.selected&&center.lengthSq()>.001)line(new THREE.Vector3(),center);
+        let attribute=node.particleGizmo.geometry.getAttribute('position');
+        if(!attribute||attribute.count!==points.length){attribute=new THREE.Float32BufferAttribute(new Float32Array(points.length*3),3);node.particleGizmo.geometry.setAttribute('position',attribute);}
+        points.forEach((point,index)=>attribute.setXYZ(index,point.x,point.y,point.z));attribute.needsUpdate=true;node.particleGizmo.geometry.computeBoundingSphere();
+    }
+
+    function syncParticleEffects(camera) {
+        if (!ParticleEffectElement) return;
+        const elements = ParticleEffectElement.all || [];
+        const active = new Set(elements.map(element => element.uuid));
+        for (const uuid of particleEffectRecords.keys()) if (!active.has(uuid)) releaseParticleEffect(uuid);
+        elements.forEach(syncParticleEffect);
+        if (camera) particleEffectScene?.updateFacingRotation?.(camera);
+    }
+
+    function importParticleJSON(existingElement = null) {
+        Blockbench.import({ resource_id: 'lightflow_particle', extensions: ['json'], type: 'Bedrock Particle' }, files => {
+            const file = files?.[0];
+            if (!file) return;
+            let json;
+            try { json = typeof file.content === 'string' ? JSON.parse(file.content) : file.content; }
+            catch (error) { json = null; }
+            if (!json?.particle_effect || typeof json.particle_effect.components !== 'object') {
+                Blockbench.showToastNotification({ text: 'Invalid .particle.json particle_effect', icon: 'error', expire: 5000 });
+                return;
+            }
+            const textureRef = String(json.particle_effect.description?.basic_render_parameters?.texture || '');
+            let previousTextureRef = '';
+            if (existingElement?.particle_json) {
+                try { previousTextureRef = String(JSON.parse(existingElement.particle_json)
+                    .particle_effect?.description?.basic_render_parameters?.texture || ''); }
+                catch (error) { /* The replacement JSON remains authoritative. */ }
+            }
+            const values = { particle_json: JSON.stringify(json), particle_path: file.path || '',
+                particle_texture: existingElement && previousTextureRef === textureRef ? existingElement.particle_texture : '',
+                particle_bloom: json.particle_effect.description?.basic_render_parameters?.material === 'particles_add' ? 0.6 : 0 };
+            let element = existingElement;
+            if (existingElement) {
+                Undo.initEdit({ elements: [existingElement] });
+                existingElement.extend(values);
+                Undo.finishEdit('Replace particle effect');
+                syncParticleEffect(existingElement);
+            } else {
+                Undo.initEdit({ outliner: true, elements: [], selection: true });
+                element = new ParticleEffectElement({ name: file.name?.replace(/\.particle\.json$|\.json$/i, '') || 'Particle Effect', ...values }).addTo().init();
+                unselectAll(); element.select();
+                Undo.finishEdit('Import particle effect', { outliner: true, elements: [element], selection: true });
+                syncParticleEffect(element);
+            }
+            // Match Blockbench's native particle import: ask for a PNG when the
+            // JSON names an external texture that the runtime did not resolve.
+            const textureSource = particleEffectRecords.get(element.uuid)?.config?.texture?.image?.src;
+            if (!element.particle_texture && textureRef && textureRef !== 'textures/particle/particles' &&
+                !textureRef.startsWith('atlas.') && (!textureSource || textureSource.startsWith('data:'))) {
+                setTimeout(() => importParticleTexture(element, file.path || ''), 0);
+            }
+            requestPreviewRender();
+        });
+    }
+
+    function importParticleTexture(element, startpath = '') {
+        Blockbench.import({ extensions: ['png'], type: 'Particle Texture', readtype: 'image', startpath }, files => {
+            const file = files?.[0];
+            if (!file) return;
+            window.LightManagerUI.textureSource.fromFile(file).then(texture => {
+            if (!texture || !ParticleEffectElement.all.includes(element)) return;
+            Undo.initEdit({ elements: [element] });
+            element.extend({ particle_texture: texture });
+            Undo.finishEdit('Change particle texture');
+            syncParticleEffect(element);
+            syncParticlePanel();
+            requestPreviewRender();
+            });
+        });
+    }
+
+    function particleJSONControls(element) {
+        let json;
+        try { json = JSON.parse(element?.particle_json || '{}'); } catch (error) { return { json: null, values: {} }; }
+        const components = json.particle_effect?.components || {};
+        const rate = components['minecraft:emitter_rate_steady'];
+        const active = components['minecraft:emitter_lifetime_once'] || components['minecraft:emitter_lifetime_looping'];
+        const billboard = components['minecraft:particle_appearance_billboard'];
+        const tint = components['minecraft:particle_appearance_tinting'];
+        const values = {};
+        const addNumber = (key, value) => { if (typeof value === 'number' && Number.isFinite(value)) values[key] = value; };
+        values.emitter_cycle=['once','looping','expression'].find(kind=>components['minecraft:emitter_lifetime_'+kind]) || 'looping';
+        addNumber('spawn_rate', rate?.spawn_rate);
+        addNumber('max_particles', rate?.max_particles);
+        if(values.emitter_cycle!=='expression')addNumber('active_time', active?.active_time ?? 10);
+        if(values.emitter_cycle==='looping')addNumber('sleep_time',active?.sleep_time ?? 0);
+        addNumber('lifetime', components['minecraft:particle_lifetime_expression']?.max_lifetime);
+        addNumber('speed', components['minecraft:particle_initial_speed']);
+        addNumber('size_x', billboard?.size?.[0]);
+        addNumber('size_y', billboard?.size?.[1]);
+        const shape=['point','box','sphere','disc','entity_aabb'].find(kind=>components['minecraft:emitter_shape_'+kind]);
+        values.emitter_shape=shape||'point';
+        const shapeConfig=components['minecraft:emitter_shape_'+values.emitter_shape]||{};
+        if(Array.isArray(shapeConfig.half_dimensions)&&shapeConfig.half_dimensions.every(v=>typeof v==='number'))values.emitter_dimensions=shapeConfig.half_dimensions.map(v=>v*2);
+        addNumber('emitter_radius',shapeConfig.radius);
+        const motion=components['minecraft:particle_motion_dynamic'];
+        if(Array.isArray(motion?.linear_acceleration)&&motion.linear_acceleration.every(v=>typeof v==='number'))values.acceleration=motion.linear_acceleration.slice();
+        addNumber('drag',motion?.linear_drag_coefficient);
+        if (typeof tint?.color === 'string' && /^#[0-9a-f]{6}$/i.test(tint.color)) values.color = tint.color;
+        return { json, values };
+    }
+
+    function particleChildIdentifiers(json) {
+        const found = new Set();
+        const visit = value => {
+            if (!value || typeof value !== 'object') return;
+            if (typeof value.particle_effect?.effect === 'string') found.add(value.particle_effect.effect);
+            for (const child of Object.values(value)) if (child && typeof child === 'object') visit(child);
+        };
+        visit(json?.particle_effect?.events);
+        return [...found];
+    }
+
+    function applyParticleJSONControl(element, key, value) {
+        const { json, values } = particleJSONControls(element);
+        if (!json?.particle_effect?.components || !Object.prototype.hasOwnProperty.call(values, key) || JSON.stringify(values[key]) === JSON.stringify(value)) return false;
+        const components = json.particle_effect.components;
+        if (key === 'spawn_rate' || key === 'max_particles') components['minecraft:emitter_rate_steady'][key] = value;
+        else if (key === 'active_time' || key === 'sleep_time') {
+            const id='minecraft:emitter_lifetime_'+values.emitter_cycle;
+            components[id] ||= {};components[id][key]=value;
+        }
+        else if(key==='emitter_cycle'){
+            if(!['once','looping','expression'].includes(value))return false;
+            const previous=components['minecraft:emitter_lifetime_'+values.emitter_cycle]||{};
+            for(const kind of['once','looping','expression'])delete components['minecraft:emitter_lifetime_'+kind];
+            components['minecraft:emitter_lifetime_'+value]=value==='expression'?{activation_expression:1,expiration_expression:0}:{active_time:previous.active_time ?? 10,...(value==='looping'?{sleep_time:previous.sleep_time ?? 0}:{})};
+        }
+        else if (key === 'lifetime') components['minecraft:particle_lifetime_expression'].max_lifetime = value;
+        else if (key === 'speed') components['minecraft:particle_initial_speed'] = value;
+        else if (key === 'size_x' || key === 'size_y') components['minecraft:particle_appearance_billboard'].size[key === 'size_x' ? 0 : 1] = value;
+        else if (key === 'color') components['minecraft:particle_appearance_tinting'].color = value;
+        else if(key==='emitter_shape'){
+            if(!['point','box','sphere'].includes(value))return false;
+            const previous=components['minecraft:emitter_shape_'+values.emitter_shape]||{};
+            for(const kind of['point','box','sphere','disc','entity_aabb'])delete components['minecraft:emitter_shape_'+kind];
+            components['minecraft:emitter_shape_'+value]={offset:previous.offset||[0,0,0],direction:previous.direction||[0,1,0],...(value==='box'?{half_dimensions:[1,1,1]}:value==='sphere'?{radius:1}:{}),...(typeof previous.surface_only==='boolean'?{surface_only:previous.surface_only}:{})};
+        }
+        else if(key==='emitter_dimensions'&&components['minecraft:emitter_shape_box'])components['minecraft:emitter_shape_box'].half_dimensions=value.map(v=>Math.max(.001,v)/2);
+        else if(key==='emitter_radius'&&components['minecraft:emitter_shape_'+values.emitter_shape])components['minecraft:emitter_shape_'+values.emitter_shape].radius=value;
+        else if(key==='acceleration'&&components['minecraft:particle_motion_dynamic'])components['minecraft:particle_motion_dynamic'].linear_acceleration=value.slice();
+        else if(key==='drag'&&components['minecraft:particle_motion_dynamic'])components['minecraft:particle_motion_dynamic'].linear_drag_coefficient=value;
+        else return false;
+        element.extend({ particle_json: JSON.stringify(json) });
+        return true;
+    }
+
+    function editParticleJSON(element) {
+        if (!element) return;
+        let formatted = element.particle_json;
+        try { formatted = JSON.stringify(JSON.parse(formatted), null, 2); } catch (error) { /* Show source unchanged. */ }
+        let dialog;
+        const validate = source => {
+            try {
+                const parsed = JSON.parse(source);
+                const effect = parsed?.particle_effect;
+                if (!effect?.description || typeof effect.description !== 'object' || Array.isArray(effect.description) || !effect.components || typeof effect.components !== 'object' || Array.isArray(effect.components)) return {error:uiText('missing_particle_components')};
+                return {parsed, count:Object.keys(effect.components).length};
+            } catch (error) { return {error:uiText('invalid_particle_json') + ': ' + error.message}; }
+        };
+        const updateStatus = result => {
+            if (!dialog?.validationNode) return;
+            const state = validate(result.source);
+            dialog.validationNode.textContent = state.error || uiText('json_valid').replace('{count}', String(state.count));
+            dialog.validationNode.style.color = state.error ? 'var(--color-error)' : 'var(--color-subtle_text)';
+            dialog.form.form_data.source.bar.querySelector('textarea')?.setAttribute('aria-invalid', String(!!state.error));
+        };
+        dialog = showEffectDialog('lightflow_particle_json_dialog', { title: uiText('edit_json'), width: 720,
+            form: {
+                source: window.LightManagerUI.formDesign.code({label:'Bedrock .particle.json',language:'json',mode:'visual',height:280,value:formatted,validate:source=>validate(source).error||''})
+            },
+            onFormChange: updateStatus,
+            onConfirm(result) {
+                const {parsed,error} = validate(result.source);
+                if (error) { updateStatus(result); return false; }
+                if (!ParticleEffectElement.all.includes(element)) return;
+                if (JSON.stringify(parsed) === element.particle_json) return;
+                Undo.initEdit({ elements: [element] });
+                element.extend({ particle_json: JSON.stringify(parsed) });
+                Undo.finishEdit('Edit particle JSON');
+                syncParticleEffect(element); syncParticlePanel(); requestPreviewRender();
+            } });
+        dialog.validationNode = document.createElement('p');
+        dialog.validationNode.setAttribute('role','status');
+        dialog.validationNode.setAttribute('aria-live','polite');
+        dialog.validationNode.style.cssText='font-size:12px;line-height:1.4;margin:8px 0 0;overflow-wrap:anywhere';
+        dialog.form.node.append(dialog.validationNode);
+        const source = dialog.form.form_data.source.bar.querySelector('textarea');
+        source.spellcheck = false;
+
+        source.setSelectionRange(0,0); source.scrollTop = 0;
+        updateStatus(dialog.getFormResult());
+    }
+
+    function particlePresetJSON(kind) {
+        const snow=kind==='snow',rain=kind==='rain';
+        const canvas=document.createElement('canvas');canvas.width=canvas.height=1;
+        canvas.getContext('2d').fillStyle='#ffffff';canvas.getContext('2d').fillRect(0,0,1,1);
+        const json={format_version:'1.10.0',particle_effect:{description:{identifier:'lightflow:'+kind,basic_render_parameters:{material:kind==='sparks'?'particles_add':'particles_alpha',texture:'textures/particle/particles'}},components:{
+            'minecraft:emitter_rate_steady':{spawn_rate:rain?45:snow?18:12,max_particles:rain?160:snow?160:80},
+            'minecraft:emitter_lifetime_looping':{active_time:1},
+            [snow||rain?'minecraft:emitter_shape_box':'minecraft:emitter_shape_point']:snow||rain?{offset:[0,12,0],half_dimensions:[6,.1,6],direction:[0,-1,0]}:{offset:[0,0,0],direction:[0,1,0]},
+            'minecraft:particle_lifetime_expression':{max_lifetime:snow?5:rain?1.5:1},
+            'minecraft:particle_initial_speed':rain?8:snow?.5:2,
+            'minecraft:particle_motion_dynamic':{linear_acceleration:[snow?.08:0,snow?-.2:rain?-2:-1,0],linear_drag_coefficient:snow?.2:0},
+            'minecraft:particle_appearance_billboard':{size:rain?[.025,.2]:snow?[.08,.08]:[.04,.04],facing_camera_mode:'rotate_xyz',uv:{texturewidth:1,textureheight:1,uv:[0,0],uv_size:[1,1]}},
+            'minecraft:particle_appearance_tinting':{color:rain?'#aaccee':snow?'#ffffff':'#ffcc66'}
+        }}};
+        return{particle_json:JSON.stringify(json),particle_texture:canvas.toDataURL(),particle_path:'',particle_playing:true,particle_size:1,particle_bloom:kind==='sparks'?.6:0,enabled:true,visibility:true};
+    }
+
+    function editParticleExpressions(element) {
+        const {json,values}=particleJSONControls(element);
+        if(!json?.particle_effect?.components)return editParticleJSON(element);
+        const components=json.particle_effect.components;
+        const specs={
+            emitter_start:['minecraft:emitter_initialization','creation_expression','emitter','variables_start','variable.speed = 2;'],
+            emitter_update:['minecraft:emitter_initialization','per_update_expression','emitter','variables_update','variable.phase = variable.emitter_age;'],
+            particle_update:['minecraft:particle_initialization','per_update_expression','particle','variables_particle_update','variable.speed = variable.speed + 0.01;'],
+            particle_render:['minecraft:particle_initialization','per_render_expression','particle','variables_particle_render',''],
+            cycle_active:['minecraft:emitter_lifetime_'+values.emitter_cycle,'active_time','cycle','duration',''],
+            cycle_sleep:['minecraft:emitter_lifetime_looping','sleep_time','cycle','sleep_time',''],
+            cycle_activation:['minecraft:emitter_lifetime_expression','activation_expression','cycle','activation_expression',''],
+            cycle_expiration:['minecraft:emitter_lifetime_expression','expiration_expression','cycle','expiration_expression','']
+        };
+        const form={_expression_tab:window.LightManagerUI.formDesign.tabs({presentation:'flat',value:'emitter',options:{emitter:{name:uiText('emitter')},particle:{name:uiText('particle')},cycle:{name:uiText('cycle')}}})};
+        const initial={};
+        for(const[id,[component,key,category,label,placeholder]]of Object.entries(specs)){
+            if(category==='cycle' && (component!=='minecraft:emitter_lifetime_'+values.emitter_cycle || (id==='cycle_active'&&values.emitter_cycle==='expression')))continue;
+            const value=components[component]?.[key];
+            const scalar=value==null||typeof value==='string'||typeof value==='number';
+            initial[id]=value==null?'':scalar?String(value):JSON.stringify(value);
+            form[id]=window.LightManagerUI.formDesign.code({language:scalar?'molang':'json',height:100,label:uiText(label),value:initial[id],placeholder,readonly:!scalar,condition:result=>result._expression_tab===category});
+        }
+        form._help={type:'info',text:uiText('variables_help')};
+        showEffectDialog('lightflow_particle_expressions',{title:uiText('variables').replace(/…$/,''),width:560,form,onConfirm(result){
+            if(!ParticleEffectElement.all.includes(element))return;
+            const current=particleJSONControls(element).json;if(!current?.particle_effect?.components)return false;
+            const next=current.particle_effect.components;let changed=false;
+            for(const[id,[component,key]]of Object.entries(specs)){
+                if(!form[id]||form[id].readonly||result[id]===initial[id])continue;
+                const value=String(result[id]||'').trim();
+                if(value){next[component] ||= {};next[component][key]=/^-?(?:\d+\.?\d*|\.\d+)$/.test(value)?Number(value):value;}
+                else if(next[component]){delete next[component][key];if(!Object.keys(next[component]).length)delete next[component];}
+                changed=true;
+            }
+            if(!changed)return;
+            Undo.initEdit({elements:[element]});element.extend({particle_json:JSON.stringify(current)});Undo.finishEdit(uiText('variables'));
+            syncParticleEffect(element);syncParticlePanel();requestPreviewRender();
+        }});
+    }
+    function applyParticlePreset(kind,element) {
+        const values=particlePresetJSON(kind);
+        if(element){Undo.initEdit({elements:[element]});element.extend(values);Undo.finishEdit(uiText('particle_setup'));}
+        else{
+            Undo.initEdit({outliner:true,elements:[],selection:true});
+            element=new ParticleEffectElement({name:uiText('preset_'+kind),...values}).addTo().init();
+            unselectAll();element.select();Undo.finishEdit(uiText('particle_setup'),{outliner:true,elements:[element],selection:true});
+        }
+        syncParticleEffect(element);syncParticlePanel();requestPreviewRender();
+    }
+    function particlePresetMenu(element,event) {
+        new Menu('lightflow_particle_presets',[
+            ...[['snow','ac_unit'],['rain','water_drop'],['sparks','auto_awesome']].map(([kind,icon])=>({name:uiText('preset_'+kind),icon,click:()=>applyParticlePreset(kind,element)})),
+            new MenuSeparator(),{name:uiText('import_effect'),icon:'upload_file',click:()=>importParticleJSON(element)}
+        ]).open(event?.target || document.activeElement);
+    }
+    async function particleSnowstormURL(element) {
+        const compress=async bytes=>{
+            const stream=new Blob([bytes]).stream().pipeThrough(new CompressionStream('deflate'));
+            const buffer=new Uint8Array(await new Response(stream).arrayBuffer());
+            let binary='';for(let i=0;i<buffer.length;i+=8192)binary+=String.fromCharCode(...buffer.subarray(i,i+8192));
+            return btoa(binary);
+        };
+        let json;try{json=JSON.parse(element.particle_json);}catch(error){editParticleJSON(element);return null;}
+        const url=new URL('https://snowstorm.app/');
+        url.searchParams.set('loadParticle',await compress(new TextEncoder().encode(JSON.stringify(json))));
+        const source=window.LightManagerUI.textureSource.url(element.particle_texture) || particleEffectRecords.get(element.uuid)?.config?.texture?.image?.src;
+        if(source){
+            try{
+                const blob=await (await fetch(source)).blob();
+                if(blob.type==='image/png'&&blob.size<200000){
+                    const texture=await compress(new Uint8Array(await blob.arrayBuffer()));
+                    if(url.href.length+texture.length<28000)url.searchParams.set('loadParticleTexture',texture);
+                }
+            }catch(error){/* An unresolved optional texture does not prevent editing the JSON. */}
+        }
+        if(url.href.length>28000){Blockbench.showQuickMessage(uiText('snowstorm_export_help'),4500);return null;}
+        return url.href;
+    }
+    async function openParticleSnowstorm(element) {
+        const url=await particleSnowstormURL(element);if(url){
+            if(element.particle_texture&&!new URL(url).searchParams.has('loadParticleTexture'))Blockbench.showQuickMessage(uiText('snowstorm_texture_help'),4500);
+            Blockbench.openLink(url);
+        }
+        return url;
+    }
+    function exportParticleJSON(element) {
+        let content=element.particle_json;try{content=JSON.stringify(JSON.parse(content),null,2);}catch(error){/* Keep invalid source editable. */}
+        Blockbench.export({type:'Bedrock Particle',extensions:['json'],name:element.name.replace(/[<>:"/\\|?*]/g,'_')+'.particle',content,savetype:'text'});
+    }
+
+    function restartParticleEffect(element) {
+        const record = particleEffectRecords.get(element?.uuid);
+        if (!record) return;
+        record.emitter.stopLoop();
+        record.previewTime = null;
+        record.previewAge = null;
+        if (element.particle_playing) record.emitter.playLoop();
+        else {
+            record.emitter.start();
+            record.emitter.jumpTo(0);
+            record.previewTime = 0;
+            record.previewAge = record.emitter.age;
+        }
+        requestPreviewRender();
+    }
+
+    let particleSourceOpen = false;
+    let particleDistributionOpen=false,particleMotionOpen=false,particleBehaviourOpen=false;
+    let particlePanelUndo = null;
+    function beginParticlePanelUndo() {
+        if (particlePanelUndo || particlePanelSyncing) return false;
+        const elements = ParticleEffectElement?.selected?.slice();
+        if (!elements?.length) return false;
+        particlePanelUndo = {elements,changed:false};
+        Undo.initEdit({elements});
+        return true;
+    }
+    function finishParticlePanelUndo() {
+        if (!particlePanelUndo) return;
+        const changed = particlePanelUndo.changed;
+        particlePanelUndo = null;
+        if (changed) Undo.finishEdit(uiText('edit_particle')); else Undo.cancelEdit(false);
+        if (changed && particlePanelTab === 'playback') {
+            const frame = requestAnimationFrame(()=>{inspectorFrames.delete(frame);syncParticlePanel();});
+            inspectorFrames.add(frame);
+        }
+    }
+    deletables.push({delete() {if(particlePanelUndo){particlePanelUndo=null;Undo.cancelEdit(false);}}});
+    function particlePanelForm(element) {
+        if (!element) return emptyEffectForm(ParticleEffectElement,'lightflow_particle_create',tr('lightflow_atmosphere.action.add_particle','Add Particle'));
+        const design = window.LightManagerUI.formDesign;
+        const tabs = design.tabs({ value: particlePanelTab,
+            options: { emission: { name: uiText('emission') }, look: { name: uiText('look') }, playback: { name: uiText('preview') } } });
+        const form = { _particle_tab: tabs, _particle_search:design.search(),
+            _setup:effectAction('','auto_awesome',event=>particlePresetMenu(element,event),{semantic_button:false,aria_label:uiText('particle_setup'),description:uiText('particle_setup')}) };
+        if(element.enabled===false)form._activate=effectAction(uiText('activate_effect'),'visibility',()=>{
+            Undo.initEdit({elements:[element]});element.extend({enabled:true,visibility:true});Undo.finishEdit(uiText('activate_effect'));syncParticleEffect(element);syncParticlePanel();requestPreviewRender();
+        });
+        const { json, values } = particleJSONControls(element);
+        const slider = (key, label, min, max, step, value, allow_higher=false) => ({type:'combo_slider', full_track:true, label, min,max,step,value,allow_higher, onBefore:beginParticlePanelUndo,onAfter:finishParticlePanelUndo});
+        if (!json?.particle_effect?.components) form._invalid = {type:'bar_display',paragraph:true,expand:true,icon:'warning',color:'var(--color-warning)',value:uiText('invalid_json')};
+        else if (element.enabled===false || element.visibility===false) form._disabled = {type:'bar_display',paragraph:true,expand:true,color:'var(--color-warning)',value:uiText('particle_inactive')};
+        {
+            form._play = effectAction(uiText(element.particle_playing?'pause':'play'),element.particle_playing?'pause':'play_arrow',()=>{
+                const playing = !element.particle_playing;
+                const record = particleEffectRecords.get(element.uuid);
+                const time = !playing ? Math.max(0, finite(record?.emitter?.view_age, element.particle_time)) : element.particle_time;
+                Undo.initEdit({ elements: [element] });
+                element.extend({ enabled: true, particle_playing: playing, particle_time: time });
+                Undo.finishEdit(uiText(playing?'play':'pause'));
+                syncParticleEffect(element); syncParticlePanel(); requestPreviewRender();
+            });
+            form._restart = effectAction(uiText('restart'),'replay',()=>{restartParticleEffect(element);syncParticlePanel();});
+            form.particle_time = slider('particle_time',uiText('frame'),0,Math.max(10,(values.active_time||1)+(values.lifetime||1)),.05,element.particle_time,true);
+            form.particle_loop = design.checkbox({label:uiText('repeat'),value:element.particle_loop,condition:()=>!!json?.particle_effect?.components?.['minecraft:emitter_lifetime_once']});
+            form._playback_help = {type:'bar_display',paragraph:true,expand:true,font_size:'12px',color:'var(--color-subtle_text)',value:uiText('scrub_help')};
+        }
+        {
+            const specs = { spawn_rate: [uiText('spawn_rate'), 0, 100, 1],
+                lifetime: [uiText('lifetime'), 0.01, 10, 0.1],
+                speed: [uiText('speed'), 0, 20, 0.1] };
+            for (const [key, [label, min, max, step]] of Object.entries(specs)) {
+                if (Object.prototype.hasOwnProperty.call(values, key)) form[key] = slider(key,label,min,max,step,values[key],true);
+            }
+            form._emission_help = {type:'bar_display',paragraph:true,expand:true,font_size:'12px',color:'var(--color-subtle_text)',value:uiText('numeric_help'),condition:()=>!['spawn_rate','lifetime','speed'].every(key=>values[key]!==undefined)};
+            form._behaviour=design.group({label:uiText('behaviour'),label_icon:'repeat',value:particleBehaviourOpen,condition:()=>!!json?.particle_effect?.components});
+            const behaviourVisible=result=>!!json?.particle_effect?.components&&result._behaviour===true;
+            if(values.max_particles!==undefined)form.max_particles={...slider('max_particles',uiText('particle_limit'),1,500,1,values.max_particles,true),condition:behaviourVisible};
+            form.emitter_cycle=design.enum({label:uiText('cycle'),value:values.emitter_cycle,options:{once:uiText('cycle_once'),looping:uiText('cycle_loop'),expression:uiText('cycle_expression')},condition:behaviourVisible});
+            for(const[key,label,min]of[['active_time','duration',.01],['sleep_time','sleep_time',0]])if(values[key]!==undefined)form[key]={...slider(key,uiText(label),min,10,.1,values[key],true),condition:behaviourVisible};
+            form._variables=effectAction(uiText('variables'),'functions',()=>editParticleExpressions(element),{condition:behaviourVisible});
+            form._distribution=design.group({label:uiText('particle_distribution'),label_icon:'select_all',value:particleDistributionOpen});
+            const shapeOptions={point:uiText('emitter_point'),box:uiText('emitter_box'),sphere:uiText('emitter_sphere')};
+            if(!shapeOptions[values.emitter_shape])shapeOptions[values.emitter_shape]=values.emitter_shape;
+            form.emitter_shape=design.enum({label:uiText('emitter_shape'),value:values.emitter_shape,options:shapeOptions,condition:result=>result._distribution===true});
+            if(values.emitter_dimensions)form.emitter_dimensions=design.vector({label:uiText('emitter_size'),value:values.emitter_dimensions,dimensions:3,min:.001,step:.1,onBefore:beginParticlePanelUndo,onAfter:finishParticlePanelUndo,condition:result=>result._distribution===true});
+            if(values.emitter_radius!==undefined)form.emitter_radius={...slider('emitter_radius',uiText('emitter_radius'),.01,20,.1,values.emitter_radius,true),condition:result=>result._distribution===true};
+            form._motion=design.group({label:uiText('particle_motion'),label_icon:'air',value:particleMotionOpen});
+            if(values.acceleration)form.acceleration=design.vector({label:uiText('acceleration'),value:values.acceleration,dimensions:3,step:.1,onBefore:beginParticlePanelUndo,onAfter:finishParticlePanelUndo,condition:result=>result._motion===true});
+            if(values.drag!==undefined)form.drag={...slider('drag',uiText('drag'),0,5,.1,values.drag,true),condition:result=>result._motion===true};
+        }
+        {
+            form.particle_texture = design.texture({label:uiText('particle_texture'),value:element.particle_texture,
+                preview_source:()=>particleEffectRecords.get(element.uuid)?.config?.texture?.image?.src || '',
+                onBefore:beginParticlePanelUndo,onAfter:finishParticlePanelUndo});
+            form.particle_size = slider('particle_size',uiText('scene_scale'),.01,4,.05,element.particle_size,true);
+            for (const [key, label] of [['size_x',uiText('width')], ['size_y',uiText('height')]]) {
+                if (Object.prototype.hasOwnProperty.call(values, key)) form[key] = slider(key,label,.001,2,.01,values[key],true);
+            }
+            if (values.color) form.color = design.color({label:uiText('tint'),value:values.color,onBefore:beginParticlePanelUndo,onAfter:finishParticlePanelUndo});
+            form.particle_bloom = slider('particle_bloom',uiText('bloom'),0,8,.1,element.particle_bloom);
+        }
+        const categories = {playback:['_play','_restart','particle_time','particle_loop','_playback_help'],emission:['spawn_rate','max_particles','lifetime','speed','_emission_help','_behaviour','emitter_cycle','active_time','sleep_time','_variables','_distribution','emitter_shape','emitter_dimensions','emitter_radius','_motion','acceleration','drag'],look:['particle_texture','particle_size','particle_bloom','size_x','size_y','color']};
+        Object.entries(categories).forEach(([category,keys])=>keys.forEach(key=>{if(form[key])form[key].panel_category_visible=category===particlePanelTab;}));
+        form._particle_source = design.group({label:uiText('source'),label_icon:'code',value:particleSourceOpen});
+        const sourceVisible = result=>result._particle_source===true;
+        form._source_info = {type:'bar_display',paragraph:true,expand:true,font_size:'12px',color:'var(--color-subtle_text)',value:json?.particle_effect?.description?.identifier || uiText('invalid_json'),condition:sourceVisible};
+        form._json = effectAction(uiText('edit_json'),'code',()=>editParticleJSON(element),{condition:sourceVisible});
+        form._snowstorm=effectAction(uiText('snowstorm'),'open_in_new',()=>openParticleSnowstorm(element),{condition:sourceVisible});
+        form._export=effectAction(uiText('export_effect'),'download',()=>exportParticleJSON(element),{condition:sourceVisible});
+        form._roundtrip_help={type:'bar_display',paragraph:true,expand:true,font_size:'12px',value:uiText('snowstorm_help'),condition:sourceVisible,color:'var(--color-subtle_text)'};
+        form._replace = effectAction(uiText('replace'),'upload_file',()=>importParticleJSON(element),{condition:sourceVisible});
+        for (const [index, identifier] of particleChildIdentifiers(json).entries()) {
+            const child = particleEffectRecordForIdentifier(identifier)?.element;
+            form['_child_'+index] = effectAction((child?uiText('select_child'):uiText('import_child'))+': '+identifier,'account_tree',()=>child?child.select():importParticleJSON(),{condition:sourceVisible});
+        }
+        return identifyEffectControls(form);
+    }
+
+    function syncParticlePanel() {
+        if (!particleEffectPanel?.form || particlePanelUndo) return;
+        const restore = rememberInspectorScroll(particleEffectPanel, `${ParticleEffectElement?.selected?.[0]?.uuid || 'empty'}:${particlePanelTab}`);
+        particlePanelSyncing = true;
+        try {
+            particleEffectPanel.form.form_config = (window.LightManagerUI?.prepareForm || (form => form))(particlePanelForm(ParticleEffectElement?.selected?.[0]));
+            particleEffectPanel.form.buildForm();
+            window.LightManagerUI.applyFormGroups?.(particleEffectPanel.form,[
+                {elements:['_particle_tab','_setup'],gap:'4px',class_name:'lf-particle-tabs-row',flex:{_particle_tab:'1 1 0',_setup:'0 0 30px'}},
+                {elements:['_play','_restart'],gap:'6px',flex:{_play:'1 1 0',_restart:'1 1 0'}}
+            ]);
+            particleEffectPanel.update();
+            restore();
+        } finally { particlePanelSyncing = false; }
+    }
+
+    function registerParticleEffectElement() {
+        class LightflowParticleEffectElement extends OutlinerElement {
+            constructor(data, uuid) {
+                super(data, uuid);
+                for (const prop of Object.values(LightflowParticleEffectElement.properties)) prop.reset(this);
+                if (data) this.extend(data);
+            }
+            get origin() { return this.position; }
+            getWorldCenter() { return this.mesh.getWorldPosition(new THREE.Vector3()); }
+            extend(data) {
+                for (const prop of Object.values(LightflowParticleEffectElement.properties)) prop.merge(this, data);
+                this.sanitizeName();
+                if (particleEffectRecords.get(this.uuid)?.element === this) syncParticleEffect(this);
+                return this;
+            }
+            getUndoCopy() { const copy = new LightflowParticleEffectElement(this, this.uuid); delete copy.parent; return copy; }
+            getSaveCopy() {
+                const copy = { type: 'lightflow_particle_effect', uuid: this.uuid };
+                for (const prop of Object.values(LightflowParticleEffectElement.properties)) prop.copy(this, copy);
+                return copy;
+            }
+            select(...args) {
+                super.select(...args); syncParticleEffect(this); syncParticlePanel();
+                particleEffectPanel?.selectTab?.();
+                return this;
+            }
+            unselect(...args) { super.unselect(...args); syncParticleEffect(this); syncParticlePanel(); }
+            static behavior = { unique_name: true, movable: true, rotatable: true,
+                parent_types: ['root', 'group', 'armature_bone'], hide_in_screenshot: true };
+        }
+        ParticleEffectElement = LightflowParticleEffectElement;
+        Object.assign(ParticleEffectElement.prototype, { title: 'Particle Effect', type: 'lightflow_particle_effect',
+            icon: 'ac_unit', movable: true, rotatable: true, needsUniqueName: true,
+            name_regex: () => window.Format?.node_name_regex ?? 'a-zA-Z0-9_' });
+        ParticleEffectElement.prototype.buttons = [Outliner.buttons.export, Outliner.buttons.locked, Outliner.buttons.visibility];
+        ParticleEffectElement.prototype.menu = new Menu(['lightflow_particle_replace', 'lightflow_particle_texture', 'lightflow_particle_settings', '_',
+            ...Outliner.control_menu_group, '_', 'rename', 'delete']);
+        for (const [key, type, value] of [['name', 'string', 'Particle Effect'], ['position', 'vector', [0, 16, 0]],
+            ['rotation', 'vector', [0, 0, 0]], ['visibility', 'boolean', true], ['enabled', 'boolean', true],
+            ['export', 'boolean', true], ['locked', 'boolean', false], ['particle_size', 'number', 1],
+            ['particle_playing', 'boolean', true], ['particle_loop', 'boolean', true], ['particle_time', 'number', 0.5],
+            ['particle_preview_mode','string','auto'],
+            ['particle_bloom', 'number', 0],
+            ['particle_json', 'string', ''], ['particle_path', 'string', ''], ['particle_texture', 'string', '']]) {
+            deletables.push(new Property(ParticleEffectElement, type, key, { default: value }));
+        }
+        allowAnimationModeInspection(ParticleEffectElement);
+        const reloadedParticleElements = prepareReloadedAtmosphereElements(ParticleEffectElement, 'lightflow_particle_effect');
+        OutlinerElement.registerType(ParticleEffectElement, 'lightflow_particle_effect');
+        publishWindowBinding('LightflowParticleEffectElement', ParticleEffectElement);
+        let transportElement=null;
+        const transportChanged=()=>window.dispatchEvent(new Event('lightflow_particle_transport_changed'));
+        const transportSelected=()=>ParticleEffectElement.selected.length===1?ParticleEffectElement.selected[0]:null;
+        const transportCommit=(element,values)=>{
+            if(!element||!ParticleEffectElement.all.includes(element))return;
+            const changed=Object.keys(values).some(key=>element[key]!==values[key]);if(!changed)return;
+            Undo.initEdit({elements:[element]});element.extend(values);Undo.finishEdit(uiText('edit_particle'));
+            syncParticleEffect(element);syncParticlePanel();requestPreviewRender();transportChanged();
+        };
+        const transport={
+            state(){
+                const element=transportSelected();if(!element)return null;
+                const record=particleEffectRecords.get(element.uuid),config=record?.config;
+                const time=element.particle_playing?Math.max(0,finite(record?.emitter?.view_age,element.particle_time)):element.particle_time;
+                return{uuid:element.uuid,name:element.name,playing:element.particle_playing,time,
+                    loop:element.particle_preview_mode==='looping'||(element.particle_preview_mode!=='once'&&(element.particle_loop||config?.emitter_lifetime_mode==='looping')),
+                    max:Math.max(10,Math.ceil(time),finite(record?.emitter?.active_time,1)+finite(record?.emitter?.sleep_time,0)+finite(config?.particle_lifetime_max_lifetime,1)),
+                    available:!!record?.valid&&element.visibility!==false};
+            },
+            toggle(){
+                const element=transportSelected();if(!element)return;
+                const playing=!element.particle_playing,record=particleEffectRecords.get(element.uuid);
+                transportCommit(element,{enabled:true,particle_playing:playing,particle_time:playing?element.particle_time:Math.max(0,finite(record?.emitter?.view_age,element.particle_time))});
+            },
+            restart(){const element=transportSelected();if(!element)return;transportCommit(element,{particle_time:0});restartParticleEffect(element);syncParticlePanel();transportChanged();},
+            loop(){const element=transportSelected();if(!element)return;const loop=!this.state().loop;transportCommit(element,{particle_loop:loop,particle_preview_mode:loop?'looping':'once'});},
+            begin(){if(transportElement)return true;if(beginParticlePanelUndo())transportElement=transportSelected();return !!transportElement;},
+            seek(value){
+                const element=transportElement||transportSelected();if(!element)return;
+                const time=Math.max(0,finite(value,0));
+                if(transportElement){
+                    if(element.particle_time===time&&!element.particle_playing)return;
+                    element.extend({particle_time:time,particle_playing:false});if(particlePanelUndo)particlePanelUndo.changed=true;
+                    syncParticleEffect(element);requestPreviewRender();transportChanged();
+                }else transportCommit(element,{particle_time:time,particle_playing:false});
+            },
+            end(){if(!transportElement)return;transportElement=null;finishParticlePanelUndo();syncParticlePanel();transportChanged();}
+        };
+        publishWindowBinding('LightflowParticleTransport',transport);
+        deletables.push(Blockbench.on('update_selection',()=>{if(transportElement&&transportSelected()!==transportElement)transport.end();}),{delete(){transportElement=null;}});
+        particleEffectController = new NodePreviewController(ParticleEffectElement, {
+            setup(element) {
+                const node = new THREE.Object3D();
+                node.name = element.uuid; node.type = element.type; node.isElement = true;
+                node.geometry = new THREE.BufferGeometry();
+                node.geometry.boundingBox = new THREE.Box3().makeEmpty();
+                node.particleGizmo = new THREE.LineSegments(
+                    new THREE.BufferGeometry(),
+                    new THREE.LineBasicMaterial({ color: 0x78ddff, transparent: true, opacity: 0.7, depthWrite: false })
+                );
+                node.particleGizmo.name = 'lightflow_particle_gizmo';
+                node.particleGizmo.raycast = () => {};
+                node.particleOrigin = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints([
+                    new THREE.Vector3(-.5,0,0),new THREE.Vector3(.5,0,0),new THREE.Vector3(0,-.5,0),new THREE.Vector3(0,.5,0),new THREE.Vector3(0,0,-.5),new THREE.Vector3(0,0,.5)
+                ]),new THREE.LineBasicMaterial({color:0x78ddff,transparent:true,opacity:.7,depthTest:false,depthWrite:false}));
+                node.particleOrigin.raycast=()=>{};node.particleOrigin.renderOrder=1100;
+                node.particleOrigin.onBeforeRender=(_renderer,_scene,camera)=>updateParticleHelper(element,particleEffectRecords.get(element.uuid),camera);
+                node.particleSelection = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2),
+                    new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false, side: THREE.DoubleSide }));
+                node.particleSelection.name = element.uuid;
+                node.particleSelection.type = element.type;
+                node.particleSelection.isElement = true;
+                node.particleSelection.userData.lightflowNoShadow = true;
+                node.particleSelection.userData.lightflowVolumeSelectionProxy = true;
+                node.add(node.particleGizmo, node.particleOrigin, node.particleSelection);
+                node.raycast = (raycaster, hits) => {
+                    if (!node.particleSelection.visible || !node.visible) return;
+                    node.particleSelection.updateWorldMatrix(true, false);
+                    node.particleSelection.raycast(raycaster, hits);
+                };
+                Project.nodes_3d[element.uuid] = node;
+                this.updateTransform(element);
+                syncParticleEffect(element);
+                this.dispatchEvent('setup', { element });
+            },
+            updateTransform(element) {
+                NodePreviewController.prototype.updateTransform.call(this, element);
+                syncParticleEffect(element);
+                requestPreviewRender();
+                this.dispatchEvent('update_transform', { element });
+            },
+            remove(element) {
+                releaseParticleEffect(element.uuid);
+                const node = element.mesh;
+                NodePreviewController.prototype.remove.call(this, element);
+                node?.particleGizmo?.geometry?.dispose?.();
+                node?.particleGizmo?.material?.dispose?.();
+                node?.particleOrigin?.geometry?.dispose?.();
+                node?.particleOrigin?.material?.dispose?.();
+                node?.particleSelection?.geometry?.dispose?.();
+                node?.particleSelection?.material?.dispose?.();
+            },
+            updateSelection(element) { syncParticleEffect(element); this.dispatchEvent('update_selection', { element }); }
+        });
+        rebuildReloadedAtmosphereElementPreviews(reloadedParticleElements, particleEffectController);
+        const addAction = new Action('lightflow_particle_import', { name: 'lightflow_atmosphere.action.add_particle',
+            icon: 'ac_unit', category: 'edit', condition: () => !!window.Project && !!(Modes.edit || Modes.render), click: () => importParticleJSON() });
+        deletables.push(Blockbench.on('lightflow_resource_packs_changed', event => {
+            if (event?.project && event.project !== window.Project) return;
+            for (const element of ParticleEffectElement.all) {
+                if (element.particle_texture) continue;
+                releaseParticleEffect(element.uuid);
+                syncParticleEffect(element);
+            }
+            requestPreviewRender();
+        }));
+        const replaceAction = new Action('lightflow_particle_replace', { name: 'Replace Particle Effect', icon: 'upload_file',
+            category: 'edit', condition: () => !!ParticleEffectElement.selected.length,
+            click: () => importParticleJSON(ParticleEffectElement.selected[0]) });
+        const textureAction = new Action('lightflow_particle_texture', { name: 'Set Particle Texture', icon: 'image',
+            category: 'edit', condition: () => !!ParticleEffectElement.selected.length,
+            click: () => importParticleTexture(ParticleEffectElement.selected[0]) });
+        const settingsAction = new Action('lightflow_particle_settings', { name: 'Particle Effect Settings', icon: 'tune',
+            category: 'edit', condition: () => !!ParticleEffectElement.selected.length,
+            click() {
+                const element = ParticleEffectElement.selected[0];
+                new Dialog('lightflow_particle_settings_dialog', { title: 'Particle Effect', form: (window.LightManagerUI?.prepareForm || (form => form))({
+                    enabled: { label: 'Enabled', type: 'checkbox', value: element.enabled },
+                    particle_playing: { label: 'Play animation', type: 'checkbox', value: element.particle_playing },
+                    particle_loop: { label: 'Repeat one-shot effect', type: 'checkbox', value: element.particle_loop },
+                    particle_time: { label: 'Preview time (s)', type: 'number', value: element.particle_time, min: 0, max: 3600, step: 0.1 },
+                    particle_size: { label: 'Size', type: 'number', value: element.particle_size, min: 0.01, max: 100, step: 0.1 },
+                    particle_bloom: { label: 'Bloom', type: 'number', value: element.particle_bloom, min: 0, max: 8, step: 0.1 }
+                }), onConfirm(result) {
+                    if(result.particle_loop!==element.particle_loop)result.particle_preview_mode='auto';
+                    Undo.initEdit({ elements: [element] });
+                    element.extend(result);
+                    Undo.finishEdit('Edit particle effect');
+                    syncParticleEffect(element);
+                } }).show();
+            } });
+        const jsonAction = new Action('lightflow_particle_edit_json', { name: 'Edit Particle JSON / Molang', icon: 'code',
+            category: 'edit', condition: () => !!ParticleEffectElement.selected.length,
+            click: () => editParticleJSON(ParticleEffectElement.selected[0]) });
+        const createAction=new Action('lightflow_particle_create',{name:'lightflow_atmosphere.action.add_particle',icon:'ac_unit',category:'edit',condition:()=>!!Project && !!(Modes.edit || Modes.render),click:event=>particlePresetMenu(null,event)});
+        const snowstormAction=new Action('lightflow_particle_snowstorm',{name:'lightflow_atmosphere.ui.snowstorm',icon:'open_in_new',category:'edit',condition:()=>!!ParticleEffectElement.selected.length,click:()=>openParticleSnowstorm(ParticleEffectElement.selected[0])});
+        ParticleEffectElement.prototype.menu = new Menu(['lightflow_particle_snowstorm', 'lightflow_particle_settings', 'lightflow_particle_edit_json',
+            'lightflow_particle_replace', 'lightflow_particle_texture', '_', ...Outliner.control_menu_group, '_', 'rename', 'delete']);
+        deletables.push(addAction, replaceAction, textureAction, settingsAction, jsonAction,createAction,snowstormAction);
+        particleEffectPanel = new Panel('lightflow_particle_properties', { name: 'lightflow_atmosphere.ui.particles', icon: 'ac_unit',
+            growable: true, resizable: true,
+            condition: { modes: ['render'], project: true },
+            default_position: { slot: 'right_bar', height: 460, folded: false, attached_to: 'light_properties', attached_index: 3 },
+            form: (window.LightManagerUI?.prepareForm || (form => form))(particlePanelForm(null)) });
+        const panelChange = particleEffectPanel.form.on('change', ({ result, changed_keys }) => {
+            if (particlePanelSyncing) return;
+            const keys = changed_keys?.length ? changed_keys : Object.keys(result);
+            if (keys.includes('_particle_tab')) { particlePanelTab = result._particle_tab; syncParticlePanel(); return; }
+            if (keys.includes('_particle_source')) particleSourceOpen = result._particle_source===true;
+            if(keys.includes('_distribution'))particleDistributionOpen=result._distribution===true;
+            if(keys.includes('_motion'))particleMotionOpen=result._motion===true;
+            if(keys.includes('_behaviour'))particleBehaviourOpen=result._behaviour===true;
+            const element = ParticleEffectElement.selected[0];
+            if (!element) return;
+            const propKeys = ['name', 'enabled', 'particle_playing', 'particle_loop', 'particle_time', 'particle_size', 'particle_bloom','particle_texture'];
+            const sourceKeys = ['spawn_rate', 'max_particles', 'active_time', 'sleep_time','emitter_cycle','lifetime', 'speed', 'size_x', 'size_y', 'color','emitter_shape','emitter_dimensions','emitter_radius','acceleration','drag'];
+            const changed = keys.some(key => (propKeys.includes(key) && result[key] !== element[key]) ||
+                (sourceKeys.includes(key) && particleJSONControls(element).values[key] !== result[key]));
+            if (!changed) return;
+            const directUndo = !particlePanelUndo && beginParticlePanelUndo();
+            const props = {};
+            for (const key of keys) if (propKeys.includes(key)) props[key] = result[key];
+            // Scrubbing is a still-frame operation; pause automatically instead
+            // of letting the running emitter ignore the entered time.
+            if (keys.includes('particle_time')) props.particle_playing = false;
+            if(keys.includes('particle_loop'))props.particle_preview_mode='auto';
+            if(keys.includes('emitter_cycle')){props.particle_loop=false;props.particle_preview_mode='auto';}
+            if (keys.includes('particle_playing') && result.particle_playing === false && element.particle_playing) {
+                props.particle_time = Math.max(0, finite(particleEffectRecords.get(element.uuid)?.emitter?.view_age,
+                    element.particle_time));
+            }
+            if (Object.keys(props).length) element.extend(props);
+            for (const key of keys) if (sourceKeys.includes(key)) applyParticleJSONControl(element, key, result[key]);
+            if (particlePanelUndo) particlePanelUndo.changed = true;
+            if (directUndo) finishParticlePanelUndo();
+            syncParticleEffect(element); requestPreviewRender();
+            if(keys.includes('emitter_shape')||keys.includes('emitter_cycle'))syncParticlePanel();
+        });
+        deletables.push(panelChange, particleEffectPanel,
+            window.LightManagerUI.addDesignedPanelStyles('lightflow_particle_properties', { row_padding: '3px 4px' }));
+        window.LightManagerUI.workspace?.register(particleEffectPanel);
+        deletables.push(Blockbench.on('update_selection', syncParticlePanel));
+        deletables.push(Blockbench.on('update_view', () => ParticleEffectElement.all.forEach(syncParticleEffect)));
+        const refreshHelpers = () => ParticleEffectElement.all.forEach(syncParticleEffect);
+        window.addEventListener('lightflow_gizmo_visibility_changed', refreshHelpers);
+        deletables.push({ delete() { window.removeEventListener('lightflow_gizmo_visibility_changed', refreshHelpers); } });
+    }
+
+    function disposeParticleEffectElement() {
+        clearParticleEffects();
+        if (ParticleEffectElement) {
+            for (const project of window.ModelProject?.all || [window.Project]) {
+                for (const element of project?.elements || []) {
+                    if (element.type !== 'lightflow_particle_effect') continue;
+                    const node = project.nodes_3d?.[element.uuid];
+                    node?.particleGizmo?.geometry?.dispose?.();
+                    node?.particleGizmo?.material?.dispose?.();
+                    node?.particleOrigin?.geometry?.dispose?.();
+                    node?.particleOrigin?.material?.dispose?.();
+                    node?.particleSelection?.geometry?.dispose?.();
+                    node?.particleSelection?.material?.dispose?.();
+                    node?.geometry?.dispose?.();
+                    node?.parent?.remove?.(node);
+                    if (node) delete project.nodes_3d[element.uuid];
+                }
+            }
+            if (OutlinerElement.types.lightflow_particle_effect === ParticleEffectElement) delete OutlinerElement.types.lightflow_particle_effect;
+        }
+        if (NodePreviewController.controllers?.lightflow_particle_effect === particleEffectController) particleEffectController.delete();
+        particleEffectScene = null; ParticleEffectElement = null; particleEffectController = null; particleEffectPanel = null;
+    }
+
     function registerVolumeElement() {
         class LightflowVolumeElement extends OutlinerElement {
             constructor(data, uuid) {
@@ -4272,6 +6387,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             }
 
             get origin() { return this.position; }
+            getWorldCenter() { return this.mesh.getWorldPosition(new THREE.Vector3()); }
 
             resize(value, axis, negative, allowNegative, bidirectional) {
                 if (axis < 0 || axis > 2) return this;
@@ -4399,6 +6515,8 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         ];
         deletables.push(...volumeProperties);
 
+        allowAnimationModeInspection(VolumeElement);
+        const reloadedVolumeElements = prepareReloadedAtmosphereElements(VolumeElement, 'lightflow_volume');
         OutlinerElement.registerType(VolumeElement, 'lightflow_volume');
 
         volumePreviewController = new NodePreviewController(VolumeElement, {
@@ -4474,6 +6592,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 this.dispatchEvent('update_selection', { element });
             }
         });
+        rebuildReloadedAtmosphereElementPreviews(reloadedVolumeElements, volumePreviewController);
     }
 
     function getSelectedVolumes() {
@@ -4564,9 +6683,25 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         return true;
     }
 
+    function nextLocalizedVolumeName() {
+        const base = tr('lightflow_atmosphere.name.volume', 'Volume Domain');
+        const used = new Set((VolumeElement?.all || []).map(item => String(item?.name || '').toLocaleLowerCase()));
+        let index = 1;
+        let candidate;
+        do {
+            candidate = `${base} ${String(index++).padStart(2, '0')}`;
+        } while (used.has(candidate.toLocaleLowerCase()));
+        return candidate;
+    }
+
     function createVolume(presetKey) {
+        try {
+            if (!localStorage.getItem('lightflow_creation_guide_v1_volume')) {
+                localStorage.setItem('lightflow_creation_guide_v1_volume', 'pending');
+            }
+        } catch (_) { /* Keep volume creation usable when storage is unavailable. */ }
         Undo.initEdit({ outliner: true, elements: [], selection: true });
-        const volume = new VolumeElement().addTo().init();
+        const volume = new VolumeElement({ name: nextLocalizedVolumeName() }).addTo().init();
         const preset = VOLUME_PRESETS[presetKey] || VOLUME_PRESETS.soft_mist;
         applyVolumeConfig(volume, preset);
         applyPresetArtDirection(preset);
@@ -4599,10 +6734,10 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
     };
 
     const ATMOSPHERE_SELECT_ICONS = {
-        preset: { custom: 'tune', soft_mist: 'blur_on', godrays: 'flare', clouds: 'cloud', stage_haze: 'filter_hdr', cinematic_dust: 'auto_awesome' },
+        preset: { custom: 'tune', soft_mist: 'blur_on', godrays: 'lightflow:godray', clouds: 'cloud', stage_haze: 'filter_hdr', cinematic_dust: 'auto_awesome' },
         shape: { box: 'check_box_outline_blank', sphere: 'circle' },
         density_mode: { uniform: 'blur_on', height: 'gradient', cloud: 'cloud' },
-        composite_mode: { physical: 'air', shafts: 'flare' },
+        composite_mode: { physical: 'air', shafts: 'lightflow:godray' },
         preview_quality: { draft: 'speed', balanced: 'balance', high: 'high_quality', ultra: 'auto_awesome' },
         render_quality: { draft: 'speed', balanced: 'balance', high: 'high_quality', ultra: 'auto_awesome', reference: 'diamond' }
     };
@@ -4861,11 +6996,11 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         const selected = getSelectedVolumes();
         const volume = selected[0];
         if (!volume) return;
-        new Dialog('lightflow_atmosphere_volume_dialog', {
+        showEffectDialog('lightflow_atmosphere_volume_dialog', {
             title: selected.length > 1
                 ? tr('lightflow_atmosphere.dialog.edit_many', 'Edit Volume Domains') + ` (${selected.length})`
                 : tr('lightflow_atmosphere.dialog.edit', 'Volume Domain'),
-            width: 640,
+            width: 560,
             form: volumeDialogForm(volume),
             onConfirm(result) {
                 const preset = VOLUME_PRESETS[result.preset];
@@ -4884,7 +7019,12 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 syncAtmospherePanel();
                 requestPreviewRender();
             }
-        }).show();
+        }, [
+            {id:'look',label:uiText('look'),entries:['preset','density','scattering_color','composite_mode','scattering_strength']},
+            {id:'shape',label:uiText('shape'),entries:['shape','size','density_mode','edge_feather','height_falloff','height_offset','noise_scale','noise_detail','coverage','erosion','wind_direction','wind_speed']},
+            {id:'light',label:uiText('light'),entries:['anisotropy','absorption_color','absorption','ambient','receive_shadows','shadow_fill']},
+            {id:'advanced',label:tr('lightflow_atmosphere.panel.quality_advanced','Advanced'),entries:['technique_override','shaft_length','shaft_decay','shaft_radius','shaft_exposure']}
+        ]);
     }
 
     const VOLUME_PANEL_GROUP_PREFIX = '_volume_group_';
@@ -4892,19 +7032,22 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
     const VOLUME_PANEL_GROUPS = [
         {
             id: 'look', label: 'lightflow_atmosphere.panel.look', icon: 'blur_on', color: '#67D7E8',
-            entries: ['preset', 'composite_mode', 'density', 'scattering_color', 'scattering_strength']
+            entries: ['density', 'scattering_color', 'scattering_strength']
         },
+        {id:'look_setup',label:'lightflow_atmosphere.ui.volume_recipe',icon:'auto_awesome',color:'#C5AFE9',entries:['preset','composite_mode']},
         {
-            id: 'light_response', label: 'lightflow_atmosphere.panel.light_response', icon: 'light_mode', color: '#67D7E8',
+            id: 'light_response', label: 'lightflow_atmosphere.panel.light_response', icon: 'light_mode', color: '#F1D27D',
             entries: ['anisotropy', 'absorption_color', 'absorption', 'ambient', 'receive_shadows', 'shadow_fill']
         },
         {
             id: 'shape', label: 'lightflow_atmosphere.panel.shape_distribution', icon: 'gradient', color: '#67D7E8',
             entries: [
-                'shape', 'density_mode', 'edge_feather', 'height_falloff', 'height_offset',
-                'noise_scale', 'noise_detail', 'coverage', 'erosion', 'wind_direction', 'wind_speed'
+                'shape', 'size', 'density_mode', 'edge_feather'
             ]
         },
+        {id:'height',label:'lightflow_atmosphere.ui.height_distribution',icon:'height',color:'#A6DCB5',condition:form=>['height','cloud'].includes(form.density_mode),entries:['height_falloff','height_offset']},
+        { id:'cloud', label:'lightflow_atmosphere.ui.cloud_detail', icon:'cloud', color:'#67D7E8', condition:form=>form.density_mode==='cloud', entries:['noise_scale','noise_detail','coverage','erosion'] },
+        { id:'motion', label:'lightflow_atmosphere.ui.motion', icon:'air', color:'#67D7E8', condition:form=>form.density_mode==='cloud', entries:['wind_direction','wind_speed'] },
         {
             id: 'quality', label: 'lightflow_atmosphere.panel.quality', icon: 'speed', color: '#67D7E8',
             quality: true,
@@ -4921,9 +7064,10 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
     ];
 
     const VOLUME_PANEL_MODE_GROUPS = Object.freeze({
-        look: new Set(['look', 'light_response']),
-        shape: new Set(['shape']),
-        quality: new Set(['quality', 'quality_advanced'])
+        basic: new Set(['look','look_setup','light_response']),
+        shape: new Set(['shape','height','cloud','motion']),
+        quality: new Set(['quality','quality_advanced']),
+        advanced: new Set(['light_response', 'quality_advanced'])
     });
 
     function volumePanelValuesEqual(left, right) {
@@ -5091,10 +7235,12 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         }
         if (base.type === 'number' || base.type === 'range') {
             return withVolumePanelUndo(Object.assign(base, {
-                type: 'number',
+                type: 'combo_slider',
+                full_track: true,
+                max: key === 'density' ? 0.15 : base.max,
                 resettable: Number.isFinite(defaultValue),
                 reset_value: Number.isFinite(defaultValue) ? defaultValue : base.value,
-                allow_higher: !Number.isFinite(base.max),
+                allow_higher: key === 'density' || !Number.isFinite(base.max),
                 allow_lower: !Number.isFinite(base.min)
             }));
         }
@@ -5103,6 +7249,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
 
     function createVolumePanelSource(volume) {
         return {
+            size: {type:'vector', dimensions:3, label:'lightflow_atmosphere.field.size', value:volume.size.slice(), min:0.01},
             preset: {
                 type: 'select', label: 'lightflow_atmosphere.field.preset', value: 'custom', default: 'custom',
                 options: VOLUME_PRESET_OPTIONS
@@ -5205,6 +7352,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             title: original.label,
             description: original.label
         });
+        if (key.endsWith('_scale')) base.search_terms = 'scale resolution escala resolución';
         const designedOptions = Object.assign({}, base);
         delete designedOptions.type;
         if (base.type === 'select') {
@@ -5216,7 +7364,8 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         }
         if (base.type === 'checkbox') return design.checkbox(Object.assign(designedOptions, { icon_size: '22px' }));
         return Object.assign(base, {
-            type: 'number',
+            type: base.type==='range' ? 'combo_slider' : 'number',
+            full_track: true,
             resettable: true,
             reset_value: base.reset_value
         });
@@ -5227,8 +7376,10 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         const volume = selected[0];
         const design = window.LightManagerUI.formDesign;
         const form = {};
+        if (!volume) return emptyEffectForm(VolumeElement,'add_lightflow_volume',tr('lightflow_atmosphere.action.add','Add Volume Domain'));
         if (volume) {
             form.summary = {
+                condition:()=>selected.length>1,
                 type: 'bar_display',
                 value: selected.length > 1
                     ? tr('lightflow_atmosphere.panel.multiple', 'Volume Domains') + ` (${selected.length})`
@@ -5255,8 +7406,6 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         const source = volume ? createVolumePanelSource(volume) : {};
         const qualitySource = createVolumeQualityPanelSource();
         if (volume) {
-            form.enabled = createVolumePanelControl('enabled', source.enabled, '_volume_overview', true);
-            form.visibility = createVolumePanelControl('visibility', source.visibility, '_volume_overview', true);
             const inactive = volume.enabled === false || volume.visibility === false || AtmosphereManager.settings.enabled === false;
             form._volume_effective_state = {
                 type: 'bar_display', search_ignore: true, paragraph: true, expand: true, font_size: '12px',
@@ -5264,19 +7413,25 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 value: tr('lightflow_atmosphere.panel.inactive_reason', 'Not rendered: check Enabled, Visible and global Atmosphere.'),
                 color: 'var(--color-warning)'
             };
+            form._activate_volume = effectAction(uiText('activate_effect'),'visibility',()=>{
+                beginVolumePanelUndo();applyVolumePanelConfig({enabled:true,visibility:true});finishVolumePanelUndo();syncAtmospherePanel();
+            },{condition:()=>volume.enabled===false});
         }
         form._volume_mode = design.tabs({
             value: volumePanelMode,
-            description: 'Volume control category',
+            description: tr('lightflow_atmosphere.panel.title', 'Volume'),
             options: {
-                look: { name: tr('lightflow_atmosphere.panel.look', 'Look'), description: tr('lightflow_atmosphere.panel.look_desc', 'The visible result') },
+                basic: { name: uiText('look'), description: tr('lightflow_atmosphere.panel.basic_desc', 'The visible result') },
                 shape: { name: tr('lightflow_atmosphere.panel.shape', 'Shape'), description: tr('lightflow_atmosphere.panel.shape_desc', 'Where the effect exists') },
                 quality: { name: tr('lightflow_atmosphere.panel.quality', 'Quality'), description: tr('lightflow_atmosphere.panel.quality_desc', 'Viewport and final render') }
             }
         });
+        form._volume_search = design.search();
+        form._volume_quality_scope = {type:'bar_display',paragraph:true,expand:true,font_size:'12px',color:'var(--color-subtle_text)',value:uiText('quality_scope'),panel_category_visible:volumePanelMode==='quality'};
+        form._enable_atmosphere = effectAction(uiText('enable_atmosphere'),'visibility',()=>{applyVolumePanelSettings({enabled:true});syncAtmospherePanel();},{condition:()=>AtmosphereManager.settings.enabled===false,search_ignore:true});
         VOLUME_PANEL_GROUPS.forEach(group => {
             if (!volume && !group.quality) return;
-            if (!VOLUME_PANEL_MODE_GROUPS[volumePanelMode]?.has(group.id)) return;
+            const categoryVisible = !!VOLUME_PANEL_MODE_GROUPS[volumePanelMode]?.has(group.id);
             const groupKey = VOLUME_PANEL_GROUP_PREFIX + group.id;
             const isTabHeading = group.id === 'look' || group.id === 'shape';
             const groupOpen = isTabHeading || volumePanelGroupsOpen[group.id] !== false;
@@ -5287,6 +7442,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 return defaultValue !== undefined && !volumePanelValuesEqual(groupSource[key]?.value, defaultValue);
             });
             form[groupKey] = design.group({
+                panel_category_visible: categoryVisible,
                 label: group.label,
                 label_icon: group.icon,
                 label_icon_color: group.color,
@@ -5318,6 +7474,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                         ? form => (!group.condition || group.condition(form)) && (!entry.condition || entry.condition(form))
                         : null;
                     form[subsectionKey] = design.subsection({
+                        panel_category_visible: categoryVisible,
                         value: tr(entry.subsection, entry.subsection),
                         icon: entry.icon,
                         icon_color: group.color,
@@ -5335,20 +7492,25 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 form[entry] = group.quality
                     ? createVolumeQualityPanelControl(entry, control, groupKey, groupOpen)
                     : createVolumePanelControl(entry, control, groupKey, groupOpen);
+                form[entry].panel_category_visible = categoryVisible;
             });
         });
-        return form;
+        Object.assign(form, window.LightManagerUI.creationGuide?.('volume') || {});
+        return identifyEffectControls(form);
     }
 
     function syncAtmospherePanel(options = {}) {
         if (!atmospherePanel?.form) return;
         finishVolumePanelUndo();
-        const scrollTop = atmospherePanel.form.node?.scrollTop || 0;
+        const restore = rememberInspectorScroll(atmospherePanel, `${getSelectedVolumes()[0]?.uuid || 'empty'}:${volumePanelMode}`);
         syncingPanel = true;
         try {
-            atmospherePanel.form.form_config = createVolumePanelForm();
+            atmospherePanel.form.form_config = (window.LightManagerUI?.prepareForm || (form => form))(createVolumePanelForm());
             atmospherePanel.form.buildForm();
             window.LightManagerUI?.applyFormGroups?.(atmospherePanel.form, [{
+                elements: ['_lightflow_creation_guide', '_lightflow_creation_guide_dismiss'], gap: '4px',
+                flex: { _lightflow_creation_guide: '1 1 0', _lightflow_creation_guide_dismiss: '0 0 26px' }
+            }, {
                 elements: ['summary', '#', 'enabled', 'visibility'],
                 gap: '2px',
                 class_name: 'lightflow_volume_overview_row',
@@ -5358,9 +7520,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         } finally {
             syncingPanel = false;
         }
-        if (options.preserveScroll && atmospherePanel.form.node) {
-            atmospherePanel.form.node.scrollTop = scrollTop;
-        }
+        restore();
         scheduleVolumePanelAdaptiveLayout();
     }
 
@@ -5380,9 +7540,12 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 edit: { slot: 'right_bar', height: 440, folded: false, fixed_height: false, attached_to: 'light_properties', attached_index: 1, sidebar_index: 1 },
                 render: { slot: 'right_bar', height: 440, folded: false, fixed_height: false, attached_to: 'light_properties', attached_index: 1, sidebar_index: 1 }
             },
-            form: createVolumePanelForm()
+            form: (window.LightManagerUI?.prepareForm || (form => form))(createVolumePanelForm())
         });
         window.LightManagerUI?.applyFormGroups?.(atmospherePanel.form, [{
+            elements: ['_lightflow_creation_guide', '_lightflow_creation_guide_dismiss'], gap: '4px',
+            flex: { _lightflow_creation_guide: '1 1 0', _lightflow_creation_guide_dismiss: '0 0 26px' }
+        }, {
             elements: ['summary', '#', 'enabled', 'visibility'],
             gap: '2px',
             class_name: 'lightflow_volume_overview_row',
@@ -5501,8 +7664,9 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             `${diagnostics.effectiveSteps || 0} steps`,
             diagnostics.hdrFormat || 'not allocated'
         ].join(' · ');
-        new Dialog('lightflow_atmosphere_settings_dialog', {
+        const qualityDialog = {
             title: tr('lightflow_atmosphere.settings.title', 'Atmosphere Quality'),
+            width: 560,
             form: enhanceAtmosphereDialogForm({
                 _global_fog: '_',
                 global_fog_enabled: { type: 'checkbox', label: 'lightflow_atmosphere.settings.global_fog_enabled', value: settings.global_fog_enabled === true },
@@ -5537,7 +7701,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 render_quality: { type: 'select', label: 'lightflow_atmosphere.settings.render_quality', value: settings.render_quality, options: QUALITY_OPTIONS },
                 render_scale: { type: 'range', label: 'lightflow_atmosphere.settings.render_scale', value: settings.render_scale, min: 0.5, max: 1, step: 0.05 },
                 _advanced: '_',
-                resolved_technique: { type: 'bar_display', icon: 'route', label: 'Resolved as', value: resolutionSummary, color: 'var(--color-accent)' },
+                resolved_technique: { type: 'bar_display', icon: 'route', label: 'Resolved as', value: resolutionSummary, color: 'var(--color-text)' },
                 temporal_jitter: { type: 'checkbox', label: 'lightflow_atmosphere.settings.jitter', value: settings.temporal_jitter },
                 temporal_response: { type: 'select', label: 'lightflow_atmosphere.settings.temporal_response', value: settings.temporal_response || 'balanced', options: { off: 'Off', responsive: 'Responsive', balanced: 'Balanced', stable: 'Stable' } },
                 temporal_interleave: { type: 'checkbox', label: 'lightflow_atmosphere.settings.temporal_interleave', value: !!settings.temporal_interleave },
@@ -5591,14 +7755,22 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 window.Canvas?.updateAllFaces?.();
                 requestPreviewRender();
             }
-        }).show();
+        };
+        const keys = Object.keys(qualityDialog.form);
+        const advanced = ['resolved_technique','temporal_jitter','temporal_response','temporal_interleave','volumetric_shadow_mode','helper_mask','static_cache','frustum_culling'];
+        showEffectDialog('lightflow_atmosphere_settings_dialog', qualityDialog, [
+            {id:'quality',label:tr('lightflow_atmosphere.panel.quality','Quality'),entries:keys.filter(key=>!key.startsWith('art_')&&!key.startsWith('global_fog_')&&!advanced.includes(key))},
+            {id:'fog',label:tr('lightflow_atmosphere.panel.global_fog','Fog'),entries:keys.filter(key=>key.startsWith('global_fog_'))},
+            {id:'look',label:uiText('look'),entries:keys.filter(key=>key.startsWith('art_'))},
+            {id:'advanced',label:tr('lightflow_atmosphere.panel.quality_advanced','Advanced'),entries:advanced}
+        ]);
     }
 
     function installActions() {
         addVolumeAction = new Action('add_lightflow_volume', {
             name: 'lightflow_atmosphere.action.add',
             description: 'lightflow_atmosphere.action.add.desc',
-            icon: 'blur_on', category: 'edit', condition: () => !!window.Project,
+            icon: 'blur_on', category: 'edit', condition: () => !!window.Project && !!(Modes.edit || Modes.render),
             click() { createVolume('soft_mist'); }
         });
         editVolumeAction = new Action('edit_lightflow_volume', {
@@ -5623,17 +7795,104 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             click() { openSettingsDialog(); }
         });
         [addVolumeAction, editVolumeAction, fitAction, settingsAction].forEach(action => deletables.push(action));
-        BarItems.add_element.side_menu.addAction(addVolumeAction, '3');
-        MenuBar.menus.edit.addAction(addVolumeAction, '9');
+        const addVfxAction = new Action('lightflow_atmosphere_add_vfx', {
+            name: 'lightflow_atmosphere.action.add_vfx',
+            description: 'lightflow_atmosphere.action.add_vfx.desc',
+            icon: 'auto_awesome',
+            category: 'edit',
+            condition: () => !!window.Project && !window.BarItems?.light_manager_add_light_menu,
+            children: [
+                'add_lightflow_volume',
+                'add_lightflow_god_ray',
+                'lightflow_particle_import'
+            ],
+            click() {
+                const fallback = this.children
+                    .map(id => BarItems[id])
+                    .find(action => action && Condition(action.condition));
+                if (fallback) fallback.click();
+            }
+        });
+        deletables.push(addVfxAction);
+        MenuBar.menus.edit.addAction(addVfxAction, '9');
+        Panels.outliner.menu.addAction(addVfxAction, '2');
         MenuBar.menus.edit.addAction(editVolumeAction, '9');
         MenuBar.menus.view.addAction(settingsAction, '9');
     }
 
     function installTranslations() {
         Language.addTranslations('en', {
+            'lightflow_atmosphere.ui.look':'Look', 'lightflow_atmosphere.ui.shape':'Shape', 'lightflow_atmosphere.ui.light':'Lighting',
+            'lightflow_atmosphere.ui.ray_gizmos':'Edit ray shape', 'lightflow_atmosphere.ui.edit_ray':'Edit God Ray',
+            'lightflow_atmosphere.ui.ray_from_light':'Create attached God Ray', 'lightflow_atmosphere.ui.ray_detach':'Detach God Ray',
+            'lightflow_atmosphere.ui.ray_attached':'Follow light position',
+            'lightflow_atmosphere.ui.ray_color_detail':'Color transition',
+            'lightflow_atmosphere.ui.ray_compositing':'Blending & bloom',
+            'lightflow_atmosphere.ui.ray_plane':'Plane & orientation',
+            'lightflow_atmosphere.ui.ray_soft_edges':'Soft edges & fading',
+            'lightflow_atmosphere.ui.ray_shadow_detail':'Light occlusion',
+            'lightflow_atmosphere.ui.ray_camera_fade':'Fade by camera distance',
+            'lightflow_atmosphere.ui.volume_recipe':'Presets & blending',
+            'lightflow_atmosphere.ui.height_distribution':'Height distribution',
+            'lightflow_atmosphere.ui.ray_attachment_help':'Move edits the offset from the light. Detach to keep the current world position and direction.',
+            'lightflow_atmosphere.ui.activate_effect':'Enable effect', 'lightflow_atmosphere.ui.particle_texture':'Particle texture',
+            'lightflow_atmosphere.ui.particle_setup':'Quick setup…', 'lightflow_atmosphere.ui.preset_snow':'Snow', 'lightflow_atmosphere.ui.preset_rain':'Rain', 'lightflow_atmosphere.ui.preset_sparks':'Sparks',
+            'lightflow_atmosphere.ui.import_effect':'Import .particle.json…', 'lightflow_atmosphere.ui.export_effect':'Export .particle.json…',
+            'lightflow_atmosphere.ui.snowstorm':'Edit in Snowstorm…', 'lightflow_atmosphere.ui.snowstorm_help':'Snowstorm opens this effect in its visual editor. Save a .particle.json there and use Replace JSON to bring it back here.',
+            'lightflow_atmosphere.ui.snowstorm_export_help':'This effect is too large for a link. Export its .particle.json and open it in Snowstorm.',
+            'lightflow_atmosphere.ui.snowstorm_texture_help':'Import this texture separately in Snowstorm; the link includes compact PNG images.',
+            'lightflow_atmosphere.ui.particle_distribution':'Emitter shape', 'lightflow_atmosphere.ui.particle_motion':'Motion',
+            'lightflow_atmosphere.ui.emitter_point':'Point', 'lightflow_atmosphere.ui.emitter_box':'Box', 'lightflow_atmosphere.ui.emitter_sphere':'Sphere',
+            'lightflow_atmosphere.ui.emitter_shape':'Shape', 'lightflow_atmosphere.ui.emitter_size':'Emitter size', 'lightflow_atmosphere.ui.emitter_radius':'Emitter radius',
+            'lightflow_atmosphere.ui.acceleration':'Acceleration', 'lightflow_atmosphere.ui.drag':'Air drag',
+            'lightflow_atmosphere.ui.quality_scope':'These quality settings apply to every volume in the project.',
+            'lightflow_atmosphere.ui.enable_atmosphere':'Enable global Atmosphere',
+            'lightflow_atmosphere.ui.ray':'God ray', 'lightflow_atmosphere.ui.particles':'Particles',
+            'lightflow_atmosphere.ui.ray_camera_axis':'Camera / ray axis', 'lightflow_atmosphere.ui.ray_world_y':'Camera / world Y',
+            'lightflow_atmosphere.ui.ray_fixed':'Fixed plane', 'lightflow_atmosphere.ui.ray_additive':'Additive', 'lightflow_atmosphere.ui.ray_alpha':'Alpha',
+            'lightflow_atmosphere.ui.ray_scene_depth':'Scene depth', 'lightflow_atmosphere.ui.ray_scene_shadows':'Scene + light shadows',
+            'lightflow_atmosphere.ui.ray_always_visible':'Always visible', 'lightflow_atmosphere.ui.ray_free_direction':'Free direction',
+            'lightflow_atmosphere.ui.ray_missing_light':'Linked light unavailable',
+            'lightflow_atmosphere.ui.preview':'Preview', 'lightflow_atmosphere.ui.emission':'Emission',
+            'lightflow_atmosphere.ui.select_effect':'Select an element in the Outliner to edit it, or add one here.',
+            'lightflow_atmosphere.ui.select_existing':'Select existing…', 'lightflow_atmosphere.ui.cloud_detail':'Cloud detail',
+            'lightflow_atmosphere.ui.motion':'Motion', 'lightflow_atmosphere.ui.edit_particle':'Edit particle effect',
+            'lightflow_atmosphere.ui.play':'Play', 'lightflow_atmosphere.ui.pause':'Pause', 'lightflow_atmosphere.ui.restart':'Restart',
+            'lightflow_atmosphere.ui.frame':'Frame time (s)', 'lightflow_atmosphere.ui.repeat':'Repeat one-shot effect',
+            'lightflow_atmosphere.ui.scrub_help':'Move the time slider to pause and preview a still frame.',
+            'lightflow_atmosphere.ui.numeric_help':'Numeric components are shown here. Expressions and events are available under JSON / Molang.',
+            'lightflow_atmosphere.ui.spawn_rate':'Particles per second', 'lightflow_atmosphere.ui.particle_limit':'Particle limit',
+            'lightflow_atmosphere.ui.duration':'Emitter duration (s)', 'lightflow_atmosphere.ui.lifetime':'Particle lifetime (s)',
+            'lightflow_atmosphere.ui.speed':'Initial speed', 'lightflow_atmosphere.ui.scene_scale':'Scene scale',
+            'lightflow_atmosphere.ui.bloom':'Bloom contribution', 'lightflow_atmosphere.ui.width':'Particle width',
+            'lightflow_atmosphere.ui.height':'Particle height', 'lightflow_atmosphere.ui.tint':'Tint',
+            'lightflow_atmosphere.ui.texture':'Choose texture PNG…', 'lightflow_atmosphere.ui.source':'JSON / Molang',
+            'lightflow_atmosphere.ui.edit_json':'Edit JSON / Molang…', 'lightflow_atmosphere.ui.replace':'Replace effect JSON…',
+            'lightflow_atmosphere.ui.select_child':'Select child effect', 'lightflow_atmosphere.ui.import_child':'Import child effect',
+            'lightflow_atmosphere.ui.invalid_json':'The effect JSON is invalid. Open JSON / Molang to fix or replace it.',
+            'lightflow_atmosphere.ui.invalid_particle_json':'Invalid particle JSON',
+            'lightflow_atmosphere.ui.json_valid':'Valid JSON · {count} components',
+            'lightflow_atmosphere.ui.json_format':'Format JSON',
+            'lightflow_atmosphere.ui.json_format_shortcut':'Format JSON · Ctrl+Shift+F',
+            'lightflow_atmosphere.ui.missing_particle_components':'The JSON needs particle_effect.description and components',
+            'lightflow_atmosphere.ui.behaviour':'Behaviour', 'lightflow_atmosphere.ui.cycle':'Cycle',
+            'lightflow_atmosphere.ui.cycle_once':'Once', 'lightflow_atmosphere.ui.cycle_loop':'Loop', 'lightflow_atmosphere.ui.cycle_expression':'Expression',
+            'lightflow_atmosphere.ui.sleep_time':'Pause between cycles', 'lightflow_atmosphere.ui.variables':'Variables & expressions…',
+            'lightflow_atmosphere.ui.emitter':'Emitter', 'lightflow_atmosphere.ui.particle':'Particle',
+            'lightflow_atmosphere.ui.variables_start':'When the emitter starts', 'lightflow_atmosphere.ui.variables_update':'Each emitter update',
+            'lightflow_atmosphere.ui.variables_particle_update':'Each particle update', 'lightflow_atmosphere.ui.variables_particle_render':'Each particle render',
+            'lightflow_atmosphere.ui.activation_expression':'Activate when', 'lightflow_atmosphere.ui.expiration_expression':'Finish when',
+            'lightflow_atmosphere.ui.variables_help':'Use Molang, for example: variable.speed = 2; Changes apply on Confirm. Complex legacy expressions remain available in JSON / Molang.',
+            'lightflow_atmosphere.ui.particle_inactive':'Not rendered: enable the effect and its visibility in the Outliner.',
             'lightflow_atmosphere.plugin.title': 'Lightflow Atmosphere',
+            'lightflow_atmosphere.name.volume': 'Volume Domain',
+            'lightflow_atmosphere.action.add_vfx': 'Add VFX',
+            'lightflow_atmosphere.action.add_vfx.desc': 'Add a volume, God Ray, or particle effect',
+            'lightflow_atmosphere.action.add_particle': 'Add Particle',
             'lightflow_atmosphere.action.add': 'Add Volume Domain',
             'lightflow_atmosphere.action.add.desc': 'Add a local fog, cloud, or light-shaft rendering domain',
+            'lightflow_atmosphere.action.add_god_ray': 'Add God Ray',
+            'lightflow_atmosphere.action.import_particle': 'Import Particle Effect (.particle.json)',
             'lightflow_atmosphere.action.edit': 'Edit Volume Domain',
             'lightflow_atmosphere.action.fit': 'Fit Volume to Selection',
             'lightflow_atmosphere.action.settings': 'Atmosphere Quality...',
@@ -5644,8 +7903,12 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             'lightflow_atmosphere.panel.summary_hint': 'Selected Volume Domain',
             'lightflow_atmosphere.panel.look': 'Look',
             'lightflow_atmosphere.panel.look_desc': 'The visible result',
+            'lightflow_atmosphere.panel.basic': 'Basic',
+            'lightflow_atmosphere.panel.basic_desc': 'The visible result',
             'lightflow_atmosphere.panel.shape': 'Shape',
             'lightflow_atmosphere.panel.shape_desc': 'Where the effect exists',
+            'lightflow_atmosphere.panel.advanced': 'Advanced',
+            'lightflow_atmosphere.panel.advanced_desc': 'Detailed light response and performance controls',
             'lightflow_atmosphere.panel.shape_distribution': 'Shape & Distribution',
             'lightflow_atmosphere.panel.light_response': 'Advanced Light Response',
             'lightflow_atmosphere.panel.quality': 'Quality',
@@ -5705,6 +7968,11 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             'lightflow_atmosphere.field.wind_speed': 'Wind Speed',
             'lightflow_atmosphere.field.technique': 'Render Technique',
             'lightflow_atmosphere.option.auto': 'Auto (recommended)',
+            'lightflow_atmosphere.option.quality_draft': 'Draft',
+            'lightflow_atmosphere.option.quality_balanced': 'Balanced',
+            'lightflow_atmosphere.option.quality_high': 'High',
+            'lightflow_atmosphere.option.quality_ultra': 'Ultra',
+            'lightflow_atmosphere.option.quality_reference': 'Reference',
             'lightflow_atmosphere.field.shaft_length': 'Shaft Length',
             'lightflow_atmosphere.field.shaft_decay': 'Shaft Decay',
             'lightflow_atmosphere.field.shaft_radius': 'Shaft Radius',
@@ -5780,9 +8048,77 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             'lightflow_atmosphere.message.light_manager_required': 'Lightflow Atmosphere requires Light Manager.'
         });
         Language.addTranslations('es', {
+            'lightflow_atmosphere.ui.look':'Aspecto', 'lightflow_atmosphere.ui.shape':'Forma', 'lightflow_atmosphere.ui.light':'Luz',
+            'lightflow_atmosphere.ui.ray_gizmos':'Editar forma del rayo', 'lightflow_atmosphere.ui.edit_ray':'Editar rayo de luz',
+            'lightflow_atmosphere.ui.ray_from_light':'Crear rayo de luz vinculado', 'lightflow_atmosphere.ui.ray_detach':'Desvincular rayo de luz',
+            'lightflow_atmosphere.ui.ray_attached':'Seguir posición de la luz',
+            'lightflow_atmosphere.ui.ray_color_detail':'Transición de color',
+            'lightflow_atmosphere.ui.ray_compositing':'Mezcla y brillo difuso',
+            'lightflow_atmosphere.ui.ray_plane':'Plano y orientación',
+            'lightflow_atmosphere.ui.ray_soft_edges':'Bordes suaves y desvanecimiento',
+            'lightflow_atmosphere.ui.ray_shadow_detail':'Oclusión de la luz',
+            'lightflow_atmosphere.ui.ray_camera_fade':'Desvanecer por distancia a cámara',
+            'lightflow_atmosphere.ui.volume_recipe':'Preajustes y mezcla',
+            'lightflow_atmosphere.ui.height_distribution':'Distribución en altura',
+            'lightflow_atmosphere.ui.ray_attachment_help':'Mover edita el desplazamiento respecto de la luz. Desvincula para conservar la posición y dirección actuales en el mundo.',
+            'lightflow_atmosphere.ui.activate_effect':'Activar efecto', 'lightflow_atmosphere.ui.particle_texture':'Textura de la partícula',
+            'lightflow_atmosphere.ui.particle_setup':'Configuración rápida…', 'lightflow_atmosphere.ui.preset_snow':'Nieve', 'lightflow_atmosphere.ui.preset_rain':'Lluvia', 'lightflow_atmosphere.ui.preset_sparks':'Chispas',
+            'lightflow_atmosphere.ui.import_effect':'Importar .particle.json…', 'lightflow_atmosphere.ui.export_effect':'Exportar .particle.json…',
+            'lightflow_atmosphere.ui.snowstorm':'Editar en Snowstorm…', 'lightflow_atmosphere.ui.snowstorm_help':'Snowstorm abre este efecto en su editor visual. Guarda allí el .particle.json y usa Reemplazar JSON para traerlo de vuelta.',
+            'lightflow_atmosphere.ui.snowstorm_export_help':'Este efecto es demasiado grande para un enlace. Exporta su .particle.json y ábrelo en Snowstorm.',
+            'lightflow_atmosphere.ui.snowstorm_texture_help':'Importa esta textura por separado en Snowstorm; el enlace incluye imágenes PNG compactas.',
+            'lightflow_atmosphere.ui.particle_distribution':'Forma del emisor', 'lightflow_atmosphere.ui.particle_motion':'Movimiento',
+            'lightflow_atmosphere.ui.emitter_point':'Punto', 'lightflow_atmosphere.ui.emitter_box':'Caja', 'lightflow_atmosphere.ui.emitter_sphere':'Esfera',
+            'lightflow_atmosphere.ui.emitter_shape':'Forma', 'lightflow_atmosphere.ui.emitter_size':'Tamaño del emisor', 'lightflow_atmosphere.ui.emitter_radius':'Radio del emisor',
+            'lightflow_atmosphere.ui.acceleration':'Aceleración', 'lightflow_atmosphere.ui.drag':'Resistencia del aire',
+            'lightflow_atmosphere.ui.quality_scope':'Estos ajustes de calidad afectan a todos los volúmenes del proyecto.',
+            'lightflow_atmosphere.ui.enable_atmosphere':'Activar Atmósfera global',
+            'lightflow_atmosphere.ui.ray':'Rayo de luz', 'lightflow_atmosphere.ui.particles':'Partículas',
+            'lightflow_atmosphere.ui.ray_camera_axis':'Cámara / eje del rayo', 'lightflow_atmosphere.ui.ray_world_y':'Cámara / eje Y del mundo',
+            'lightflow_atmosphere.ui.ray_fixed':'Plano fijo', 'lightflow_atmosphere.ui.ray_additive':'Aditiva', 'lightflow_atmosphere.ui.ray_alpha':'Alfa',
+            'lightflow_atmosphere.ui.ray_scene_depth':'Profundidad de la escena', 'lightflow_atmosphere.ui.ray_scene_shadows':'Escena y sombras de la luz',
+            'lightflow_atmosphere.ui.ray_always_visible':'Siempre visible', 'lightflow_atmosphere.ui.ray_free_direction':'Dirección libre',
+            'lightflow_atmosphere.ui.ray_missing_light':'La luz vinculada no está disponible',
+            'lightflow_atmosphere.ui.preview':'Vista', 'lightflow_atmosphere.ui.emission':'Emisión',
+            'lightflow_atmosphere.ui.select_effect':'Selecciona un elemento en el Outliner para editarlo o añade uno aquí.',
+            'lightflow_atmosphere.ui.select_existing':'Seleccionar existente…', 'lightflow_atmosphere.ui.cloud_detail':'Detalle de nubes',
+            'lightflow_atmosphere.ui.motion':'Movimiento', 'lightflow_atmosphere.ui.edit_particle':'Editar partículas',
+            'lightflow_atmosphere.ui.play':'Reproducir', 'lightflow_atmosphere.ui.pause':'Pausar', 'lightflow_atmosphere.ui.restart':'Reiniciar',
+            'lightflow_atmosphere.ui.frame':'Tiempo del fotograma (s)', 'lightflow_atmosphere.ui.repeat':'Repetir efecto de una sola emisión',
+            'lightflow_atmosphere.ui.scrub_help':'Mueve el tiempo para pausar y previsualizar un fotograma.',
+            'lightflow_atmosphere.ui.numeric_help':'Aquí aparecen componentes numéricos. Las expresiones y eventos están en JSON / Molang.',
+            'lightflow_atmosphere.ui.spawn_rate':'Partículas por segundo', 'lightflow_atmosphere.ui.particle_limit':'Límite de partículas',
+            'lightflow_atmosphere.ui.duration':'Duración del emisor (s)', 'lightflow_atmosphere.ui.lifetime':'Vida de cada partícula (s)',
+            'lightflow_atmosphere.ui.speed':'Velocidad inicial', 'lightflow_atmosphere.ui.scene_scale':'Escala en la escena',
+            'lightflow_atmosphere.ui.bloom':'Contribución a Bloom', 'lightflow_atmosphere.ui.width':'Ancho de la partícula',
+            'lightflow_atmosphere.ui.height':'Alto de la partícula', 'lightflow_atmosphere.ui.tint':'Color',
+            'lightflow_atmosphere.ui.texture':'Elegir textura PNG…', 'lightflow_atmosphere.ui.source':'JSON / Molang',
+            'lightflow_atmosphere.ui.edit_json':'Editar JSON / Molang…', 'lightflow_atmosphere.ui.replace':'Reemplazar JSON del efecto…',
+            'lightflow_atmosphere.ui.select_child':'Seleccionar efecto hijo', 'lightflow_atmosphere.ui.import_child':'Importar efecto hijo',
+            'lightflow_atmosphere.ui.invalid_json':'El JSON del efecto no es válido. Abre JSON / Molang para corregirlo o reemplazarlo.',
+            'lightflow_atmosphere.ui.invalid_particle_json':'JSON de partícula no válido',
+            'lightflow_atmosphere.ui.json_valid':'JSON válido · {count} componentes',
+            'lightflow_atmosphere.ui.json_format':'Formatear JSON',
+            'lightflow_atmosphere.ui.json_format_shortcut':'Formatear JSON · Ctrl+Shift+F',
+            'lightflow_atmosphere.ui.missing_particle_components':'El JSON necesita particle_effect.description y components',
+            'lightflow_atmosphere.ui.behaviour':'Comportamiento', 'lightflow_atmosphere.ui.cycle':'Ciclo',
+            'lightflow_atmosphere.ui.cycle_once':'Una vez', 'lightflow_atmosphere.ui.cycle_loop':'Repetir', 'lightflow_atmosphere.ui.cycle_expression':'Expresión',
+            'lightflow_atmosphere.ui.sleep_time':'Pausa entre ciclos', 'lightflow_atmosphere.ui.variables':'Variables y expresiones…',
+            'lightflow_atmosphere.ui.emitter':'Emisor', 'lightflow_atmosphere.ui.particle':'Partícula',
+            'lightflow_atmosphere.ui.variables_start':'Al iniciar el emisor', 'lightflow_atmosphere.ui.variables_update':'En cada actualización del emisor',
+            'lightflow_atmosphere.ui.variables_particle_update':'En cada actualización de la partícula', 'lightflow_atmosphere.ui.variables_particle_render':'En cada render de la partícula',
+            'lightflow_atmosphere.ui.activation_expression':'Activar cuando', 'lightflow_atmosphere.ui.expiration_expression':'Finalizar cuando',
+            'lightflow_atmosphere.ui.variables_help':'Usa Molang, por ejemplo: variable.speed = 2; Los cambios se aplican al confirmar. Las expresiones complejas antiguas siguen disponibles en JSON / Molang.',
+            'lightflow_atmosphere.ui.particle_inactive':'No se renderiza: activa el efecto y su visibilidad en el Outliner.',
             'lightflow_atmosphere.plugin.title': 'Atmósfera Lightflow',
+            'lightflow_atmosphere.name.volume': 'Dominio de volumen',
+            'lightflow_atmosphere.action.add_vfx': 'Añadir VFX',
+            'lightflow_atmosphere.action.add_vfx.desc': 'Añade un volumen, un rayo de luz o un efecto de partículas',
+            'lightflow_atmosphere.action.add_particle': 'Añadir partícula',
             'lightflow_atmosphere.action.add': 'Añadir dominio volumétrico',
             'lightflow_atmosphere.action.add.desc': 'Añade un área local de niebla, nubes o rayos de luz',
+            'lightflow_atmosphere.action.add_god_ray': 'Añadir rayo de luz',
+            'lightflow_atmosphere.action.import_particle': 'Importar efecto de partículas (.particle.json)',
             'lightflow_atmosphere.action.edit': 'Editar dominio volumétrico',
             'lightflow_atmosphere.action.fit': 'Ajustar volumen a la selección',
             'lightflow_atmosphere.action.settings': 'Calidad de atmósfera...',
@@ -5792,8 +8128,12 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             'lightflow_atmosphere.panel.summary_hint': 'Dominio volumetrico seleccionado',
             'lightflow_atmosphere.panel.look': 'Aspecto',
             'lightflow_atmosphere.panel.look_desc': 'El resultado visible',
+            'lightflow_atmosphere.panel.basic': 'Básico',
+            'lightflow_atmosphere.panel.basic_desc': 'El resultado visible',
             'lightflow_atmosphere.panel.shape': 'Forma',
             'lightflow_atmosphere.panel.shape_desc': 'Dónde existe el efecto',
+            'lightflow_atmosphere.panel.advanced': 'Avanzado',
+            'lightflow_atmosphere.panel.advanced_desc': 'Respuesta de luz y controles de rendimiento detallados',
             'lightflow_atmosphere.panel.shape_distribution': 'Forma y distribución',
             'lightflow_atmosphere.panel.light_response': 'Respuesta de luz avanzada',
             'lightflow_atmosphere.panel.quality': 'Calidad',
@@ -5826,7 +8166,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             'lightflow_atmosphere.field.size': 'Tamaño del dominio',
             'lightflow_atmosphere.field.density_mode': 'Distribución',
             'lightflow_atmosphere.field.composite_mode': 'Efecto',
-            'lightflow_atmosphere.field.density': 'Cantidad',
+            'lightflow_atmosphere.field.density': 'Densidad',
             'lightflow_atmosphere.field.scattering_color': 'Color iluminado',
             'lightflow_atmosphere.field.scattering': 'Dispersión de luz',
             'lightflow_atmosphere.field.absorption_color': 'Color de sombra',
@@ -5847,6 +8187,11 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             'lightflow_atmosphere.field.wind_speed': 'Velocidad del viento',
             'lightflow_atmosphere.field.technique': 'Técnica de render',
             'lightflow_atmosphere.option.auto': 'Auto (recomendado)',
+            'lightflow_atmosphere.option.quality_draft': 'Borrador',
+            'lightflow_atmosphere.option.quality_balanced': 'Equilibrada',
+            'lightflow_atmosphere.option.quality_high': 'Alta',
+            'lightflow_atmosphere.option.quality_ultra': 'Ultra',
+            'lightflow_atmosphere.option.quality_reference': 'Referencia',
             'lightflow_atmosphere.field.shaft_length': 'Longitud del haz',
             'lightflow_atmosphere.field.shaft_decay': 'Decaimiento del haz',
             'lightflow_atmosphere.field.shaft_radius': 'Radio del haz',
@@ -5881,7 +8226,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             'lightflow_atmosphere.preset.ground_fog': 'Niebla de suelo',
             'lightflow_atmosphere.preset.smoke': 'Humo',
             'lightflow_atmosphere.preset.dream_fog': 'Niebla onírica',
-            'lightflow_atmosphere.help.density': 'Cantidad total de niebla o nube dentro del dominio.',
+            'lightflow_atmosphere.help.density': 'Densidad total de niebla o nube dentro del dominio.',
             'lightflow_atmosphere.help.scattering_color': 'Color que toma el medio cuando recibe luz.',
             'lightflow_atmosphere.help.scattering': 'Qué tanto responde el medio a las luces de la escena.',
             'lightflow_atmosphere.help.absorption_color': 'Color que permanece en las partes oscuras del medio.',
@@ -5970,9 +8315,20 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
 
     installTranslations();
 
+    let atmosphereRuntimeLoaded = false;
+    let deferredAtmosphereLightManagerInit = null;
+
+    function atmosphereDependenciesReady() {
+        return !!(
+            window.LIGHT_MANAGER_LOADED &&
+            getAtmosphereFormUI() &&
+            typeof window.applyIndestructibleFormGroups === 'function'
+        );
+    }
+
     Plugin.register(PLUGIN_ID, {
         title: 'Lightflow Atmosphere',
-        icon: 'blur_on',
+        icon: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABQAAAAUCAYAAACNiR0NAAABGElEQVR4AayUsa5BQRCGJ9Pd5Gp0Kr3OM3g67+IVPINOTUUUIiFRcr7Dz1i7LCG+zOzsv3Nmd84eH09Op1/i1vw6f2bQuE//0dAsx5PwGvCYKPq9rhlcddXG90ezCCupaNA3A8Y50IDm8MGpAjQRfcU+se0ZpgvmS7MaprP7Snzw1dYMNIVfC2s4d8HY2fc7EKbEJJojlt2yBKnlfMV/86rlqEqoHdB1kT5M46qEEtdYpzM53nW5lPyhQg5V1HY61bUJlSQ+lRhjWZ1jyaKFNiFXL9cxOkoci7iG23sosbqYWs2XrCpvKyyJvom7uqnFGke7WJfvtt4Q6W93OXbr0HzSIpvd5b4Tizp8FYIP2S3TpBQWEsO+4gwAAP//FK356AAAAAZJREFUAwBufQo06ukMYgAAAABJRU5ErkJggg==',
         author: 'MidFord327',
         description: 'Production-ready local fog, occluded additive light shafts, and procedural cloud domains for the Lightflow rendering suite.',
         tags: ['Lightflow', 'Rendering', 'Volumetrics'],
@@ -5981,17 +8337,38 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         variant: 'both',
         dependencies: ['light_manager'],
 
-        onload() {
-            if (!window.LIGHT_MANAGER_LOADED || !getAtmosphereFormUI() || typeof window.applyIndestructibleFormGroups !== 'function') {
-                Blockbench.showToastNotification({
-                    text: tr('lightflow_atmosphere.message.light_manager_required', 'Lightflow Atmosphere requires Light Manager.'),
-                    icon: 'error',
-                    expire: 10000
-                });
+        onload: function loadLightflowAtmosphere() {
+            if (atmosphereRuntimeLoaded) return;
+            if (!atmosphereDependenciesReady()) {
+                if (!deferredAtmosphereLightManagerInit) {
+                    deferredAtmosphereLightManagerInit = () => {
+                        if (!atmosphereDependenciesReady()) return;
+                        window.removeEventListener('light_manager_initialized', deferredAtmosphereLightManagerInit);
+                        deferredAtmosphereLightManagerInit = null;
+                        loadLightflowAtmosphere();
+                    };
+                    window.addEventListener('light_manager_initialized', deferredAtmosphereLightManagerInit);
+                }
+                const lightManagerInstalled = window.Plugins?.all?.some?.(plugin => plugin?.id === 'light_manager' && plugin.installed !== false);
+                if (!lightManagerInstalled) {
+                    Blockbench.showToastNotification({
+                        text: tr('lightflow_atmosphere.message.light_manager_required', 'Lightflow Atmosphere requires Light Manager.'),
+                        icon: 'error',
+                        expire: 10000
+                    });
+                }
                 return;
             }
+            atmosphereRuntimeLoaded = true;
             addAtmosphereDialogStyles();
+            // Full developer reloads can load another Outliner plugin after our old
+            // runtime is unloaded but before this one registers its element classes.
+            // Keep every surviving Atmosphere element core-safe before the first
+            // registerType dispatch refreshes Blockbench selection/highlights.
+            ensureAtmosphereReloadPlaceholders();
             registerVolumeElement();
+            registerGodRayElement();
+            registerParticleEffectElement();
             if (window.ModelProject && window.Property) {
                 atmosphereProjectSettingsProperty = new Property(
                     ModelProject,
@@ -6037,11 +8414,14 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                         return;
                     }
                     window.LightflowLifecycle.restoreCustomElements(model, 'lightflow_volume', VolumeElement);
+                    window.LightflowLifecycle.restoreCustomElements(model, 'lightflow_god_ray', GodRayElement);
+                    window.LightflowLifecycle.restoreCustomElements(model, 'lightflow_particle_effect', ParticleEffectElement);
                     if (!isCurrent()) return;
                     const projectSettingsHydrated = hydrateProjectSettings(project);
                     if (projectSettingsHydrated) window.Canvas?.updateAllFaces?.();
                     AtmosphereManager.invalidateSceneCache();
                     AtmosphereManager.patchAllPreviews();
+                    syncParticleEffects(window.Preview?.selected?.camera);
                     syncAtmospherePanel();
                     requestPreviewRender();
                 }
@@ -6089,6 +8469,13 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         },
 
         onunload() {
+            for(const Type of [VolumeElement,GodRayElement,ParticleEffectElement])if(Type?.animator?.prototype.type==='lightflow_inspection')delete Type.animator;
+            for (const project of window.ModelProject?.all || []) window.LightflowLifecycle?.preserveLiveElements?.(project, ['lightflow_volume','lightflow_god_ray','lightflow_particle_effect']);
+            atmosphereRuntimeLoaded = false;
+            if (deferredAtmosphereLightManagerInit) {
+                window.removeEventListener('light_manager_initialized', deferredAtmosphereLightManagerInit);
+                deferredAtmosphereLightManagerInit = null;
+            }
             beginAtmosphereProject(null);
             if (animationHandleType === 'frame' && animationFrame !== null) {
                 cancelAnimationFrame(animationFrame);
@@ -6099,8 +8486,16 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             animationHandleType = '';
             if (typeof previewRenderFrame === 'number') cancelAnimationFrame(previewRenderFrame);
             previewRenderFrame = null;
-            AtmosphereManager.dispose();
+            window.LightManagerUI?.workspace?.unregister?.(particleEffectPanel);
+            window.LightManagerUI?.workspace?.unregister?.(godRayPanel);
+            window.LightManagerUI?.workspace?.unregister?.(atmospherePanel);
+            // Blockbench recalculates sidebar order while panels/actions are deleted.
+            // Keep the element classes alive until those conditions have finished
+            // evaluating, then tear down their runtime controllers.
             disposeRegisteredResources();
+            AtmosphereManager.dispose();
+            disposeParticleEffectElement();
+            disposeGodRays();
             if (VolumeElement?.all) {
                 VolumeElement.all.forEach(volume => {
                     const mesh = volume?.mesh;
@@ -6125,6 +8520,11 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             if (NodePreviewController.controllers?.lightflow_volume === volumePreviewController) {
                 volumePreviewController.delete();
             }
+            // The project keeps custom Outliner elements across a plugin reload.
+            // Other plugins may register their element types before Atmosphere loads
+            // again, and Blockbench's registration listeners expect every live
+            // element to expose mesh.geometry during that gap.
+            ensureAtmosphereReloadPlaceholders();
             restoreWindowBindings();
             VolumeElement = null;
             volumePreviewController = null;

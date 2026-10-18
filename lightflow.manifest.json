@@ -1,7 +1,8 @@
 {
   "schema_version": 1,
   "suite": "Lightflow",
-  "generated_at": "2026-09-14",
+  "artwork": "assets/hub/copper-golem.png",
+  "generated_at": "2026-10-18",
   "repository": {
     "owner": "MidFord",
     "name": "lightflow-blockbench",
@@ -12,7 +13,7 @@
   "hub": {
     "id": "lightflow_hub",
     "file": "lightflow_hub.js",
-    "version": "1.0.1",
+    "version": "1.1.0",
     "min_blockbench": "4.9.0"
   },
   "modules": [
@@ -22,7 +23,7 @@
       "title": "Light Manager",
       "description": "Lights, gizmos, animation, and shadows for the entire suite.",
       "description_es": "Luces, gizmos, animación y sombras para toda la suite.",
-      "version": "1.8.2",
+      "version": "1.9.0",
       "min_blockbench": "4.9.0",
       "icon": "light_mode",
       "group": "essential",
@@ -35,12 +36,14 @@
       "title": "Shader Architect",
       "description": "Lightflow, PBR, and Rendercraft materials, instances, and screen effects.",
       "description_es": "Materiales Lightflow, PBR, Rendercraft, instancias y efectos de pantalla.",
-      "version": "3.2.6",
+      "version": "3.3.0",
       "min_blockbench": "4.9.0",
       "icon": "architecture",
       "group": "essential",
       "recommended": true,
-      "dependencies": ["light_manager"]
+      "dependencies": [
+        "light_manager"
+      ]
     },
     {
       "id": "lightflow_environment",
@@ -48,12 +51,14 @@
       "title": "Lightflow Environment",
       "description": "Sky, sun, moon, clouds, reflections, and environment lighting.",
       "description_es": "Cielo, sol, luna, nubes, reflejos e iluminación ambiental.",
-      "version": "1.9.0",
+      "version": "1.10.0",
       "min_blockbench": "4.9.0",
       "icon": "wb_twilight",
       "group": "essential",
       "recommended": true,
-      "dependencies": ["light_manager"]
+      "dependencies": [
+        "light_manager"
+      ]
     },
     {
       "id": "lightflow_atmosphere",
@@ -61,12 +66,14 @@
       "title": "Lightflow Atmosphere",
       "description": "Local fog, light shafts, dust, and procedural volumes.",
       "description_es": "Niebla local, haces de luz, polvo y volúmenes procedurales.",
-      "version": "2.0.0",
+      "version": "2.1.0",
       "min_blockbench": "4.9.0",
       "icon": "blur_on",
       "group": "essential",
       "recommended": true,
-      "dependencies": ["light_manager"]
+      "dependencies": [
+        "light_manager"
+      ]
     },
     {
       "id": "studio_render",
@@ -74,7 +81,7 @@
       "title": "Studio Render",
       "description": "High-resolution scene composition and supersampled image export.",
       "description_es": "Composición y exportación de imágenes con alta resolución y supersampling.",
-      "version": "1.9.10",
+      "version": "1.10.0",
       "min_blockbench": "4.9.0",
       "icon": "photo_camera_back",
       "group": "essential",
@@ -82,18 +89,37 @@
       "dependencies": []
     },
     {
+      "id": "lightflow_scene_links",
+      "file": "lightflow_scene_links.js",
+      "title": "Scene Links",
+      "description": "Compose scenes from linked Blockbench projects with independent poses.",
+      "description_es": "Compón escenas con proyectos de Blockbench vinculados y poses independientes.",
+      "version": "0.1.0",
+      "min_blockbench": "4.9.0",
+      "variant": "desktop",
+      "icon": "kid_star",
+      "group": "creative",
+      "recommended": false,
+      "maturity": "experimental",
+      "dependencies": [
+        "light_manager"
+      ]
+    },
+    {
       "id": "lightflow_cinematic",
       "file": "lightflow_cinematic.js",
       "title": "Lightflow Cinematic",
       "description": "Deterministic sequences, physical cameras, and animation rendering.",
       "description_es": "Secuencias deterministas, cámaras físicas y render de animación.",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "min_blockbench": "4.9.0",
       "icon": "movie_creation",
       "group": "creative",
       "recommended": false,
       "maturity": "experimental",
-      "dependencies": ["studio_render"]
+      "dependencies": [
+        "studio_render"
+      ]
     },
     {
       "id": "visual_shader_graph",
@@ -101,27 +127,32 @@
       "title": "Visual Shader Graph",
       "description": "A visual shader editor connected to Shader Architect.",
       "description_es": "Editor visual de shaders conectado con Shader Architect.",
-      "version": "1.2.0",
+      "version": "1.3.0",
       "min_blockbench": "4.9.0",
       "icon": "schema",
       "group": "creative",
       "recommended": false,
       "maturity": "beta",
-      "dependencies": ["light_manager", "shader_architect"]
+      "dependencies": [
+        "light_manager",
+        "shader_architect"
+      ]
     },
     {
       "id": "bedrock_structure_studio",
-      "file": "bedrock_structure_studio.js",
-      "title": "Bedrock Structure Studio",
-      "description": "Open, edit, and export Bedrock .mcstructure files.",
-      "description_es": "Abrir, editar y exportar estructuras .mcstructure de Bedrock.",
-      "version": "2.5.0",
+      "file": "dist/bedrock_structure_studio.js",
+      "title": "Lightflow Terrain Render",
+      "description": "Compose terrain with Bedrock and Java structures, logical block editing and local resource packs.",
+      "description_es": "Componer terrenos con estructuras Bedrock y Java, edicion logica de bloques y packs locales.",
+      "version": "2.6.0",
       "min_blockbench": "5.0.0",
       "icon": "view_in_ar",
       "group": "specialized",
       "recommended": false,
       "maturity": "beta",
-      "dependencies": ["light_manager"]
+      "dependencies": [
+        "light_manager"
+      ]
     },
     {
       "id": "lightflow_test_lab",
@@ -135,7 +166,26 @@
       "group": "developer",
       "recommended": false,
       "maturity": "developer",
-      "dependencies": ["light_manager", "shader_architect"]
+      "dependencies": [
+        "light_manager",
+        "shader_architect"
+      ]
+    },
+    {
+      "id": "lightflow_ui_lab",
+      "file": "lightflow_ui_lab.js",
+      "title": "Lightflow UI Lab",
+      "description": "Development-only fixtures using real shared controls in a Panel and Dialog.",
+      "description_es": "Fixtures de desarrollo con controles compartidos reales en un Panel y un Dialog.",
+      "version": "1.0.0",
+      "min_blockbench": "4.9.0",
+      "icon": "widgets",
+      "group": "developer",
+      "recommended": false,
+      "maturity": "developer",
+      "dependencies": [
+        "light_manager"
+      ]
     },
     {
       "id": "lightflow_ui_diagnostics",
@@ -149,7 +199,13 @@
       "group": "developer",
       "recommended": false,
       "maturity": "developer",
-      "dependencies": ["light_manager"]
+      "dependencies": [
+        "light_manager"
+      ]
     }
-  ]
+  ],
+  "suite_version": "0.2.0-rc.1",
+  "distribution_status": "development",
+  "development_branch": "main",
+  "release_target": "0.2.0-rc.1"
 }
