@@ -1,5 +1,7 @@
 # Lightflow 3.0 Development Documentation
 
+> **Archived engineering snapshot (2026-08-24).** This directory documents the older `development/lightflow-3.0` preservation effort, not the current `main` build. See [current development status](../DEVELOPMENT_STATUS.md) and [SOURCE_SYNC_STATUS.md](SOURCE_SYNC_STATUS.md) for known synchronization caveats.
+
 This directory is the authoritative engineering documentation for `development/lightflow-3.0`.
 
 - **MODULE_STATUS.md** — what is implemented in each module and what still needs validation.

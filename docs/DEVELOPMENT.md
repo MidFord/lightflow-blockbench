@@ -2,11 +2,11 @@
 
 This document describes the current development workflow for Lightflow for Blockbench.
 
-Lightflow is intentionally developed close to the environment in which it runs: Blockbench Desktop, its Three.js/WebGL renderer, and the five independently loadable Lightflow modules.
+Lightflow is intentionally developed close to the environment in which it runs: Blockbench Desktop, its Three.js/WebGL renderer, and the independently loadable Lightflow modules.
 
 ## Repository layout
 
-The primary distributable modules live at the repository root:
+The five foundational rendering modules live at the repository root (this is not the complete inventory; see [Modules](MODULES.md) and the [manifest](../lightflow.manifest.json)):
 
 | File | Responsibility |
 | --- | --- |
@@ -23,7 +23,7 @@ Supporting material lives in:
 - `assets/` — repository documentation assets;
 - `package.json` — Node.js validation harness.
 
-There is currently no production bundling step. The root JavaScript modules are the source files loaded by Blockbench.
+The root JavaScript entry points must retain their paths for existing installation URLs and Hub compatibility. Some additional modules have distributables in `dist/`; do not move entry points without updating the manifest and release tooling.
 
 ## Requirements
 
@@ -47,7 +47,7 @@ Run the complete validation suite:
 npm run validate
 ```
 
-This runs syntax checks for all five modules followed by the Node.js regression suite.
+This runs syntax checks for the shipped JavaScript entry points and the Node.js regression and Hub contract tests.
 
 You can also run the stages separately:
 
@@ -68,7 +68,7 @@ Use **File → Plugins → Load Plugin from File** and load:
 4. `lightflow_atmosphere.js`
 5. `lightflow_environment.js`
 
-Light Manager is the foundation module and should be loaded first. Keep all five files on the same commit/revision while testing cross-module behavior.
+Light Manager is the foundation module and should be loaded first. Keep all dependent plugin files on the same commit/revision while testing cross-module behavior. For additional plugins, follow the module manifest.
 
 After changing a plugin, reload it or restart Blockbench before judging the result. For lifecycle changes, explicitly test unload and reload behavior as well.
 
@@ -120,7 +120,7 @@ Avoid turning expensive final-quality work into unconditional viewport work. Lig
 
 ## Cross-module changes
 
-The five plugins are independently loadable but intentionally cooperate. When changing shared behavior:
+The plugins are independently loadable but intentionally cooperate. When changing shared behavior:
 
 - establish which module owns the state;
 - define cleanup behavior;

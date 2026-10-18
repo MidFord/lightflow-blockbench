@@ -1,5 +1,7 @@
 # Lightflow 3.0 Development Branch Policy
 
+> **Historical document (2026-08-24).** This policy describes the older `development/lightflow-3.0` snapshot; it is not the current `main` release policy. For active status and local development guidance, see [Development Status](docs/DEVELOPMENT_STATUS.md) and [Development Guide](docs/DEVELOPMENT.md).
+
 ## Purpose
 
 `development/lightflow-3.0` is the preservation and integration branch for the complete Lightflow development state as of 2026-08-24.
