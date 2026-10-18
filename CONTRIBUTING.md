@@ -24,7 +24,7 @@ npm install
 npm run validate
 ```
 
-The repository currently has no build step for the five distributable modules. The JavaScript files in the repository root are loaded directly by Blockbench.
+The repository currently keeps directly loadable JavaScript entry points at the root for compatibility with existing Blockbench installation URLs and Lightflow Hub. Some modules use a distributable in `dist/`; follow the paths in [`lightflow.manifest.json`](lightflow.manifest.json) instead of moving files without a migration.
 
 For the complete local-development workflow, see [Development Guide](docs/DEVELOPMENT.md).
 
@@ -37,6 +37,8 @@ In Blockbench, use **File → Plugins → Load Plugin from File** and load the m
 3. `studio_render.js`
 4. `lightflow_atmosphere.js`
 5. `lightflow_environment.js`
+
+The five entries above are the basic rendering suite, not the entire module inventory. See [Module Guide](docs/MODULES.md) for optional modules and dependencies.
 
 Keep all modules from the same revision when testing. Restart Blockbench or reload the plugins after updating local files.
 

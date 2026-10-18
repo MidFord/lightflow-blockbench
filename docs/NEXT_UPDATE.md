@@ -1,5 +1,7 @@
 # Next Update Progress
 
+> **Historical checklist.** This page tracks an earlier development milestone and the module versions listed below are not necessarily current. For the current `main` target and module versions, see [Development Status](DEVELOPMENT_STATUS.md) and the [manifest](../lightflow.manifest.json). Do not infer that a checkbox is currently correct without verifying the active source and tests.
+
 This document tracks the active development work planned for the next major Lightflow development update.
 
 The checklist is intentionally more detailed than the public README. It separates work that is already implemented in the current development build from work that still needs implementation, validation, performance testing, documentation, or final UI polish.

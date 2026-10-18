@@ -1,5 +1,7 @@
 # Changelog
 
+> **Historical release-candidate log.** Early entries describe the first preview and may include superseded release/license plans. For current branch/module versions see [Development Status](docs/DEVELOPMENT_STATUS.md) and [lightflow.manifest.json](lightflow.manifest.json); for published builds consult [Releases](https://github.com/MidFord/lightflow-blockbench/releases).
+
 All notable changes to Lightflow for Blockbench are documented here.
 
 Lightflow currently uses a **suite development milestone** plus independent module versions. Until the first public release, entries may describe release candidates and matched development builds rather than strict semantic-versioned packages.

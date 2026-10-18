@@ -2,10 +2,10 @@
   "name": "lightflow-blockbench-3-development",
   "private": true,
   "version": "3.0.0-development",
-  "description": "Validation harness for the Lightflow 3.0 Blockbench development branch",
+  "description": "Validation harness for Lightflow Blockbench development",
   "scripts": {
-    "check": "node --check light_manager.js && node --check shader_architect.js && node --check studio_render.js && node --check lightflow_environment.js && node --check lightflow_atmosphere.js && node --check lightflow_cinematic.js && node --check visual_shader_graph.js && node --check bedrock_structure_studio.js",
-    "test": "node --test tests/development_core.test.js",
+    "check": "node --check lightflow_hub.js && node --check light_manager.js && node --check shader_architect.js && node --check lightflow_environment.js && node --check lightflow_atmosphere.js && node --check studio_render.js && node --check lightflow_scene_links.js && node --check lightflow_cinematic.js && node --check visual_shader_graph.js && node --check dist/bedrock_structure_studio.js && node --check lightflow_test_lab.js && node --check lightflow_ui_lab.js && node --check lightflow_ui_diagnostics.js && node --check bedrock_browser_jar.js && node --check bedrock_feature_runtime.js && node --check bedrock_java_model_jar.js && node --check bedrock_java_primitive_shapes.js",
+    "test": "node --test tests/development_core.test.js && node tests/lightflow_hub_contract.test.js",
     "validate": "npm run check && npm test"
   },
   "engines": {

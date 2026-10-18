@@ -1,103 +1,96 @@
-# Lightflow Module Guide
+# Lightflow modules
 
-Lightflow is distributed as five independently loadable Blockbench plugins. They are designed to behave as one suite, but each module owns a clear part of the rendering pipeline.
+Lightflow is a **suite of independent Blockbench plugins**, not a single monolithic plugin. The five foundational rendering modules can be combined with optional creative, specialized and developer tools. **Lightflow Hub** is the installer and update manager; it is listed separately from the suite modules.
 
-## Light Manager
+This inventory is based on [lightflow.manifest.json](../lightflow.manifest.json) in `main`. Versions below are **development-manifest versions, not promises about the Stable release**. For installation channels, see [Installation](INSTALLATION.md).
 
-The foundation module for real scene lights.
+## Lightflow Hub
 
-Use it for:
+- Script: `lightflow_hub.js`
+- Version on `main`: `1.1.0`
+- Purpose: install, update, enable, disable and manage module versions and their dependencies.
+- Recommended installer: the pinned [Lightflow Hub v1.0.1 release](https://github.com/MidFord/lightflow-blockbench/releases/tag/lightflow-hub-v1.0.1).
 
-- Point, Spot, and Directional lights;
-- viewport handles for position, direction, range, cone, and bounds;
-- color, temperature, intensity, attenuation, and penumbra;
-- adaptive raster shadows with preview/final quality separation;
-- light and shadow profiles;
-- fitting lights or directional bounds to selected content;
-- animation channels for position, rotation, color, and intensity.
+## Core rendering suite
 
-Install this module first.
+| Module | Development version | Entry point | Dependencies |
+| --- | --- | --- | --- |
+| **Light Manager** | `1.9.0` | `light_manager.js` | None |
+| **Shader Architect** | `3.3.0` | `shader_architect.js` | `light_manager` |
+| **Lightflow Environment** | `1.10.0` | `lightflow_environment.js` | `light_manager` |
+| **Lightflow Atmosphere** | `2.1.0` | `lightflow_atmosphere.js` | `light_manager` |
+| **Studio Render** | `1.10.0` | `studio_render.js` | None |
 
-## Lightflow Environment
+### Light Manager
 
-A Minecraft-inspired procedural world and ambient-light system.
+Lights, gizmos, animation, and shadows for the entire suite. It provides the shared lighting foundation for dependent plugins.
 
-Use it for:
+### Shader Architect
 
-- Minecraft time from 0 to 23999;
-- realtime day-cycle playback;
-- Vanilla and Vibrant Visuals presets;
-- custom sky gradients and palettes;
-- deterministic stars;
-- square sun and moon textures with moon phases;
-- voxel-style clouds and cloud motion;
-- project texture overrides;
-- sky, horizon, and ground ambient colors;
-- environment reflections and sun/moon shadows.
+Lightflow, PBR, and Rendercraft materials, instances, and screen effects. Use this to assign materials globally, to elements, or to individual cube faces.
 
-The environment is not only a background. Compatible materials consume its ambient and reflection response.
+### Lightflow Environment
 
-## Shader Architect
+Sky, sun, moon, clouds, reflections, and environment lighting. 
 
-The material workspace and programmable surface system.
+### Lightflow Atmosphere
 
-Use it for:
+Local fog, light shafts, dust, and procedural volumes. 
 
-- global materials;
-- per-element materials for Cubes, Meshes, and Texture Meshes;
-- per-face Cube overrides;
-- Material Instances and reusable override presets;
-- Lightflow, Cinematic Craft, Principled PBR, Vibrant Visuals PBR, and pixelated workflows;
-- AO, SSR, SSS, bevels, rim light, outlines, transmission, clearcoat, sheen, anisotropy, and iridescence;
-- editable GLSL with formatting and validation;
-- `.samat` import/export;
-- native Blockbench emissive, additive, layered, and MER texture semantics.
+### Studio Render
 
-Shader Architect requires Light Manager.
+High-resolution scene composition and supersampled image export. Use it to compose and export the final still image.
 
-## Lightflow Atmosphere
+## Optional creative, specialized and developer tools
 
-A local volumetric system based on editable Volume Domains.
+| Module | Group | Maturity | Version | Entry point | Declared dependencies |
+| --- | --- | --- | --- | --- | --- |
+| **Scene Links** | creative | experimental | `0.1.0` | `lightflow_scene_links.js` | `light_manager` |
+| **Lightflow Cinematic** | creative | experimental | `0.2.0` | `lightflow_cinematic.js` | `studio_render` |
+| **Visual Shader Graph** | creative | beta | `1.3.0` | `visual_shader_graph.js` | `light_manager`, `shader_architect` |
+| **Lightflow Terrain Render** | specialized | beta | `2.6.0` | `dist/bedrock_structure_studio.js` | `light_manager` |
+| **Lightflow Test Lab** | developer | developer | `2.0.0` | `lightflow_test_lab.js` | `light_manager`, `shader_architect` |
+| **Lightflow UI Lab** | developer | developer | `1.0.0` | `lightflow_ui_lab.js` | `light_manager` |
+| **Lightflow UI Diagnostics** | developer | developer | `1.1.0` | `lightflow_ui_diagnostics.js` | `light_manager` |
 
-Use it for:
+### Scene Links
 
-- uniform fog;
-- height fog;
-- local mist;
-- additive God Rays;
-- procedural clouds;
-- cinematic dust;
-- physically composited or shaft-style volumes;
-- depth occlusion and volumetric shadow reception;
-- separate preview and render quality.
+Compose scenes from linked Blockbench projects with independent poses.
 
-Atmosphere is one of the most expensive modules. Use the smallest domain and lowest preview quality that still communicates the intended result.
+### Lightflow Cinematic
 
-## Studio Render
+Deterministic sequences, physical cameras, and animation rendering.
 
-The final composition and still-output module.
+### Visual Shader Graph
 
-Use it for:
+A visual shader editor connected to Shader Architect.
 
-- Scene Composer inside Lightflow Render mode;
-- realtime GPU Bloom;
-- exposure, contrast, saturation, temperature, tint, and vignette;
-- saved camera presets;
-- adjustable render frame;
-- transparent or solid backgrounds;
-- tiled high-resolution output;
-- supersampling;
-- preview, save, clipboard, or texture destinations;
-- 4K, DCI 4K, square 4K, 8K, and custom resolutions.
+### Lightflow Terrain Render
 
-Studio Render can operate independently, but it becomes most useful when it receives lighting, material, environment, and atmosphere data from the rest of the suite.
+Compose terrain with Bedrock and Java structures, logical block editing and local resource packs. Requires **Blockbench 5.0.0+**.
 
-## Recommended module combinations
+### Lightflow Test Lab
 
-| Goal | Modules |
+Renderer diagnostics and benchmarks for development.
+
+### Lightflow UI Lab
+
+Development-only fixtures using real shared controls in a Panel and Dialog.
+
+### Lightflow UI Diagnostics
+
+Visual and accessibility auditing for panels and dialogs.
+
+## Recommended combinations
+
+| Goal | Start with |
 | --- | --- |
-| Better viewport lighting | Light Manager |
-| Stylized material preview | Light Manager + Shader Architect |
-| Minecraft environment scene | Light Manager + Environment + Shader Architect |
-| Cinematic volumetric image | Light Manager + Environment + Shader Architect + Atmosphere + Studio Render |
-| Clean transparent product render | Light Manager + Shader Architect + Studio Render |
+| Better lighting and shadow control | Light Manager |
+| Stylized and PBR materials | Light Manager + Shader Architect |
+| Minecraft-inspired day/night and sky | Light Manager + Environment + Shader Architect |
+| Fog and light shafts | Core modules + Atmosphere |
+| Finished still image | Light Manager + Shader Architect + Studio Render |
+| Animation and camera-sequence experiments | Core modules + Cinematic (experimental) |
+| Structure/terrain authoring | Light Manager + Lightflow Terrain Render (beta) |
+
+Module IDs, direct file paths, current versions and declared dependencies are maintained in the [manifest](../lightflow.manifest.json). Some internal helper scripts are **not** independently installable plugins. Do not move or rename manifest-listed entry points without updating Hub, installation URLs and release packaging.

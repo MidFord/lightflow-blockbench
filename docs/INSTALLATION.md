@@ -1,150 +1,68 @@
 # Installing Lightflow
 
-Lightflow is currently a development preview and has not yet been published in the official Blockbench Plugin Marketplace. **Lightflow Hub** is the recommended installer and update manager; manual installation remains available as a fallback.
+Lightflow is not currently published in the official Blockbench Plugin Marketplace. **Lightflow Hub** is the recommended installer and update manager. Direct module installation is a fallback for development or troubleshooting.
 
-## Before you install
+## Before you begin
 
-- Use Blockbench 4.9.0 or newer.
-- **Prefer Blockbench Desktop.**
-- Install every Lightflow module from the same commit, branch, or release package.
-- Back up important `.bbmodel` projects before moving between development builds.
-- If your computer has both integrated and dedicated graphics, configure your operating system to run Blockbench with the **high-performance / dedicated GPU**. This makes realtime previews and final renders faster.
+- Use **Blockbench 4.9.0 or later**. Some optional plugins require Blockbench **5.0.0+**; consult the [module inventory](MODULES.md).
+- Prefer Blockbench Desktop and a dedicated GPU for GPU-intensive workflows.
+- Save a backup of important `.bbmodel` projects before changing channels.
+- Keep coupled modules from the **same release or commit**. Do not mix independently downloaded `main` scripts with the Stable release.
 
-> **Current maturity:** Light Manager, Shader Architect, and Studio Render are the most complete and polished modules. Lightflow Atmosphere and Lightflow Environment are still in a more active beta stage, so their interfaces and behavior may change more frequently.
+## Recommended: Lightflow Hub
 
-## Install with Lightflow Hub
-
-1. Open Blockbench.
-2. Open **File → Plugins → Load Plugin from URL**.
-3. Install this URL:
+For a pinned installer, use the **Lightflow Hub v1.0.1** script from its release tag:
 
 ```text
-https://raw.githubusercontent.com/MidFord/lightflow-blockbench/refs/heads/main/lightflow_hub.js
+https://raw.githubusercontent.com/MidFord/lightflow-blockbench/lightflow-hub-v1.0.1/lightflow_hub.js
 ```
 
-4. Open **Tools → Lightflow Hub**.
-5. Choose the channel you want:
-   - **Stable** uses an immutable GitHub Release snapshot that contains a Lightflow manifest.
-   - **Main** follows the public `main` branch.
-   - **Experimental** follows the configurable experimental branch (`experimental` by default).
-6. Install the recommended modules or individual modules from the Hub.
+1. Open Blockbench and go to **File → Plugins → Load Plugin from URL**.
+2. Paste the URL above and load the plugin.
+3. Open **Tools → Lightflow Hub**.
+4. Leave **Stable** selected to install the published Lightflow suite snapshot, or explicitly select **Main** if you want the in-development build.
+5. Install the recommended modules. Lightflow Hub handles declared dependencies and provides update and plugin-management actions.
 
-The Hub resolves dependencies, checks versions, supports updates and enable/disable/reload/uninstall operations, and asks before replacing installations that came from another source.
+The pinned Hub installer comes from the [v1.0.1 release](https://github.com/MidFord/lightflow-blockbench/releases/tag/lightflow-hub-v1.0.1). Hub's own version and the version of the Lightflow suite are **separate**.
 
-## Install directly from URLs (manual fallback)
+### Which channel should I use?
 
-This is the fastest installation method and does not require downloading the repository first.
+| Channel | Meaning |
+| --- | --- |
+| **Stable** | Published, frozen Lightflow release snapshot. Recommended for normal use. |
+| **Main** | The latest public `main` source, which is actively developed and not a stable release. |
+| **Experimental** | A development channel only when a compatible experimental branch is available; do not assume it exists or is a stable download. |
 
-1. Open Blockbench Desktop.
-2. Open **File → Plugins**.
-3. Choose **Load Plugin from URL**.
-4. Copy, paste, and install each URL **one at a time in this order**.
+The published [v0.1.0 suite preview](https://github.com/MidFord/lightflow-blockbench/releases/tag/v0.1.0) is distinct from the newer development manifest on `main`. Check [Development status](DEVELOPMENT_STATUS.md) when comparing features or versions.
 
-### 1. Light Manager
+## Manual installation (advanced fallback)
+
+For manual testing of the current development revision, Blockbench supports **File → Plugins → Load Plugin from File/URL**. Install **Light Manager first**, followed by any dependent modules.
 
 ```text
-https://raw.githubusercontent.com/MidFord/lightflow-blockbench/refs/heads/main/light_manager.js
+https://raw.githubusercontent.com/MidFord/lightflow-blockbench/main/light_manager.js
+https://raw.githubusercontent.com/MidFord/lightflow-blockbench/main/shader_architect.js
+https://raw.githubusercontent.com/MidFord/lightflow-blockbench/main/lightflow_environment.js
+https://raw.githubusercontent.com/MidFord/lightflow-blockbench/main/lightflow_atmosphere.js
+https://raw.githubusercontent.com/MidFord/lightflow-blockbench/main/studio_render.js
 ```
 
-### 2. Shader Architect
+**These are development URLs, not stable installers.** Each URL is loaded separately. For additional modules, consult the [manifest](../lightflow.manifest.json) for paths, dependencies and minimum Blockbench versions; some entries use `dist/` instead of a root file.
 
-```text
-https://raw.githubusercontent.com/MidFord/lightflow-blockbench/refs/heads/main/shader_architect.js
-```
-
-### 3. Studio Render
-
-```text
-https://raw.githubusercontent.com/MidFord/lightflow-blockbench/refs/heads/main/studio_render.js
-```
-
-### 4. Lightflow Atmosphere
-
-```text
-https://raw.githubusercontent.com/MidFord/lightflow-blockbench/refs/heads/main/lightflow_atmosphere.js
-```
-
-### 5. Lightflow Environment
-
-```text
-https://raw.githubusercontent.com/MidFord/lightflow-blockbench/refs/heads/main/lightflow_environment.js
-```
-
-Each URL is placed in its own code field so it can be copied easily with the copy button shown by GitHub and most Markdown viewers.
-
-Restart Blockbench or reload the plugins after the installation. Light Manager must be installed first because it provides the shared lighting foundation and lifecycle used by the other modules.
-
-## Install from downloaded files
-
-1. Download the repository as a ZIP or clone it with Git.
-2. Extract it to a permanent folder. Do not load plugins directly from a temporary ZIP preview.
-3. Open Blockbench.
-4. Open **File → Plugins**.
-5. Use **Load Plugin from File** for each JavaScript file.
-6. Load them in this order:
-
-```text
-1. light_manager.js
-2. shader_architect.js
-3. studio_render.js
-4. lightflow_atmosphere.js
-5. lightflow_environment.js
-```
-
-## Use the dedicated GPU
-
-Blockbench Desktop is strongly recommended for Lightflow. When a computer includes both integrated graphics and a dedicated GPU, configure the operating system or GPU control panel to run Blockbench in **high-performance mode** with the dedicated GPU.
-
-On Windows, this is usually available under **Settings → System → Display → Graphics**. Add or select Blockbench, open **Options**, and choose **High performance**. Equivalent settings may also be available in the NVIDIA, AMD, or Intel graphics control panel.
-
-Using the dedicated GPU can improve viewport responsiveness, realtime Bloom and atmosphere previews, high-resolution shadows, and Studio Render performance.
+When working from a downloaded ZIP or a clone, load the corresponding local `.js` file rather than mixing release sources. Restart Blockbench after an update or reload affected plugins when testing development changes.
 
 ## Verify the installation
 
-Open or create a project, then confirm that:
+Open a `.bbmodel` project and confirm that the expected Lightflow modules load, the Lightflow Render workspace is available, and you can create a light and use the material/render tools. A specialized or experimental plugin may expose different UI or requirements. If a module fails, check **View → Developer Tools** for errors.
 
-- **Lightflow Render** is available as a view mode;
-- Light Manager actions can add a Point, Spot, or Directional light;
-- the Environment, Material, Atmosphere, and Scene Composer panels appear in Lightflow Render mode;
-- Studio Render is available from the relevant menu/actions;
-- the developer console contains no red plugin-load errors.
+## Updating or uninstalling
 
-## Updating
+Update through Lightflow Hub whenever possible. For manual installs, replace a matched set of module scripts from one revision, then restart Blockbench. After updating, reopen a **copy** of a project to verify saved materials, lighting and environment settings.
 
-1. Save and close important projects.
-2. Replace all five plugin files with files from the same newer build.
-3. Reload the plugins or restart Blockbench.
-4. Reopen a copy of a project first and verify lights, materials, environment settings, atmosphere domains, and camera presets.
+Uninstall through Blockbench's plugin interface or through Hub. Removing a plugin does not necessarily remove custom data already saved in a project.
 
-Do not update only one dependency-sensitive module unless the changelog explicitly says the versions are compatible.
+## GPU configuration
 
-## Removing Lightflow
+On Windows, use **Settings → System → Display → Graphics**, select Blockbench, and choose **High performance** if a dedicated GPU is available. Other operating systems have equivalent controls.
 
-Disable or uninstall each local plugin from Blockbench's Plugin dialog. Removing the plugin does not automatically remove Lightflow data already stored inside a `.bbmodel` file.
-
-Keep an untouched project backup when testing removal or migration behavior.
-
-## Development validation
-
-For contributors or local builds:
-
-```bash
-npm install
-npm run validate
-```
-
-This runs JavaScript syntax checks and the repository regression tests. Node.js 18 or newer is required.
-
-## Common installation problems
-
-### Shader Architect or Atmosphere says Light Manager is required
-
-Light Manager did not load first, failed to initialize, or came from an incompatible build. Reload Light Manager, inspect the console, then reload the dependent module.
-
-### Saved lights or materials do not appear
-
-Use `.bbmodel`, verify that every module loaded successfully, and avoid mixing files from different commits. Recent builds include late project hydration, but a failed dependency can still prevent a module from restoring its own data.
-
-### The plugin loads but the panels are missing
-
-Switch to **Lightflow Render** mode and select an applicable object when the panel depends on selection. Then check the developer console for initialization errors.
+For rendering issues, see [Troubleshooting](TROUBLESHOOTING.md); for local source validation, see [Development](DEVELOPMENT.md).
