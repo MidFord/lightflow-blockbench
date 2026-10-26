@@ -1,3 +1,5 @@
+function shaderArchitectInlineText(key) { return typeof tl === 'function' ? tl(key) : key; }
+
 /**
  * @name Shader Architect
  * @description A standalone Blockbench plugin dedicated to switching Render Modes,
@@ -87,6 +89,17 @@
         if (!element) return null;
         return element.mesh || (window.Project?.nodes_3d ? Project.nodes_3d[element.uuid] : null) || null;
     };
+
+    function isShaderMeshInActiveScene(mesh) {
+        // Open projects retain their linked meshes for reuse. A parent alone
+        // does not make a cached mesh a consumer of the current scene's passes.
+        const scene = typeof Canvas !== 'undefined' ? Canvas.scene : null;
+        if (!scene) return false;
+        for (let object = mesh; object; object = object.parent) {
+            if (object === scene) return true;
+        }
+        return false;
+    }
 
     function isSystemUniform(name) {
         if (!name) return false;
@@ -725,11 +738,11 @@
         'panel.global_renderer_properties': 'WORLD',
         'panel.material_properties': 'OVERRIDES',
         'shader_architect.element.cast_shadow': 'Cast Shadows',
-        'shader_architect.element.cast_shadow.desc': 'Allow the selected element to cast shadows onto other surfaces.',
+        'shader_architect.element.cast_shadow.desc': 'Make this element cast shadows on other surfaces.',
         'shader_architect.element.auto_tile': 'Auto Tile',
-        'shader_architect.element.auto_tile.desc': 'Enable geometry-driven auto tiling for the selected Mesh/Cube faces or components. With no face/component selection, it applies to the whole element.',
+        'shader_architect.element.auto_tile.desc': 'Use geometry-based Auto Tile on selected cube or mesh faces or components; otherwise, apply to the whole element.',
         'shader_architect.element.lighting_normal': 'Stylized Lighting',
-        'shader_architect.element.lighting_normal.desc': 'Replace the element\'s physical face normals only for material lighting. The direction is local to the element, so it follows element rotation; AO, shadow casting, and geometry stay physical.',
+        'shader_architect.element.lighting_normal.desc': 'Set custom face normals for lighting; they follow element rotation. Geometry, AO, and shadow casting stay physical.',
         'shader_architect.element.lighting_normal.physical': 'Physical Normals',
         'shader_architect.element.lighting_normal.up': 'Top (+Y)',
         'shader_architect.element.lighting_normal.down': 'Bottom (-Y)',
@@ -737,11 +750,10 @@
         'shader_architect.element.lighting_normal.west': 'West (-X)',
         'shader_architect.element.lighting_normal.south': 'South (+Z)',
         'shader_architect.element.lighting_normal.north': 'North (-Z)',
-
-        'shader_architect.material_panel.no_selected': 'Select an object in the viewport or Outliner to edit its material.',
-        'shader_architect.material_panel.no_instance': 'Add a material instance to adjust only this object.',
-        'shader_architect.material_panel.no_face_instance': 'Assign a material instance to adjust only this face.',
-        'shader_architect.material_panel.multiple_instances': 'Multiple material instances have been selected. All selected cubes must have the same material instance properties.',
+        'shader_architect.material_panel.no_selected': 'Select an object to edit its material.',
+        'shader_architect.material_panel.no_instance': 'Assign an override to customize this object only.',
+        'shader_architect.material_panel.no_face_instance': 'Assign an override to customize this face only.',
+        'shader_architect.material_panel.multiple_instances': 'Selected cubes use different overrides. Select cubes sharing the same override.',
         'shader_architect.material_panel.title': 'Material Instance',
         'shader_architect.material_panel.object_scope_short': 'Object',
         'shader_architect.material_panel.overrides_title': 'Material',
@@ -750,7 +762,7 @@
         'shader_architect.material_panel.element_material': 'Element Material',
         'shader_architect.material_panel.mixed_instances': 'Mixed',
         'shader_architect.material_panel.no_override_selected': 'No Selection',
-        'shader_architect.material_panel.unused_override': 'This override is not used by any element in the scene.',
+        'shader_architect.material_panel.unused_override': 'Not assigned to any element in this scene.',
         'shader_architect.material_panel.face_scope.element': 'Element',
         'shader_architect.material_panel.face_scope.north': 'North Face',
         'shader_architect.material_panel.face_scope.south': 'South Face',
@@ -759,11 +771,11 @@
         'shader_architect.material_panel.face_scope.up': 'Up Face',
         'shader_architect.material_panel.face_scope.down': 'Down Face',
         'shader_architect.material_panel.geometry_auto_tile': 'Auto Tile',
-        'shader_architect.material_panel.geometry_auto_tile.desc': 'Enable geometry-driven auto tiling for the selected element or face. A material instance with global Auto Tile enabled still applies to every face.',
+        'shader_architect.material_panel.geometry_auto_tile.desc': 'Use geometry-based Auto Tile for this element or face. Global Auto Tile still applies to every face.',
         'shader_architect.material_panel.base_material': 'Base Material',
-        'shader_architect.material_panel.base_material.desc': 'Select the FancyShaderMaterial that provides the shader code and uniform defaults for this instance.',
+        'shader_architect.material_panel.base_material.desc': 'Choose the shader and default settings for this override.',
         'shader_architect.material_panel.instance': 'Material Instance',
-        'shader_architect.material_panel.instance.desc': 'Assign a project material instance to the selected cubes, or use the global render material.',
+        'shader_architect.material_panel.instance.desc': 'Use a project override or the global material for the selected cubes.',
         'shader_architect.material_panel.map_color': 'Color texture',
         'shader_architect.material_panel.map_normal': 'Normal map',
         'shader_architect.material_panel.map_height': 'Height map',
@@ -775,13 +787,13 @@
         'shader_architect.material_panel.map_empty': 'No map / inherit native material',
         'shader_architect.material_panel.repeat_texture': 'Repeat textures',
         'shader_architect.material_panel.texture_source': 'Texture Source',
-        'shader_architect.material_panel.texture_source.desc': 'Use the selected Blockbench texture for this material instance. Leave empty to use each element face texture.',
+        'shader_architect.material_panel.texture_source.desc': 'Choose a Blockbench texture, or leave empty to use each face\'s texture.',
         'shader_architect.material_panel.texture_element': 'Use element texture',
         'shader_architect.material_panel.instance_name': 'Instance Name',
         'shader_architect.material_panel.new_instance_name': 'New Material Instance',
         'shader_architect.material_panel.instance_details': 'Instance Details',
         'shader_architect.material_panel.instance_icon': 'Icon',
-        'shader_architect.material_panel.instance_icon.desc': 'Material icon name used in Shader Architect selectors.',
+        'shader_architect.material_panel.instance_icon.desc': 'Icon shown in material selectors.',
         'shader_architect.material_panel.icon_preview': 'Icon Preview',
         'shader_architect.material_panel.icon_preset.texture': 'Texture',
         'shader_architect.material_panel.icon_preset.cube': 'Cube',
@@ -800,15 +812,15 @@
         'shader_architect.material_panel.icon_preset.palette': 'Palette',
         'shader_architect.material_panel.icon_preset.custom': 'Custom Icon…',
         'shader_architect.material_panel.instance_icon_color': 'Marker Color',
-        'shader_architect.material_panel.instance_icon_color.desc': 'Native Blockbench marker color used for this instance icon in selector menus.',
+        'shader_architect.material_panel.instance_icon_color.desc': 'Blockbench marker color for this icon.',
         'shader_architect.material_panel.select_instance': 'Override',
-        'shader_architect.material_panel.select_instance.desc': 'Select any project material override to edit its details.',
-        'shader_architect.material_panel.create_instance': 'Create Material Instance',
-        'shader_architect.material_panel.create_instance.desc': 'Create a project material instance from a base material and assign it to the selected cubes.',
-        'shader_architect.material_panel.edit_instance': 'Edit Material Instance',
-        'shader_architect.material_panel.edit_instance.desc': 'Open this material instance in the override manager.',
-        'shader_architect.material_panel.delete_instance': 'Delete Material Instance',
-        'shader_architect.material_panel.delete_instance.desc': 'Delete the selected material instance from this project and clear it from every cube using it.',
+        'shader_architect.material_panel.select_instance.desc': 'Choose an override to edit.',
+        'shader_architect.material_panel.create_instance': 'Create Override',
+        'shader_architect.material_panel.create_instance.desc': 'Create an override from a base material and assign it to the selected cubes.',
+        'shader_architect.material_panel.edit_instance': 'Edit Override',
+        'shader_architect.material_panel.edit_instance.desc': 'Open the override manager.',
+        'shader_architect.material_panel.delete_instance': 'Delete Override',
+        'shader_architect.material_panel.delete_instance.desc': 'Delete this override and remove its assignments from all cubes.',
         'shader_architect.material_panel.save_instance': 'Save Override',
         'shader_architect.material_panel.save_instance.desc': 'Save all material overrides into the current project.',
         'shader_architect.material_panel.export_instance': 'Export Override',
@@ -816,14 +828,14 @@
         'shader_architect.material_panel.import_instance': 'Import Override',
         'shader_architect.material_panel.import_instance.desc': 'Import one or more .sami material override presets into this project.',
         'shader_architect.material_panel.manage_instances': 'Material Overrides',
-        'shader_architect.material_panel.manage_instances.desc': 'Select and manage the material overrides stored in this project.',
+        'shader_architect.material_panel.manage_instances.desc': 'Manage this project\'s material overrides.',
         'shader_architect.material_panel.edit_base_material': 'Change Base Material...',
         'shader_architect.material_panel.rename_instance': 'Rename...',
         'shader_architect.material_panel.change_icon': 'Change Icon...',
         'shader_architect.material_panel.change_color': 'Marker Color',
         'shader_architect.material_panel.duplicate_instance': 'Duplicate',
         'shader_architect.material_panel.new_instance': 'New Override...',
-        'shader_architect.material_panel.no_project_instances': 'No Material Overrides Yet',
+        'shader_architect.material_panel.no_project_instances': 'No overrides yet',
         'shader_architect.material_panel.undo.duplicate_instance': 'Duplicate material instance',
         'shader_architect.material_panel.undo.edit_instance': 'Edit material instance',
         'shader_architect.material_panel.undo.set_instance_color': 'Change material instance color',
@@ -833,7 +845,7 @@
         'shader_architect.message.delete_instance_confirm': 'Delete material override "{name}" from this project?',
         'shader_architect.message.instance_duplicated': 'Material override duplicated.',
         'shader_architect.material_panel.show_advanced': 'Advanced controls',
-        'shader_architect.material_panel.show_advanced.desc': 'Show additional controls. This changes the editor view; it does not enable or disable material effects.',
+        'shader_architect.material_panel.show_advanced.desc': 'Show more settings without changing active effects.',
         'shader_architect.material_panel.advanced_short':'Show advanced',
         'shader_architect.material_panel.appearance':'Look',
         'shader_architect.material_panel.textures':'Textures',
@@ -904,24 +916,24 @@
         "menu.shader_architect": "Shader Architect",
         "action.sa_global_mode": "World Render Mode",
         "shader_architect.menu.material_studio": "Material Studio",
-        "shader_architect.menu.material_studio.desc": "Open Material Studio to create, edit, import, and export Shader Architect materials.",
+        "shader_architect.menu.material_studio.desc": "Create, edit, import, and export materials.",
         "shader_architect.menu.performance": "Render Performance",
-        "shader_architect.menu.performance.desc": "Inspect draw calls, GPU materials, render batches, and expensive Shader Architect effects.",
+        "shader_architect.menu.performance.desc": "Inspect draw calls, batches, GPU resources, and costly effects.",
         "shader_architect.performance.title": "Render Performance",
-        "shader_architect.performance.refresh": "Refresh snapshot",
-        "shader_architect.performance.live_note": "This snapshot covers one complete Lightflow frame. CPU time measures JavaScript submission; GPU time uses asynchronous timer queries when the driver supports them and may need another refresh before results arrive.",
+        "shader_architect.performance.refresh": "Refresh",
+        "shader_architect.performance.live_note": "One complete Lightflow frame. CPU measures JavaScript submission; GPU uses asynchronous timer queries when supported. Refresh again if GPU time is pending.",
         "shader_architect.performance.snapshot_help": "About this snapshot",
         "shader_architect.performance.scene": "Scene",
         "shader_architect.performance.elements": "Elements",
-        "shader_architect.performance.visible_elements": "Visible render elements",
+        "shader_architect.performance.visible_elements": "Visible elements",
         "shader_architect.performance.cubes": "Cubes",
         "shader_architect.performance.meshes": "Meshes",
         "shader_architect.performance.texture_meshes": "Texture meshes",
         "shader_architect.performance.billboards": "Billboards",
         "shader_architect.performance.other_elements": "Other elements",
-        "shader_architect.performance.overrides_defined": "Material Overrides defined",
-        "shader_architect.performance.overrides_visible": "Visible Material Overrides",
-        "shader_architect.performance.override_assignments": "Visible override assignments",
+        "shader_architect.performance.overrides_defined": "Defined overrides",
+        "shader_architect.performance.overrides_visible": "Visible overrides",
+        "shader_architect.performance.override_assignments": "Visible assignments",
         "shader_architect.performance.project_textures": "Project textures",
         "shader_architect.performance.sampling_textures": "Nearest-sampling clones",
         "shader_architect.performance.effect_textures": "Effect target textures",
@@ -1032,8 +1044,8 @@
         "shader_architect.dialog.studio_title": "Material Studio",
         "shader_architect.warmup.title": "Preparing Lightflow Shaders",
         "shader_architect.warmup.heading": "Preparing shaders",
-        "shader_architect.warmup.description": "Lightflow is compiling the shader variants used by its presets and the current scene. Blockbench may pause briefly while your graphics driver prepares them.",
-        "shader_architect.warmup.once": "Each shader variant is prepared only once per Blockbench session. After this finishes, switching presets or opening another scene that reuses these materials will be smooth.",
+        "shader_architect.warmup.description": "Lightflow is preparing the programs needed by the current scene. Preparation tasks can share a GPU program; their count is not a fixed number of Rendercraft variants.",
+        "shader_architect.warmup.once": "Ready programs are reused in this graphics context. Enabling a new effect or changing the light setup may require additional preparation.",
         "shader_architect.warmup.status.pending": "Analyzing scene materials...",
         "shader_architect.warmup.status.pending_driver": "Preparing graphics driver...",
         "shader_architect.warmup.canvas.paused": "Viewport paused while materials are prepared",
@@ -1050,7 +1062,7 @@
         "shader_architect.warmup.status.warning": "Preparation finished with warnings",
         "shader_architect.warmup.status.failed": "Material preparation failed — Textured view is active. Choose Lightflow to retry.",
         "shader_architect.warmup.status.blocked": "Viewport paused after a material error. Change view mode or project to recover.",
-        "shader_architect.warmup.counter": "Shader variants",
+        "shader_architect.warmup.counter": "Preparation tasks",
         "shader_architect.toast.applied": "Material applied to scene.",
         "shader_architect.toast.exported": "Material Exported successfully.",
         "shader_architect.toast.imported": "Material Imported successfully.",
@@ -1162,7 +1174,6 @@
         "shader_architect.ui.add": "Add",
         "shader_architect.ui.allow_higher": "Allow Higher",
         "shader_architect.ui.allow_lower": "Allow Lower",
-
         "shader_architect.preset.classic": "Classic Shader",
         "shader_architect.preset.pbr_metallic_roughness": "CineFlow",
         "shader_architect.preset.vibrant_visuals_pbr": "Vibrant Visuals (PBR)",
@@ -1175,17 +1186,14 @@
         "shader_architect.material_panel.quick_presets.desc": "Apply a tuned starting point without replacing this override.",
         "shader_architect.material_panel.apply_preset": "Apply Preset",
         "shader_architect.material_panel.preset_balanced": "Balanced",
-        "shader_architect.material_panel.preset_trailer_hero": "Trailer Hero",
+        "shader_architect.material_panel.preset_render_keyart": "Keyart",
         "shader_architect.material_panel.preset_soft_daylight": "Soft Daylight",
         "shader_architect.material_panel.preset_night_drama": "Night Drama",
         "shader_architect.material_panel.preset_clean_product": "Clean Product",
         "shader_architect.material_panel.preset_vanilla_shadows": "Pixel Shadows",
         "shader_architect.message.preset_applied": "Material preset applied",
         "shader_architect.preset.realview_pbr": "RealView PBR",
-
         "shader_architect.preset.pbr": "Standard PBR",
-
-        // Preset Uniform Translations (Short labels for properties UI)
         "shader_architect.uniform.map": "Texture",
         "shader_architect.uniform.map.desc": "Main texture sampled by the material",
         "shader_architect.uniform.LIGHTCOLOR": "Light Tint",
@@ -1722,6 +1730,31 @@
         "shader_architect.ui.tooltip.duplicate": "Duplicate this material",
         "shader_architect.ui.tooltip.export": "Export material to .samat file",
         "shader_architect.ui.tooltip.delete": "Delete this material",
+        "shader_architect.inline.face": "Face ",
+        "shader_architect.inline.selected_faces": "selected faces",
+        "shader_architect.inline.faces_and_elements": "Faces and elements",
+        "shader_architect.inline.mixed": "Mixed",
+        "shader_architect.inline.on": "On",
+        "shader_architect.inline.off": "Off",
+        "shader_architect.inline.geometry_auto_tile": "Geometry Auto Tile",
+        "shader_architect.inline.whole_element": "Whole element",
+        "shader_architect.inline.whole_surface": "Whole surface",
+        "shader_architect.inline.cast_shadows": "cast shadows",
+        "shader_architect.inline.color": "Color",
+        "shader_architect.inline.normal": "Normal",
+        "shader_architect.inline.height": "Height",
+        "shader_architect.inline.metallic_r": "Metallic · R",
+        "shader_architect.inline.emission_g": "Emission · G",
+        "shader_architect.inline.roughness_b": "Roughness · B",
+        "shader_architect.inline.create_pbr_channel": "Create PBR channel",
+        "shader_architect.inline.set_up_pbr_channels": "Set up PBR channels",
+        "shader_architect.inline.paint_channel": "Paint channel",
+        "shader_architect.inline.paint_value": "Paint value (%)",
+        "shader_architect.inline.keep_the_assigned_color_texture_add_maps_as_you_need_t": "Keep the assigned color texture; add maps as you need them.",
+        "shader_architect.inline.sample_the_map_the_selected_mer_component_sets_the_pai": "Sample the map; the selected MER component sets the paint value.",
+        "shader_architect.inline.brush_edits_this_channel_the_other_mer_channels_are_pr": "Brush edits this channel. The other MER channels are preserved.",
+        "shader_architect.inline.individual_mer_channels_brush_or_eraser_without_layers": "Individual MER channels: brush or eraser, without layers. Use MER · RGB for other tools or layers.",
+        "shader_architect.inline.choose_mer_rgb_for_this_tool_or_layered_texture": "Choose MER · RGB for this tool or layered texture."
     });
 
     Language.addTranslations('es', {
@@ -1729,11 +1762,11 @@
         'panel.global_renderer_properties': 'MUNDO',
         'panel.material_properties': 'REEMPLAZOS',
         'shader_architect.element.cast_shadow': 'Proyectar sombras',
-        'shader_architect.element.cast_shadow.desc': 'Permite que el elemento seleccionado proyecte sombras sobre otras superficies.',
+        'shader_architect.element.cast_shadow.desc': 'Hace que el elemento proyecte sombras sobre otras superficies.',
         'shader_architect.element.auto_tile': 'Auto Tile',
-        'shader_architect.element.auto_tile.desc': 'Activa el Auto Tile controlado por geometría en las caras o componentes seleccionados de una Mesh/Cube. Sin selección interna, se aplica al elemento completo.',
+        'shader_architect.element.auto_tile.desc': 'Usa Auto Tile según la geometría en las caras o componentes seleccionados del cubo o malla; sin selección interna, afecta a todo el elemento.',
         'shader_architect.element.lighting_normal': 'Iluminación estilizada',
-        'shader_architect.element.lighting_normal.desc': 'Reemplaza las normales físicas de las caras sólo para la iluminación del material. La dirección es local al elemento y sigue su rotación; el AO, las sombras proyectadas y la geometría permanecen físicos.',
+        'shader_architect.element.lighting_normal.desc': 'Personaliza las normales de iluminación; siguen la rotación del elemento. La geometría, el AO y las sombras permanecen físicos.',
         'shader_architect.element.lighting_normal.physical': 'Normales físicas',
         'shader_architect.element.lighting_normal.up': 'Superior (+Y)',
         'shader_architect.element.lighting_normal.down': 'Inferior (-Y)',
@@ -1741,10 +1774,10 @@
         'shader_architect.element.lighting_normal.west': 'Oeste (-X)',
         'shader_architect.element.lighting_normal.south': 'Sur (+Z)',
         'shader_architect.element.lighting_normal.north': 'Norte (-Z)',
-        'shader_architect.material_panel.no_selected': 'Selecciona un objeto en la vista o el Outliner para editar su material.',
-        'shader_architect.material_panel.no_instance': 'Añade una instancia de material para ajustar solo este objeto.',
-        'shader_architect.material_panel.no_face_instance': 'Asigna una instancia de material para ajustar solo esta cara.',
-        'shader_architect.material_panel.multiple_instances': 'Hay varias instancias de material seleccionadas. Todos los cubos seleccionados deben compartir la misma instancia.',
+        'shader_architect.material_panel.no_selected': 'Selecciona un objeto para editar su material.',
+        'shader_architect.material_panel.no_instance': 'Asigna un override para personalizar solo este objeto.',
+        'shader_architect.material_panel.no_face_instance': 'Asigna un override para personalizar solo esta cara.',
+        'shader_architect.material_panel.multiple_instances': 'Los cubos seleccionados usan overrides distintos. Selecciona cubos que compartan el mismo override.',
         'shader_architect.material_panel.title': 'Instancia de material',
         'shader_architect.material_panel.object_scope_short': 'Objeto',
         'shader_architect.material_panel.overrides_title': 'Material',
@@ -1753,7 +1786,7 @@
         'shader_architect.material_panel.element_material': 'Material del elemento',
         'shader_architect.material_panel.mixed_instances': 'Mixto',
         'shader_architect.material_panel.no_override_selected': 'Sin selección',
-        'shader_architect.material_panel.unused_override': 'Este override no está siendo utilizado por ningún elemento de la escena.',
+        'shader_architect.material_panel.unused_override': 'Sin asignar a ningún elemento de la escena.',
         'shader_architect.material_panel.face_scope.element': 'Elemento',
         'shader_architect.material_panel.face_scope.north': 'Cara norte',
         'shader_architect.material_panel.face_scope.south': 'Cara sur',
@@ -1762,11 +1795,11 @@
         'shader_architect.material_panel.face_scope.up': 'Cara superior',
         'shader_architect.material_panel.face_scope.down': 'Cara inferior',
         'shader_architect.material_panel.geometry_auto_tile': 'Auto Tile',
-        'shader_architect.material_panel.geometry_auto_tile.desc': 'Activa el autotile controlado por geometria para el elemento o la cara seleccionada. Una instancia con Auto Tile global activo sigue aplicandolo a todas las caras.',
+        'shader_architect.material_panel.geometry_auto_tile.desc': 'Activa Auto Tile según la geometría en este elemento o cara. Auto Tile global sigue aplicándose a todas las caras.',
         'shader_architect.material_panel.base_material': 'Material base',
-        'shader_architect.material_panel.base_material.desc': 'Elige el FancyShaderMaterial que aporta el shader y los uniforms por defecto de esta instancia.',
+        'shader_architect.material_panel.base_material.desc': 'Elige el shader y sus ajustes predeterminados para este override.',
         'shader_architect.material_panel.instance': 'Instancia de material',
-        'shader_architect.material_panel.instance.desc': 'Asigna una instancia de material del proyecto a los cubos seleccionados, o usa el material global.',
+        'shader_architect.material_panel.instance.desc': 'Usa un override del proyecto o el material global en los cubos seleccionados.',
         'shader_architect.material_panel.map_color': 'Textura de color',
         'shader_architect.material_panel.map_normal': 'Mapa de normales',
         'shader_architect.material_panel.map_height': 'Mapa de altura',
@@ -1778,13 +1811,13 @@
         'shader_architect.material_panel.map_empty': 'Sin mapa / heredar material nativo',
         'shader_architect.material_panel.repeat_texture': 'Repetir texturas',
         'shader_architect.material_panel.texture_source': 'Fuente de textura',
-        'shader_architect.material_panel.texture_source.desc': 'Usa la textura de Blockbench seleccionada para esta instancia. Déjalo vacío para usar la textura de cada cara.',
+        'shader_architect.material_panel.texture_source.desc': 'Elige una textura de Blockbench o déjalo vacío para usar la de cada cara.',
         'shader_architect.material_panel.texture_element': 'Usar textura del elemento',
         'shader_architect.material_panel.instance_name': 'Nombre de instancia',
         'shader_architect.material_panel.new_instance_name': 'Nueva instancia de material',
         'shader_architect.material_panel.instance_details': 'Detalles de instancia',
         'shader_architect.material_panel.instance_icon': 'Icono',
-        'shader_architect.material_panel.instance_icon.desc': 'Nombre de icono usado en los selectores de Shader Architect.',
+        'shader_architect.material_panel.instance_icon.desc': 'Icono mostrado en los selectores de materiales.',
         'shader_architect.material_panel.icon_preview': 'Vista previa del icono',
         'shader_architect.material_panel.icon_preset.texture': 'Textura',
         'shader_architect.material_panel.icon_preset.cube': 'Cubo',
@@ -1802,16 +1835,16 @@
         'shader_architect.material_panel.icon_preset.energy': 'Energía',
         'shader_architect.material_panel.icon_preset.palette': 'Paleta',
         'shader_architect.material_panel.icon_preset.custom': 'Icono personalizado…',
-        'shader_architect.material_panel.instance_icon_color': 'Marker Color',
-        'shader_architect.material_panel.instance_icon_color.desc': 'Color marker nativo de Blockbench usado para el icono de esta instancia en menus.',
+        'shader_architect.material_panel.instance_icon_color': 'Color del marcador',
+        'shader_architect.material_panel.instance_icon_color.desc': 'Color de marcador de Blockbench para este icono.',
         'shader_architect.material_panel.select_instance': 'Override',
-        'shader_architect.material_panel.select_instance.desc': 'Selecciona cualquier override del proyecto para editar sus detalles.',
-        'shader_architect.material_panel.create_instance': 'Crear instancia de material',
-        'shader_architect.material_panel.create_instance.desc': 'Crea una instancia de material del proyecto desde un material base y la asigna a los cubos seleccionados.',
-        'shader_architect.material_panel.edit_instance': 'Editar instancia',
-        'shader_architect.material_panel.edit_instance.desc': 'Abre esta instancia de material en el gestor de overrides.',
-        'shader_architect.material_panel.delete_instance': 'Eliminar instancia de material',
-        'shader_architect.material_panel.delete_instance.desc': 'Elimina la instancia de material seleccionada del proyecto y la limpia de todos los cubos que la usan.',
+        'shader_architect.material_panel.select_instance.desc': 'Elige un override para editarlo.',
+        'shader_architect.material_panel.create_instance': 'Crear override',
+        'shader_architect.material_panel.create_instance.desc': 'Crea un override a partir de un material base y asígnalo a los cubos seleccionados.',
+        'shader_architect.material_panel.edit_instance': 'Editar override',
+        'shader_architect.material_panel.edit_instance.desc': 'Abre el gestor de overrides.',
+        'shader_architect.material_panel.delete_instance': 'Eliminar override',
+        'shader_architect.material_panel.delete_instance.desc': 'Elimina este override y retira sus asignaciones de todos los cubos.',
         'shader_architect.material_panel.save_instance': 'Guardar override',
         'shader_architect.material_panel.save_instance.desc': 'Guarda todos los overrides de material en el proyecto actual.',
         'shader_architect.material_panel.export_instance': 'Exportar override',
@@ -1819,14 +1852,14 @@
         'shader_architect.material_panel.import_instance': 'Importar override',
         'shader_architect.material_panel.import_instance.desc': 'Importa uno o varios presets .sami de material override en este proyecto.',
         'shader_architect.material_panel.manage_instances': 'Overrides de material',
-        'shader_architect.material_panel.manage_instances.desc': 'Selecciona y administra los overrides de material guardados en este proyecto.',
+        'shader_architect.material_panel.manage_instances.desc': 'Administra los overrides de material del proyecto.',
         'shader_architect.material_panel.edit_base_material': 'Cambiar material base...',
         'shader_architect.material_panel.rename_instance': 'Renombrar...',
         'shader_architect.material_panel.change_icon': 'Cambiar icono...',
-        'shader_architect.material_panel.change_color': 'Color marker',
+        'shader_architect.material_panel.change_color': 'Color del marcador',
         'shader_architect.material_panel.duplicate_instance': 'Duplicar',
         'shader_architect.material_panel.new_instance': 'Nuevo override...',
-        'shader_architect.material_panel.no_project_instances': 'Aun no hay overrides de material',
+        'shader_architect.material_panel.no_project_instances': 'Aún no hay overrides',
         'shader_architect.material_panel.undo.duplicate_instance': 'Duplicar instancia de material',
         'shader_architect.material_panel.undo.edit_instance': 'Editar instancia de material',
         'shader_architect.material_panel.undo.set_instance_color': 'Cambiar color de instancia de material',
@@ -1836,7 +1869,7 @@
         'shader_architect.message.delete_instance_confirm': 'Eliminar el override de material "{name}" de este proyecto?',
         'shader_architect.message.instance_duplicated': 'Override de material duplicado.',
         'shader_architect.material_panel.show_advanced': 'Controles avanzados',
-        'shader_architect.material_panel.show_advanced.desc': 'Muestra controles adicionales. Cambia la vista del editor; no activa ni desactiva los efectos del material.',
+        'shader_architect.material_panel.show_advanced.desc': 'Muestra más ajustes sin cambiar los efectos activos.',
         'shader_architect.material_panel.advanced_short':'Mostrar avanzados',
         'shader_architect.material_panel.appearance':'Aspecto',
         'shader_architect.material_panel.textures':'Texturas',
@@ -1907,24 +1940,24 @@
         "menu.shader_architect": "Shader Architect",
         "action.sa_global_mode": "Modo de Render",
         "shader_architect.menu.material_studio": "Estudio de Materiales",
-        "shader_architect.menu.material_studio.desc": "Abre Material Studio para crear, editar, importar y exportar materiales de Shader Architect.",
+        "shader_architect.menu.material_studio.desc": "Crea, edita, importa y exporta materiales.",
         "shader_architect.menu.performance": "Rendimiento de Render",
-        "shader_architect.menu.performance.desc": "Inspecciona draw calls, materiales GPU, batches y efectos costosos de Shader Architect.",
+        "shader_architect.menu.performance.desc": "Analiza draw calls, lotes, recursos GPU y efectos exigentes.",
         "shader_architect.performance.title": "Rendimiento de Render",
-        "shader_architect.performance.refresh": "Actualizar captura",
-        "shader_architect.performance.live_note": "Esta captura cubre un frame logico completo de Lightflow. El tiempo CPU mide el envio desde JavaScript; el tiempo GPU usa consultas asincronas cuando el driver las admite y puede necesitar otra actualizacion para aparecer.",
+        "shader_architect.performance.refresh": "Actualizar",
+        "shader_architect.performance.live_note": "Un fotograma completo de Lightflow. CPU mide el envío desde JavaScript; GPU usa consultas asíncronas si el controlador las admite. Actualiza de nuevo si falta el resultado GPU.",
         "shader_architect.performance.snapshot_help": "Acerca de esta captura",
         "shader_architect.performance.scene": "Escena",
         "shader_architect.performance.elements": "Elementos",
-        "shader_architect.performance.visible_elements": "Elementos de render visibles",
+        "shader_architect.performance.visible_elements": "Elementos visibles",
         "shader_architect.performance.cubes": "Cubes",
         "shader_architect.performance.meshes": "Meshes",
         "shader_architect.performance.texture_meshes": "Texture meshes",
         "shader_architect.performance.billboards": "Billboards",
         "shader_architect.performance.other_elements": "Otros elementos",
-        "shader_architect.performance.overrides_defined": "Material Overrides definidos",
-        "shader_architect.performance.overrides_visible": "Material Overrides visibles",
-        "shader_architect.performance.override_assignments": "Asignaciones de override visibles",
+        "shader_architect.performance.overrides_defined": "Overrides definidos",
+        "shader_architect.performance.overrides_visible": "Overrides visibles",
+        "shader_architect.performance.override_assignments": "Asignaciones visibles",
         "shader_architect.performance.project_textures": "Texturas del proyecto",
         "shader_architect.performance.sampling_textures": "Clones de muestreo nearest",
         "shader_architect.performance.effect_textures": "Texturas target de efectos",
@@ -2035,8 +2068,8 @@
         "shader_architect.dialog.studio_title": "Estudio de Materiales",
         "shader_architect.warmup.title": "Preparando shaders de Lightflow",
         "shader_architect.warmup.heading": "Preparando shaders",
-        "shader_architect.warmup.description": "Lightflow está compilando las variantes de shader que utilizan sus presets y la escena actual. Blockbench puede pausarse brevemente mientras el controlador gráfico las prepara.",
-        "shader_architect.warmup.once": "Cada variante de shader se prepara una sola vez por sesión de Blockbench. Al terminar, cambiar de preset o abrir otra escena que reutilice estos materiales será fluido.",
+        "shader_architect.warmup.description": "Lightflow está preparando los programas necesarios para la escena actual. Varias tareas pueden compartir un programa GPU; su contador no es un número fijo de variantes de Rendercraft.",
+        "shader_architect.warmup.once": "Los programas preparados se reutilizan en este contexto gráfico. Activar otro efecto o cambiar la configuración de luces puede requerir preparación adicional.",
         "shader_architect.warmup.status.pending": "Analizando los materiales de la escena...",
         "shader_architect.warmup.status.pending_driver": "Preparando el controlador grafico...",
         "shader_architect.warmup.canvas.paused": "Vista en pausa mientras se preparan los materiales",
@@ -2053,7 +2086,7 @@
         "shader_architect.warmup.status.warning": "La preparación terminó con advertencias",
         "shader_architect.warmup.status.failed": "La preparación de materiales falló; la vista Texturizada está activa. Elige Lightflow para reintentar.",
         "shader_architect.warmup.status.blocked": "Visor en pausa por un error de materiales. Cambia de vista o proyecto para recuperarlo.",
-        "shader_architect.warmup.counter": "Variantes de shader",
+        "shader_architect.warmup.counter": "Tareas de preparación",
         "shader_architect.toast.applied": "Material aplicado a la escena.",
         "shader_architect.toast.exported": "Material Exportado exitosamente.",
         "shader_architect.toast.imported": "Material Importado exitosamente.",
@@ -2165,7 +2198,6 @@
         "shader_architect.ui.add": "Agregar",
         "shader_architect.ui.allow_higher": "Permitir mayor",
         "shader_architect.ui.allow_lower": "Permitir menor",
-
         "shader_architect.preset.classic": "Shader Clásico",
         "shader_architect.preset.pbr_metallic_roughness": "CineFlow",
         "shader_architect.preset.vibrant_visuals_pbr": "Vibrant Visuals (PBR)",
@@ -2178,14 +2210,13 @@
         "shader_architect.material_panel.quick_presets.desc": "Aplica un punto de partida ajustado sin reemplazar este override.",
         "shader_architect.material_panel.apply_preset": "Aplicar preset",
         "shader_architect.material_panel.preset_balanced": "Equilibrado",
-        "shader_architect.material_panel.preset_trailer_hero": "Héroe de tráiler",
+        "shader_architect.material_panel.preset_render_keyart": "Keyart",
         "shader_architect.material_panel.preset_soft_daylight": "Luz diurna suave",
         "shader_architect.material_panel.preset_night_drama": "Drama nocturno",
         "shader_architect.material_panel.preset_clean_product": "Producto limpio",
         "shader_architect.material_panel.preset_vanilla_shadows": "Sombras Pixel",
         "shader_architect.message.preset_applied": "Preset de material aplicado",
         "shader_architect.preset.realview_pbr": "RealView PBR",
-
         "shader_architect.preset.pbr": "Standard PBR",
         "shader_architect.uniform.map": "Textura",
         "shader_architect.uniform.map.desc": "Textura principal del material",
@@ -2723,7 +2754,35 @@
         "shader_architect.ui.tooltip.duplicate": "Duplicar este material",
         "shader_architect.ui.tooltip.export": "Exportar material a archivo .samat",
         "shader_architect.ui.tooltip.delete": "Eliminar este material",
+        "shader_architect.inline.face": "Cara ",
+        "shader_architect.inline.selected_faces": "caras seleccionadas",
+        "shader_architect.inline.faces_and_elements": "Caras y elementos",
+        "shader_architect.inline.mixed": "Mixto",
+        "shader_architect.inline.on": "Activado",
+        "shader_architect.inline.off": "Desactivado",
+        "shader_architect.inline.geometry_auto_tile": "Auto Tile de geometría",
+        "shader_architect.inline.whole_element": "Elemento completo",
+        "shader_architect.inline.whole_surface": "Superficie completa",
+        "shader_architect.inline.cast_shadows": "proyectan sombras",
+        "shader_architect.inline.color": "Color",
+        "shader_architect.inline.normal": "Normal",
+        "shader_architect.inline.height": "Altura",
+        "shader_architect.inline.metallic_r": "Metal · R",
+        "shader_architect.inline.emission_g": "Emisión · G",
+        "shader_architect.inline.roughness_b": "Rugosidad · B",
+        "shader_architect.inline.create_pbr_channel": "Crear canal PBR",
+        "shader_architect.inline.set_up_pbr_channels": "Preparar canales PBR",
+        "shader_architect.inline.paint_channel": "Canal de pintura",
+        "shader_architect.inline.paint_value": "Valor de pintura (%)",
+        "shader_architect.inline.keep_the_assigned_color_texture_add_maps_as_you_need_t": "Conserva la textura de color; añade mapas cuando los necesites.",
+        "shader_architect.inline.sample_the_map_the_selected_mer_component_sets_the_pai": "Muestrea el mapa; el componente MER elegido define el valor de pintura.",
+        "shader_architect.inline.brush_edits_this_channel_the_other_mer_channels_are_pr": "El pincel edita este canal y conserva los otros canales MER.",
+        "shader_architect.inline.individual_mer_channels_brush_or_eraser_without_layers": "Canales MER individuales: pincel o borrador, sin capas. Usa MER · RGB para otras herramientas o capas.",
+        "shader_architect.inline.choose_mer_rgb_for_this_tool_or_layered_texture": "Elige MER · RGB para esta herramienta o textura con capas."
     });
+
+
+
 
     // Shared constants and editor styling
     const PLUGIN_STYLE_ID = 'shader-architect-styles';
@@ -3149,18 +3208,9 @@
     ].map(preset => Object.freeze(preset)));
 
     const MATERIAL_OVERRIDE_PRESETS = {
-        balanced: {
-            label: 'shader_architect.material_panel.preset_balanced',
-            icon: 'balance',
-            color: '#8CC8F7',
-            compatibleMaterials: ['*'],
-            reset: true,
-            values: {}
-        },
         vanilla_shadows: {
             label: 'shader_architect.material_panel.preset_vanilla_shadows',
-            icon: 'transition_fade',
-            color: '#52a535',
+            icon: 'lightflow:grassblock',
             compatibleMaterials: ['*'],
             requiredUniforms: ['uLFPixelatedShadowsEnabled'],
             reset: false,
@@ -3168,10 +3218,10 @@
                 uLFPixelatedShadowsEnabled: true
             }
         },
-        trailer_hero: {
-            label: 'shader_architect.material_panel.preset_trailer_hero',
-            icon: 'movie_filter',
-            color: '#C5A6E8',
+        render_keyart: {
+            label: 'shader_architect.material_panel.preset_render_keyart',
+            icon: 'lightflow:creeper-face',
+            //color: '#C5A6E8',
             compatibleMaterials: ['cinematic_craft', 'luma_forge'],
             requiredUniforms: ['uAmbient', 'uExposure', 'uLightWrap', 'BEVEL_ENABLED', 'PROMO_RIM_ENABLED'],
             values: {
@@ -3225,7 +3275,8 @@
                 BEVEL_GLOW_DIRECTIONAL_GRADIENT: 1.0,
                 BEVEL_GLOW_REQUIRE_LIGHT_FACING: true,
                 BEVEL_GLOW_FACE_THRESHOLD: 0.74,
-                BEVEL_GLOW_WIDTH: 0.084,
+                BEVEL_GLOW_ALLOW_OVERFLOW: true,
+                BEVEL_GLOW_WIDTH: 0.05,
                 BEVEL_GLOW_SOFTNESS: 0.0,
                 BEVEL_GLOW_CORNER_FADE: 1.0,
                 BEVEL_GLOW_INTENSITY: 0.74,
@@ -3452,6 +3503,27 @@ vec4 saSampleBaseMap(vec2 uv) {
             /uniform\s+sampler2D\s+map\s*;/,
             match => `${match}\n${BLOCKBENCH_LAYERED_TEXTURE_FRAGMENT}`
         );
+    }
+
+    function injectTerrainVertexAO(vertexShader, fragmentShader) {
+        if (vertexShader.includes('SA_TERRAIN_VERTEX_AO')) return {vertexShader,fragmentShader};
+        const prepend = (source, header) => {
+            const version = source.match(/^[\t ]*#version[^\n]*\n/);
+            return version ? version[0]+header+source.slice(version[0].length) : header+source;
+        };
+        const end = fragmentShader.lastIndexOf('}');
+        if (end < 0) return {vertexShader,fragmentShader};
+        const stage = vertexShader.includes('#version 300 es') ? ['out','in'] : ['varying','varying'];
+        vertexShader = prepend(vertexShader, `\n// SA_TERRAIN_VERTEX_AO\nattribute float bedrockBlockAo;\n${stage[0]} float vLightflowTerrainAo;\n`)
+            .replace(/void\s+main\s*\(\s*\)\s*\{/, match=>match+'\n vLightflowTerrainAo=bedrockBlockAo;\n');
+        const gate = `\n#if !defined(SA_RENDERCRAFT_RIM_GLOW) && !defined(SA_RENDERCRAFT_GLOW_BLOOM) && !defined(SA_RENDERCRAFT_STUDIO_BLOOM)\n if (!EMISSIVE) gl_FragColor.rgb *= clamp(vLightflowTerrainAo,0.0,1.0);\n#endif\n`;
+        // Shade the surface before atmosphere mixes in unoccluded fog.
+        const fog = fragmentShader.indexOf('    // Interpolate position, then measure distance.');
+        const insertion = fog >= 0 ? fog : end;
+        fragmentShader = fragmentShader.slice(0,insertion)+gate+fragmentShader.slice(insertion);
+        const emissive = /uniform\s+bool[^;]*\bEMISSIVE\b/.test(fragmentShader) ? '' : 'uniform bool EMISSIVE;\n';
+        fragmentShader = prepend(fragmentShader, `\n${stage[1]} float vLightflowTerrainAo;\n${emissive}`);
+        return {vertexShader,fragmentShader};
     }
 
     function injectLightflowInstancingVertex(vertexShader) {
@@ -8881,6 +8953,21 @@ vec4 rcGetConnectedEdgeKeepMask(
 }
 
 #if SA_TEXTURE_ALPHA_OPAQUE == 0
+vec4 rcGetGlowBands(vec4 distanceToEdge, vec4 glowWidth, float softness);
+
+// Distance to the current texel cell boundary along each face-local axis.
+// The signed UV basis retains mirrored/rotated islands and Auto Tile scale.
+vec2 rcAlphaCellDistances(vec2 phase, vec2 texelsPerUnit) {
+    vec2 inverseRate = 1.0 / max(abs(texelsPerUnit), vec2(0.000001));
+    vec2 positive = step(vec2(0.0), texelsPerUnit);
+    vec2 backward = mix(1.0 - phase, phase, positive) * inverseRate;
+    vec2 forward = mix(phase, 1.0 - phase, positive) * inverseRate;
+    vec2 inactiveAxis = step(abs(texelsPerUnit), vec2(0.000001)) * 1000000.0;
+    backward += inactiveAxis;
+    forward += inactiveAxis;
+    return vec2(min(backward.x, backward.y), min(forward.x, forward.y));
+}
+
 float rcSampleAlphaNeighbor(
     vec2 localOffset,
     mat2 elementToMapJacobian,
@@ -8911,8 +8998,11 @@ float rcSampleAlphaNeighbor(
 
 vec4 rcGetAlphaBands(
     float sourceAlpha,
-    vec2 absoluteWidth
+    vec2 absoluteWidth,
+    vec2 glowWidth,
+    out vec4 glowBands
 ) {
+    glowBands = vec4(0.0);
     if (
         !BEVEL_ALPHA_ENABLED ||
         sourceAlpha <= 0.0001 ||
@@ -8929,7 +9019,7 @@ vec4 rcGetAlphaBands(
     // owning atlas island after Auto Tile, rotation and mirroring are known.
     vec2 safeSize = max(abs(vPromoElementSize), vec2(0.0001));
     vec2 localStep = clamp(
-        abs(absoluteWidth) / safeSize,
+        max(abs(absoluteWidth), glowWidth) / safeSize,
         vec2(0.000001),
         vec2(1.0)
     );
@@ -8961,11 +9051,28 @@ vec4 rcGetAlphaBands(
         max(sourceAlpha - aB, 0.0) + innerBL + innerBR,
         max(sourceAlpha - aT, 0.0) + innerTL + innerTR
     );
-    return smoothstep(
+    alphaBands = smoothstep(
         vec4(0.02),
         vec4(0.35),
         clamp(alphaBands, vec4(0.0), vec4(1.0))
     );
+    if (max(glowWidth.x, glowWidth.y) <= 0.0) return alphaBands;
+    // Gather once at the wider reach, then resolve the two authored widths.
+    // No second alpha stencil and no texture sampling inside the Art Key loop.
+    vec2 texelSize = max(TEXTURE_SIZE, vec2(1.0));
+    vec2 repeatCount = abs(lfResolveTextureTiling(vPromoGlobalFaceSize, vPromoElementUvSize, vPromoAutoTile));
+    vec2 phase = fract(lfResolveMaterialUvWithJacobian(
+        vPromoMapUv, vPromoElementUv, elementToMapJacobian,
+        vPromoGlobalFaceSize, vPromoElementUvSize, vPromoAutoTile
+    ) * texelSize);
+    vec4 edgeDistance = vec4(
+        rcAlphaCellDistances(phase, elementToMapJacobian[0] * repeatCount.x * texelSize / safeSize.x),
+        rcAlphaCellDistances(phase, elementToMapJacobian[1] * repeatCount.y * texelSize / safeSize.y)
+    );
+    glowBands = alphaBands * rcGetGlowBands(edgeDistance,
+        vec4(glowWidth.x, glowWidth.x, glowWidth.y, glowWidth.y), BEVEL_GLOW_SOFTNESS);
+    return alphaBands * step(edgeDistance,
+        vec4(absoluteWidth.x, absoluteWidth.x, absoluteWidth.y, absoluteWidth.y) + 0.000001);
 }
 #endif
 
@@ -9107,6 +9214,38 @@ vec4 rcGetGlowBands(
     );
 }
 
+// A point source can project inside an edge. A sign-selected endpoint ramp
+// reverses there and incorrectly goes cold toward the nearby corner. Keep one
+// continuous peak at the projected source instead; outside the domain this
+// reduces to the original hot-to-cold endpoint ramp.
+vec4 rcGetPointGlowRamp(vec3 tangentU, vec3 tangentV, vec3 sourcePosition, float curve) {
+    vec2 coordinate = clamp(vPromoElementUv, vec2(0.0), vec2(1.0));
+    vec2 span = max(abs(vPromoElementSize), vec2(0.0001));
+#if RC_CONNECTED_BEVEL == 1
+    if (BEVEL_CONNECTED_CLIP_ENABLED) {
+        vec2 extent = vec2(
+            dot(abs(tangentU), max(vPromoBevelRampHalfSize, vec3(0.0))),
+            dot(abs(tangentV), max(vPromoBevelRampHalfSize, vec3(0.0)))
+        );
+        vec2 valid = step(vec2(0.00001), extent);
+        vec3 fromCenter = vPromoWorldPosition - vPromoBevelRampCenter;
+        vec2 connectedSpan = max(2.0 * extent, vec2(0.0001));
+        coordinate = mix(coordinate, clamp(0.5 + vec2(
+            dot(fromCenter, tangentU), dot(fromCenter, tangentV)
+        ) / connectedSpan, vec2(0.0), vec2(1.0)), valid);
+        span = mix(span, connectedSpan, valid);
+    }
+#endif
+    vec3 toSource = sourcePosition - vPromoWorldPosition;
+    vec2 peak = clamp(coordinate + vec2(
+        dot(toSource, tangentU), dot(toSource, tangentV)
+    ) / span, vec2(0.0), vec2(1.0));
+    vec2 ramp = 1.0 - abs(coordinate - peak) / max(peak, 1.0 - peak);
+    float rampX = rcShapeDirectionalGradient(ramp.x, curve);
+    float rampY = rcShapeDirectionalGradient(ramp.y, curve);
+    return vec4(rampY, rampY, rampX, rampX);
+}
+
 
 // Geometry and derivatives are independent of Art Key direction/color.
 // Prepare once per fragment; share the same bands in beauty, Bloom and RIM.
@@ -9164,11 +9303,24 @@ RCBevelGeometry rcPrepareBevel(vec3 surfaceNormal, vec3 tangentU, vec3 tangentV,
     float rampFraction = clamp(max(BEVEL_PROFILE_ROUNDNESS, BEVEL_SOFTNESS), 0.0, 1.0);
     vec4 rampStart = width * (1.0-rampFraction);
     bands = (1.0 - smoothstep(rampStart, width, distanceToEdge)) * support;
+    glowIntensity = (BEVEL_GLOW_MODE == 1 || PROMO_RIM_COLOR_MODE == 3)
+        ? max(BEVEL_GLOW_INTENSITY, 0.0)
+        : (BEVEL_GLOW_SYNC_TO_PROMO_RIM
+            ? max(PROMO_RIM_INTENSITY, 0.0)
+            : max(BEVEL_GLOW_INTENSITY, 0.0));
+    bool glowActive = BEVEL_GLOW_ENABLED && glowIntensity > 0.0 && (BEVEL_MATCH_RELIEF_WIDTH ? BEVEL_GLOW_WIDTH_RATIO : BEVEL_GLOW_WIDTH) > 0.0;
+    vec2 glowAxisWidth = vec2(0.0);
+    if (glowActive) {
+        glowAxisWidth = BEVEL_MATCH_RELIEF_WIDTH ? configured * max(BEVEL_GLOW_WIDTH_RATIO, 0.0)
+            : vec2(max(BEVEL_GLOW_WIDTH * bevelScale, 0.00001));
+        if (!BEVEL_MATCH_RELIEF_WIDTH && !BEVEL_GLOW_ALLOW_OVERFLOW) glowAxisWidth = min(glowAxisWidth, configured);
+    }
+    vec4 alphaGlowBand = vec4(0.0);
 #if SA_TEXTURE_ALPHA_OPAQUE == 0
     if (BEVEL_ALPHA_ENABLED && sourceAlpha > 0.0001) {
         bands = max(
             bands,
-            rcGetAlphaBands(sourceAlpha, configured)
+            rcGetAlphaBands(sourceAlpha, configured, glowAxisWidth, alphaGlowBand)
         );
     }
 #endif
@@ -9189,23 +9341,16 @@ RCBevelGeometry rcPrepareBevel(vec3 surfaceNormal, vec3 tangentU, vec3 tangentV,
     vec3 target = rcSafeNormalize(surfaceNormal + outward, surfaceNormal);
     bevelNormal = rcSafeNormalize(mix(surfaceNormal, target, bevelCoverage*clamp(BEVEL_SLOPE,0.0,2.0)*0.5), surfaceNormal);
 
-    glowIntensity = (BEVEL_GLOW_MODE == 1 || PROMO_RIM_COLOR_MODE == 3)
-        ? max(BEVEL_GLOW_INTENSITY, 0.0)
-        : (BEVEL_GLOW_SYNC_TO_PROMO_RIM
-            ? max(PROMO_RIM_INTENSITY, 0.0)
-            : max(BEVEL_GLOW_INTENSITY, 0.0));
-    if (BEVEL_GLOW_ENABLED && glowIntensity > 0.0 && (BEVEL_MATCH_RELIEF_WIDTH ? BEVEL_GLOW_WIDTH_RATIO : BEVEL_GLOW_WIDTH) > 0.0) {
+    if (glowActive) {
         // Linked widths share the relief footprint; Glow may deliberately be
         // wider while the physical bevel normal stays unchanged.
-        vec2 glowAxisWidth = BEVEL_MATCH_RELIEF_WIDTH ? configured * max(BEVEL_GLOW_WIDTH_RATIO, 0.0)
-            : vec2(max(BEVEL_GLOW_WIDTH * bevelScale, 0.00001));
-        if (!BEVEL_MATCH_RELIEF_WIDTH && !BEVEL_GLOW_ALLOW_OVERFLOW) glowAxisWidth = min(glowAxisWidth, configured);
         vec4 glowWidth = vec4(glowAxisWidth.x, glowAxisWidth.x, glowAxisWidth.y, glowAxisWidth.y);
         glowBand = rcGetGlowBands(
             distanceToEdge,
             glowWidth,
             BEVEL_GLOW_SOFTNESS
         );
+        glowBand = max(glowBand, alphaGlowBand);
 #if RC_CONNECTED_BEVEL == 1
         // Glow is a luminous subset of the physical bevel. Reusing the exact
         // topology mask prevents a narrower Glow Width from reopening seams
@@ -9223,7 +9368,7 @@ RCBevelGeometry rcPrepareBevel(vec3 surfaceNormal, vec3 tangentU, vec3 tangentV,
     return data;
 }
 void rcEvaluateBevelLight(RCBevelGeometry data, vec3 surfaceNormal, vec3 tangentU, vec3 tangentV,
-    vec3 keyDirection, vec3 keyColor, bool classifyBevel, bool resolveGlow,
+    vec3 keyDirection, vec3 keyColor, vec3 sourcePosition, bool pointSource, bool classifyBevel, bool resolveGlow,
     out float bevelLightType, out vec3 glowColor, out float glowOpacity) {
     bevelLightType = 0.5;
     glowColor = vec3(0.0);
@@ -9371,6 +9516,11 @@ void rcEvaluateBevelLight(RCBevelGeometry data, vec3 surfaceNormal, vec3 tangent
             longitudinalByEdge,
             longitudinalInfluence
         );
+        if (pointSource && BEVEL_GLOW_CORNER_FADE > 0.0) {
+            longitudinalGlowRamp = rcGetPointGlowRamp(
+                tangentU, tangentV, sourcePosition, BEVEL_DIRECTIONAL_GRADIENT_CURVE
+            );
+        }
         hotBevelEnergy *= mix(
             vec4(1.0),
             longitudinalGlowRamp,
@@ -9418,7 +9568,7 @@ void rcResolveBevel(
     bevelNormal = data.normal;
     coverage = data.coverage;
     rcEvaluateBevelLight(data, surfaceNormal, tangentU, tangentV, keyDirection, keyColor,
-        true, uArtKeyCount == 0, lightType, glowColor, glowOpacity);
+        vec3(0.0), false, true, uArtKeyCount == 0, lightType, glowColor, glowOpacity);
 #if RC_GLOW == 1
     if (uArtKeyCount > 0) {
         vec3 radiance = vec3(0.0);
@@ -9438,7 +9588,7 @@ void rcResolveBevel(
             }
             float unusedType; vec3 color; float alpha;
             rcEvaluateBevelLight(data, surfaceNormal, tangentU, tangentV, direction, uArtKeyColor[i],
-                false, true, unusedType, color, alpha);
+                uArtKeyVector[i], !directionalKey, false, true, unusedType, color, alpha);
             alpha *= max(uArtKeyParams[i].y, 0.0);
             // Each source preserves its own direction and color. Opposing keys
             // cannot cancel each other as they would in a weighted direction.
@@ -11835,7 +11985,7 @@ uniform float uSSRIntensity;
         width: 30px !important;
         min-width: 30px !important;
         height: 30px !important;
-        padding: 3px !important;
+        padding: 0px 0px 0px 4px !important;
         margin: 0 !important;
         flex: 0 0 30px;
     }
@@ -11975,10 +12125,11 @@ uniform float uSSRIntensity;
     #sa_material_studio_dialog .sa-studio-apply { display: flex; align-items: center; justify-content: center; gap: 6px; height: 30px; margin: 0; padding: 4px 8px; flex-shrink: 0; }
     #sa_material_studio_dialog .sa-studio-apply { background: var(--color-accent); color: var(--color-accent_text); }
     #sa_material_studio_dialog .sa-library-search { margin-block: 8px; width: 100%; }
-    #sa_material_studio_dialog .sa-library-filter { display: flex; margin-bottom: 8px; }
-    #sa_material_studio_dialog .sa-library-filter button { flex: 1; font-size: 12px; min-width: 0; padding: 4px 2px; margin: 0; border-radius: 0; }
-    #sa_material_studio_dialog .sa-library-filter button.active,
-    #sa_material_studio_dialog .sa-property-categories button.active { background: var(--color-selected); color: var(--color-text); }
+    #sa_material_studio_dialog .sa-library-filter { display: flex; margin-bottom: 8px; background: var(--color-back); border: 1px solid var(--color-border); }
+    #sa_material_studio_dialog .sa-library-filter button { flex: 1; font-size: 12px; min-width: 0; padding: 4px 2px; margin: 0; background: transparent; }
+    #sa_material_studio_dialog .sa-library-filter button.selected,
+    #sa_material_studio_dialog .sa-property-categories button.selected { background: var(--color-accent); }
+    #sa_material_studio_dialog .sa-property-categories button.selected small { color: inherit; }
     #sa_material_studio_dialog .sa-library-list { min-height: 0; flex: 1; overflow-y: auto; }
     #sa_material_studio_dialog .sa-materiel-list-item { display: flex; width: 100%; gap: 8px; text-align: left; min-width: 0; box-shadow: none; background: transparent; color: var(--color-text); border: 0; }
     #sa_material_studio_dialog .sa-materiel-list-item.selected { background: var(--color-selected); color: var(--color-text); }
@@ -11986,10 +12137,10 @@ uniform float uSSRIntensity;
     #sa_material_studio_dialog .sa-materiel-list-item > .icon { font-size: 20px; flex-shrink: 0; }
     #sa_material_studio_dialog .sa-materiel-list-item .sa-builtin-lock { font-size: 14px; opacity: .5; }
     #sa_material_studio_dialog .sa-vscode-tab { font-family: inherit; color: var(--color-text); font-weight: 400; border-top: 0; }
-    #sa_material_studio_dialog .sa-vscode-tab.active { background: var(--color-selected); border-bottom: 2px solid var(--color-accent); }
+    #sa_material_studio_dialog .sa-vscode-tab.active { background: var(--color-selected); border-bottom: 0; }
     #sa_material_studio_dialog .sa-vscode-tab i { color: var(--color-text) !important; font-size: 18px !important; }
-    #sa_material_studio_dialog .sa-studio-appearance { overflow: auto; flex: 1; min-height: 0; width: 100%; box-sizing: border-box; padding: 12px 16px !important; }
-    #sa_material_studio_dialog .sa-studio-appearance > div { max-width: 720px; margin: 0 auto; }
+    #sa_material_studio_dialog .sa-studio-appearance { overflow: auto; flex: 1; min-height: 0; width: 100%; box-sizing: border-box; padding: 0 12px 12px !important; }
+    #sa_material_studio_dialog .sa-studio-appearance > div { max-width: 920px; margin: 0; }
     #sa_material_studio_dialog .sa-appearance-heading { display: none; }
     #sa_material_studio_dialog .sa-property-tools,
     #sa_material_studio_dialog .sa-schema-tools { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
@@ -11997,8 +12148,8 @@ uniform float uSSRIntensity;
     #sa_material_studio_dialog .sa-schema-tools input[type=search] { flex: 1; min-width: 100px; }
     #sa_material_studio_dialog .sa-property-tools label,
     #sa_material_studio_dialog .sa-schema-tools label { display: flex; align-items: center; gap: 6px; font-weight: 400; }
-    #sa_material_studio_dialog .sa-property-categories { display: flex; flex-wrap: wrap; gap: 0; margin-bottom: 12px; }
-    #sa_material_studio_dialog .sa-property-categories button { flex: 1; margin: 0; min-width: 90px; padding: 6px 8px; border-radius: 0; }
+    #sa_material_studio_dialog .sa-property-categories { display: flex; flex-wrap: wrap; gap: 2px; margin-bottom: 0; background: var(--color-back); border: 1px solid var(--color-border); }
+    #sa_material_studio_dialog .sa-property-categories button { display: flex; align-items: center; justify-content: center; gap: 5px; flex: 1; margin: 0; min-width: 100px; padding: 5px 8px; background: transparent; }
     #sa_material_studio_dialog .sa-property-categories small { color: var(--color-text); margin-left: 4px; }
     #sa_material_studio_dialog .sa-tweak-number { width: 70px; flex: 0 0 70px; text-align: right; }
     #sa_material_studio_dialog .sa-uniform-row { box-shadow: none; border-radius: 3px; }
@@ -12011,14 +12162,13 @@ uniform float uSSRIntensity;
     #sa_material_studio_dialog .sa-studio-material-meta { margin-bottom: 10px; border-bottom: 1px solid var(--color-border); }
     #sa_material_studio_dialog summary { padding: 8px 0; cursor: pointer; }
     #sa_material_studio_dialog .sa-tweak-section { border-bottom: 1px solid var(--color-border); }
-    #sa_material_studio_dialog .sa-tweak-section > summary { display: flex; align-items: center; gap: 6px; font-size: 13px; padding: 7px 0; }
+    #sa_material_studio_dialog .sa-tweak-section > summary { display: flex; align-items: center; gap: 6px; font-size: 13px; padding: 10px 0 6px; color: var(--color-subtle_text); }
     #sa_material_studio_dialog .sa-tweak-section > summary::before { content: 'chevron_right'; font-family: 'Material Icons'; font-size: 18px; width: 18px; flex: 0 0 18px; }
     #sa_material_studio_dialog .sa-tweak-section[open] > summary::before { transform: rotate(90deg); }
     #sa_material_studio_dialog .sa-tweak-section > summary small { margin-left: auto; color: var(--color-subtle_text); }
     #sa_material_studio_dialog .sa-tweak-section > summary:hover { background: var(--color-ui); }
     #sa_material_studio_dialog .sa-quick-tweaks input[type=range] { background: transparent; border: 0; box-shadow: none; height: 24px !important; }
-    #sa_material_studio_dialog .sa-quick-tweaks input[type=range]::-webkit-slider-runnable-track { height: 3px; background: var(--color-button); }
-    #sa_material_studio_dialog .sa-quick-tweaks input[type=range]::-webkit-slider-thumb { margin-top: -9px; }
+    #sa_material_studio_dialog .sa-quick-tweaks input[type=range]::-webkit-slider-runnable-track { background: var(--color-button); }
     #sa_material_studio_dialog .sa-studio-material-meta label { display: flex; gap: 8px; align-items: center; padding: 8px 0; }
     #sa_material_studio_dialog .sa-studio-statusbar { height: auto; min-height: 28px; gap: 8px; flex-wrap: wrap; padding: 4px 8px; }
     #sa_material_studio_dialog .sa-statusbar-item { min-width: 0; white-space: normal; }
@@ -12042,6 +12192,37 @@ uniform float uSSRIntensity;
     }
     @media (prefers-reduced-motion: reduce) {
         #sa_material_studio_dialog .sa-studio-sidebar { transition: none; }
+    }
+
+    #sa_material_studio_dialog .sa-material-icon { flex: 0 0 22px; width: 22px; height: 22px; margin: 0; }
+    #sa_material_studio_dialog .sa-library-actions { display: flex; align-items: stretch; gap: 4px; }
+    #sa_material_studio_dialog .sa-library-actions > .sa-left-btn { flex: 1; margin: 0; justify-content: flex-start; }
+    #sa_material_studio_dialog .sa-library-actions > .sa-icon-btn { flex: 0 0 34px; width: 34px !important; height: 34px !important; }
+    #sa_material_studio_dialog button { border-radius: var(--lf-radius-control, 8px); }
+    #sa_material_studio_dialog .sa-materiel-list-item { min-height: 34px; padding: 5px 8px; }
+    #sa_material_studio_dialog .sa-materiel-list-item.selected { box-shadow: inset 2px 0 var(--color-accent); }
+    #sa_material_studio_dialog .sa-editor-header { gap: 8px; }
+    #sa_material_studio_dialog .sa-material-name-input:disabled { opacity: 1; color: var(--color-text); background: transparent; border-color: transparent; }
+    #sa_material_studio_dialog .sa-appearance-toolbar { position: sticky; top: 0; z-index: 3; background: var(--color-back); padding: 10px 0 6px; }
+    #sa_material_studio_dialog .sa-property-tools { gap: 8px; }
+    #sa_material_studio_dialog .sa-property-tools label { font-size: 12px; color: var(--color-subtle_text); }
+    #sa_material_studio_dialog .sa-property-categories .icon { width: 18px; height: 18px; font-size: 18px; flex: 0 0 18px; margin: 0; }
+    #sa_material_studio_dialog .sa-property-categories small { font-size: 11px; color: var(--color-subtle_text); }
+    #sa_material_studio_dialog .sa-quick-tweaks .sa-uniform-row { display: grid; grid-template-columns: minmax(130px, 34%) minmax(0, 1fr); gap: 8px; align-items: center; padding: 5px 4px !important; min-height: 38px; margin: 0 !important; border-bottom: 0; }
+    #sa_material_studio_dialog .sa-quick-tweaks .sa-uniform-row > div:first-child { margin: 0 !important; min-width: 0; }
+    #sa_material_studio_dialog .sa-quick-tweaks .sa-uniform-row > div:not(:first-child) { min-width: 0; }
+    #sa_material_studio_dialog .sa-quick-tweaks .sa-uniform-row > div:first-child > span { font-size: 13px; font-weight: 400; }
+    #sa_material_studio_dialog .sa-quick-tweaks .sa-uniform-row.is-vector { align-items: start; }
+    #sa_material_studio_dialog .sa-studio-texture { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 4px 8px; }
+    #sa_material_studio_dialog .sa-studio-texture img { width: 32px; height: 32px; margin: 0; grid-row: 1 / 3; }
+    #sa_material_studio_dialog .sa-studio-texture select { width: 100% !important; margin: 0 !important; }
+    #sa_material_studio_dialog .sa-studio-texture:not(:has(img)) { grid-template-columns: minmax(0, 1fr); }
+    @container lightflow-material-studio (max-width: 650px) {
+        #sa_material_studio_dialog .sa-studio-appearance { padding-inline: 8px !important; }
+        #sa_material_studio_dialog .sa-quick-tweaks .sa-uniform-row { grid-template-columns: minmax(0, 1fr); gap: 3px; }
+        #sa_material_studio_dialog .sa-property-categories button { min-width: 90px; }
+        #sa_material_studio_dialog .sa-studio-header { padding: 6px 8px; }
+        #sa_material_studio_dialog .sa-material-name-input { font-size: 13px; }
     }
 
     #sa_shader_warmup_dialog .dialog_content {
@@ -12649,7 +12830,7 @@ uniform float uSSRIntensity;
             }
 
             const base = baseMaterial || this.materials[instance.baseMaterialId] || null;
-            const preset = MATERIAL_OVERRIDE_PRESETS.trailer_hero;
+            const preset = MATERIAL_OVERRIDE_PRESETS.render_keyart;
             const storedVersion = Math.max(1, Number(instance.rendercraftPresetVersion) || 1);
             const legacyDefaults = storedVersion >= 3
                 ? RENDERCRAFT_V3_PRESET_DEFAULTS
@@ -14447,7 +14628,7 @@ uniform float uSSRIntensity;
             });
             const knownMeshes = new Set(users.map(element => ShaderEngine.getCubeMesh(element)));
             for (const mesh of ShaderEngine.externalIntegratedMeshes || []) {
-                if (!mesh?.parent || knownMeshes.has(mesh)) continue;
+                if (!isShaderMeshInActiveScene(mesh) || knownMeshes.has(mesh)) continue;
                 if (ShaderEngine.getMaterialList(ShaderEngine.getEffectiveMeshMaterial(mesh))
                     .some(material => material?.sa_material_instance_id === instance.id)) {
                     users.push({mesh, uuid:mesh.uuid, sa_material_instance_id:instance.id});
@@ -14664,7 +14845,7 @@ uniform float uSSRIntensity;
                 changed = true;
             });
 
-            if (presetId === 'trailer_hero' && this.isRendercraftBaseMaterialId(base.id)) {
+            if (presetId === 'render_keyart' && this.isRendercraftBaseMaterialId(base.id)) {
                 instance.rendercraftPresetVersion = RENDERCRAFT_PRESET_VERSION;
             }
 
@@ -17818,7 +17999,7 @@ void main() {
                 lumaForgeUniforms.uToneMapping.max = 7;
             }
             // Cinematic Craft opens with a trailer-oriented grade while remaining fully editable.
-            Object.entries(MATERIAL_OVERRIDE_PRESETS.trailer_hero.values).forEach(([key, value]) => {
+            Object.entries(MATERIAL_OVERRIDE_PRESETS.render_keyart.values).forEach(([key, value]) => {
                 if (!lumaForgeUniforms[key]) return;
                 lumaForgeUniforms[key].value = cloneUniformValue(value);
             });
@@ -18336,7 +18517,7 @@ void main() {
             };
             getAllShaderElements().forEach(element => collectMesh(ShaderEngine.getCubeMesh(element)));
             ShaderEngine?.externalIntegratedMeshes?.forEach?.(mesh => {
-                if (mesh?.parent) collectMesh(mesh);
+                if (isShaderMeshInActiveScene(mesh)) collectMesh(mesh);
             });
             return materials;
         },
@@ -19991,7 +20172,7 @@ void main() {
             };
             getAllShaderElements().forEach(cube => collectMesh(ShaderEngine.getCubeMesh(cube)));
             ShaderEngine?.externalIntegratedMeshes?.forEach?.(mesh => {
-                if (mesh?.parent) collectMesh(mesh);
+                if (isShaderMeshInActiveScene(mesh)) collectMesh(mesh);
             });
 
             this.activeMaterialCache = materials;
@@ -22238,6 +22419,7 @@ void main() {
                     ShaderEngine.externalIntegratedMeshes.delete(mesh);
                     return;
                 }
+                if (!isShaderMeshInActiveScene(mesh)) return;
                 if (mesh.traverse) mesh.traverse(object => cubeObjects.add(object));
                 else cubeObjects.add(mesh);
                 const effectiveMaterial = ShaderEngine.getEffectiveMeshMaterial(mesh);
@@ -23341,7 +23523,7 @@ void main() {
                 elements.push(element);
             });
             ShaderEngine?.externalIntegratedMeshes?.forEach?.(mesh => {
-                if (!mesh?.isMesh || !mesh.parent || seenMeshes.has(mesh)) return;
+                if (!mesh?.isMesh || !isShaderMeshInActiveScene(mesh) || seenMeshes.has(mesh)) return;
                 seenMeshes.add(mesh);
                 const hasLogicalVisibility = Object.prototype.hasOwnProperty.call(
                     mesh.userData || {},
@@ -23373,6 +23555,16 @@ void main() {
             return true;
         },
 
+        getJoinAttributeSignature(attribute) {
+            if (!attribute) return '';
+            if (!this.joinAttributeIds) {
+                this.joinAttributeIds = new WeakMap();
+                this.nextJoinAttributeId = 1;
+            }
+            if (!this.joinAttributeIds.has(attribute)) this.joinAttributeIds.set(attribute, this.nextJoinAttributeId++);
+            return `${this.joinAttributeIds.get(attribute)}:${attribute.count}:${attribute.itemSize}:${attribute.normalized ? 1 : 0}:${attribute.version ?? attribute.data?.version ?? 0}`;
+        },
+
         getSceneSignature() {
             const parts = [];
             let targetElements = 0;
@@ -23390,31 +23582,34 @@ void main() {
                     !!material?.uniforms?.SA_BEVEL_JOIN_MASK
                 ));
                 if (target) targetElements++;
-                const attributes = Object.keys(geometry.attributes || {})
-                    .filter(name => ![
-                        this.attributeName,
-                        this.rampCenterAttributeName,
-                        this.rampHalfSizeAttributeName
-                    ].includes(name))
-                    .sort()
-                    .map(name => {
-                        const attribute = geometry.attributes[name];
-                        return `${name}:${attribute?.count || 0}:${attribute?.itemSize || 0}:${attribute?.version || 0}`;
-                    })
+                // Coverage reads positions, normals and logical face UVs. Shader
+                // lighting/tiling/packed-output uploads cannot change an edge.
+                const attributes = ['position', 'normal', 'normalizedFaceUv']
+                    .map(name => `${name}:${this.getJoinAttributeSignature(geometry.getAttribute(name))}`)
                     .join(',');
                 const index = geometry.getIndex?.();
+                const ranges = geometry.userData?.saLogicalFaceRanges;
+                const topology = JSON.stringify([
+                    geometry.groups,
+                    Array.isArray(ranges) ? ranges.map(range => [range.start, range.count, range.cursors, range.materialIndex, range.connectedClip]) : null,
+                    materials.map(material => [material?.visible !== false, !!material?.uniforms?.SA_BEVEL_JOIN_MASK]),
+                    typeof Mesh !== 'undefined' && element instanceof Mesh
+                        ? Object.entries(element.faces || {}).map(([id, face]) => [id, face.vertices?.length]) : null
+                ]);
                 const matrix = Array.from(mesh.matrixWorld?.elements || [])
                     .map(value => Number(value).toPrecision(10))
                     .join(',');
-                const parent = element?.sa_connected_clip_domain ?? element?.parent;
+                const parent = this.getJoinDomain(element);
                 parts.push([
                     element?.uuid || elementIndex,
                     parent?.uuid || parent?.id || parent?.name || parent || 'root',
                     this.isSurfaceElementVisible(element, mesh) ? 1 : 0,
                     target ? 1 : 0,
                     geometry.uuid || geometry.id || elementIndex,
-                    index?.count || 0,
-                    index?.version || 0,
+                    this.getJoinAttributeSignature(index),
+                    geometry.userData?.lightflowTerrainConnectedClip
+                        ? this.getJoinAttributeSignature(geometry.userData.lightflowTerrainConnectedClip.data) : '',
+                    topology,
                     attributes,
                     matrix
                 ].join('|'));
@@ -23480,10 +23675,14 @@ void main() {
             if (element?.sa_connected_clip_domain !== undefined) {
                 return element.sa_connected_clip_domain;
             }
-            const parent = element?.parent;
-            return parent && typeof parent === 'object'
-                ? parent
-                : null;
+            let parent = element?.parent;
+            if (!parent || typeof parent !== 'object') return null;
+            // A rig's nested bones still belong to the same model. Actual
+            // world-space edge coverage, not bone membership, decides joins.
+            while (parent.parent && typeof parent.parent === 'object') {
+                parent = parent.parent;
+            }
+            return parent;
         },
 
         canJoinFaces(face, candidate) {
@@ -23496,10 +23695,11 @@ void main() {
             if (face.element === candidate.element) return true;
 
             /*
-             * Separate outliner groups normally represent articulated pieces
-             * or independent objects. Welding across those boundaries makes a
-             * humanoid arm lose its bevel when it approaches the torso.
-             * Root-level elements remain compatible for block assemblies.
+             * Separate top-level assemblies remain independent. Descendant
+             * bones can join at a real contact; pose changes rebuild coverage
+             * and restore exposed edges when those parts separate. Root-level
+             * elements remain compatible for block assemblies, and external
+             * integrations retain their explicit domains.
              */
             return (
                 !face.joinDomain ||
@@ -23737,6 +23937,21 @@ void main() {
                     !this.isSurfaceElementVisible(element, mesh)
                 ) return;
                 mesh.updateMatrixWorld?.(true);
+                const baked = geometry.userData?.lightflowTerrainConnectedClip;
+                if (baked) {
+                    baked.faces.forEach((record, row) => {
+                        const material = this.getMaterialForRange(mesh, geometry, record);
+                        if (!material || material.visible === false) return;
+                        const box = values => new THREE.Box3(new THREE.Vector3().fromArray(values, 0), new THREE.Vector3().fromArray(values, 3)).applyMatrix4(mesh.matrixWorld);
+                        const ramp = box(record.ramp);
+                        faces.push({id:faces.length, mesh, geometry, material, element, range:record,
+                            target:!!material.uniforms?.SA_BEVEL_JOIN_MASK, attributeSafe:true, row:-1,
+                            vertexIndices:record.vertices, bounds:box(record.bounds),
+                            rampCenter:ramp.getCenter(new THREE.Vector3()), rampHalfSize:ramp.getSize(new THREE.Vector3()).multiplyScalar(.5),
+                            bakedClip:{data:baked.data, offset:row*baked.resolution*4, resolution:baked.resolution}});
+                    });
+                    return;
+                }
                 this.getLogicalFaceRanges(element, geometry)
                     .filter(range => range.connectedClip !== false)
                     .forEach(range => {
@@ -23757,6 +23972,62 @@ void main() {
                     });
             });
             return faces;
+        },
+
+        bakeTerrainConnectedClip(meshes) {
+            // This cache belongs to source geometry, never a preview/project atlas.
+            // All sections form one dependency set: a changed neighbor invalidates
+            // coverage on both sides of a section boundary.
+            this.terrainBakeCache ||= new WeakMap();
+            const signature = meshes.map(mesh => {
+                mesh.updateWorldMatrix(true, false);
+                return [mesh.geometry.uuid, ['position','normal','uv','bedrockTileUv'].map(name => this.getJoinAttributeSignature(mesh.geometry.getAttribute(name))),
+                    this.getJoinAttributeSignature(mesh.geometry.index), mesh.matrixWorld.toArray(),
+                    mesh.geometry.userData.saLogicalFaceRanges?.map(range => [range.start,range.count,range.cursors,range.materialIndex,range.noTextureRepeat]), mesh.geometry.groups];
+            });
+            const key = JSON.stringify(signature), first = meshes[0]?.geometry;
+            if (!first) return new Map();
+            const cached = this.terrainBakeCache.get(first);
+            if (cached?.key === key) return cached.result;
+            const elements = [], originals = new Map(), result = new Map();
+            const baker = Object.assign(Object.create(this), {texture:null, cachedStats:null, lastSceneSignature:'', pendingFrame:null,
+                textureSize:new THREE.Vector2(), textureLayout:new THREE.Vector2(), sceneCenter:new THREE.Vector3(), sceneHalfSize:new THREE.Vector3(),
+                getSurfaceElements:() => elements, bindTextureToMaterials() {}, installFaceAttributes(faces) { this.bakedFaces = faces; }});
+            try {
+                for (const source of meshes) {
+                    const geometry = source.geometry.clone();
+                    geometry.userData = {...source.geometry.userData};
+                    delete geometry.userData.lightflowTerrainConnectedClip;
+                    geometry.userData.saLogicalFaceRanges = (source.geometry.userData.saLogicalFaceRanges || []).map(range => ({...range, connectedClip:range.noTextureRepeat !== true}));
+                    const mesh = new THREE.Mesh(geometry, {uniforms:{SA_BEVEL_JOIN_MASK:{value:null}}});
+                    mesh.matrixAutoUpdate = false;
+                    mesh.matrix.copy(source.matrixWorld); mesh.updateMatrixWorld(true);
+                    const element = {mesh, uuid:source.uuid, sa_connected_clip_domain:'terrain-bake'};
+                    elements.push(element); originals.set(mesh,source.geometry);
+                    ShaderEngine.addUvAspectRatioAttribute(geometry, element, 0);
+                }
+                baker.rebuild();
+                if (baker.stats.overflowFaces || baker.stats.attributeConflicts) throw new Error('Terrain connected clip exceeds its atlas or vertex ownership budget.');
+                for (const element of elements) {
+                    const mesh = element.mesh, inverse = mesh.matrixWorld.clone().invert();
+                    const faces = baker.bakedFaces.filter(face => face.mesh === mesh && face.target && face.row >= 0);
+                    const resolution = baker.stats.resolution, data = new Uint8Array(faces.length*resolution*4);
+                    const records = faces.map((face, index) => {
+                        const x = (face.row % baker.textureLayout.y)*resolution, y = Math.floor(face.row/baker.textureLayout.y);
+                        const offset = (y*baker.textureSize.x+x)*4;
+                        data.set(baker.texture.image.data.subarray(offset,offset+resolution*4),index*resolution*4);
+                        const pack = box => {const local=box.clone().applyMatrix4(inverse); return [...local.min.toArray(),...local.max.toArray()];};
+                        return {vertices:face.vertexIndices, materialIndex:face.range.materialIndex || 0, bounds:pack(face.bounds),
+                            ramp:pack(new THREE.Box3().setFromCenterAndSize(face.rampCenter,face.rampHalfSize.clone().multiplyScalar(2)))};
+                    });
+                    result.set(originals.get(mesh), {version:1,resolution,data,faces:records});
+                }
+                this.terrainBakeCache.set(first,{key,result});
+                return result;
+            } finally {
+                baker.texture?.dispose();
+                elements.forEach(element => element.mesh.geometry.dispose());
+            }
         },
 
         sampleWorldPosition(face, u, v) {
@@ -24221,6 +24492,18 @@ void main() {
                 face.mesh.userData?.lightflowSourcePrimitive === 'cube';
         },
 
+        extendsBeyondFacePlane(face, candidate, tolerance) {
+            // An attached cube's hidden end cap also points into this edge.
+            // Only a neighbor extending above the face can form a concave
+            // valley; buried faces must not erase a real convex ridge.
+            const boundary = face.planeConstant + tolerance * 3;
+            return candidate.triangles.some(triangle => (
+                face.normal.dot(triangle.a.position) > boundary ||
+                face.normal.dot(triangle.b.position) > boundary ||
+                face.normal.dot(triangle.c.position) > boundary
+            ));
+        },
+
         isConcaveEdgeSample(
             face,
             edge,
@@ -24317,6 +24600,7 @@ void main() {
         },
 
         assignConnectedRampDomains(faces, findConnectedRoot) {
+            faces = (faces || []).filter(face => !face.bakedClip);
             const componentBounds = new Map();
             (faces || []).forEach(face => {
                 const root = findConnectedRoot(face);
@@ -24550,8 +24834,9 @@ void main() {
                 ? Math.ceil(activeTargetFaces.length / textureColumns)
                 : 1;
             const data = new Uint8Array(width * height * 4);
-            const tolerance = this.getSceneTolerance(faces);
-            const spatialIndex = this.buildFaceSpatialIndex(faces, tolerance);
+            const dynamicFaces = faces.filter(face => !face.bakedClip);
+            const tolerance = this.getSceneTolerance(dynamicFaces);
+            const spatialIndex = this.buildFaceSpatialIndex(dynamicFaces, tolerance);
             const connectedParents = new Map(
                 targetFaces.map(face => [face, face])
             );
@@ -24588,6 +24873,19 @@ void main() {
                 const textureColumn = face.row % textureColumns;
                 const textureRow = Math.floor(face.row / textureColumns);
 
+                if (face.bakedClip) {
+                    const baked = face.bakedClip;
+                    if (resolution === baked.resolution) {
+                        data.set(baked.data.subarray(baked.offset,baked.offset+resolution*4),(textureRow*width+textureColumn*resolution)*4);
+                        return;
+                    }
+                    for (let sample=0; sample<resolution; sample++) {
+                        const source = baked.offset + Math.round(sample*(baked.resolution-1)/Math.max(1,resolution-1))*4;
+                        data.set(baked.data.subarray(source,source+4),(textureRow*width+textureColumn*resolution+sample)*4);
+                    }
+                    return;
+                }
+
                 for (let channel = 0; channel < 4; channel++) {
                     const edge = this.getEdgeGeometry(face, channel);
                     if (!edge) continue;
@@ -24606,7 +24904,8 @@ void main() {
                     ));
                     const concaveEdgeCandidates = adjacentEdgeCandidates.filter(candidate => (
                         !coplanarEdgeCandidates.includes(candidate) &&
-                        !this.isConvexSelfEdge(face, candidate)
+                        !this.isConvexSelfEdge(face, candidate) &&
+                        this.extendsBeyondFacePlane(face, candidate, tolerance)
                     ));
                     if (
                         !coplanarEdgeCandidates.length &&
@@ -24747,6 +25046,7 @@ void main() {
                 attributeConflicts,
                 resolution,
                 broadPhaseCandidates,
+                bakedFaces: targetFaces.filter(face => face.bakedClip).length,
                 overflowFaces: Math.max(
                     0,
                     targetFaces.length - activeTargetFaces.length
@@ -27002,7 +27302,7 @@ void main() {
                 ...ShaderEngine.dynamicInstanceBatches
             ].forEach(addMesh);
             ShaderEngine.externalIntegratedMeshes.forEach(mesh => {
-                if (mesh?.parent) addMesh(mesh);
+                if (isShaderMeshInActiveScene(mesh)) addMesh(mesh);
             });
 
             return groups;
@@ -27122,7 +27422,7 @@ void main() {
             });
             ShaderEngine.renderBatches.forEach(mesh => { if (mesh) projectMeshes.add(mesh); });
             ShaderEngine.dynamicInstanceBatches.forEach(mesh => { if (mesh) projectMeshes.add(mesh); });
-            ShaderEngine.externalIntegratedMeshes.forEach(mesh => { if (mesh) projectMeshes.add(mesh); });
+            ShaderEngine.externalIntegratedMeshes.forEach(mesh => { if (isShaderMeshInActiveScene(mesh)) projectMeshes.add(mesh); });
             const editorHelperCandidates = new Set(
                 AmbientOcclusionManager.getScenePartition?.().hiddenCandidates || []
             );
@@ -29972,13 +30272,90 @@ void main() {
             if (typeof originalRender !== 'function') return;
             const pipeline = this;
             const patchedRender = function lightflowFramePipelineRender() {
-                return pipeline.renderFrame(this, originalRender, arguments);
+                return pipeline.renderFrame(this, originalRender, arguments, { idleReuse: true });
             };
+            const record = { originalRender, patchedRender, idleFrame: null };
+            this.installIdlePreviewInputTracking();
             preview.render = patchedRender;
-            this.patchedPreviews.set(preview, { originalRender, patchedRender });
+            this.patchedPreviews.set(preview, record);
+        },
+
+        installIdlePreviewInputTracking() {
+            if (this.idlePreviewInput || typeof document === 'undefined') return;
+            const state = { lastAt: -Infinity, held: new Set() };
+            const input = event => {
+                state.lastAt = performance.now();
+                const key = event.type.startsWith('key') ? `key:${event.code || event.key}` : `pointer:${event.pointerId}`;
+                if (event.type === 'keydown' || event.type === 'pointerdown') state.held.add(key);
+                if (event.type === 'keyup' || event.type === 'pointerup' || event.type === 'pointercancel') state.held.delete(key);
+            };
+            const clear = () => { state.held.clear(); state.lastAt = performance.now(); };
+            const events = ['pointermove', 'pointerdown', 'pointerup', 'pointercancel', 'wheel', 'keydown', 'keyup'];
+            events.forEach(event => document.addEventListener(event, input, { passive: true }));
+            window.addEventListener('blur', clear);
+            state.release = () => {
+                events.forEach(event => document.removeEventListener(event, input));
+                window.removeEventListener('blur', clear);
+            };
+            this.idlePreviewInput = state;
+        },
+
+        getIdlePreviewFrameKey(preview, epoch = ShaderEngine.previewRenderRequestEpoch) {
+            const camera = preview?.camera;
+            if (!camera?.projectionMatrix?.elements || !camera.position || !camera.quaternion) return null;
+            return [
+                ShaderEngine.activeProject?.uuid, ShaderEngine.projectRevision, epoch,
+                ShaderEngine.materialRecipeRevision, ShaderEngine.globalRenderMode,
+                preview.width, preview.height, preview.canvas?.width, preview.canvas?.height,
+                preview.renderer?.getPixelRatio?.(), camera.uuid,
+                camera.position.x, camera.position.y, camera.position.z,
+                camera.quaternion.x, camera.quaternion.y, camera.quaternion.z, camera.quaternion.w,
+                ...camera.projectionMatrix.elements,
+                preview.controls?.target?.x, preview.controls?.target?.y, preview.controls?.target?.z
+            ].join('|');
+        },
+
+        shouldReuseIdlePreviewFrame(preview) {
+            const record = this.patchedPreviews.get(preview);
+            const frame = record?.idleFrame;
+            // Native modes, offscreen capture and active animation retain their
+            // normal cadence. Never retain a canvas across pending GPU/scene work.
+            if (!frame || preview.offscreen || preview.sa_studio_render_active ||
+                ShaderEngine.getActiveViewMode() !== 'lightflow' ||
+                window.LightManagerStudioRenderSession || window.StudioRender?.isRendering ||
+                window.LightflowCinematicFrameContext || window.Animator?.open ||
+                window.Timeline?.playing || window.TextureAnimator?.isPlaying ||
+                window.Transformer?.dragging || preview.controls?.enableDamping || preview.controls?.autoRotate ||
+                preview.renderer.getRenderTarget?.() ||
+                ShaderEngine.pendingPreviewRenderFrame !== null ||
+                ShaderEngine.pendingSceneUpdateFrame !== null || ShaderEngine.pendingLightUniformFrame !== null ||
+                ShaderEngine.shouldDeferPreviewRenderForShaderWarmup() ||
+                ShaderEngine.shaderWarmupProgressSession?.firstPreviewDrawPending ||
+                ShaderEngine.getAnimationUniformTargets().length ||
+                this.idlePreviewInput?.held.size ||
+                (window.Project?.elements || []).some(element =>
+                    element.type === 'lightflow_particle_effect' && element.enabled !== false &&
+                    element.visibility !== false && element.particle_playing !== false)) return false;
+            const now = performance.now();
+            // A 4 Hz safety refresh covers native/third-party changes without a
+            // Lightflow invalidation. Camera motion and input wake immediately.
+            return now - (this.idlePreviewInput?.lastAt ?? -Infinity) >= 160 && now - frame.at < 250 &&
+                frame.renderer === preview.renderer && frame.camera === preview.camera &&
+                frame.project === ShaderEngine.activeProject &&
+                frame.key === this.getIdlePreviewFrameKey(preview);
+        },
+
+        recordIdlePreviewFrame(preview, epoch) {
+            const record = this.patchedPreviews.get(preview);
+            if (!record) return;
+            record.idleFrame = {
+                at: performance.now(), key: this.getIdlePreviewFrameKey(preview, epoch),
+                renderer: preview.renderer, camera: preview.camera, project: ShaderEngine.activeProject
+            };
         },
 
         renderFrame(preview, originalRender, args, options = {}) {
+            if (options.idleReuse && this.shouldReuseIdlePreviewFrame(preview)) return undefined;
             // Auxiliary previews may request a lower cadence. Defer before any
             // frame target is cleared, keeping their last complete image intact.
             const interval = Number(preview?.sa_lightflow_frame_interval) || 0;
@@ -30200,6 +30577,7 @@ void main() {
                 if (completedFrame && !options.external && !preview.sa_studio_render_active &&
                     !window.LightManagerStudioRenderSession) {
                     ShaderEngine.recordCompletedPreviewRender(preview, renderRequestEpoch);
+                    if (options.idleReuse) this.recordIdlePreviewFrame(preview, renderRequestEpoch);
                 }
                 if (this.renderingPreview === preview) this.renderingPreview = null;
                 if (profilerState) LightflowFrameProfiler.endFrame(preview);
@@ -30276,6 +30654,8 @@ void main() {
             this.patchedPreviews.forEach((record, preview) => {
                 if (preview?.render === record.patchedRender) preview.render = record.originalRender;
             });
+            this.idlePreviewInput?.release();
+            this.idlePreviewInput = null;
             this.patchedPreviews.clear();
             this.passes.clear();
             this.graph = null;
@@ -34972,8 +35352,14 @@ void main() {
 
         collectAnimationUniformTargets() {
             const targets = [];
-
-            getAllShaderElements().forEach(cube => {
+            const elements = getAllShaderElements();
+            const seen = new Set(elements.map(element => this.getCubeMesh(element)));
+            this.externalIntegratedMeshes?.forEach(mesh => {
+                if (!isShaderMeshInActiveScene(mesh) || seen.has(mesh)) return;
+                seen.add(mesh);
+                elements.push({ mesh, uuid: mesh.uuid });
+            });
+            elements.forEach(cube => {
                 const mesh = this.getCubeMesh(cube);
                 if (!mesh) return;
 
@@ -34984,7 +35370,12 @@ void main() {
                     // lifecycle events. Global frame uniforms are shared above,
                     // so the animation loop has no reason to revisit them per mesh.
                     const systemKeys = [];
-                    const hasTime = !!mat.uniforms.uTime && mat.uniforms.uTime !== this.sharedFrameUniforms?.uTime;
+                    const hasTime = !!mat.uniforms.uTime && (
+                        mat.uniforms.uTime !== this.sharedFrameUniforms?.uTime ||
+                        [mat.vertexShader, mat.fragmentShader].some(source => /\buTime\b/.test(
+                            String(source || '').replace(/\buniform\s+(?:(?:lowp|mediump|highp)\s+)?float\s+uTime\s*;/g, '')
+                        ))
+                    );
                     const hasWorldNormalMatrix = false;
 
                     if (!hasTime && !hasWorldNormalMatrix && systemKeys.length === 0) {
@@ -35680,24 +36071,10 @@ void main() {
                 scheduleWarmup: this.sceneUpdateRequiresShaderWarmup(sceneUpdateCause, causes)
             });
 
-            if (
-                projectHydration &&
-                this.getActiveViewMode() === 'textured' &&
-                this.projectHasMaterialOverrides()
-            ) {
-                // Hydration intentionally keeps Blockbench in Textured while the
-                // exact Lightflow override programs are prepared. The task itself
-                // owns the guarded Textured -> Lightflow commit.
-                this.requestShaderWarmupWhenReady('project_material_overrides', {
-                    includeScene: true,
-                    includePresets: false,
-                    renderMode: this.globalRenderMode || 'classic',
-                    activateLightflowAfterWarmup: true,
-                    activationViewMode: 'textured',
-                    forceProgress: true,
-                    renderAfter: true
-                });
-            }
+            // Blockbench restores Project.view_mode in loadEditorState(). Material
+            // hydration must not promote a deliberately Textured project to
+            // Lightflow; only an explicit view/material action may do that.
+
         },
 
         cancelPendingSceneUpdate() {
@@ -36992,7 +37369,11 @@ void main() {
                 try {
                     resourceSuccess = await this.primeCanonicalPreviewResourcesCooperatively(
                         preview,
-                        null
+                        null,
+                        {
+                            isTaskValid: () => !this.isUnloading && externalTaskValid(),
+                            afterStage: options.afterResourceStage
+                        }
                     ) !== false;
                 } catch (error) {
                     console.warn('[Shader Architect] External renderer resource preparation failed.', error);
@@ -37034,6 +37415,7 @@ void main() {
                     exactLiveMaterials: true,
                     allowExternalPreview: true,
                     isTaskValid: () => !this.isUnloading && externalTaskValid(),
+                    afterProgramStage: options.afterProgramStage,
                     studioRendererPrepare: true
                 });
             } catch (error) {
@@ -37589,6 +37971,17 @@ void main() {
                 options.targetViewMode === 'lightflow' ||
                 options.forceLightflowAuxiliary === true;
             const exactLiveMaterials = options.exactLiveMaterials === true;
+            const plannedMaterials = Array.isArray(options.plannedMaterials)
+                ? options.plannedMaterials : null;
+            // Before a mode commit, inspect the resolved target materials. After
+            // it, use the real frame contract. Merely selecting Lightflow does
+            // not make SSR an active consumer of this context.
+            const needsSSR = exactLiveMaterials
+                ? (options.resourceContract || this.getEffectivePreviewResourceContract(preview)).ssrPrimeActive
+                : plannedMaterials
+                    ? plannedMaterials.some(material => material?.sa_uses_ssr_resolve_pass === true &&
+                        ScreenSpaceReflectionManager.materialIsActive(material))
+                    : ScreenSpaceReflectionManager.hasActiveResolveMaterials() || targetLightflow;
             const lightweightPrimeCollection = options.lightweightPrimeCollection === true;
             let sharedLiveLights = null;
             let sharedLiveLightTopology = '';
@@ -37768,10 +38161,7 @@ void main() {
                 }
             }
 
-            if (
-                ScreenSpaceReflectionManager.hasActiveResolveMaterials() ||
-                targetLightflow
-            ) {
+            if (needsSSR) {
                 const resolveState = ScreenSpaceReflectionManager.getResolveState(preview);
                 if (resolveState?.postCamera && resolveState.quad?.geometry) {
                     createMaterialUnit(
@@ -38819,7 +39209,7 @@ void main() {
                         MaterialManager.getCubeFaceMaterialInstanceOverrides(element)
                     ).length > 0;
                     if (
-                        globalTargetMaterial &&
+                        options.includeUnusedGlobalTarget === true && globalTargetMaterial &&
                         (resolvedMaterial !== globalTargetMaterial || hasFaceOverrides)
                     ) {
                         if (addTargetMaterialUnits(
@@ -38913,7 +39303,10 @@ void main() {
             // uniforms and are not reselected by a light topology change.
             const auxiliaryUnits = lightTopologyOnly || targetElements?.length
                 ? []
-                : this.collectAuxiliaryPreviewCompileUnits(preview, options);
+                : this.collectAuxiliaryPreviewCompileUnits(preview, {
+                    ...options,
+                    plannedMaterials: Array.from(sceneMaterials)
+                });
             const hasRendercraft = Array.from(sceneMaterials).some(material =>
                 String(material?.sa_shader_id || '').toLowerCase() === 'rendercraft'
             );
@@ -39879,7 +40272,8 @@ void main() {
                 task.warmupTotalUnits = totalUnits;
                 this.updateShaderWarmupProgressDialog();
 
-                const compileUnit = (scene, compileCamera, compileOptions = {}) => this.compileRendererSceneCooperatively(
+                const compileUnit = async (scene, compileCamera, compileOptions = {}) => {
+                    const completed = await this.compileRendererSceneCooperatively(
                     renderer,
                     scene,
                     compileCamera,
@@ -39890,7 +40284,12 @@ void main() {
                         isTaskValid: isWarmupTaskValid,
                         ...compileOptions
                     }
-                );
+                    );
+                    if (completed !== false && typeof options.afterProgramStage === 'function') {
+                        await options.afterProgramStage();
+                    }
+                    return completed;
+                };
                 const clearBatch = () => {
                     while (warmupGroup.children.length) {
                         warmupGroup.remove(warmupGroup.children[warmupGroup.children.length - 1]);
@@ -40256,7 +40655,8 @@ void main() {
             }
             const maxConcurrentJobs = Math.max(
                 1,
-                Math.min(configuredMaxConcurrentJobs, sourceConcurrencyCap)
+                Math.min(configuredMaxConcurrentJobs, sourceConcurrencyCap,
+                    typeof options.afterProgramStage === 'function' ? 1 : configuredMaxConcurrentJobs)
             );
 
             // Keep the first compiler wave focused on scene programs while still
@@ -40558,7 +40958,7 @@ void main() {
                             job.camera,
                             task,
                             cooperativeOptions
-                        ).then(result => {
+                        ).then(async result => {
                             if (result === false) {
                                 unitSucceeded = false;
                                 anyFailure = true;
@@ -40585,6 +40985,12 @@ void main() {
                                     unitSucceeded = false;
                                     anyFailure = true;
                                 }
+                            }
+                            // KHR completion covers linking, not the queued native
+                            // draw/pipeline realization. Studio drains that work
+                            // before this job releases its slot to another program.
+                            if (unitSucceeded && typeof options.afterProgramStage === 'function') {
+                                await options.afterProgramStage(descriptorMetaForCompile);
                             }
                         }).catch(error => {
                             unitSucceeded = false;
@@ -40748,7 +41154,7 @@ void main() {
             }).finally(() => surfaceRenderTarget?.dispose?.());
         },
 
-        async primeCanonicalPreviewResourcesCooperatively(preview, task) {
+        async primeCanonicalPreviewResourcesCooperatively(preview, task, options = {}) {
             const renderer = preview?.renderer;
             if (!renderer || this.getActiveViewMode() !== 'lightflow') return true;
 
@@ -40765,7 +41171,9 @@ void main() {
             let promotionalPrimeKey = '';
             let viewportComposerPrimeKey = '';
 
-            const taskStillCurrent = () => !task || this.shaderWarmupCurrentTask === task;
+            const taskStillCurrent = () => !this.isUnloading &&
+                (!task || this.shaderWarmupCurrentTask === task) &&
+                (typeof options.isTaskValid !== 'function' || options.isTaskValid() !== false);
             const combineResults = (...results) => ({
                 success: results.every(result => result?.success !== false),
                 durationMs: results.reduce(
@@ -40877,7 +41285,11 @@ void main() {
                 });
                 totalTargets += targets;
                 if (result?.success === false) success = false;
-                return result?.success !== false;
+                if (result?.success !== false && typeof options.afterStage === 'function') {
+                    await options.afterStage(label);
+                }
+                if (!taskStillCurrent()) success = false;
+                return success;
             };
 
             const ensureSSRPrime = async () => {
@@ -41922,12 +42334,44 @@ void main() {
                 queuedBlocksPreview;
         },
 
+        async waitForShaderWarmupSceneSources(preview, task) {
+            const project = this.activeProject;
+            const revision = this.projectRevision;
+            const valid = () => !this.isUnloading && this.activeProject === project &&
+                project === (window.Project || null) && this.projectRevision === revision &&
+                this.shaderWarmupCurrentTask === task && preview === this.getShaderWarmupPreview();
+            const pending = () => !!window.LightflowSceneLinks && (project?.elements || []).some(element =>
+                element?.type === 'lightflow_scene_instance' &&
+                (element._lightflowStatus === 'updating' ||
+                    (!element._lightflowStatus && !!element.source_link)));
+            if (!pending()) return valid();
+            const started = performance.now();
+            task.linkedHydrationWaitMs = 0;
+            while (valid()) {
+                if (performance.now() - started >= 30000) {
+                    // A slow/unavailable link must not hold the whole editor
+                    // indefinitely. Keep the normal late-source recovery path.
+                    task.linkedHydrationTimedOut = true;
+                    break;
+                }
+                if (!pending()) {
+                    // Source mounts can queue texture/light/fog updates. Let
+                    // those paints settle before selecting a program topology.
+                    await waitForShaderWarmupFrame();
+                    await waitForShaderWarmupFrame();
+                    if (!pending()) break;
+                } else await waitForShaderWarmupFrame();
+            }
+            task.linkedHydrationWaitMs = Math.max(0, performance.now() - started);
+            return valid();
+        },
+
         scheduleNextShaderWarmup() {
             if (this.shaderWarmupCurrentTask) return;
-            // Studio Render owns the GPU for its complete async session. Do not
-            // start a queued main-preview compiler job in a waitForFrame gap;
-            // the Studio renderer performs its own explicit warm-up instead.
-            if (window.LightManagerStudioRenderSession) return;
+            // Respect the recovery reservation too: a queued viewport compile
+            // can otherwise block IndexedDB completion before Studio claims its
+            // GPU session. Studio releases that reservation and resumes the queue.
+            if (window.LightManagerStudioRenderSession || window.StudioRender?.isRendering) return;
             const urgentPending = this.hasUrgentShaderWarmupTask();
             if (this.pendingShaderWarmupHandle !== null) {
                 if (
@@ -41975,7 +42419,7 @@ void main() {
                 // The idle/RAF handle may have been queued before Studio claimed
                 // ownership. Leave the queue intact; Studio release explicitly
                 // restarts the scheduler.
-                if (window.LightManagerStudioRenderSession) return;
+                if (window.LightManagerStudioRenderSession || window.StudioRender?.isRendering) return;
 
                 const urgentIndex = this.shaderWarmupQueue.findIndex(candidate =>
                     this.isShaderWarmupTaskUrgent(candidate)
@@ -42036,6 +42480,7 @@ void main() {
                         }
                         if (this.isUnloading || this.shaderWarmupCurrentTask !== task ||
                             preview !== this.getShaderWarmupPreview()) return false;
+                        if (!await this.waitForShaderWarmupSceneSources(preview, task)) return false;
                     }
                     if (task.type === 'scene') {
                         return this.compileCurrentSceneProgramsIncremental(preview, task, {
@@ -42124,6 +42569,8 @@ void main() {
                                 ? task.resourcePrimeBreakdown.map(item => ({ ...item }))
                                 : [],
                             liveSceneRealizationMs: Number(task.liveSceneRealizationMs) || 0,
+                            linkedHydrationWaitMs: Number(task.linkedHydrationWaitMs) || 0,
+                            linkedHydrationTimedOut: task.linkedHydrationTimedOut === true,
                     auxiliaryUnitTimings: Array.isArray(parallelStats.lastAuxiliaryUnitTimings)
                         ? parallelStats.lastAuxiliaryUnitTimings.map(item => ({ ...item }))
                         : [],
@@ -43565,8 +44012,39 @@ void main() {
             }
 
             this.setPreparedGeometryAttribute(geometry, 'autoTile', values, 1);
+            this.restoreLinkedTerrainTiling(geometry);
             geometry.attributes.autoTile.needsUpdate = true;
             return geometry.attributes.autoTile;
+        },
+
+        restoreLinkedTerrainTiling(geometry) {
+            if (!geometry.userData?.lightflowLinkedTerrain) return;
+            const repeat = geometry.getAttribute('bedrockGreedyRepeat');
+            const tile = geometry.getAttribute('bedrockTileUv');
+            const sizing = geometry.getAttribute('uvSize');
+            const tiling = geometry.getAttribute('autoTile');
+            if (!repeat || !tile || !sizing) return;
+            const index = geometry.index;
+            const sizes = new Float32Array(sizing.array);
+            const flags = tiling ? new Float32Array(tiling.array) : null;
+            for (const range of geometry.userData.saLogicalFaceRanges || []) {
+                const vertices = [];
+                for (let cursor = range.start; cursor < range.start + range.count; cursor++) vertices.push(index ? index.getX(cursor) : cursor);
+                if (!vertices.length || !vertices.every(vertex => repeat.getX(vertex) > 0.5)) continue;
+                const us = vertices.map(vertex => tile.getX(vertex));
+                const vs = vertices.map(vertex => tile.getY(vertex));
+                const width = Math.max(1e-6, Math.max(...us) - Math.min(...us));
+                const height = Math.max(1e-6, Math.max(...vs) - Math.min(...vs));
+                for (const vertex of vertices) {
+                    sizes[vertex * 2] = 1 / width;
+                    sizes[vertex * 2 + 1] = 1 / height;
+                    if (flags) flags[vertex] = 1;
+                }
+            }
+            // Use the common setter so Rendercraft's packed attributes stay in
+            // sync during material refresh and external transform updates too.
+            this.setPreparedGeometryAttribute(geometry, 'uvSize', sizes, 2);
+            if (flags) this.setPreparedGeometryAttribute(geometry, 'autoTile', flags, 1);
         },
 
         setPreparedGeometryAttribute(geometry, name, values, itemSize) {
@@ -43582,24 +44060,39 @@ void main() {
                 const [packedName, size, offset] = packed;
                 const count = values.length / itemSize;
                 let attribute = geometry.getAttribute(packedName);
+                let changed = false;
                 if (!attribute || attribute.count !== count) {
                     attribute = new THREE.BufferAttribute(new Float32Array(count * size), size);
                     geometry.setAttribute(packedName, attribute);
+                    changed = true;
                 }
                 for (let vertex = 0; vertex < count; vertex++) {
                     for (let component = 0; component < itemSize; component++) {
-                        attribute.array[vertex * size + offset + component] = values[vertex * itemSize + component];
+                        const index = vertex * size + offset + component;
+                        const value = values[vertex * itemSize + component];
+                        if (attribute.array[index] !== value) {
+                            attribute.array[index] = value;
+                            changed = true;
+                        }
                     }
                 }
-                attribute.needsUpdate = true;
+                if (changed) attribute.needsUpdate = true;
             }
             const previous = geometry.getAttribute(name);
             if (previous?.isBufferAttribute && !previous.isInterleavedBufferAttribute &&
                 previous.itemSize === itemSize && previous.normalized === false &&
                 previous.array?.constructor === values.constructor &&
                 previous.array.length === values.length) {
-                previous.array.set(values);
-                previous.needsUpdate = true;
+                let changed = false;
+                if (previous.array !== values) {
+                    for (let index = 0; index < values.length; index++) {
+                        if (previous.array[index] !== values[index]) { changed = true; break; }
+                    }
+                }
+                if (changed) {
+                    previous.array.set(values);
+                    previous.needsUpdate = true;
+                }
                 return previous;
             }
             // Three owns GPU buffers by attribute identity. Retire the old
@@ -43845,10 +44338,21 @@ void main() {
 
             const bevelJoinFaceData = new Float32Array(vertexCount);
             bevelJoinFaceData.fill(-1);
-            this.setPreparedGeometryAttribute(geometry, PromotionalBevelJoinManager.attributeName, bevelJoinFaceData, 1);
-
-            this.setPreparedGeometryAttribute(geometry, PromotionalBevelJoinManager.rampCenterAttributeName, new Float32Array(vertexCount * 3), 3);
-            this.setPreparedGeometryAttribute(geometry, PromotionalBevelJoinManager.rampHalfSizeAttributeName, new Float32Array(vertexCount * 3), 3);
+            // Atlas outputs survive an unchanged material/UV refresh. A real
+            // topology/position/face-UV change rebuilds and replaces them below.
+            if (geometry.getAttribute(PromotionalBevelJoinManager.attributeName)?.count !== vertexCount) {
+                this.setPreparedGeometryAttribute(geometry, PromotionalBevelJoinManager.attributeName, bevelJoinFaceData, 1);
+            } else {
+                // Recreate a missing packed companion without erasing atlas rows.
+                this.setPreparedGeometryAttribute(geometry, PromotionalBevelJoinManager.attributeName,
+                    geometry.getAttribute(PromotionalBevelJoinManager.attributeName).array, 1);
+            }
+            if (geometry.getAttribute(PromotionalBevelJoinManager.rampCenterAttributeName)?.count !== vertexCount) {
+                this.setPreparedGeometryAttribute(geometry, PromotionalBevelJoinManager.rampCenterAttributeName, new Float32Array(vertexCount * 3), 3);
+            }
+            if (geometry.getAttribute(PromotionalBevelJoinManager.rampHalfSizeAttributeName)?.count !== vertexCount) {
+                this.setPreparedGeometryAttribute(geometry, PromotionalBevelJoinManager.rampHalfSizeAttributeName, new Float32Array(vertexCount * 3), 3);
+            }
 
 
             const canonicalCubeUv = [0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 1, 1, 0, 0, 1, 0];
@@ -44308,6 +44812,7 @@ void main() {
 
             }
 
+            this.restoreLinkedTerrainTiling(geometry);
             const uvAttributeSignature = this.getNativeCubeUvAttributeSignature(cube);
             if (uvAttributeSignature !== null) {
                 this.uvAttributeSignatures.set(cube, uvAttributeSignature);
@@ -45190,12 +45695,17 @@ ${stochasticAlpha
                     vertexShader: baseVertexShader,
                     fragmentShader: baseFragmentShader
                 }) || null;
-                const targetVertexShader = injectLightflowMRTVertex(
+                let targetVertexShader = injectLightflowMRTVertex(
                     atmosphereSurfaceProgram?.vertexShader || baseVertexShader
                 );
-                const targetFragmentShader = decorateLightflowShadowFilters(injectLightflowMRTFragment(
+                let targetFragmentShader = decorateLightflowShadowFilters(injectLightflowMRTFragment(
                     atmosphereSurfaceProgram?.fragmentShader || baseFragmentShader
                 ));
+                if (mesh.geometry.getAttribute('bedrockBlockAo') && activeShader.id !== 'bedrock_structure_fancy_classic') {
+                    const terrainProgram = injectTerrainVertexAO(targetVertexShader,targetFragmentShader);
+                    targetVertexShader = terrainProgram.vertexShader;
+                    targetFragmentShader = terrainProgram.fragmentShader;
+                }
                 const activeShaderUsesLights = !!activeShader.enableShadows && isAffectedByLight(activeShader);
                 const materialRecipeKey = this.getMaterialRecipeKey(
                     activeShader,
@@ -45455,7 +45965,8 @@ ${stochasticAlpha
             const meshReceivesShadows = slotShaders.some(slotShader => (
                 slotShader && slotShader.enableShadows && isAffectedByLight(slotShader)
             ));
-            mesh.castShadow = (cube[ELEMENT_CAST_SHADOW_PROP] ?? mesh.userData?.lightflowSourceElement?.sa_cast_shadow) !== false;
+            mesh.castShadow = cube[ELEMENT_CAST_SHADOW_PROP] !== false &&
+                mesh.userData?.lightflowSourceElement?.sa_cast_shadow !== false;
             mesh.receiveShadow = meshReceivesShadows;
 
             const firstSourceState = sourceStates.filter(Boolean).sort((left, right) => {
@@ -45907,6 +46418,7 @@ ${stochasticAlpha
         updateAllUniforms(cause = 'default', options = {}) {
             const viewMode = this.getActiveViewMode();
             if (!this.shouldApplyShaderArchitectMaterials(viewMode)) return false;
+            const hadResolveMaterials = ScreenSpaceReflectionManager.hasActiveResolveMaterials?.() === true;
             if (options.invalidateRecipeSignatures !== false) {
                 this.invalidateMaterialRecipeSignatures();
             }
@@ -45916,6 +46428,7 @@ ${stochasticAlpha
             AmbientOcclusionManager.invalidateSceneCache();
             const updatedMaterials = new Set();
             const updatedAlphaStates = new Map();
+            let ssrActivityChanged = false;
 
             const cloneUniformValue = (value) => {
                 if (value && typeof value.clone === 'function') return value.clone();
@@ -45959,6 +46472,8 @@ ${stochasticAlpha
                             return;
                         }
                         updatedMaterials.add(mat);
+                        const wasResolveActive = mat.sa_uses_ssr_resolve_pass === true &&
+                            ScreenSpaceReflectionManager.materialIsActive(mat);
 
                         this.cleanupStaleShaderArchitectUniforms(mat, renderShader);
 
@@ -46035,6 +46550,8 @@ ${stochasticAlpha
                         this.syncNativePBRUniforms(mat, sourceState, renderShader, this.getFallbackTexture());
 
                         ScreenSpaceReflectionManager.configureMaterial(mat, renderShader);
+                        if (wasResolveActive !== (mat.sa_uses_ssr_resolve_pass === true &&
+                            ScreenSpaceReflectionManager.materialIsActive(mat))) ssrActivityChanged = true;
                         mat.uniformsNeedUpdate = true;
                     }
                 });
@@ -46052,7 +46569,22 @@ ${stochasticAlpha
 
             MinecraftPromotionalSilhouetteManager.invalidateGroups();
             PromotionalBevelJoinManager.bindTextureToMaterials();
+            // Capture invalidation alone retains the cached receiver list. Only
+            // rescan it when an edited material crosses the SSR activity boundary.
+            if (ssrActivityChanged) ScreenSpaceReflectionManager.invalidateMaterialCache();
             this.updateLightUniforms(`${cause}_light_sync`, { render: false });
+            if (!hadResolveMaterials && ScreenSpaceReflectionManager.hasActiveResolveMaterials?.() === true) {
+                // Inactive SSR is no longer speculatively compiled on scene load.
+                // Prepare its first actual use behind the existing barrier, also
+                // when a resident surface enables it through a uniform-only edit.
+                this.requestShaderWarmupWhenReady(`${cause}_ssr_activation`, {
+                    includePresets: false,
+                    blockVisiblePreview: true,
+                    renderAfter: true,
+                    partialSceneWarmup: targetElements.length > 0,
+                    targetElements
+                });
+            }
             this.requestPreviewRender();
             return true;
         },
@@ -47174,7 +47706,7 @@ ${stochasticAlpha
                 let h = Math.min(820, window.innerHeight - 48);
                 this.object.style.height = h + 'px';
                 if (this.content_vue) {
-                    if (window.innerWidth <= 800) this.content_vue.showLeftSidebar = false;
+                    if (this.content_vue.$el.clientWidth <= 800) this.content_vue.showLeftSidebar = false;
                     this.content_vue.setupEditorEvents();
                 }
             },
@@ -47308,6 +47840,9 @@ ${stochasticAlpha
                     }
                 },
                 methods: {
+                    categoryIcon(id) {
+                        return {appearance: 'lightflow:material', texture: 'texture', lighting: 'lightbulb', effects: 'auto_awesome'}[id];
+                    },
                     tweakSectionLabel(section) {
                         return tl(MATERIAL_UNIFORM_GROUPS[section.group]?.label || 'shader_architect.uniform_group.core') + ' · ' +
                             tl(MATERIAL_UNIFORM_SUBSECTIONS[section.subsection]?.label || 'shader_architect.uniform_section.general');
@@ -47390,7 +47925,7 @@ ${stochasticAlpha
                         if (!this.hasUniformOptions(uni)) return [];
                         return Object.entries(uni.options).map(([value, label]) => ({
                             value: parseInt(value, 10) || 0,
-                            label: String(label)
+                            label: tl(String(label))
                         }));
                     },
                     getUniformColorHex(uni) {
@@ -47519,7 +48054,7 @@ ${stochasticAlpha
                                 this.propertyCategory = this.propertyCategories.find(category => category.count)?.id || 'appearance';
                             }
                         });
-                        if (window.innerWidth <= 800) this.showLeftSidebar = false;
+                        if (this.$el?.clientWidth && this.$el.clientWidth <= 800) this.showLeftSidebar = false;
                         this.validationErrors = [];
                         this.validationComplete = false;
                         this.closeAutocomplete();
@@ -48751,6 +49286,14 @@ ${stochasticAlpha
                 },
                 mounted() {
                     this._lightflowNumbers = window.LightManagerUI?.controls?.mountNumberEditors?.(this.$el);
+                    // Dialog resize and interface zoom can settle after onOpen.
+                    let compactLayout = false;
+                    this._studioResize = new ResizeObserver(() => {
+                        const compact = this.$el.clientWidth <= 800;
+                        if (compact && !compactLayout) this.showLeftSidebar = false;
+                        compactLayout = compact;
+                    });
+                    this._studioResize.observe(this.$el);
                     this.setupEditorEvents();
                     this.debounceValidate();
 
@@ -48779,6 +49322,7 @@ ${stochasticAlpha
                 },
                 beforeDestroy() {
                     this._lightflowNumbers?.dispose(); this._lightflowNumbers = null;
+                    this._studioResize?.disconnect(); this._studioResize = null;
                     this.closeMaterialMenu();
                     if (this.validationTimeout) clearTimeout(this.validationTimeout);
                     this._validationGL?.getExtension('WEBGL_lose_context')?.loseContext();
@@ -48796,7 +49340,7 @@ ${stochasticAlpha
                     'vue-prism-editor': window.VuePrismEditor || VuePrismEditor
                 },
                 template: `
-                <div class="sa-studio-container">
+                <div class="sa-studio-container lf-controls">
                     <!-- Top toolbar / Header -->
                     <div class="sa-studio-header">
                         <div style="display: flex; align-items: center; gap: 8px; flex-grow: 1;">
@@ -48804,7 +49348,7 @@ ${stochasticAlpha
                                 <i class="material-icons">menu</i>
                             </button>
                             <div class="sa-editor-header" v-if="activeMat">
-                                <i class="material-icons">{{activeMat.icon}}</i>
+                                <dynamic-icon :icon="activeMat.icon" class="sa-material-icon"></dynamic-icon>
                                 <input v-model="activeMat.name" type="text" :disabled="!activeMat.isCustom" class="sa-material-name-input" :aria-label="tl('shader_architect.studio.material_name')">
                                 <button class="sa-studio-copy" @click="duplicateActiveMaterial()"><i class="material-icons">content_copy</i><span>{{tl('shader_architect.studio.make_copy')}}</span></button>
                                 <button class="sa-icon-btn" @click="openMaterialActions($event)" :title="tl('shader_architect.studio.actions')" :aria-label="tl('shader_architect.studio.actions')"><i class="material-icons">more_horiz</i></button>
@@ -48820,17 +49364,19 @@ ${stochasticAlpha
 
                         <!-- Left Sidebar: Materials Library -->
                         <div class="sa-studio-sidebar sa-left" :class="{collapsed: !showLeftSidebar}" style="padding: 12px 10px;">
-                            <button class="sa-left-btn" @click="createNewMaterial()"><i class="material-icons">add</i> {{ tl('shader_architect.ui.new_material') }}</button>
-                            <button class="sa-left-btn" @click="importMaterial()"><i class="material-icons">file_upload</i> {{ tl('shader_architect.ui.import_samat') }}</button>
+                            <div class="sa-library-actions">
+                                <button class="sa-left-btn" @click="createNewMaterial()"><i class="material-icons">add</i><span>{{ tl('shader_architect.ui.new_material') }}</span></button>
+                                <button class="sa-icon-btn" @click="importMaterial()" :title="tl('shader_architect.ui.import_samat')" :aria-label="tl('shader_architect.ui.import_samat')"><i class="material-icons">file_upload</i></button>
+                            </div>
                             <input class="dark_bordered sa-library-search" type="search" v-model="materialQuery" :placeholder="tl('shader_architect.studio.search_materials')" :aria-label="tl('shader_architect.studio.search_materials')">
-                            <div class="sa-library-filter">
-                                <button v-for="filter in ['all','custom','builtin']" :key="filter" @click="materialFilter=filter" :class="{active:materialFilter===filter}" :aria-pressed="materialFilter===filter">{{tl('shader_architect.studio.filter_'+filter)}}</button>
+                            <div class="sa-library-filter horizontal_select_widget light_manager_horizontal_select" data-presentation="inline">
+                                <button class="horizontal_select_btn" v-for="filter in ['all','custom','builtin']" :key="filter" @click="materialFilter=filter" :class="{selected:materialFilter===filter}" :aria-pressed="materialFilter===filter">{{tl('shader_architect.studio.filter_'+filter)}}</button>
                             </div>
                             <div class="sa-library-list" :aria-label="tl('shader_architect.ui.material_library')">
                                 <button v-for="(m, mid) in filteredMaterials" :key="mid" :data-studio-material="mid"
                                      class="sa-materiel-list-item" :class="{selected: selectedId === mid}" :aria-pressed="selectedId===mid"
                                      @click="selectMaterial(mid)" @keydown="libraryKey($event, mid)" :title="m.name">
-                                     <i class="material-icons">{{m.icon}}</i>
+                                     <dynamic-icon :icon="m.icon" class="sa-material-icon"></dynamic-icon>
                                      <span>{{m.name}}</span>
                                      <i v-if="!m.isCustom" class="material-icons sa-builtin-lock" :title="tl('shader_architect.ui.read_only')">lock</i>
                                 </button>
@@ -48842,15 +49388,15 @@ ${stochasticAlpha
                         <div class="sa-studio-main" v-if="activeMat" style="flex: 1; display: flex; flex-direction: column; min-height: 0; overflow: hidden;">
 
                             <!-- VSCode Style Tab Header Bar -->
-                                <div class="sa-vscode-tabs-row" style="flex-shrink: 0; z-index: 2;">
-                                    <button class="sa-vscode-tab" :class="{active: editingMode === 'appearance'}" @click="editingMode='appearance'"><i class="material-icons">tune</i>{{tl('shader_architect.studio.appearance')}}</button>
-                                    <button class="sa-vscode-tab" :class="{active: editingMode === 'vertex'}" @click="editingMode = 'vertex'">
+                                <div class="sa-vscode-tabs-row lf-tabs" data-presentation="flat" style="flex-shrink: 0; z-index: 2;">
+                                    <button class="sa-vscode-tab" :class="{active: editingMode === 'appearance', selected: editingMode === 'appearance'}" :aria-pressed="editingMode === 'appearance'" @click="editingMode='appearance'"><dynamic-icon icon="lightflow:material"></dynamic-icon>{{tl('shader_architect.studio.appearance')}}</button>
+                                    <button class="sa-vscode-tab" :class="{active: editingMode === 'vertex', selected: editingMode === 'vertex'}" :aria-pressed="editingMode === 'vertex'" @click="editingMode = 'vertex'">
                                         <i class="material-icons" style="font-size:1.15em; color: #8be9fd;">code</i> vertex.glsl
                                     </button>
-                                    <button class="sa-vscode-tab" :class="{active: editingMode === 'fragment'}" @click="editingMode = 'fragment'">
+                                    <button class="sa-vscode-tab" :class="{active: editingMode === 'fragment', selected: editingMode === 'fragment'}" :aria-pressed="editingMode === 'fragment'" @click="editingMode = 'fragment'">
                                         <i class="material-icons" style="font-size:1.15em; color: #ffb86c;">code</i> fragment.glsl
                                     </button>
-                                    <button class="sa-vscode-tab" :class="{active: editingMode === 'uniforms'}" @click="editingMode = 'uniforms'">
+                                    <button class="sa-vscode-tab" :class="{active: editingMode === 'uniforms', selected: editingMode === 'uniforms'}" :aria-pressed="editingMode === 'uniforms'" @click="editingMode = 'uniforms'">
                                         <i class="material-icons" style="font-size:1.15em; color: #50fa7b;">settings</i> {{tl('shader_architect.studio.controls')}}
                                     </button>
 
@@ -48871,21 +49417,18 @@ ${stochasticAlpha
                         <!-- Right Sidebar: Properties and Active Uniforms Quick Tweaks -->
                         <div class="sa-studio-appearance sa-quick-tweaks" v-if="editingMode === 'appearance'">
                             <div v-if="activeMat">
+                                <div class="sa-appearance-toolbar">
                                 <div class="sa-property-tools">
                                     <input type="search" v-model="propertyQuery" class="dark_bordered" :placeholder="tl('shader_architect.studio.search_controls')" :aria-label="tl('shader_architect.studio.search_controls')">
                                     <label><input type="checkbox" v-model="showAdvancedTweaks"> {{ tl('shader_architect.ui.advanced') }}</label>
                                 </div>
-                                <nav class="sa-property-categories" :aria-label="tl('shader_architect.studio.appearance')">
-                                    <button v-for="category in propertyCategories" :key="category.id" :class="{active: propertyCategory === category.id && !propertyQuery}" @click="propertyCategory = category.id; propertyQuery = ''" :aria-pressed="propertyCategory === category.id && !propertyQuery" :disabled="!category.count">{{ tl(category.label) }} <small>{{category.count}}</small></button>
+                                <nav class="sa-property-categories horizontal_select_widget light_manager_horizontal_select" data-presentation="inline" :aria-label="tl('shader_architect.studio.appearance')">
+                                    <button class="horizontal_select_btn" v-for="category in propertyCategories" :key="category.id" :class="{selected: propertyCategory === category.id && !propertyQuery}" @click="propertyCategory = category.id; propertyQuery = ''" :aria-pressed="propertyCategory === category.id && !propertyQuery" :disabled="!category.count"><dynamic-icon :icon="categoryIcon(category.id)"></dynamic-icon><span>{{ tl(category.label) }}</span><small>{{category.count}}</small></button>
                                 </nav>
-                                <h3 class="sa-appearance-heading">
-                                    <i class="material-icons" style="color:var(--color-accent)">tune</i>
-                                    {{ tl('shader_architect.ui.quick_tweaks') }}
-                                </h3>
-
-                                <div style="font-size:0.85em; opacity:0.6; margin-bottom:12px;">
-                                    {{ tl('shader_architect.ui.quick_tweaks.desc') }}
                                 </div>
+
+
+
 
 
 
@@ -48895,10 +49438,9 @@ ${stochasticAlpha
 
                                 <details v-for="(section, sectionIndex) in tweakSections" :key="section.id" class="sa-tweak-section" :open="sectionIndex === 0 || !!propertyQuery">
                                 <summary>{{tweakSectionLabel(section)}} <small>{{Object.keys(section.entries).length}}</small></summary>
-                                <div v-for="(uni, key) in section.entries" :key="key" :data-studio-uniform="key" class="sa-uniform-row" :class="{'is-boolean': uni.type === 'bool'}" style="margin-bottom:10px; padding: 8px;">
+                                <div v-for="(uni, key) in section.entries" :key="key" :data-studio-uniform="key" class="sa-uniform-row" :class="{'is-boolean': uni.type === 'bool', 'is-vector': !isColorUniform(uni) && ['vec2','vec3','vec4'].includes(uni.type)}" style="margin-bottom:10px; padding: 8px;">
                                     <div style="font-weight:bold; font-size:0.9em; margin-bottom:4px; display:flex; justify-content:space-between; align-items:center;">
-                                        <span>{{ getUniformLabel(uni, key) || key }}</span>
-                                        <span class="sa-uniform-type" :title="key">{{ uni.type }}</span>
+                                        <span :title="key + ' · ' + uni.type">{{ getUniformLabel(uni, key) || key }}</span>
                                     </div>
 
                                     <!-- Float slider or input -->
@@ -49858,6 +50400,282 @@ ${stochasticAlpha
         );
     }
 
+    // Compact indicators follow native face selection while preserving the host's
+    // Element property handlers, UV selection and Undo operations.
+    function installElementWorkflowIndicators() {
+        const panel = window.Panels?.element;
+        if (!panel?.node) return {delete() {}};
+        const rows = new Set();
+        let frame = null, disposed = false;
+        const companion = (bar, kind) => {
+            let row = bar.nextElementSibling;
+            if (!row?.classList.contains('lightflow-element-' + kind)) {
+                row = document.createElement('div');
+                row.className = 'lightflow-element-state lightflow-element-' + kind;
+                bar.after(row); rows.add(row);
+            }
+            return row;
+        };
+        const update = () => {
+            frame = null; if (disposed) return;
+            for (const row of rows) if (!panel.node.contains(row)) rows.delete(row);
+            for (const type of ['cube', 'mesh', 'texture_mesh', 'billboard']) {
+                const elements = (Outliner.selected || []).filter(element => element.type === type);
+                const auto = document.getElementById(`${type}__${ELEMENT_AUTO_TILE_PROP}`);
+                const shadow = document.getElementById(`${type}__${ELEMENT_CAST_SHADOW_PROP}`);
+                if (auto) {
+                    const bar = auto.closest('.dialog_bar'), row = companion(bar, 'autotile');
+                    row.hidden = !elements.length || bar.style.display === 'none';
+                    if (elements.length) {
+                        const targets = elements.flatMap(element => {
+                            const selectedFaces = MaterialManager.getSelectedAutoTileFaceKeys(element);
+                            const keys = type === 'mesh' && selectedFaces.length ? Object.keys(element.faces || {}) : [];
+                            return selectedFaces.length ? selectedFaces.map(face => ({element,face,
+                                name:type === 'cube' ? tl('shader_architect.material_panel.face_scope.' + face)
+                                    : shaderArchitectInlineText('shader_architect.inline.face') + (keys.indexOf(face) + 1),
+                                enabled:MaterialManager.getElementAutoTile(element,face)
+                            })) : [{element,face:null,enabled:MaterialManager.getElementAutoTile(element)}];
+                        });
+                        const enabled = targets.every(target => target.enabled), mixed = targets.some(target => target.enabled !== targets[0].enabled);
+                        // The host can rebuild its checkbox after update_selection.
+                        // Synchronize its face-aware value in this owned layout frame.
+                        panel.form?.form_data?.[auto.id]?.setValue(enabled,false); auto.indeterminate = mixed;
+                        const faces = targets.filter(target => target.face);
+                        const scope = faces.length === 1 && targets.length === 1 ? faces[0].name
+                            : faces.length === targets.length ? `${faces.length} ` + shaderArchitectInlineText('shader_architect.inline.selected_faces')
+                                : faces.length ? shaderArchitectInlineText('shader_architect.inline.faces_and_elements')
+                                    : shaderArchitectInlineText(type === 'cube' || type === 'mesh'
+                                        ? 'shader_architect.inline.whole_element'
+                                        : 'shader_architect.inline.whole_surface');
+                        const status = mixed ? shaderArchitectInlineText('shader_architect.inline.mixed') : enabled ? shaderArchitectInlineText('shader_architect.inline.on') : shaderArchitectInlineText('shader_architect.inline.off');
+                        const value = scope + ' · ' + status;
+                        if (row.textContent !== value) row.textContent = value;
+                        row.title = shaderArchitectInlineText('shader_architect.inline.geometry_auto_tile') + ' · ' + scope + ' · ' + status;
+                        if (targets.length === 1 && faces.length) row.title += ' · ' + targets[0].element.name + ' [' + targets[0].face + ']';
+                    }
+                }
+                if (shadow) {
+                    const bar = shadow.closest('.dialog_bar'), row = companion(bar, 'shadow');
+                    row.hidden = !elements.length || bar.style.display === 'none';
+                    const count = elements.filter(element => element[ELEMENT_CAST_SHADOW_PROP] !== false).length;
+                    shadow.indeterminate = count > 0 && count < elements.length;
+                    const value = shaderArchitectInlineText('shader_architect.inline.whole_element') + ` · ${count}/${elements.length} ` + shaderArchitectInlineText('shader_architect.inline.cast_shadows');
+                    if (row.textContent !== value) row.textContent = value;
+                }
+            }
+        };
+        const schedule = () => {if (!disposed && frame === null) frame = requestAnimationFrame(update);};
+        const observer = new MutationObserver(schedule); observer.observe(panel.node, {childList: true, subtree: true});
+        const listeners = ['update_selection', 'select_mode', 'change_view_mode', 'undo', 'redo', 'finish_edit'].map(event => Blockbench.on(event,schedule));
+        const style = Blockbench.addCSS(`
+            #panel_element .lightflow-element-state { padding:0 6px 6px; color:var(--color-subtle_text); font-size:11px; line-height:1.4; }
+            #panel_element .lightflow-element-state[hidden] { display:none; }
+            #panel_element .lightflow-element-autotile { min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        `);
+        schedule();
+        return {delete() {disposed = true; if (frame !== null) cancelAnimationFrame(frame); observer.disconnect(); listeners.forEach(listener => listener.delete()); rows.forEach(row => row.remove()); style.delete();}};
+    }
+
+    function installPBRPaintWorkflow() {
+        if (!window.Painter || !window.TextureGroup || !window.InputForm || !Panels.textures?.node
+            || !['getTextureToEdit','scanCanvas','modifyCanvasSection','startPaintTool','stopPaintTool'].every(key => typeof Painter[key] === 'function')) return {delete() {}};
+        const definitions = {
+            color: {map: 'color', name: shaderArchitectInlineText('shader_architect.inline.color'), icon: 'palette', fill: [255,255,255]},
+            normal: {map: 'normal', name: shaderArchitectInlineText('shader_architect.inline.normal'), icon: 'landscape', fill: [128,128,255]},
+            height: {map: 'height', name: shaderArchitectInlineText('shader_architect.inline.height'), icon: 'terrain', fill: [128,128,128]},
+            metallic: {map: 'mer', index: 0, name: shaderArchitectInlineText('shader_architect.inline.metallic_r'), icon: 'lens', fill: [0,0,128]},
+            emissive: {map: 'mer', index: 1, name: shaderArchitectInlineText('shader_architect.inline.emission_g'), icon: 'lightbulb', fill: [0,0,128]},
+            roughness: {map: 'mer', index: 2, name: shaderArchitectInlineText('shader_architect.inline.roughness_b'), icon: 'grain', fill: [0,0,128]},
+            mer: {map: 'mer', name: 'MER · RGB', icon: 'texture', fill: [0,0,128]}
+        };
+        let channel = 'color', maskedTexture = '', chosenTexture = '', maskedStroke = '', savedColor = null, frame = null, disposed = false;
+        const groupOf = texture => {const group = texture?.getGroup?.(); return group?.is_material ? group : null;};
+        const mapIn = (group, key) => group?.getTextures().find(texture => texture.pbr_channel === key);
+        const baseTexture = () => Texture.selected || Texture.getDefault();
+        const restoreColor = () => {if (savedColor !== null) {ColorPanel.set(savedColor); savedColor = null;}};
+        const ensureMap = key => {
+            const base = baseTexture(); if (!base) return null;
+            const definition = definitions[key], existingGroup = groupOf(base);
+            const existing = mapIn(existingGroup, definition.map);
+            if (existing) return existing;
+            Undo.initEdit({textures: [base], texture_groups: existingGroup ? [existingGroup] : []});
+            const group = existingGroup || new TextureGroup({name: base.name.replace(/\.[^.]+$/, '') + ' PBR', is_material: true});
+            if (!existingGroup) {base.group = group.uuid; base.pbr_channel = 'color'; group.add();}
+            let texture = base;
+            if (definition.map !== 'color' || existingGroup) {
+                const canvas = document.createElement('canvas');
+                canvas.width = Math.max(1, base.width); canvas.height = Math.max(1, base.height);
+                const ctx = canvas.getContext('2d');
+                const configured = definition.map === 'mer' ? group.material_config?.mer_value
+                    : definition.map === 'color' ? group.material_config?.color_value : null;
+                const fill = Array.isArray(configured) ? configured : definition.fill;
+                ctx.fillStyle = `rgba(${fill.slice(0,3).join(',')},${(fill[3] ?? 255)/255})`; ctx.fillRect(0,0,canvas.width,canvas.height);
+                texture = new Texture({name: (mapIn(group,'color') || base).name.replace(/\.[^.]+$/, '') + '_' + definition.map + '.png',
+                    group: group.uuid, pbr_channel: definition.map, uv_width: base.uv_width, uv_height: base.uv_height, width: canvas.width, height: canvas.height}).fromDataURL(canvas.toDataURL()).add(false);
+            }
+            group.folded = false; group.updateMaterial();
+            Undo.finishEdit(shaderArchitectInlineText('shader_architect.inline.create_pbr_channel'), {textures: [...new Set([base,texture])], texture_groups: [group]});
+            return texture;
+        };
+        const choose = key => {
+            if (!definitions[key]) return;
+            const texture = ensureMap(key); if (!texture) return;
+            restoreColor(); channel = key; chosenTexture = texture.uuid; maskedTexture = Number.isInteger(definitions[key].index) ? texture.uuid : '';
+            texture.select(); UVEditor.vue.updateTexture();
+            if (maskedTexture) {savedColor = ColorPanel.get(); ColorPanel.set('#808080');}
+            form.setValues({channel}); schedule();
+        };
+        const form = new InputForm(LightManagerUI.prepareForm({
+            setup: {type: 'action_button', semantic_button: true, icon: 'texture', text: shaderArchitectInlineText('shader_architect.inline.set_up_pbr_channels'),
+                condition: () => !groupOf(Texture.selected), click: () => choose('color')},
+            channel: {type: 'enum_select', label: shaderArchitectInlineText('shader_architect.inline.paint_channel'), value: channel,
+                options: Object.fromEntries(Object.entries(definitions).map(([key,value]) => [key,{name:value.name,icon:value.icon}])),
+                condition: () => !!groupOf(Texture.selected)},
+            value: {type: 'combo_slider', full_track: false, label: shaderArchitectInlineText('shader_architect.inline.paint_value'), min: 0, max: 100, step: 1, value: 50,
+                condition: () => !!maskedTexture && maskedTexture === Texture.selected?.uuid}
+        }));
+        const formChange = form.on('change', ({result,changed_keys}) => {
+            if (changed_keys?.includes('channel')) choose(result.channel);
+            if (changed_keys?.includes('value')) {
+                const value = Math.round(Math.clamp(Number(result.value) || 0,0,100)*255/100);
+                ColorPanel.set(tinycolor({r:value,g:value,b:value}).toHexString());
+            }
+        });
+        const root = document.createElement('div'); root.className = 'lightflow-pbr-workflow';
+        const hint = document.createElement('div'); hint.className = 'lightflow-pbr-hint'; hint.setAttribute('role','status');
+        root.append(form.node,hint); Panels.textures.node.insertBefore(root, Panels.textures.node.querySelector('.panel_vue_wrapper'));
+        const update = () => {
+            frame = null; if (disposed) return;
+            root.hidden = !window.Project || !Modes?.paint || !Texture.selected;
+            const texture = Texture.selected, group = groupOf(texture);
+            if (maskedTexture && texture?.uuid !== maskedTexture) {maskedTexture = ''; restoreColor();}
+            if (group && !maskedTexture) {
+                const next = Object.keys(definitions).find(key => definitions[key].map === texture.pbr_channel && !Number.isInteger(definitions[key].index)) || 'color';
+                if (channel !== next) {channel = next; form.setValues({channel});}
+            }
+            form.update();
+            if (maskedTexture && !form.form_data.value.bar.contains(document.activeElement)) {
+                const color = tinycolor(ColorPanel.get()).toRgb(), index = definitions[channel]?.index;
+                if (Number.isInteger(index)) form.form_data.value.setValue(Math.round([color.r,color.g,color.b][index]/2.55),false);
+            }
+            const isolated = !!maskedTexture && texture?.uuid === maskedTexture;
+            const reading = Toolbox.selected?.id === 'color_picker';
+            const supported = reading || (['brush_tool','eraser'].includes(Toolbox.selected?.id) && !texture?.layers_enabled && !Toolbox.selected?.brush?.draw);
+            const message = !group ? shaderArchitectInlineText('shader_architect.inline.keep_the_assigned_color_texture_add_maps_as_you_need_t')
+                : isolated ? reading ? shaderArchitectInlineText('shader_architect.inline.sample_the_map_the_selected_mer_component_sets_the_pai') : supported ? shaderArchitectInlineText('shader_architect.inline.brush_edits_this_channel_the_other_mer_channels_are_pr')
+                    : shaderArchitectInlineText('shader_architect.inline.individual_mer_channels_brush_or_eraser_without_layers')
+                : definitions[channel].name + ' · ' + texture.name;
+            if (hint.textContent !== message) hint.textContent = message;
+            hint.classList.toggle('is-warning',isolated && !supported); root.title = message;
+        };
+        function schedule() {if (!disposed && frame === null) frame = requestAnimationFrame(update);}
+        // Native Painter only follows a group's selected map in Material view.
+        // Lightflow needs the same routing while keeping its own shading mode.
+        const nativeTextureToEdit = Painter.getTextureToEdit;
+        const textureToEdit = function (texture, ...args) {
+            if (Modes?.paint && texture && (ShaderEngine.getActiveViewMode() === 'lightflow' || chosenTexture === Texture.selected?.uuid)) {
+                const group = groupOf(texture);
+                if (group && group.getTextures().includes(Texture.selected)) return Texture.selected;
+            }
+            return nativeTextureToEdit.call(this, texture, ...args);
+        };
+        Painter.getTextureToEdit = textureToEdit;
+        const uv = window.UVEditor?.vue, nativeUVUpdate = uv?.updateTexture;
+        const updateUVTexture = typeof nativeUVUpdate === 'function' ? function (...args) {
+            const result = nativeUVUpdate.apply(this,args);
+            const texture = Painter.getTextureToEdit(this.texture);
+            if (Modes?.paint && texture && texture !== this.texture) {
+                this.texture = texture; this.layer = texture.selected_layer || null;
+                if (!UVEditor.isBoxUV() && UVEditor.auto_grid) UVEditor.grid = texture.width / UVEditor.getUVWidth();
+                UVEditor.updateSelectionOutline(); this.updateTextureCanvas();
+            }
+            return result;
+        } : null;
+        if (updateUVTexture) uv.updateTexture = updateUVTexture;
+        const maskIndex = () => Modes?.paint && Painter.current?.texture?.uuid === maskedTexture && maskedStroke === maskedTexture
+            && !Painter.current.texture.layers_enabled ? definitions[channel]?.index : undefined;
+        // Operate on the native brush's changed pixels, rather than copying the
+        // entire canvas per dab. Native clipping, pressure, symmetry and Undo run normally.
+        const isolate = (before, after, index) => {
+            if (!after) return after;
+            const result = before.slice();
+            result[index] = after[3] < before[3] ? Math.round(before[index] * after[3] / Math.max(1,before[3])) : after[index];
+            result[3] = before[3] || after[3];
+            return result;
+        };
+        const nativeScan = Painter.scanCanvas;
+        const scan = function (ctx,x,y,width,height,callback) {
+            const index = maskIndex(); if (!Number.isInteger(index)) return nativeScan.apply(this,arguments);
+            return nativeScan.call(this,ctx,x,y,width,height,(px,py,color) => {
+                const before = color.slice(); return isolate(before,callback(px,py,color),index);
+            });
+        };
+        Painter.scanCanvas = scan;
+        const nativeModify = Painter.modifyCanvasSection;
+        const modify = function (ctx,x,y,width,height,offset,callback) {
+            const index = maskIndex(); if (!Number.isInteger(index)) return nativeModify.apply(this,arguments);
+            return nativeModify.call(this,ctx,x,y,width,height,offset,write => callback((px,py,change) => write(px,py,color => {
+                const before = [color.r,color.g,color.b,color.a*255], after = change(color);
+                if (!after) return color;
+                const value = isolate(before,[after.r,after.g,after.b,after.a*255],index);
+                return {r:value[0],g:value[1],b:value[2],a:value[3]/255};
+            })));
+        };
+        Painter.modifyCanvasSection = modify;
+        const nativeStart = Painter.startPaintTool;
+        const start = function (texture,...args) {
+            if (texture?.uuid === maskedTexture && Toolbox.selected?.id !== 'color_picker' && (texture.layers_enabled || !['brush_tool','eraser'].includes(Toolbox.selected?.id) || Toolbox.selected?.brush?.draw)) {
+                Blockbench.showQuickMessage(shaderArchitectInlineText('shader_architect.inline.choose_mer_rgb_for_this_tool_or_layered_texture'),2500);
+                this.paint_stroke_canceled = true; return;
+            }
+            maskedStroke = texture?.uuid === maskedTexture && ['brush_tool','eraser'].includes(Toolbox.selected?.id) ? texture.uuid : '';
+            return nativeStart.call(this,texture,...args);
+        };
+        Painter.startPaintTool = start;
+        const nativeStop = Painter.stopPaintTool;
+        const stop = function (...args) {try {return nativeStop.apply(this,args);} finally {maskedStroke = '';}};
+        Painter.stopPaintTool = stop;
+        const textureSelection = Blockbench.on('select_texture', () => {uv?.updateTexture(); schedule();});
+        const unwatchColor = ColorPanel.panel?.vue?.$watch?.('main_color',schedule);
+        const listeners = ['add_texture','remove_texture','select_mode','select_project','select_tool','undo','redo','update_interface'].map(event => Blockbench.on(event,schedule));
+        const style = Blockbench.addCSS(`
+            .lightflow-pbr-workflow { flex:0 0 auto; min-width:0; padding:3px 6px 5px; border-bottom:1px solid var(--color-border); }
+            .lightflow-pbr-workflow[hidden] { display:none; }
+            .lightflow-pbr-workflow .form { display:flex; flex-wrap:wrap; align-items:center; gap:4px 6px; padding:0!important; margin:0!important; overflow:visible!important; }
+            .lightflow-pbr-workflow .dialog_bar { margin:0!important; padding:0!important; min-width:0; }
+            .lightflow-pbr-workflow .form_bar_channel { flex:1 1 120px; }
+            .lightflow-pbr-workflow .form_bar_setup { flex:1 1 100%; }
+            .lightflow-pbr-workflow .form_bar_value { flex:0 0 74px; }
+            .lightflow-pbr-workflow .form_bar_channel > label,
+            .lightflow-pbr-workflow .form_bar_value .combo_slider_label,
+            .lightflow-pbr-workflow .form_bar_value input[type=range] { display:none!important; }
+            .lightflow-pbr-workflow .form_bar_value .slider_input_combo { margin:0!important; min-width:0!important; width:74px!important; }
+            .lightflow-pbr-workflow .form_bar_value .numeric_input { width:74px!important; }
+            .lightflow-pbr-workflow .form_bar_value .numeric_input input { min-width:0; }
+            .lightflow-pbr-workflow .form_bar_value > .tool.widget { min-width:0; height:30px!important; }
+            .lightflow-pbr-hint:not(.is-warning) { position:absolute; width:1px; height:1px; padding:0; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+            .lightflow-pbr-hint.is-warning { padding-top:4px; }
+
+            .lightflow-pbr-workflow .light_manager_enum_select_input { min-width:0; flex:1 1 0; }
+            .lightflow-pbr-workflow .name_space_left { width:auto; flex:0 0 auto; padding-right:6px; }
+            .lightflow-pbr-hint { font-size:11px; line-height:1.35; color:var(--color-subtle_text); padding:3px 0; }
+        `);
+        const api = {choose, get channel() {return channel;}, get node() {return root;}};
+        publishWindowBinding('LightflowPBRPaint',api);
+        schedule();
+        return {delete() {
+            disposed = true; if (frame !== null) cancelAnimationFrame(frame); restoreColor();
+            textureSelection.delete(); unwatchColor?.(); listeners.forEach(listener => listener.delete()); formChange.delete(); form.delete(); root.remove(); style.delete();
+
+            if (Painter.getTextureToEdit === textureToEdit) Painter.getTextureToEdit = nativeTextureToEdit;
+            if (Painter.scanCanvas === scan) Painter.scanCanvas = nativeScan;
+            if (Painter.modifyCanvasSection === modify) Painter.modifyCanvasSection = nativeModify;
+            if (Painter.startPaintTool === start) Painter.startPaintTool = nativeStart;
+            if (Painter.stopPaintTool === stop) Painter.stopPaintTool = nativeStop;
+            if (updateUVTexture && uv.updateTexture === updateUVTexture) uv.updateTexture = nativeUVUpdate;
+        }};
+    }
+
     Plugin.register('shader_architect', {
         title: 'Shader Architect',
         icon: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABwAAAAcCAYAAAByDd+UAAAA3UlEQVR4AeyQIQsCMRiGXy7aBDWZZFZNgsVgMd0/EJs/QxCb+Ds02MyCyeJvEDGISYNBEE26g/s+dseCO7YLx8YettuO79n3BkI0v3kSIOfhhdYD50jv2x5UKuMjbEIvZ2F0sHpNQUzCC0zpfBbQEdUmEkI6dLlqhV1RhwlQRqNWhgpSQytM/WP1s5jC3brFKRWzQ25PbnyHMgS700dqN09ZTRvp4XSFCbIOz/PtARW+iDdaYXznZEkIh6UZTOmPQhDzzRI61JezsDrYIwvt5xv/QFIW0oHr1QutJ/wDAAD//1z4gAsAAAAGSURBVAMA8gTgCbqmVtYAAAAASUVORK5CYII=',
@@ -49896,6 +50714,8 @@ ${stochasticAlpha
                 return;
             }
             shaderArchitectRuntimeLoaded = true;
+            deletables.push(installElementWorkflowIndicators());
+            deletables.push(installPBRPaintWorkflow());
 
             LightflowFrameBudgetController.configureForRenderer(
                 window.Preview?.selected?.renderer || window.main_preview?.renderer || null
@@ -50081,6 +50901,13 @@ ${stochasticAlpha
             publishWindowBinding('LightflowAnimationRuntime', Object.freeze({
                 getFrameContext: () => LightflowAnimationRuntime.frameContext,
                 getSceneMotionEpoch: () => LightflowAnimationRuntime.sceneMotionEpoch,
+                markSceneMotion: () => {
+                    const epoch = ++LightflowAnimationRuntime.sceneMotionEpoch;
+                    AmbientOcclusionManager.invalidateMotion?.(epoch);
+                    ScreenSpaceReflectionManager.invalidateCapture?.();
+                    MinecraftPromotionalSilhouetteManager.invalidateMotion?.(epoch);
+                    return epoch;
+                },
                 markPlanDirty: () => LightflowAnimationRuntime.markPlanDirty(),
                 flush: event => LightflowAnimationRuntime.flush(event),
                 snapshot: () => LightflowAnimationRuntime.snapshot()
@@ -50530,7 +51357,7 @@ ${stochasticAlpha
             let openStudioAction = new Action('sa_open_studio', {
                 name: tl('shader_architect.menu.material_studio'),
                 description: tl('shader_architect.menu.material_studio.desc'),
-                icon: 'brush',
+                icon: 'lightflow:material_orbs',
                 category: 'view',
                 click() {
                     MaterialStudioDialog.show();
@@ -50923,6 +51750,8 @@ ${stochasticAlpha
                     width: 520,
                     confirmIndex: 0,
                     cancelIndex: 1,
+                    buttons:['dialog.confirm','dialog.cancel',tl('shader_architect.world.ao.reset')],
+                    onButton(index) {if(index===2){resetDialogValues();return false;}},
                     form: (window.LightManagerUI?.prepareForm || (form => form))({
                         enabled: {
                             type: 'custom_checkbox', label: 'shader_architect.world.ao',
@@ -50932,29 +51761,29 @@ ${stochasticAlpha
                             layout: 'space_between', animate: false
                         },
                         quality: {
-                            label: 'shader_architect.world.ao.quality', type: 'compact_select',
+                            label: 'shader_architect.world.ao.quality', type: 'horizontal_select', allow_empty:false, multi_select:false,
                             icon: 'high_quality', value: ao.quality,
                             show_value_text: true, expand: true,
                             options: {
                                 performance: {
-                                    name: tl('shader_architect.world.ao.quality.performance'),
+                                    name: tl('shader_architect.world.ao.quality.performance').split(' (')[0],
                                     icon: 'speed',
-                                    color: worldMarker(6, 'pastel', '#7BFFA3')
+                                    color: 'var(--color-text)'
                                 },
                                 adaptive: {
-                                    name: tl('shader_architect.world.ao.quality.adaptive'),
+                                    name: tl('shader_architect.world.ao.quality.adaptive').split(' (')[0],
                                     icon: 'auto_awesome',
-                                    color: worldMarker(0, 'pastel', '#A2EBFF')
+                                    color: 'var(--color-text)'
                                 },
                                 balanced: {
-                                    name: tl('shader_architect.world.ao.quality.balanced'),
+                                    name: tl('shader_architect.world.ao.quality.balanced').split(' (')[0],
                                     icon: 'balance',
-                                    color: worldMarker(1, 'pastel', '#FFF899')
+                                    color: 'var(--color-text)'
                                 },
                                 high: {
-                                    name: tl('shader_architect.world.ao.quality.high'),
+                                    name: tl('shader_architect.world.ao.quality.high').split(' (')[0],
                                     icon: 'high_quality',
-                                    color: worldMarker(4, 'pastel', '#C5A6E8')
+                                    color: 'var(--color-text)'
                                 }
                             }
                         },
@@ -50965,7 +51794,7 @@ ${stochasticAlpha
                         },
                         strength: {
                             label: 'shader_architect.world.ao.strength', type: 'combo_slider', density: 'compact',
-                            icon: 'opacity', color: worldMarker(4, 'pastel', '#C5A6E8'),
+                            icon: 'opacity', color: 'var(--color-text)',
                             value: ao.strength, resettable: true, reset_value: defaults.strength,
                             min: 0, max: 2, step: 0.01,
                             marks: [{value: 0, label: '0'}, {value: defaults.strength, label: tl('generic.default')}, {value: 2, label: '2'}],
@@ -50973,14 +51802,14 @@ ${stochasticAlpha
                         },
                         radius: {
                             label: 'shader_architect.world.ao.radius', type: 'combo_slider', density: 'compact',
-                            icon: 'radio_button_unchecked', color: worldMarker(0, 'pastel', '#A2EBFF'),
+                            icon: 'radio_button_unchecked', color: 'var(--color-text)',
                             value: ao.radius, resettable: true, reset_value: defaults.radius,
                             min: 0.05, max: 4, step: 0.01, full_track: false,
                             description: 'shader_architect.world.ao.radius.desc'
                         },
                         power: {
                             label: 'shader_architect.world.ao.power', type: 'combo_slider', density: 'compact',
-                            icon: 'contrast', color: worldMarker(8, 'pastel', '#FFA5D5'),
+                            icon: 'contrast', color: 'var(--color-text)',
                             value: ao.power, resettable: true, reset_value: defaults.power,
                             min: 0.25, max: 4, step: 0.05, full_track: false,
                             description: 'shader_architect.world.ao.power.desc'
@@ -50992,16 +51821,10 @@ ${stochasticAlpha
                         },
                         bias: {
                             label: 'shader_architect.world.ao.bias', type: 'combo_slider', density: 'compact',
-                            icon: 'center_focus_strong', color: worldMarker(2, 'pastel', '#F1BB75'),
+                            icon: 'center_focus_strong', color: 'var(--color-text)',
                             value: ao.bias, resettable: true, reset_value: defaults.bias,
                             min: 0, max: 0.2, step: 0.001, full_track: false,
                             description: 'shader_architect.world.ao.bias.desc'
-                        },
-                        reset_defaults: {
-                            type: 'action_button', text: tl('shader_architect.world.ao.reset'), semantic_button: true,
-                            description: 'shader_architect.world.ao.reset.desc',
-                            icon: 'restart_alt', color: 'var(--color-text)',
-                            click: resetDialogValues
                         },
                     }),
                     onFormChange: previewAO,
@@ -51288,6 +52111,17 @@ ${stochasticAlpha
                     padding-left: 2px !important;
                     padding-right: 14px !important;
                 }
+                .lightflow-workspace-enabled #left_bar > .panel_container[panel_id="global_renderer_properties"] { flex:0 0 auto!important; height:auto!important; min-height:0!important; }
+                #left_bar #panel_global_renderer_properties .world_values_row { flex-wrap:wrap!important; gap:2px; }
+                #left_bar #panel_global_renderer_properties .world_values_row > .dialog_bar { flex:1 1 100%!important; min-width:0!important; padding:0 2px!important; }
+                #left_bar #panel_global_renderer_properties .world_values_row .dialog_bar > .tool.widget { display:grid!important; grid-template-columns:18px minmax(0,1fr) 44px 16px!important; grid-template-rows:18px 26px; align-items:center; gap:4px!important; width:100%; min-width:0; height:48px!important; min-height:48px!important; padding:0!important; }
+                #left_bar #panel_global_renderer_properties .world_values_row .combo_slider_label { display:flex!important; grid-column:2 / 5; grid-row:1; margin:0!important; }
+                #left_bar #panel_global_renderer_properties .world_values_row .dialog_bar > .tool.widget > .material-icons:first-child { position:static!important; grid-column:1; width:18px; font-size:17px; margin:0!important; }
+                #left_bar #panel_global_renderer_properties .world_values_row .slider_input_combo { display:contents!important; }
+                #left_bar #panel_global_renderer_properties .world_values_row input[type="range"] { grid-column:1 / 3; grid-row:2; min-width:30px!important; height:26px!important; width:100%!important; }
+                #left_bar #panel_global_renderer_properties .world_values_row .numeric_input { grid-column:3; grid-row:2; width:44px!important; min-width:44px!important; flex:0 0 44px!important; }
+                #left_bar #panel_global_renderer_properties .world_values_row .numeric_input input { min-width:0!important; width:100%; }
+                #left_bar #panel_global_renderer_properties .world_values_row .dialog_bar > .tool.widget > .material-icons:last-child { grid-column:4; grid-row:2!important; width:16px; height:26px; margin:0!important; font-size:16px; }
             `);
             const syncProjectWorld = () => { applyProjectFOV(); syncWorldPanel(); };
             const worldSettingsListener = Blockbench.on('update_scene_shading', syncProjectWorld);

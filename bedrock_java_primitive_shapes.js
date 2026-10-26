@@ -134,6 +134,7 @@ function translateStates(name, bedrock = {}, originalName = name) {
         return item === true || item === 1 || item === 'true' || item === '1';
     };
     const values = {...bedrock};
+    if (originalName === 'snow_layer') values.layers = String(Math.max(1, Math.min(8, 1 + (Number(value('height')) || 0))));
     const direction = value('minecraft:cardinal_direction', 'cardinal_direction', 'facing');
     const legacyDirection = Number(value('direction'));
     // The four-valued Bedrock `direction` state is NOT universal. Doors use
@@ -305,6 +306,7 @@ class PrimitiveLibrary {
         // Keep the Bedrock block name on the resulting shape, but use the
         // matching authored Java model as a geometry/material reference.
         const bedrockToJava = {
+            snow: 'snow_block', snow_layer: 'snow',
             wooden_door: 'oak_door', trapdoor: 'oak_trapdoor', waterlily: 'lily_pad',
             powered_repeater: 'repeater', unpowered_repeater: 'repeater',
             powered_comparator: 'comparator', unpowered_comparator: 'comparator',

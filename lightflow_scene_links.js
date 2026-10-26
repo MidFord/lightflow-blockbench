@@ -1,4 +1,4 @@
-/* Lightflow Scene Links: data-only contract shared by the future viewport and Studio consumers. */
+/* Lightflow Scene Links: shared scene data and Desktop Blockbench integration. */
 (function (root, factory) {
     const api = factory();
     if (typeof module === 'object' && module.exports) module.exports = api;
@@ -12,8 +12,8 @@
     const vector = (value, fallback) => fallback.map((defaultValue, index) => finite(value?.[index], defaultValue));
     const plain = value => value && typeof value === 'object' && !Array.isArray(value);
 
-    // Resolve every base-map sample, including Shader Architect's materialUv,
-    // alpha and neighbor samples. Native vUv alone does not cover those shaders.
+    // Resolve base-map samples for shaders without their own atlas resolver.
+    // Shader Architect keeps its resolved material/neighbor UVs intact below.
     function patchTerrainMapSamples(source) {
         const samples = /\b(texture2D|texture)\s*\(\s*map\s*,/g;
         const edits = [];
@@ -80,9 +80,87 @@
             const drawCount=geometry.index?bufferLength(geometry.index):vertices;
             if(drawCount%3)throw new Error('Invalid terrain triangle count.');
             if(!Array.isArray(geometry.groups)||geometry.groups.some(group=>!Number.isInteger(group.start)||!Number.isInteger(group.count)||group.start<0||group.count<0||group.start+group.count>drawCount||!Number.isInteger(group.materialIndex)||group.materialIndex<0||group.materialIndex>=section.terrain_materials.length))throw new Error('Invalid terrain material groups.');
+            if(geometry.face_runs!==undefined){
+                if(!Array.isArray(geometry.face_runs)||!geometry.face_runs.length)throw new Error('Invalid terrain face runs.');
+                let cursor=0;
+                for(const run of geometry.face_runs){
+                    if(run.start!==cursor||![3,6].includes(run.faceSize)||!Number.isInteger(run.count)||run.count<run.faceSize||run.count%run.faceSize||
+                        !geometry.groups.some(group=>run.start>=group.start&&run.start+run.count<=group.start+group.count&&run.materialIndex===group.materialIndex)||
+                        (run.uvTextureSize!==undefined&&(!Array.isArray(run.uvTextureSize)||run.uvTextureSize.length!==2||!run.uvTextureSize.every(value=>Number.isFinite(value)&&value>0))))throw new Error('Invalid terrain face run layout.');
+                    cursor+=run.count;
+                }
+                if(cursor!==drawCount)throw new Error('Incomplete terrain face runs.');
+            }
             if(geometry.attributes.bedrockGreedyRepeat&&(!geometry.attributes.bedrockTileUv||!geometry.attributes.bedrockAtlasRect))throw new Error('Missing terrain atlas attributes.');
+            const clip=geometry.connected_clip;
+            if(clip){
+                const box=value=>Array.isArray(value)&&value.length===6&&value.every(Number.isFinite)&&value.slice(0,3).every((v,i)=>v<=value[i+3]);
+                if(clip.version!==1||!Number.isInteger(clip.resolution)||clip.resolution<64||clip.resolution>512||!Array.isArray(clip.faces)||clip.faces.length>drawCount/3||
+                    bufferLength({type:'Uint8Array',data:clip.data})!==clip.faces.length*clip.resolution*4||clip.faces.some(face=>
+                        !Array.isArray(face.vertices)||face.vertices.length<3||face.vertices.length>6||face.vertices.some(v=>!Number.isInteger(v)||v<0||v>=vertices)||
+                        !Number.isInteger(face.materialIndex)||face.materialIndex<0||face.materialIndex>=section.terrain_materials.length||!box(face.bounds)||!box(face.ramp)))throw new Error('Invalid terrain connected clip bake.');
+            }
         }
         return terrain.sections;
+    }
+
+    function terrainFaceRanges(data, drawCount) {
+        const ranges=[];
+        // Legacy snapshots have only groups. Each triangle is a safe UV domain
+        // there; new snapshots retain exact quads with far fewer serialized runs.
+        for(const run of data.face_runs||(data.groups?.length?data.groups:[{start:0,count:drawCount,materialIndex:0}])){
+            const size=run.faceSize||3;
+            for(let start=run.start;start<run.start+run.count;start+=size){
+                const {faceSize,...range}=run;
+                ranges.push({...range,start,count:size});
+            }
+        }
+        return ranges;
+    }
+
+    function createTerrainInstanceGeometry(source, THREE) {
+        const geometry=new THREE.BufferGeometry();
+        // Only derived shader streams depend on an instance's transform. Source
+        // positions, atlas UVs, AO and indices are immutable and share GPU buffers.
+        for(const [name,attribute] of Object.entries(source.attributes))geometry.setAttribute(name,attribute);
+        if(source.index)geometry.setIndex(source.index);
+        geometry.groups=source.groups.map(group=>({...group}));
+        geometry.boundingBox=source.boundingBox?.clone()||null;
+        geometry.boundingSphere=source.boundingSphere?.clone()||null;
+        geometry.userData={...source.userData};
+        const dispose=geometry.dispose;
+        geometry.dispose=function(){
+            // Three r129 retires attributes by identity on geometry.dispose().
+            // A shell may only retire its own streams; the source owns shared ones.
+            const shared=[];
+            for(const [name,attribute] of Object.entries(this.attributes))if(source.attributes[name]===attribute){shared.push([name,attribute]);this.deleteAttribute(name);}
+            const index=this.index===source.index?this.index:null;
+            if(index)this.setIndex(null);
+            try{dispose.call(this);}finally{
+                for(const [name,attribute] of shared)this.setAttribute(name,attribute);
+                if(index)this.setIndex(index);
+            }
+        };
+        return geometry;
+    }
+
+    function createTerrainBufferOwnerGeometry(sources, THREE) {
+        // An empty, zero-draw mesh registers this owner in every renderer used
+        // by the scene. Source templates themselves are never rendered. Without
+        // this owner their dispose events cannot retire shared WebGL buffers.
+        const owner=new THREE.BufferGeometry(),dispose=owner.dispose;
+        owner.setAttribute('position',new THREE.BufferAttribute(new Float32Array(0),3));
+        owner.dispose=function(){
+            const attributes=new Set();
+            for(const geometry of sources){
+                for(const attribute of Object.values(geometry.attributes))attributes.add(attribute);
+                if(geometry.index)attributes.add(geometry.index);
+            }
+            let index=0;
+            for(const attribute of attributes)this.setAttribute('terrain_owned_'+index++,attribute);
+            try{dispose.call(this);}finally{for(const name of Object.keys(this.attributes))this.deleteAttribute(name);}
+        };
+        return owner;
     }
 
     function inspectBBModel(input) {
@@ -454,22 +532,21 @@
         const resolved=resolveLinkReference(link,receiverPath,pathAPI);
         if(!resolved)return {status:'missing',path:null};
         if(typeof io?.readFile!=='function'||typeof hash!=='function') throw new Error('File and revision adapters are required.');
-        let bytes;
-        let actualPath=resolved;
-        let usedFallback=false;
-        try {bytes=await io.readFile(actualPath);}
-        catch(error) {
-            const fallback=link.absoluteFallback;
-            if(error?.code==='ENOENT'&&fallback&&pathAPI.normalize(fallback)!==pathAPI.normalize(actualPath)) {
-                actualPath=fallback;
-                usedFallback=true;
-                try {bytes=await io.readFile(actualPath);}
-                catch(fallbackError) {
-                    if(fallbackError?.code==='ENOENT')return {status:'missing',path:resolved};
-                    return {status:'read_error',path:actualPath,message:String(fallbackError?.message||fallbackError)};
-                }
-            } else if(error?.code==='ENOENT')return {status:'missing',path:resolved};
-            else return {status:'read_error',path:resolved,message:String(error?.message||error)};
+        let bytes,actualPath=resolved,usedFallback=false,readError;
+        const candidates=[resolved];
+        if(link.absoluteFallback&&canonicalPathKey(link.absoluteFallback,pathAPI)!==canonicalPathKey(resolved,pathAPI))candidates.push(link.absoluteFallback);
+        for(const candidate of candidates){
+            try{bytes=await io.readFile(candidate);actualPath=candidate;usedFallback=candidate!==resolved;break;}
+            catch(error){
+                // A stale relative path may be a directory or inaccessible while
+                // the original absolute source remains readable. Try both paths.
+                if(!readError||['ENOENT','ENOTDIR'].includes(readError.error?.code))readError={error,path:candidate};
+            }
+        }
+        if(bytes===undefined){
+            const error=readError?.error;
+            if(['ENOENT','ENOTDIR'].includes(error?.code))return {status:'missing',path:resolved};
+            return {status:'read_error',path:readError?.path||resolved,message:String(error?.message||error)};
         }
         const text=typeof bytes==='string'?bytes:new TextDecoder().decode(bytes);
         try {
@@ -501,7 +578,7 @@
         return walk(start);
     }
 
-    return {VERSION,patchTerrainMapSamples,terrainGridOffset,parseBBModel,terrainSections,inspectBBModel,sourceMaterialDefinitions,linkedMaterialDefinition,linkedTextureReferences,linkedTextureBindings,normalizePose,portablePathAPI,quaternionFromDegrees,resolveGroupPose,animationSupported,normalizeLinkedAnimations,sampleAnimationChannel,linkedAnimationTime,reconcilePoses,makeLinkReference,resolveLinkReference,sourceCacheKey,readLinkedSource,sourceDisplayStatus,detectReferenceCycle};
+    return {VERSION,patchTerrainMapSamples,terrainGridOffset,terrainFaceRanges,createTerrainInstanceGeometry,createTerrainBufferOwnerGeometry,parseBBModel,terrainSections,inspectBBModel,sourceMaterialDefinitions,linkedMaterialDefinition,linkedTextureReferences,linkedTextureBindings,normalizePose,portablePathAPI,quaternionFromDegrees,resolveGroupPose,animationSupported,normalizeLinkedAnimations,sampleAnimationChannel,linkedAnimationTime,reconcilePoses,makeLinkReference,resolveLinkReference,sourceCacheKey,readLinkedSource,sourceDisplayStatus,detectReferenceCycle};
 });
 
 if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
@@ -531,7 +608,143 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
             if(['lightflow_scene_link_picker','lightflow_scene_link_import'].includes(Dialog.open?.id))Dialog.open.delete();
             document.querySelectorAll('#lightflow_scene_link_picker,#lightflow_scene_link_import').forEach(node=>node.remove());
             owned.push({delete(){pickerDialog?.delete?.();importDialog?.delete?.();}});
-            const t=(en,es)=>String(window.settings?.language?.value||window.Language?.code||'en').startsWith('es')?es:en;
+            // UI copy stays local so this plugin can load independently.
+            const SCENE_LINK_UI_TEXT = {
+                "scene_animation": ["Scene animation","Animación de escena"],
+                "connected": ["Connected","Conectada"],
+                "changes_available": ["Changes available","Hay cambios"],
+                "updating": ["Updating…","Actualizando…"],
+                "source_missing": ["Source missing","Origen no encontrado"],
+                "incompatible_source": ["Incompatible source","Origen incompatible"],
+                "could_not_read_source": ["Could not read source","No se pudo leer el origen"],
+                "edit_these_keyframes_in_the_source_project": ["Edit these keyframes in the source project","Edita estos keyframes en el proyecto de origen"],
+                "open_source_project": ["Open source project","Abrir proyecto de origen"],
+                "source_animation_read_only": ["Source animation · read-only","Animación de origen · solo lectura"],
+                "source_keyframes_are_read_only": ["Source keyframes are read-only","Los keyframes del origen son de solo lectura"],
+                "linked_scene_timeline": ["Linked scene timeline","Timeline de escena vinculada"],
+                "choose_linked_animations": ["Choose linked animations","Elegir animaciones vinculadas"],
+                "select_linked_clip": ["Select linked clip","Seleccionar clip vinculado"],
+                "change_linked_playback_state": ["Change linked playback state","Cambiar estado de reproducción vinculada"],
+                "lock_linked_animation_pose": ["Lock linked animation pose","Fijar pose de animación vinculada"],
+                "original_pose": ["Original pose","Pose original"],
+                "unsupported": ["unsupported","incompatible"],
+                "offset_linked_clip": ["Offset linked clip","Desfasar clip vinculado"],
+                "start_at_timeline_cursor": ["Start at timeline cursor","Comenzar en el cursor del timeline"],
+                "edit_time_offset": ["Edit time offset…","Editar desfase de tiempo…"],
+                "time_offset_seconds": ["Time offset (seconds)","Desfase de tiempo (segundos)"],
+                "clip_time_timeline_offset_a_negative_offset_delays_its_start": ["Clip time = timeline + offset. A negative offset delays its start.","Tiempo del clip = timeline + desfase. Un valor negativo retrasa su inicio."],
+                "reset_offset": ["Reset offset","Restablecer desfase"],
+                "loop_animation": ["Loop animation","Repetir animación"],
+                "change_clip_loop": ["Change clip loop","Cambiar bucle del clip"],
+                "playback_state": ["Playback state","Estado de reproducción"],
+                "play": ["Play","Reproducir"],
+                "lock_current_pose": ["Lock current pose","Bloquear pose actual"],
+                "source_recovery_help": ["The linked project could not be read. Choose its current file, leave this instance empty, or keep the link to retry later.","No se pudo leer el proyecto vinculado. Elige su archivo actual, deja la instancia vacía o conserva el vínculo para intentarlo más tarde."],
+                "find_source_file": ["Find source…","Buscar origen…"],
+                "leave_source_empty": ["Leave empty","Dejar vacío"],
+                "retry_source_later": ["Later","Más tarde"],
+                "empty_linked_scene": ["Empty linked scene","Vaciar escena vinculada"],
+                "empty_source": ["Empty source","Origen vacío"],
+                "could_not_open_source_project": ["Could not open source project","No se pudo abrir el proyecto origen"],
+                "choose_another_project": ["Choose another project","Elige otro proyecto"],
+                "a_project_cannot_contain_a_linked_instance_of_itself": ["A project cannot contain a linked instance of itself.","Un proyecto no puede contener una instancia vinculada de sí mismo."],
+                "cannot_link_this_scene": ["Cannot link this scene","No se puede vincular esta escena"],
+                "no_supported_geometry": ["No supported geometry","Sin geometría compatible"],
+                "choose_a_project_with_cubes_meshes_or_billboards_effects_and_loc": ["Choose a project with cubes, meshes or billboards. Effects and locators are not imported.","Elige un proyecto con cubos, mallas o billboards. Los efectos y localizadores no se importan."],
+                "add_linked_scene": ["Add linked scene","Añadir escena vinculada"],
+                "link_a_scene": ["Link a scene","Vincular una escena"],
+                "choose_what_this_instance_includes_textures_follow_the_selected": ["Choose what this instance includes. Textures follow the selected geometry.","Elige qué incluye esta instancia. Las texturas acompañan a la geometría elegida."],
+                "instance_name": ["Instance name","Nombre de instancia"],
+                "geometry": ["Geometry","Geometría"],
+                "cubes_and_meshes_from_the_source_project": ["Cubes and meshes from the source project.","Cubos y mallas del proyecto de origen."],
+                "sprite_elements_from_the_source_project": ["Sprite elements from the source project.","Elementos sprite del proyecto de origen."],
+                "excluded_from_this_version": ["Excluded from this version: ","Se excluyen en esta versión: "],
+                "source_animations_available_in_the_instance_inspector_group_tran": ["source animations available in the instance inspector. Group transforms only; effect tracks are excluded.","animaciones del origen disponibles en el inspector de la instancia. Solo transformaciones de grupos; las pistas de efectos se excluyen."],
+                "source_material_overrides_are_preserved_receiver_overrides_take": ["Source material overrides are preserved. Receiver overrides take priority.","Se conservan los overrides del origen. Los overrides de esta instancia tienen prioridad."],
+                "select_geometry_or_billboards": ["Select geometry or billboards","Selecciona geometría o billboards"],
+                "blockbench_project": ["Blockbench project","Proyecto de Blockbench"],
+                "relink_scene": ["Relink scene","Revincular escena"],
+                "choose_a_3d_skin_model": ["Choose a 3D skin model.","Elige un modelo de skin 3D."],
+                "choose_a_skin_texture": ["Choose a skin texture.","Elige una textura de skin."],
+                "load_a_skin_texture_before_saving_this_project": ["Load a skin texture before saving this project.","Carga una textura de skin antes de guardar este proyecto."],
+                "save_the_skin_separately_from_the_current_scene": ["Save the skin separately from the current scene.","Guarda la skin en un archivo distinto de la escena actual."],
+                "linked_scene": ["Linked scene","Escena vinculada"],
+                "compose_with_a_linked_project": ["Compose with a linked project","Compón con un proyecto vinculado"],
+                "choose_a_blockbench_project_each_instance_has_its_own_position_a": ["Choose a Blockbench project. Each instance has its own position and pose; the model stays connected to its source.","Elige un proyecto de Blockbench. Cada instancia tiene posición y pose propias; el modelo sigue conectado a su origen."],
+                "choose_bbmodel": ["Choose .bbmodel…","Elegir .bbmodel…"],
+                "create_skin": ["Create skin…","Crear skin…"],
+                "find_a_project": ["Find a project","Buscar proyecto"],
+                "projects": ["projects","proyectos"],
+                "current_scene": ["Current scene","Escena actual"],
+                "open": ["Open","Abierto"],
+                "recent": ["Recent","Reciente"],
+                "no_matching_projects_choose_a_bbmodel_file_to_continue": ["No matching projects. Choose a .bbmodel file to continue.","No hay proyectos coincidentes. Elige un archivo .bbmodel para continuar."],
+                "choose_file": ["Choose file","Elegir archivo"],
+                "the_source_remains_editable_in_its_own_tab": ["The source remains editable in its own tab.","El origen se puede seguir editando en su propia pestaña."],
+                "close": ["Close","Cerrar"],
+                "apply_skin_pose": ["Apply skin pose","Aplicar pose de skin"],
+                "skin_pose": ["Skin pose","Pose de skin"],
+                "cannot_apply_pose": ["Cannot apply pose","No se puede aplicar la pose"],
+                "saved_poses": ["Saved poses","Poses guardadas"],
+                "restore_source_pose": ["Restore source pose","Restaurar pose del origen"],
+                "reset_local_pose": ["Reset local pose","Restablecer pose local"],
+                "instance_settings": ["Instance settings","Ajustes de instancia"],
+                "material_override": ["Material override","Sobrescribir material"],
+                "override_linked_material": ["Override linked material","Sobrescribir material vinculado"],
+                "inherit_material": ["Inherit material","Heredar material"],
+                "position": ["Position","Posición"],
+                "offset": ["Offset","Desplazamiento"],
+                "rotation": ["Rotation","Rotación"],
+                "scale": ["Scale","Escala"],
+                "scene_links": ["Scene Links","Escenas vinculadas"],
+                "source_unavailable": ["Source unavailable","Origen no disponible"],
+                "change_linked_animation_loop": ["Change linked animation loop","Cambiar repetición de animación vinculada"],
+                "edit_linked_transform": ["Edit linked transform","Editar transformación vinculada"],
+                "reset_linked_transform": ["Reset linked transform","Restablecer transformación vinculada"],
+                "change_pose_mode": ["Change pose mode","Cambiar modo de pose"],
+                "build_a_scene_with_linked_projects": ["Build a scene with linked projects","Compón una escena con proyectos vinculados"],
+                "choose_an_instance_in_the_outliner_to_place_it_or_open_a_group_t": ["Choose an instance in the Outliner to place it, or open a group to pose it.","Selecciona una instancia en el Outliner para colocarla, o abre un grupo para posarlo."],
+                "select_instance": ["Select instance","Seleccionar instancia"],
+                "reset_group_pose": ["Reset group pose","Restablecer pose del grupo"],
+                "groups": ["groups","grupos"],
+                "elements": ["elements","elementos"],
+                "textures": ["textures","texturas"],
+                "source_material_overrides_are_not_linked_yet": ["Source material overrides are not linked yet","Los materiales personalizados del origen aún no se vinculan"],
+                "textures_only": ["Textures only","Solo texturas"],
+                "read_the_latest_saved_source": ["Read the latest saved source","Leer la última versión guardada del origen"],
+                "update": ["Update","Actualizar"],
+                "edit_the_source_project": ["Edit the source project","Editar el proyecto origen"],
+                "open_2": ["Open","Abrir"],
+                "find_a_moved_source": ["Find a moved source","Buscar un origen movido"],
+                "find": ["Find","Buscar"],
+                "pose_this_group": ["Pose this group","Posar este grupo"],
+                "place_the_instance": ["Place the instance","Colocar la instancia"],
+                "posed": ["posed","con pose"],
+                "pose_mode": ["Pose mode","Modo de pose"],
+                "adds_to_the_source_pose_follows_later_source_edits": ["Adds to the source pose; follows later source edits.","Se suma a la pose original y sigue sus cambios."],
+                "additive": ["Additive","Aditiva"],
+                "keeps_fixed_values_if_the_source_pose_changes": ["Keeps fixed values if the source pose changes.","Conserva valores fijos si cambia la pose original."],
+                "absolute": ["Absolute","Absoluta"],
+                "reset": ["Reset","Restablecer"],
+                "linked_animation": ["Linked animation","Animación vinculada"],
+                "animations": ["animations","animaciones"],
+                "change_linked_clock": ["Change linked clock","Cambiar reloj vinculado"],
+                "offset_linked_animation": ["Offset linked animation","Desfasar animación vinculada"],
+                "change_linked_loop": ["Change linked loop","Cambiar repetición vinculada"],
+                "evaluated_clip_time": ["Evaluated clip time","Tiempo evaluado del clip"],
+                "animation_clock": ["Animation clock","Reloj de animación"],
+                "follow_the_native_timeline_plus_offset": ["Follow the native timeline plus Offset","Seguir el timeline nativo más Offset"],
+                "keep_the_pose_at_the_current_timeline_time": ["Keep the pose at the current timeline time","Conservar la pose en el instante actual del timeline"],
+                "clip_time_offset": ["Clip time offset","Desfase de tiempo del clip"],
+                "locked_pose": ["Locked pose","Pose bloqueada"],
+                "playing_click_to_lock": ["Playing — click to lock","Reproduciendo — clic para bloquear"],
+                "off_click_to_play": ["Off — click to play","Apagada — clic para reproducir"],
+                "links": ["Links","Vínculo"]
+            };
+            const t = key => {
+                const [en, es] = SCENE_LINK_UI_TEXT[key];
+                return String(window.Language?.code||window.settings?.language?.value||'en').startsWith('es') ? es : en;
+            };
             Language.addTranslations('en',{
                 'lightflow_links.name':'Scene instance', 'lightflow_links.pose':'Local pose',
                 'lightflow_links.add':'Linked scene…','lightflow_links.inspector':'Scene Links',
@@ -549,13 +762,10 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 const digest=await crypto.subtle.digest('SHA-256',bytes);
                 return [...new Uint8Array(digest)].map(byte=>byte.toString(16).padStart(2,'0')).join('');
             };
-            const readFile=path=>new Promise((resolve,reject)=>{
-                const ok=Blockbench.read([path],{errorbox:false,readtype:'text'},files=>{
-                    if(files?.[0]?.content!==undefined)resolve(files[0].content);
-                    else reject(Object.assign(new Error('Could not read source'),{code:'ENOENT'}));
-                });
-                if(ok===false)reject(Object.assign(new Error('Source unavailable'),{code:'ENOENT'}));
-            });
+            // Blockbench.read can log an error without invoking its callback.
+            // Native async reads always settle and retain ENOENT/EACCES for recovery.
+            const sourceFiles=require('fs').promises;
+            const readFile=path=>sourceFiles.readFile(path,'utf8');
             // Read the installed native preset without creating or selecting a project.
             let skinReadQueue=Promise.resolve();
             const skinSnapshots=new Map();
@@ -629,6 +839,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
             owned.push({delete(){skinSnapshots.clear();}});
             const readSource=async(element,force=false)=>{
                 const receiver=element._lightflowProject?.save_path||window.Project?.save_path||'';
+                if(!element.source_link)return {status:'empty',path:null};
                 let link;
                 try{link=JSON.parse(element.source_link||'{}');}catch(_){return {status:'incompatible'};}
                 const key=core.sourceCacheKey(link,receiver,paths);
@@ -733,7 +944,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 createKeyframe(...args){
                     if(this.animation._lightflowSceneLinkClock){
                         delete this.animation._lightflowSceneLinkClock;
-                        this.animation.name=t('Scene animation','Animación de escena');
+                        this.animation.name=t("scene_animation");
                         this.animation.add(false);timelineCarriers.delete(Project);
                     }
                     return super.createKeyframe(...args);
@@ -746,7 +957,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 Type.prototype.size=function(axis){
                     if(!this.mesh)return axis===undefined?[1,1,1]:1;
                     this.mesh.updateWorldMatrix(true,true);const inverse=new THREE.Matrix4().copy(this.mesh.matrixWorld).invert(),box=new THREE.Box3();
-                    this.mesh.traverseVisible(mesh=>{if(!mesh.isMesh||!mesh.geometry)return;if(!mesh.geometry.boundingBox)mesh.geometry.computeBoundingBox();box.union(mesh.geometry.boundingBox.clone().applyMatrix4(new THREE.Matrix4().copy(inverse).multiply(mesh.matrixWorld)));});
+                    this.mesh.traverseVisible(mesh=>{if(!mesh.isMesh||!mesh.geometry||mesh.userData.lightflowTerrainBufferOwner)return;if(!mesh.geometry.boundingBox)mesh.geometry.computeBoundingBox();box.union(mesh.geometry.boundingBox.clone().applyMatrix4(new THREE.Matrix4().copy(inverse).multiply(mesh.matrixWorld)));});
                     const size=box.isEmpty()?new THREE.Vector3(1,1,1):box.getSize(new THREE.Vector3());const values=size.toArray().map((value,index)=>Math.max(.001,value*Math.abs(this.scale[index])));
                     return axis===undefined?values:values[axis];
                 };
@@ -800,7 +1011,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
             const nativeEdit=window.TransformerModule?.modules.edit;
             if(nativeEdit){
                 const module=new TransformerModule('lightflow_link_rotate',{
-                    priority:2,condition:()=>!!Modes.edit&&Toolbox.selected.id==='rotate_tool'&&Outliner.selected.length>0&&Outliner.selected.every(node=>['lightflow_scene_instance','lightflow_pose_group'].includes(node.type)),
+                    priority:2,condition:()=>!!(Modes.edit||Modes.render)&&Toolbox.selected.id==='rotate_tool'&&Outliner.selected.length>0&&Outliner.selected.every(node=>['lightflow_scene_instance','lightflow_pose_group'].includes(node.type)),
                     updateGizmo:nativeEdit.updateGizmo,calculateOffset:nativeEdit.calculateOffset,onStart(context){this.lightflowRotationFrame=null;nativeEdit.onStart.call(this,context);},
                     onMove(context){
                         const difference=context.value-(this.initial_value||0),space=getEditTransformSpace();
@@ -882,7 +1093,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                     // Defend shader sources as well: inherited hooks from older
                     // material chains must not duplicate declarations or AO.
                     const needsAtlas=atlas&&!shader.vertexShader.includes('varying vec2 vLinkTile;');
-                    const needsAo=ao&&!shader.vertexShader.includes('varying float vLinkAo;');
+                    const needsAo=ao&&!shader.vertexShader.includes('SA_TERRAIN_VERTEX_AO')&&!shader.vertexShader.includes('varying float vLinkAo;');
                     const inject=(source,code)=>source.replace(/^(#version[^\n]*\n)?/,match=>match+code+'\n');
                     let vertex='',fragment='',assign='';
                     if(needsAtlas){
@@ -893,7 +1104,10 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                     if(needsAo){vertex+='attribute float bedrockBlockAo;\nvarying float vLinkAo;\n';fragment+='varying float vLinkAo;\n';assign+='vLinkAo=bedrockBlockAo;';}
                     shader.vertexShader=inject(shader.vertexShader,vertex).replace(/void\s+main\s*\(\s*\)\s*\{/,match=>match+assign);
                     shader.fragmentShader=inject(shader.fragmentShader,fragment);
-                    if(atlas){
+                    // Shader Architect resolves material UVs and neighbor offsets
+                    // itself. Replacing those samples with the interpolated tile
+                    // coordinate discards relief/alpha-bevel neighbor lookups.
+                    if(atlas&&!shader.fragmentShader.includes('lfResolveMaterialUvWithJacobian')){
                         if(shader.fragmentShader.includes('#include <map_fragment>'))shader.fragmentShader=shader.fragmentShader.replace('#include <map_fragment>',THREE.ShaderChunk.map_fragment);
                         shader.fragmentShader=core.patchTerrainMapSamples(shader.fragmentShader);
                     }
@@ -908,7 +1122,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
 
             const createRenderResources=result=>{
                 const existing=renderResources.get(result.cacheKey);
-                if(existing?.revision===result.revision)return existing;
+                if(existing?.revision===result.revision){result.model=existing.result.model;result.manifest=existing.result.manifest;return existing;}
                 const resources={result,revision:result.revision,textures:new Map(),materials:new Map(),cubes:new Map(),owned:new Set(),users:new Set(),retired:false,batchVersion:0,batchCache:null};
                 const terrain=core.terrainSections(result.model);
                 const referencedTextures=core.linkedTextureReferences(result.model);
@@ -1084,6 +1298,14 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                     for(const [name,attribute] of Object.entries(data.attributes))geometry.setAttribute(name,new THREE.BufferAttribute(decodeTerrainArray(attribute),attribute.itemSize,attribute.normalized===true));
                     if(data.index)geometry.setIndex(new THREE.BufferAttribute(decodeTerrainArray(data.index),1));
                     for(const group of data.groups||[])geometry.addGroup(group.start,group.count,group.materialIndex);
+                    // Preserve compact UV domains until a Lightflow material is
+                    // actually requested. Native atlas draws need no face objects.
+                    geometry.userData.lightflowLinkedTerrain=true;
+                    geometry.userData.lightflowTerrainFaceData={groups:data.groups,face_runs:data.face_runs};
+                    if(data.connected_clip){
+                        const clip=data.connected_clip,raw=atob(clip.data);
+                        geometry.userData.lightflowTerrainConnectedClip={...clip,data:Uint8Array.from(raw,char=>char.charCodeAt(0))};
+                    }
                     geometry.computeBoundingBox();geometry.computeBoundingSphere();resources.owned.add(geometry);
                     const materials=section.terrain_materials.map(record=>{
                         const texture=resources.textures.get(record.map)?.texture;
@@ -1097,22 +1319,61 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                         resources.materials.set(key,material);resources.owned.add(material);return material;
                     });
                     const mesh=new THREE.Mesh(geometry,materials.length===1?materials[0]:materials);
-                    mesh.castShadow=true;mesh.receiveShadow=true;mesh.userData.lightflowTerrainSection=true;
+                    mesh.castShadow=true;mesh.receiveShadow=true;mesh.frustumCulled=true;mesh.matrixAutoUpdate=false;
+                    mesh.userData.lightflowTerrainSection=true;mesh.userData.bedrockStructurePrebatched=true;
+                    mesh.userData.bedrockChunkLayer=Number(section.terrain_layer||0);
+                    mesh.userData.bedrockRenderLayer=section.terrain_render_layer||'opaque';
                     holder.matrix.fromArray(section.matrix);holder.matrix.decompose(holder.position,holder.quaternion,holder.scale);
                     holder.userData.lightflowTerrainCoordinates=true;
                     holder.visible=section.visibility!==false;holder.userData.lightflowKind='geometry';holder.add(mesh);
                     resources.cubes.set(section.uuid,holder);
                 }
+                if(terrain.length){
+                    resources.terrainNativeBytes=0;resources.terrainVertexCount=0;
+                    const geometries=[];
+                    for(const section of terrain){
+                        const mesh=resources.cubes.get(section.uuid).children[0],geometry=mesh.geometry;
+                        geometries.push(geometry);
+                        for(const attribute of Object.values(geometry.attributes))resources.terrainNativeBytes+=attribute.array.byteLength;
+                        resources.terrainNativeBytes+=geometry.index?.array.byteLength||0;
+                        resources.terrainVertexCount+=geometry.getAttribute('position').count;
+                    }
+                    const limit=Number(result.model.lightflow_terrain?.performance?.maxGeometryBytes);
+                    resources.terrainGeometryLimit=Number.isFinite(limit)&&limit>0?limit:384*1048576;
+                    resources.terrainBufferOwner=core.createTerrainBufferOwnerGeometry(geometries,THREE);
+                    resources.owned.add(resources.terrainBufferOwner);
+                }
                 if(existing){existing.retired=true;if(!existing.users.size)existing.owned.forEach(resource=>resource.dispose?.());}
                 renderResources.set(result.cacheKey,resources);
                 return resources;
             };
-            const clearMounted=element=>{
-                for(const mesh of mountedCubes.get(element)||[]){mesh.traverse(object=>{if(object.isMesh){window.ShaderEngine?.releaseMeshIntegration?.({mesh:object},object);if(object.userData.lightflowOwnedGeometry){object.geometry?.dispose();delete object.userData.lightflowOwnedGeometry;}}});mesh.parent?.remove(mesh);}
+            const terrainInstanceStates=new WeakMap();
+            const clearMounted=(element,preserveResources=false)=>{
+                let released=false;
+                for(const mesh of mountedCubes.get(element)||[]){mesh.traverse(object=>{if(object.isMesh){
+                    if(object.userData.lightflowTerrainBufferOwner)return;
+                    // Retire private GPU streams before Shader Architect removes
+                    // their attributes. Shared terrain streams belong to resources.
+                    const terrain=terrainInstanceStates.has(object);
+                    if(terrain&&object.userData.lightflowOwnedGeometry)object.geometry?.dispose();
+                    window.ShaderEngine?.releaseMeshIntegration?.({mesh:object},object,{deferCacheInvalidation:true});released=true;
+                    if(object.userData.lightflowOwnedGeometry){if(!terrain)object.geometry?.dispose();delete object.userData.lightflowOwnedGeometry;}
+                    terrainInstanceStates.delete(object);
+                }});mesh.parent?.remove(mesh);}
                 mountedCubes.delete(element);
                 const old=activeMounts.get(element);
-                if(old){old.users.delete(element);if(old.retired&&!old.users.size)old.owned.forEach(resource=>resource.dispose?.());}
+                if(old){
+                    old.users.delete(element);
+                    if(!old.users.size&&(old.retired||old.terrainVertexCount&&!preserveResources)){
+                        old.retired=true;
+                        old.owned.forEach(resource=>resource.dispose?.());
+                        const key=old.result.cacheKey;
+                        if(renderResources.get(key)===old)renderResources.delete(key);
+                        if(assetCache.get(key)?.revision===old.revision)assetCache.delete(key);
+                    }
+                }
                 activeMounts.delete(element);
+                if(released)window.ShaderEngine?.invalidateExternalMeshIntegrationCaches?.();
             };
             // Resolve receiver overrides without changing shared source materials or textures.
             const linkedMaterialId=node=>{
@@ -1147,18 +1408,56 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 linkedSourceSlotCache.set(mesh,slots);
                 return slots;
             };
+            const terrainBudget=()=>{
+                const sources=new Set();let nativeBytes=0,vertices=0,limit=Infinity;
+                for(const element of SceneInstanceElement.all){
+                    const resources=activeMounts.get(element);
+                    if(!resources)continue;
+                    if(element._lightflowProject!==Project||!resources.terrainVertexCount||element.include_geometry===false)continue;
+                    if(!sources.has(resources)){sources.add(resources);nativeBytes+=resources.terrainNativeBytes;}
+                    vertices+=resources.terrainVertexCount;limit=Math.min(limit,resources.terrainGeometryLimit);
+                }
+                return {nativeGeometryBytes:nativeBytes,estimatedDecoratedBytes:nativeBytes+vertices*256,maxGeometryBytes:limit};
+            };
+            const restoreTerrainInstance=(mesh,engine)=>{
+                const state=terrainInstanceStates.get(mesh);
+                if(!state)return;
+                if(state.integrated){
+                    mesh.geometry.dispose();engine?.releaseMeshIntegration?.({mesh},mesh,{deferCacheInvalidation:true});
+                    mesh.geometry=core.createTerrainInstanceGeometry(state.source,THREE);
+                    state.integrated=false;
+                    mesh.material=state.nativeMaterial;
+                    return true;
+                }
+                mesh.material=state.nativeMaterial;
+                return false;
+            };
             const applyLinkedMaterials=root=>{
                 const engine=window.ShaderEngine,manager=window.MaterialManager;
-                if(!engine||!manager)return;
+                const budget=terrainBudget(),lightflow=!!(engine&&manager&&Project?.view_mode==='lightflow');
+                let restored=false;
                 for(const holder of mountedCubes.get(root)||[])holder.traverse(mesh=>{
-                    if(!mesh.isMesh||mesh.userData.saOpaqueCoveragePass)return;
+                    if(!mesh.isMesh||mesh.userData.saOpaqueCoveragePass||mesh.userData.lightflowTerrainBufferOwner)return;
+                    if(mesh.userData.lightflowTerrainSection){
+                        const state=terrainInstanceStates.get(mesh);
+                        const allowed=budget.estimatedDecoratedBytes<=budget.maxGeometryBytes;
+                        root._lightflowTerrainStats={...budget,bridgeState:!lightflow?'native':!allowed?'native_geometry_budget':'lightflow'};
+                        if(!lightflow||!allowed){restored=restoreTerrainInstance(mesh,engine)||restored;return;}
+                        if(!state.source.userData.saLogicalFaceRanges){
+                            state.source.userData.saLogicalFaceRanges=core.terrainFaceRanges(state.source.userData.lightflowTerrainFaceData,state.source.index?.count||state.source.getAttribute('position').count);
+                        }
+                        mesh.geometry.userData.saLogicalFaceRanges=state.source.userData.saLogicalFaceRanges;
+                    }
+                    if(!engine||!manager)return;
                     const node=OutlinerNode.uuids[mesh.userData.lightflowPose]||root;
                     const id=linkedMaterialId(node);
                     mesh.userData.lightflowReceiverMaterialOverride=id;
                     const shader=manager.getRenderMaterial(id||engine.globalRenderMode||'classic');
-                    engine.applyToMesh({mesh,uuid:mesh.uuid},shader,{reuseUnchangedMaterial:true});
+                    const applied=engine.applyToMesh({mesh,uuid:mesh.uuid,sa_lighting_normal:mesh.userData.bedrockRenderLayer==='vegetation'?'up':'physical'},shader,{reuseUnchangedMaterial:true});
+                    if(mesh.userData.lightflowTerrainSection&&applied)terrainInstanceStates.get(mesh).integrated=true;
                     if(mesh.userData.lightflowTerrainSection)for(const material of [...(Array.isArray(mesh.material)?mesh.material:[mesh.material]),mesh.customDepthMaterial,mesh.customDistanceMaterial])installTerrainMaterialSupport(material,mesh.geometry);
                 });
+                if(restored)engine?.invalidateExternalMeshIntegrationCaches?.();
             };
             for(const Type of [SceneInstanceElement,ScenePoseElement])owned.push(new Property(Type,'string','lightflow_material_override',{default:''}));
             let linkedMaterialSignature='';
@@ -1196,6 +1495,20 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 return map;
             };
             let rigidBatchingEnabled=true;
+            const mountedInstanceStates=new WeakMap();
+            const mountOptionsKey=element=>[element.include_geometry!==false,element.include_billboards!==false,!!Format.centered_grid,rigidBatchingEnabled].join('|');
+            const rememberMountedInstance=element=>mountedInstanceStates.set(element,{mesh:element.mesh,options:mountOptionsKey(element)});
+            const canReuseMountedInstance=(element,result)=>{
+                const resources=activeMounts.get(element),state=mountedInstanceStates.get(element),mounted=mountedCubes.get(element);
+                if(!resources||resources.retired||resources.revision!==result.revision||resources.result.cacheKey!==result.cacheKey
+                    ||!state||state.mesh!==element.mesh||state.options!==mountOptionsKey(element)||!mounted)return false;
+                const poses=treeFor(element);
+                if(result.manifest.groups.some(group=>!poses.has(group.id)))return false;
+                return mounted.every(mesh=>{
+                    for(let current=mesh;current;current=current.parent)if(current===element.mesh)return true;
+                    return false;
+                });
+            };
             const generatedSurfaceAttributes=new Set([
                 'saSurfaceFlags','saFaceMetrics',
                 'normalizedFaceUv','uv_shadow_map','saLightingNormal','sa_bevel_join_face',
@@ -1213,6 +1526,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                     const meshes=[];holder.traverseVisible(object=>{if(object.isMesh)meshes.push(object);});
                     if(meshes.length!==1)continue;
                     const mesh=meshes[0],material=mesh.material;
+                    if(mesh.userData.bedrockStructurePrebatched)continue;
                     const alpha=material?.map?.userData;
                     if(Array.isArray(material)||!material?.visible||material.opacity!==1||material.transparent&&!(alpha?.lightflowOpaque||alpha?.lightflowCutout&&material.alphaTest>=.05))continue;
                     const key=[parentIds.get(id)||'',material.uuid,mesh.castShadow,mesh.receiveShadow,mesh.renderOrder,JSON.stringify(mesh.userData.lightflowSourceElement||{})].join('|');
@@ -1250,7 +1564,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
             const mountResult=(element,result)=>{
                 if(!element?.mesh||result.status!=='ready')return;
                 element._lightflowEulerOrder=window.Formats?.[result.manifest.format]?.euler_order||'ZYX';
-                clearMounted(element);
+                clearMounted(element,true);
                 const poses=synchronizeTree(element,result);
                 const resources=createRenderResources(result);
                 const mounted=[];
@@ -1266,7 +1580,14 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                         linkedSourceResources.set(object,resources);
                         // Shader face dimensions and join attributes depend on
                         // this instance's transform; never mutate a shared template.
-                        if(object.geometry){object.geometry=object.geometry.clone();object.userData.lightflowOwnedGeometry=true;}
+                        if(object.geometry){
+                            const source=object.geometry;
+                            if(object.userData.lightflowTerrainSection){
+                                object.geometry=core.createTerrainInstanceGeometry(source,THREE);
+                                terrainInstanceStates.set(object,{source,nativeMaterial:object.material,integrated:false});
+                            }else object.geometry=source.clone();
+                            object.userData.lightflowOwnedGeometry=true;
+                        }
                         if(object.userData.lightflowBillboard)object.onBeforeRender=(_renderer,_scene,camera)=>{
                             const mode=object.userData.lightflowBillboard,target=camera.getWorldPosition(new THREE.Vector3());
                             if(mode.endsWith('_y'))target.y=object.getWorldPosition(new THREE.Vector3()).y;
@@ -1279,9 +1600,19 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                     mounted.push(mesh);
                 }
                 mountedCubes.set(element,mounted);
+                if(resources.terrainBufferOwner&&element.include_geometry!==false){
+                    const owner=new THREE.Mesh(resources.terrainBufferOwner,[]);
+                    owner.name='Terrain shared buffer owner';owner.frustumCulled=false;owner.matrixAutoUpdate=false;
+                    owner.raycast=()=>{};
+                    owner.userData.lightflowTerrainBufferOwner=true;owner.userData.bedrockStructurePrebatched=true;
+                    element.mesh.add(owner);mounted.push(owner);
+                }
                 resources.users.add(element);
                 activeMounts.set(element,resources);
-                applyLinkedMaterials(element);
+                rememberMountedInstance(element);
+                // A second linked world shares source streams but needs its own
+                // derived streams. Preflight the whole scene before decorating it.
+                refreshLinkedMaterials();
                 window.ShaderEngine?.refreshExternalMeshTransforms?.(element.mesh);
                 element._lightflowManifest=result.manifest;
                 element._lightflowAnimations=core.normalizeLinkedAnimations(result.model,window.invertMolang);
@@ -1299,18 +1630,98 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 window.ShaderEngine?.requestPreviewRender?.({cause:'scene_link_mount'});
                 syncPanel();
             };
+            // One native recovery dialog at a time; repeated hydration and linked
+            // copies of the same source share a prompt. Dismissing keeps the link.
+            const sourceRecoveryQueue=[],sourceRecoverySeen=new WeakMap();
+            let sourceRecoveryTimer=null,sourceRecoveryDialog=null;
+            const recoveryTargets=entry=>[...entry.targets].filter(([element,reference])=>
+                !disposed&&entry.project===window.Project&&element.mesh?.parent&&element.source_link===reference&&
+                ['missing','read_error'].includes(element._lightflowStatus)).map(([element])=>element);
+            const scheduleSourceRecovery=()=>{
+                if(disposed||sourceRecoveryDialog||sourceRecoveryTimer!==null||!sourceRecoveryQueue.length)return;
+                sourceRecoveryTimer=setTimeout(()=>{
+                    sourceRecoveryTimer=null;
+                    if(disposed)return;
+                    if(sourceRecoveryDialog||Dialog.open){scheduleSourceRecovery();return;}
+                    let entry,targets;
+                    do{entry=sourceRecoveryQueue.shift();targets=entry?recoveryTargets(entry):[];}while(entry&&!targets.length);
+                    if(!entry)return;
+                    targets.forEach(element=>sourceRecoverySeen.set(element,element.source_link));
+                    const finish=()=>{sourceRecoveryDialog?.delete();sourceRecoveryDialog=null;scheduleSourceRecovery();};
+                    sourceRecoveryDialog=new Dialog('lightflow_scene_link_recovery',{
+                        title:t('source_unavailable'),width:560,
+                        form:{
+                            explanation:{type:'info',text:t('source_recovery_help')},
+                            instances:{type:'text',label:t('instance_name'),value:targets.map(element=>element.name||element.uuid||'').join(', '),readonly:true},
+                            source:{type:'text',label:t('linked_scene'),value:entry.path||'',readonly:true},
+                            detail:{type:'text',label:t('could_not_read_source'),value:entry.message||statusText({_lightflowStatus:entry.status}),readonly:true}
+                        },
+                        buttons:[t('find_source_file'),t('leave_source_empty'),t('retry_source_later')],confirmIndex:0,cancelIndex:2,
+                        onButton(index){
+                            const current=recoveryTargets(entry);
+                            finish();
+                            if(index===0&&current.length)chooseSource(current);
+                            if(index===1&&current.length){
+                                Undo.initEdit({elements:current});
+                                for(const element of current){
+                                    element.extend({source_link:'',source_revision:''});
+                                    element._lightflowRequest=(element._lightflowRequest||0)+1;
+                                    element._lightflowPlaying=false;
+                                    clearMounted(element);
+                                    delete element._lightflowManifest;delete element._lightflowAnimations;
+                                    element._lightflowStatus='empty';
+                                }
+                                Undo.finishEdit(t('empty_linked_scene'));
+                                syncPanel();window.ShaderEngine?.requestPreviewRender?.({cause:'scene_link_empty'});
+                            }
+                            return false;
+                        },
+                        onCancel(){finish();}
+                    });
+                    sourceRecoveryDialog.show();
+                },250);
+            };
+            const queueSourceRecovery=(element,result,force)=>{
+                if(!force&&sourceRecoverySeen.get(element)===element.source_link)return;
+                const project=element._lightflowProject||window.Project;
+                let entry=sourceRecoveryQueue.find(item=>item.project===project&&item.path===result.path);
+                if(!entry){entry={...result,project,targets:new Map()};sourceRecoveryQueue.push(entry);}
+                entry.targets.set(element,element.source_link);
+                scheduleSourceRecovery();
+            };
+            owned.push({delete(){
+                if(sourceRecoveryTimer!==null)clearTimeout(sourceRecoveryTimer);
+                sourceRecoveryTimer=null;sourceRecoveryQueue.length=0;
+                sourceRecoveryDialog?.delete();sourceRecoveryDialog=null;
+            }});
             const refreshInstance=async(element,force=false)=>{
                 if(disposed||!element||element.type!=='lightflow_scene_instance')return;
+                const project=element._lightflowProject||window.Project;
                 const current=(element._lightflowRequest||0)+1;element._lightflowRequest=current;
                 element._lightflowStatus='updating';syncPanel();
                 const result=await readSource(element,force);
-                if(disposed||element._lightflowRequest!==current||!element.mesh?.parent)return;
+                if(disposed||element._lightflowRequest!==current||!element.mesh?.parent||project!==window.Project)return;
                 element._lightflowStatus=result.status;
                 if(result.status==='ready'){
+                    sourceRecoverySeen.delete(element);
                     element._lightflowManifest=result.manifest;
+                    // Source files are still checked on project selection. An
+                    // unchanged resident mount keeps its geometry and GPU programs.
+                    if(!force&&canReuseMountedInstance(element,result)){
+                        element.source_revision=result.revision;
+                        applyLinkedMaterials(element);
+                        updateAnimatedTree(element);
+                        window.ShaderEngine?.requestPreviewRender?.({cause:'scene_link_resume'});
+                        syncPanel();
+                        return;
+                    }
                     mountResult(element,result);
                 }
-                else syncPanel();
+                else {
+                    if(result.status==='empty'){clearMounted(element);element._lightflowPlaying=false;}
+                    if(['missing','read_error'].includes(result.status))queueSourceRecovery(element,result,force);
+                    syncPanel();
+                }
             };
 
             const selected=()=>Outliner.selected.find(node=>node?.type==='lightflow_scene_instance'||node?.type==='lightflow_pose_group');
@@ -1328,7 +1739,8 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
             const selectionEdges=new THREE.Group();
             selectionEdges.name='lightflow_scene_link_edges';
             let edgeSignature='';
-            const clearSelectionEdges=()=>{for(const edge of [...selectionEdges.children]){edge.geometry.dispose();edge.material.dispose();selectionEdges.remove(edge);}};
+            const terrainSelectionEdges=new WeakMap();
+            const clearSelectionEdges=()=>{for(const edge of [...selectionEdges.children]){if(!edge.userData.sharedTerrainGeometry)edge.geometry.dispose();edge.material.dispose();selectionEdges.remove(edge);}};
             updateOutline=()=>{
                 const element=selected();
                 let visible=!!element?.mesh;for(let node=element?.mesh;node;node=node.parent)if(!node.visible)visible=false;
@@ -1338,7 +1750,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 if(selectionEdges.parent!==Canvas.outlines||!Canvas.outlines?.children.includes(selectionEdges))Canvas.outlines?.add(selectionEdges);
                 if(Canvas.outlines)Canvas.outlines.visible=true;
                 element.mesh.updateWorldMatrix(true,true);
-                const meshes=[];element.mesh.traverseVisible(mesh=>{if(mesh.isMesh&&mesh.geometry)meshes.push(mesh);});
+                const meshes=[];element.mesh.traverseVisible(mesh=>{if(mesh.isMesh&&mesh.geometry&&!mesh.userData.lightflowTerrainBufferOwner)meshes.push(mesh);});
                 selectionBox.makeEmpty();for(const mesh of meshes){if(!mesh.geometry.boundingBox)mesh.geometry.computeBoundingBox();selectionBox.union(mesh.geometry.boundingBox.clone().applyMatrix4(mesh.matrixWorld));}
                 selectionOutline.visible=!selectionBox.isEmpty();
                 const root=rootOf(element);
@@ -1347,7 +1759,13 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 const signature=meshes.map(mesh=>mesh.uuid).join('|');
                 if(signature!==edgeSignature){
                     clearSelectionEdges();edgeSignature=signature;
-                    for(const mesh of meshes){const edge=new THREE.LineSegments(new THREE.EdgesGeometry(mesh.geometry),new THREE.LineBasicMaterial({color:marker?.pastel||0x5d9dff,depthTest:true,depthWrite:false,transparent:true,opacity:.8}));edge.matrixAutoUpdate=false;edge.userData.source=mesh;edge.raycast=()=>{};edge.renderOrder=2001;selectionEdges.add(edge);}
+                    for(const mesh of meshes){
+                        const source=terrainInstanceStates.get(mesh)?.source,resources=linkedSourceResources.get(mesh);
+                        let geometry=source&&terrainSelectionEdges.get(source);
+                        if(!geometry){geometry=new THREE.EdgesGeometry(source||mesh.geometry);if(source){terrainSelectionEdges.set(source,geometry);resources.owned.add(geometry);}}
+                        const edge=new THREE.LineSegments(geometry,new THREE.LineBasicMaterial({color:marker?.pastel||0x5d9dff,depthTest:true,depthWrite:false,transparent:true,opacity:.8}));
+                        edge.matrixAutoUpdate=false;edge.userData.source=mesh;edge.userData.sharedTerrainGeometry=!!source;edge.raycast=()=>{};edge.renderOrder=2001;selectionEdges.add(edge);
+                    }
                 }
                 selectionEdges.visible=meshes.length>0;
                 selectionEdges.updateWorldMatrix(true,false);
@@ -1357,7 +1775,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
             owned.push({delete(){clearSelectionEdges();selectionEdges.parent?.remove(selectionEdges);selectionOutline.parent?.remove(selectionOutline);selectionOutline.geometry.dispose();selectionOutline.material.dispose();}});
             const statusText=element=>{
                 const status=element?._lightflowStatus||'ready';
-                return ({ready:t('Connected','Conectada'),changed:t('Changes available','Hay cambios'),updating:t('Updating…','Actualizando…'),missing:t('Source missing','Origen no encontrado'),incompatible:t('Incompatible source','Origen incompatible'),read_error:t('Could not read source','No se pudo leer el origen')})[status]||status;
+                return ({ready:t("connected"),changed:t("changes_available"),updating:t("updating"),missing:t("source_missing"),empty:t('empty_source'),incompatible:t("incompatible_source"),read_error:t("could_not_read_source")})[status]||status;
             };
             const sourcePath=element=>{
                 const root=rootOf(element);
@@ -1381,8 +1799,8 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 getGroup(){return this.group;}
                 select(){return GeneralAnimator.prototype.select.call(this);}
                 doRender(){return false;}
-                createKeyframe(){Blockbench.showQuickMessage(t('Edit these keyframes in the source project','Edita estos keyframes en el proyecto de origen'));}
-                showContextMenu(event){new Menu([{name:t('Open source project','Abrir proyecto de origen'),icon:'open_in_new',click:()=>openSource(this.group)}]).open(event);}
+                createKeyframe(){Blockbench.showQuickMessage(t("edit_these_keyframes_in_the_source_project"));}
+                showContextMenu(event){new Menu([{name:t("open_source_project"),icon:'open_in_new',click:()=>openSource(this.group)}]).open(event);}
             }
             let sourceTrackSignature='';
             const showSourceKeyframes=node=>{
@@ -1403,15 +1821,15 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                     }
                     animator.expanded=true;animator.addToTimeline();
                 }
-                Vue.nextTick(()=>{if(disposed)return;for(const animator of Timeline.animators)if(animator._lightflowReadOnly){const row=document.querySelector('.animator[uuid="'+animator.uuid+'"]');row?.classList.add('lf-links-readonly-track');if(row)row.title=t('Source animation · read-only','Animación de origen · solo lectura');}});
+                Vue.nextTick(()=>{if(disposed)return;for(const animator of Timeline.animators)if(animator._lightflowReadOnly){const row=document.querySelector('.animator[uuid="'+animator.uuid+'"]');row?.classList.add('lf-links-readonly-track');if(row)row.title=t("source_animation_read_only");}});
             };
             owned.push({delete(){for(const animator of [...Timeline.animators])if(animator._lightflowReadOnly)Timeline.animators.remove(animator);}});
             const guardSourceKeyframe=event=>{
                 const element=event.target.closest?.('.keyframe[id]');if(!element)return;
                 const track=Timeline.animators.find(animator=>animator._lightflowReadOnly&&animator.keyframes.some(key=>key.uuid===element.id.replace(/^_/,'')));if(!track)return;
                 event.preventDefault();event.stopImmediatePropagation();
-                if(event.type==='contextmenu')new Menu([{name:t('Open source project','Abrir proyecto de origen'),icon:'open_in_new',click:()=>openSource(track.group)}]).open(event);
-                else if(event.type==='mousedown')Blockbench.showQuickMessage(t('Source keyframes are read-only','Los keyframes del origen son de solo lectura'));
+                if(event.type==='contextmenu')new Menu([{name:t("open_source_project"),icon:'open_in_new',click:()=>openSource(track.group)}]).open(event);
+                else if(event.type==='mousedown')Blockbench.showQuickMessage(t("source_keyframes_are_read_only"));
             };
             for(const type of ['pointerdown','mousedown','touchstart','contextmenu'])document.addEventListener(type,guardSourceKeyframe,true);
             owned.push({delete(){for(const type of ['pointerdown','mousedown','touchstart','contextmenu'])document.removeEventListener(type,guardSourceKeyframe,true);}});
@@ -1474,7 +1892,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 const roots=(Project.elements||[]).filter(e=>e.type==='lightflow_scene_instance');
                 const length=Math.max(.001,...roots.flatMap(root=>animationsFor(root).map(a=>(Number(a.length)||0)+Math.max(0,-((Number(root.animation_offset)||0)+(Number(layerFor(root,String(a.uuid||a.name))?.offset)||0))))));
                 let carrier=timelineCarriers.get(Project);
-                if(!carrier){carrier=new Animation({name:t('Linked scene timeline','Timeline de escena vinculada'),length,loop:'hold'});carrier._lightflowSceneLinkClock=true;timelineCarriers.set(Project,carrier);}
+                if(!carrier){carrier=new Animation({name:t("linked_scene_timeline"),length,loop:'hold'});carrier._lightflowSceneLinkClock=true;timelineCarriers.set(Project,carrier);}
                 carrier.length=length;
                 if(current!==carrier){if(current)current.selected=false;Animation.selected=carrier;carrier.selected=true;}
                 Timeline.vue.animation_length=length;Timeline.updateSize();
@@ -1505,7 +1923,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 delete root._lightflowTime;root._lightflowPlaying=false;
                 const layers=(root.animation_layers||[]).map(layer=>({...layer}));
                 next.forEach(id=>{if(!layers.some(layer=>layer.id===id))layers.push({id,locked:false,time:0});});
-                edit(root,{animation_ids:next,animation_id:next.includes(root.animation_id)?root.animation_id:next[0]||'',animation_layers:layers},t('Choose linked animations','Elegir animaciones vinculadas'));
+                edit(root,{animation_ids:next,animation_id:next.includes(root.animation_id)?root.animation_id:next[0]||'',animation_layers:layers},t("choose_linked_animations"));
                 ensureTimeline();updateAnimatedTree(root);
             };
             const setAnimation=(element,id)=>setAnimations(element,id?[id]:[]);
@@ -1514,7 +1932,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 const locked=(root.animation_layers||[]).filter(layer=>layer.locked&&animationIds(root).includes(layer.id)&&layer.id!==id);
                 const inactive=(root.animation_layers||[]).filter(layer=>!animationIds(root).includes(layer.id)&&layer.id!==id);
                 const existing=layerFor(root,id);
-                edit(root,{animation_id:id,animation_ids:[...locked.map(layer=>layer.id),id],animation_layers:[...inactive,...locked,existing||{id,locked:false,time:0}]},t('Select linked clip','Seleccionar clip vinculado'));
+                edit(root,{animation_id:id,animation_ids:[...locked.map(layer=>layer.id),id],animation_layers:[...inactive,...locked,existing||{id,locked:false,time:0}]},t("select_linked_clip"));
                 ensureTimeline();updateAnimatedTree(root);
             };
             const toggleAnimation=(element,id)=>{
@@ -1525,26 +1943,26 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 if(!active||existing?.locked&&root.animation_id===id){next.push(id);layers.push({...existing,id,locked:false,time:0});}
                 else if(!existing?.locked){next.push(id);layers.push({...existing,id,locked:true,time:timelineClock(root)});}
                 if(active&&existing?.locked&&root.animation_id!==id)layers.push({...existing,locked:false});
-                edit(root,{animation_ids:next,animation_layers:layers,...(!next.includes(root.animation_id)?{animation_id:next[0]||''}:{})},t('Change linked playback state','Cambiar estado de reproducción vinculada'));
+                edit(root,{animation_ids:next,animation_layers:layers,...(!next.includes(root.animation_id)?{animation_id:next[0]||''}:{})},t("change_linked_playback_state"));
                 ensureTimeline();updateAnimatedTree(root);
             };
             const setAnimationTime=(element,time)=>{
                 const root=rootOf(element);if(!root)return;
-                edit(root,{animation_locked:true,animation_time:Math.max(0,Number(time)||0)},t('Lock linked animation pose','Fijar pose de animación vinculada'));updateAnimatedTree(root);
+                edit(root,{animation_locked:true,animation_time:Math.max(0,Number(time)||0)},t("lock_linked_animation_pose"));updateAnimatedTree(root);
             };
             const setClipPlayback=(root,id,locked)=>{
                 const ids=animationIds(root),layers=(root.animation_layers||[]).filter(layer=>layer.id!==id);
                 layers.push({...layerFor(root,id),id,locked,time:locked?timelineClock(root):0});
-                edit(root,{animation_ids:ids.includes(id)?ids:[...ids,id],animation_layers:layers,animation_id:root.animation_id||id},t('Change linked playback state','Cambiar estado de reproducción vinculada'));
+                edit(root,{animation_ids:ids.includes(id)?ids:[...ids,id],animation_layers:layers,animation_id:root.animation_id||id},t("change_linked_playback_state"));
                 ensureTimeline();updateAnimatedTree(root);
             };
             const togglePlayback=()=>{ensureTimeline();if(Timeline.playing)Timeline.pause();else Timeline.start();};
             const showAnimationMenu=(root,anchor)=>{
                 if(!root)return;
                 const menu=new Menu(()=>[
-                    {name:t('Original pose','Pose original'),icon:animationIds(root).length?'radio_button_unchecked':'check_box',click:()=>setAnimations(root,[])},
+                    {name:t("original_pose"),icon:animationIds(root).length?'radio_button_unchecked':'check_box',click:()=>setAnimations(root,[])},
                     '_',...(root._lightflowManifest?.animations||[]).map(a=>({
-                        name:a.name+(a.supported?'':' · '+t('unsupported','incompatible')),
+                        name:a.name+(a.supported?'':' · '+t("unsupported")),
                         icon:animationIds(root).includes(a.id)?'check_box':'check_box_outline_blank',
                         condition:a.supported,click:()=>{const ids=animationIds(root);setAnimations(root,ids.includes(a.id)?ids.filter(id=>id!==a.id):[...ids,a.id]);}
                     }))
@@ -1556,30 +1974,30 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 const layers=(root.animation_layers||[]).map(layer=>({...layer}));
                 let layer=layers.find(item=>item.id===id);if(!layer){layer={id,locked:false,time:0};layers.push(layer);}
                 layer.offset=value-(Number(root.animation_offset)||0);
-                edit(root,{animation_layers:layers},t('Offset linked clip','Desfasar clip vinculado'));ensureTimeline();updateAnimatedTree(root);
+                edit(root,{animation_layers:layers},t("offset_linked_clip"));ensureTimeline();updateAnimatedTree(root);
             };
             const showClipMenu=(root,id,anchor)=>{
                 const clip=root?._lightflowManifest?.animations?.find(a=>a.id===id);if(!clip)return;
                 const totalOffset=()=>(Number(root.animation_offset)||0)+(Number(layerFor(root,id)?.offset)||0);
                 const menu=new Menu([
-                    {name:t('Start at timeline cursor','Comenzar en el cursor del timeline')+' · '+Timeline.time.toFixed(2)+' s',icon:'vertical_align_center',click:()=>setClipOffset(root,id,-Timeline.time)},
-                    {name:t('Edit time offset…','Editar desfase de tiempo…'),icon:'schedule',click:()=>{
+                    {name:t("start_at_timeline_cursor")+' · '+Timeline.time.toFixed(2)+' s',icon:'vertical_align_center',click:()=>setClipOffset(root,id,-Timeline.time)},
+                    {name:t("edit_time_offset"),icon:'schedule',click:()=>{
                         const dialog=new Dialog('lightflow_linked_clip_offset',{title:clip.name,width:440,form:(window.LightManagerUI?.prepareForm || (form => form))({
-                            offset:{label:t('Time offset (seconds)','Desfase de tiempo (segundos)'),type:'number',value:totalOffset(),step:.05},
-                            help:{type:'info',text:t('Clip time = timeline + offset. A negative offset delays its start.','Tiempo del clip = timeline + desfase. Un valor negativo retrasa su inicio.')}
+                            offset:{label:t("time_offset_seconds"),type:'number',value:totalOffset(),step:.05},
+                            help:{type:'info',text:t("clip_time_timeline_offset_a_negative_offset_delays_its_start")}
                         }),onConfirm(values){if(root._lightflowProject===Project)setClipOffset(root,id,values.offset);dialog.delete();}});
                         offsetDialog?.delete();offsetDialog=dialog;dialog.show();
                     }},
-                    {name:t('Reset offset','Restablecer desfase'),icon:'restart_alt',click:()=>setClipOffset(root,id,0)},
-                    {name:t('Loop animation','Repetir animación'),icon:(typeof layerFor(root,id)?.loop==='boolean'?layerFor(root,id).loop:root.animation_loop_override?root.animation_loop:root._lightflowAnimations?.find(a=>String(a.uuid||a.name)===id)?.loop==='loop')?'check_box':'check_box_outline_blank',click:()=>{
+                    {name:t("reset_offset"),icon:'restart_alt',click:()=>setClipOffset(root,id,0)},
+                    {name:t("loop_animation"),icon:(typeof layerFor(root,id)?.loop==='boolean'?layerFor(root,id).loop:root.animation_loop_override?root.animation_loop:root._lightflowAnimations?.find(a=>String(a.uuid||a.name)===id)?.loop==='loop')?'check_box':'check_box_outline_blank',click:()=>{
                         const source=root._lightflowAnimations?.find(a=>String(a.uuid||a.name)===id),existing=layerFor(root,id);
                         const looping=typeof existing?.loop==='boolean'?existing.loop:root.animation_loop_override?root.animation_loop:source?.loop==='loop';
                         const layers=(root.animation_layers||[]).filter(layer=>layer.id!==id).map(layer=>({...layer}));layers.push({...existing,id,loop:!looping});
-                        edit(root,{animation_layers:layers},t('Change clip loop','Cambiar bucle del clip'));updateAnimatedTree(root);
+                        edit(root,{animation_layers:layers},t("change_clip_loop"));updateAnimatedTree(root);
                     }},
-                    '_',{name:t('Playback state','Estado de reproducción'),icon:'play_circle',children:[
-                        {name:t('Play','Reproducir'),icon:'far.fa-play-circle',click:()=>setClipPlayback(root,id,false)},
-                        {name:t('Lock current pose','Bloquear pose actual'),icon:'fas.fa-lock',click:()=>setClipPlayback(root,id,true)}
+                    '_',{name:t("playback_state"),icon:'play_circle',children:[
+                        {name:t("play"),icon:'far.fa-play-circle',click:()=>setClipPlayback(root,id,false)},
+                        {name:t("lock_current_pose"),icon:'fas.fa-lock',click:()=>setClipPlayback(root,id,true)}
                     ]}
                 ]);
                 activeAnimationMenu?.hide();activeAnimationMenu=menu;menu.open(anchor);
@@ -1595,24 +2013,24 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 const existing=window.ModelProject?.all?.find(project=>paths.normalize(project.save_path||'')===paths.normalize(path));
                 if(existing){existing.select();return;}
                 try{const text=await readFile(path);Codecs.project.load(core.parseBBModel(text),{path});}
-                catch(error){Blockbench.showQuickMessage(t('Could not open source project','No se pudo abrir el proyecto origen'));}
+                catch(error){Blockbench.showQuickMessage(t("could_not_open_source_project"));}
             };
             const importPath=async(path,automatic=false)=>{
                 const targetProject=Project;
                 const receiver=Project?.save_path||'';
                 if(receiver&&paths.normalize(receiver).toLowerCase()===paths.normalize(path).toLowerCase()){
-                    Blockbench.showMessageBox({title:t('Choose another project','Elige otro proyecto'),message:t('A project cannot contain a linked instance of itself.','Un proyecto no puede contener una instancia vinculada de sí mismo.')});
+                    Blockbench.showMessageBox({title:t("choose_another_project"),message:t("a_project_cannot_contain_a_linked_instance_of_itself")});
                     return;
                 }
                 const link=core.makeLinkReference(path,receiver,paths);
                 const result=await core.readLinkedSource(link,receiver,paths,{readFile,prepareModel:prepareSourceModel},hash);
                 if(disposed||Project!==targetProject)return;
                 if(result.status!=='ready'){
-                    Blockbench.showMessageBox({title:t('Cannot link this scene','No se puede vincular esta escena'),message:result.message||statusText({_lightflowStatus:result.status})});
+                    Blockbench.showMessageBox({title:t("cannot_link_this_scene"),message:result.message||statusText({_lightflowStatus:result.status})});
                     return;
                 }
                 if(!result.manifest.visualCount){
-                    Blockbench.showMessageBox({title:t('No supported geometry','Sin geometría compatible'),message:t('Choose a project with cubes, meshes or billboards. Effects and locators are not imported.','Elige un proyecto con cubos, mallas o billboards. Los efectos y localizadores no se importan.')});
+                    Blockbench.showMessageBox({title:t("no_supported_geometry"),message:t("choose_a_project_with_cubes_meshes_or_billboards_effects_and_loc")});
                     return;
                 }
                 const name=result.manifest.name||paths.normalize(path).split('/').pop().replace(/\.bbmodel$/i,'');
@@ -1625,38 +2043,46 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                     const element=new SceneInstanceElement({name:form.name||name,source_link:JSON.stringify(link),include_geometry:geometry,include_billboards:billboards}).init();
                     element._lightflowProject=Project;element.addTo();element.select();
                     assetCache.set(result.cacheKey,result);mountResult(element,result);
-                    Undo.finishEdit(t('Add linked scene','Añadir escena vinculada'),{outliner:true});return element;
+                    Undo.finishEdit(t("add_linked_scene"),{outliner:true});return element;
                 };
                 if(automatic)return addInstance({name,geometry:true,billboards:true});
                 importDialog?.delete?.();
                 const checkboxRow=window.LightManagerUI?.formDesign?.checkboxRow || (options=>({type:'checkbox',...options}));
                 const geometryCount=(result.manifest.elementTypes.cube||0)+(result.manifest.elementTypes.mesh||0);
                 const billboardCount=result.manifest.elementTypes.billboard||0;
-                importDialog=new Dialog('lightflow_scene_link_import',{title:t('Link a scene','Vincular una escena'),width:460,form:(window.LightManagerUI?.prepareForm || (form => form))({
-                    summary:{type:'info',text:t('Choose what this instance includes. Textures follow the selected geometry.','Elige qué incluye esta instancia. Las texturas acompañan a la geometría elegida.')},
-                    name:{type:'text',label:t('Instance name','Nombre de instancia'),value:name},
-                    geometry:checkboxRow({label:t('Geometry','Geometría'),supporting_text:t('Cubes and meshes from the source project.','Cubos y mallas del proyecto de origen.'),summary:geometryCount,value:true,condition:geometryCount>0}),
-                    billboards:checkboxRow({label:'Billboards',supporting_text:t('Sprite elements from the source project.','Elementos sprite del proyecto de origen.'),summary:billboardCount,value:true,condition:billboardCount>0}),
-                    skipped:{type:'info',condition:Object.keys(result.manifest.ignoredTypes).length>0,text:t('Excluded from this version: ','Se excluyen en esta versión: ')+Object.entries(result.manifest.ignoredTypes).map(([type,count])=>`${count} ${type}`).join(', ')+'.'},
-                    animations:{type:'info',condition:result.manifest.animations.length>0,text:`${result.manifest.animations.length} ${t('source animations available in the instance inspector. Group transforms only; effect tracks are excluded.','animaciones del origen disponibles en el inspector de la instancia. Solo transformaciones de grupos; las pistas de efectos se excluyen.')}`},
-                    material_note:{type:'info',condition:hasCustomMaterials,text:t('Source material overrides are preserved. Receiver overrides take priority.','Se conservan los overrides del origen. Los overrides de esta instancia tienen prioridad.')},
+                importDialog=new Dialog('lightflow_scene_link_import',{title:t("link_a_scene"),width:460,form:(window.LightManagerUI?.prepareForm || (form => form))({
+                    summary:{type:'info',text:t("choose_what_this_instance_includes_textures_follow_the_selected")},
+                    name:{type:'text',label:t("instance_name"),value:name},
+                    geometry:checkboxRow({label:t("geometry"),supporting_text:t("cubes_and_meshes_from_the_source_project"),summary:geometryCount,value:true,condition:geometryCount>0}),
+                    billboards:checkboxRow({label:'Billboards',supporting_text:t("sprite_elements_from_the_source_project"),summary:billboardCount,value:true,condition:billboardCount>0}),
+                    skipped:{type:'info',condition:Object.keys(result.manifest.ignoredTypes).length>0,text:t("excluded_from_this_version")+Object.entries(result.manifest.ignoredTypes).map(([type,count])=>`${count} ${type}`).join(', ')+'.'},
+                    animations:{type:'info',condition:result.manifest.animations.length>0,text:`${result.manifest.animations.length} ${t("source_animations_available_in_the_instance_inspector_group_tran")}`},
+                    material_note:{type:'info',condition:hasCustomMaterials,text:t("source_material_overrides_are_preserved_receiver_overrides_take")},
                     file:{type:'info',text:path}
                 }),onConfirm(form){
                     if(disposed||Project!==targetProject)return false;
                     const geometry=!!form.geometry&&!!(result.manifest.elementTypes.cube||result.manifest.elementTypes.mesh),billboards=!!form.billboards&&!!result.manifest.elementTypes.billboard;
-                    if(!geometry&&!billboards){Blockbench.showQuickMessage(t('Select geometry or billboards','Selecciona geometría o billboards'));return false;}
+                    if(!geometry&&!billboards){Blockbench.showQuickMessage(t("select_geometry_or_billboards"));return false;}
                     addInstance(form);
                 }});importDialog.show();
             };
-            const chooseSource=(element=null)=>Blockbench.import({extensions:['bbmodel'],type:t('Blockbench project','Proyecto de Blockbench'),resource_id:'lightflow_scene_link'},files=>{
-                const path=files?.[0]?.path;
-                if(!path)return;
-                if(element){
-                    const link=core.makeLinkReference(path,element._lightflowProject?.save_path||Project?.save_path||'',paths);
-                    edit(element,{source_link:JSON.stringify(link)},t('Relink scene','Revincular escena'));
-                    refreshInstance(element,true);
-                }else importPath(path);
-            });
+            const chooseSource=(element=null)=>{
+                const targetProject=window.Project,targets=Array.isArray(element)?element:element?[element]:[];
+                const references=new Map(targets.map(target=>[target,target.source_link]));
+                return Blockbench.import({extensions:['bbmodel'],type:t("blockbench_project"),resource_id:'lightflow_scene_link'},files=>{
+                    const path=files?.[0]?.path;
+                    if(!path||disposed||window.Project!==targetProject)return;
+                    if(targets.length){
+                        const current=targets.filter(target=>target.mesh?.parent&&target.source_link===references.get(target));
+                        if(!current.length)return;
+                        const link=core.makeLinkReference(path,targetProject?.save_path||'',paths);
+                        Undo.initEdit({elements:current});
+                        for(const target of current)target.extend({source_link:JSON.stringify(link)});
+                        Undo.finishEdit(t('relink_scene'));
+                        for(const target of current)refreshInstance(target,true);
+                    }else importPath(path);
+                });
+            };
             let restoreSkinDialog=null;
             owned.push({delete(){restoreSkinDialog?.();}});
             const createSkinLink=()=>{
@@ -1668,8 +2094,8 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 restoreSkinDialog=restore;
                 native.onCancel=function(){restore();receiver.select();};
                 native.onConfirm=function(form){
-                    if(form.model==='flat_texture'){Blockbench.showQuickMessage(t('Choose a 3D skin model.','Elige un modelo de skin 3D.'));return false;}
-                    if(form.texture_source==='upload_texture'&&!form.texture_file){Blockbench.showQuickMessage(t('Choose a skin texture.','Elige una textura de skin.'));return false;}
+                    if(form.model==='flat_texture'){Blockbench.showQuickMessage(t("choose_a_3d_skin_model"));return false;}
+                    if(form.texture_source==='upload_texture'&&!form.texture_file){Blockbench.showQuickMessage(t("choose_a_skin_texture"));return false;}
                     restore();confirm.call(native,form);
                     const skin=Project;
                     if(skin===receiver||skin.format?.id!=='skin')return;
@@ -1680,14 +2106,14 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                             if(Project!==skin)return;
                             const texture=skin.textures.find(texture=>texture.img?.complete&&texture.img.naturalWidth>0);
                             if(texture&&!Dialog.open)break;
-                            if(attempt===599){Blockbench.showQuickMessage(t('Load a skin texture before saving this project.','Carga una textura de skin antes de guardar este proyecto.'));return;}
+                            if(attempt===599){Blockbench.showQuickMessage(t("load_a_skin_texture_before_saving_this_project"));return;}
                             await new Promise(resolve=>setTimeout(resolve,100));
                         }
                         if(disposed||Project!==skin)return;
                         Blockbench.export({resource_id:'model',type:Codecs.project.name,extensions:['bbmodel'],name:skin.name||'Skin',content:null,
                             custom_writer(_content,path){
                                 if(disposed||Project!==skin)return;
-                                if(receiver.save_path&&paths.normalize(path).toLowerCase()===paths.normalize(receiver.save_path).toLowerCase()){Blockbench.showQuickMessage(t('Save the skin separately from the current scene.','Guarda la skin en un archivo distinto de la escena actual.'));return;}
+                                if(receiver.save_path&&paths.normalize(path).toLowerCase()===paths.normalize(receiver.save_path).toLowerCase()){Blockbench.showQuickMessage(t("save_the_skin_separately_from_the_current_scene"));return;}
                                 skin.save_path=path;skin.name=paths.normalize(path).split('/').pop().replace(/\.bbmodel$/i,'');
                                 const content=Codecs.project.compile();
                                 Blockbench.writeFile(path,{content},()=>{
@@ -1719,7 +2145,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 }
                 const projects=[...candidates.values()];
                 pickerDialog?.delete?.();
-                const picker=new Dialog('lightflow_scene_link_picker',{title:t('Linked scene','Escena vinculada'),width:860,buttons:[],component:{
+                const picker=new Dialog('lightflow_scene_link_picker',{title:t("linked_scene"),width:860,buttons:[],component:{
                     data(){return {query:'',projects};},
                     computed:{visible(){const q=this.query.trim().toLowerCase();return this.projects.filter(project=>!q||`${project.name} ${project.path}`.toLowerCase().includes(q));}},
                     methods:{
@@ -1729,10 +2155,10 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                         close(){picker.hide();}
                     },
                     template:`<div class="lf-links-picker">
-                        <header class="lf-links-picker-head"><div><div class="lf-links-eyebrow">LIGHTFLOW · SCENE LINKS</div><h2>${t('Compose with a linked project','Compón con un proyecto vinculado')}</h2><p>${t('Choose a Blockbench project. Each instance has its own position and pose; the model stays connected to its source.','Elige un proyecto de Blockbench. Cada instancia tiene posición y pose propias; el modelo sigue conectado a su origen.')}</p></div><button type="button" class="lf-links-browse" @click="browse"><i class="material-icons">folder_open</i>${t('Choose .bbmodel…','Elegir .bbmodel…')}</button></header>
-                        <div class="lf-links-picker-tools"><button type="button" class="lf-links-browse" @click="skin"><i class="material-icons">person_add</i>${t('Create skin…','Crear skin…')}</button><label><i class="material-icons">search</i><input v-model="query" type="search" :placeholder="'${t('Find a project','Buscar proyecto')}'" :aria-label="'${t('Find a project','Buscar proyecto')}'"></label><span>{{ visible.length }} ${t('projects','proyectos')}</span></div>
-                        <main class="lf-links-picker-scroll"><div v-if="visible.length" class="lf-links-grid"><button v-for="project in visible" :key="project.path" type="button" class="lf-links-card" :disabled="project.self" :title="project.path" @click="choose(project)"><div class="lf-links-cover"><img v-if="project.thumbnail" :src="project.thumbnail" @error="project.thumbnail=''" alt=""><div v-else class="lf-links-cover-fallback"><i class="material-icons">view_in_ar</i></div><span class="lf-links-origin">{{ project.self ? '${t('Current scene','Escena actual')}' : project.open ? '${t('Open','Abierto')}' : '${t('Recent','Reciente')}' }}</span></div><div class="lf-links-card-info"><i class="material-icons">{{ project.self ? 'block' : 'kid_star' }}</i><div><strong>{{ project.name }}</strong><small>{{ project.path }}</small></div></div></button></div><div v-else class="lf-links-empty"><i class="material-icons">search_off</i><p>${t('No matching projects. Choose a .bbmodel file to continue.','No hay proyectos coincidentes. Elige un archivo .bbmodel para continuar.')}</p><button type="button" @click="browse">${t('Choose file','Elegir archivo')}</button></div></main>
-                        <footer class="lf-links-picker-foot"><span>${t('The source remains editable in its own tab.','El origen se puede seguir editando en su propia pestaña.')}</span><button type="button" @click="close">${t('Close','Cerrar')}</button></footer>
+                        <header class="lf-links-picker-head"><div><div class="lf-links-eyebrow">LIGHTFLOW · SCENE LINKS</div><h2>${t("compose_with_a_linked_project")}</h2><p>${t("choose_a_blockbench_project_each_instance_has_its_own_position_a")}</p></div><button type="button" class="lf-links-browse" @click="browse"><i class="material-icons">folder_open</i>${t("choose_bbmodel")}</button></header>
+                        <div class="lf-links-picker-tools"><button type="button" class="lf-links-browse" @click="skin"><i class="material-icons">person_add</i>${t("create_skin")}</button><label><i class="material-icons">search</i><input v-model="query" type="search" :placeholder="'${t("find_a_project")}'" :aria-label="'${t("find_a_project")}'"></label><span>{{ visible.length }} ${t("projects")}</span></div>
+                        <main class="lf-links-picker-scroll"><div v-if="visible.length" class="lf-links-grid"><button v-for="project in visible" :key="project.path" type="button" class="lf-links-card" :disabled="project.self" :title="project.path" @click="choose(project)"><div class="lf-links-cover"><img v-if="project.thumbnail" :src="project.thumbnail" @error="project.thumbnail=''" alt=""><div v-else class="lf-links-cover-fallback"><i class="material-icons">view_in_ar</i></div><span class="lf-links-origin">{{ project.self ? '${t("current_scene")}' : project.open ? '${t("open")}' : '${t("recent")}' }}</span></div><div class="lf-links-card-info"><i class="material-icons">{{ project.self ? 'block' : 'kid_star' }}</i><div><strong>{{ project.name }}</strong><small>{{ project.path }}</small></div></div></button></div><div v-else class="lf-links-empty"><i class="material-icons">search_off</i><p>${t("no_matching_projects_choose_a_bbmodel_file_to_continue")}</p><button type="button" @click="browse">${t("choose_file")}</button></div></main>
+                        <footer class="lf-links-picker-foot"><span>${t("the_source_remains_editable_in_its_own_tab")}</span><button type="button" @click="close">${t("close")}</button></footer>
                     </div>`
                 }});
                 pickerDialog=picker;picker.show();
@@ -1754,22 +2180,22 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                     pose.extend({pose_mode:'absolute',position:target.origin.map((value,i)=>value-(targetParent?.origin[i]||0)+(parent?.origin[i]||0)),rotation:target.rotation,scale:target.scale});
                     pose.preview_controller.updateTransform(pose);
                 }
-                Undo.finishEdit(t('Apply skin pose','Aplicar pose de skin'));
+                Undo.finishEdit(t("apply_skin_pose"));
                 updateOutline();syncPanel();window.updateSelection?.();
             };
             const skinPoseAction=new Action('lightflow_scene_link_skin_pose',{
-                name:t('Skin pose','Pose de skin'),icon:'accessibility_new',category:'edit',
+                name:t("skin_pose"),icon:'accessibility_new',category:'edit',
                 condition:()=>rootOf(selected())?._lightflowManifest?.format==='skin',
                 children(){
                     const root=rootOf(selected());
-                    const apply=(preset,data)=>applySkinPose(root,preset,data).catch(error=>{if(!disposed)Blockbench.showMessageBox({title:t('Cannot apply pose','No se puede aplicar la pose'),message:String(error.message||error)});});
+                    const apply=(preset,data)=>applySkinPose(root,preset,data).catch(error=>{if(!disposed)Blockbench.showMessageBox({title:t("cannot_apply_pose"),message:String(error.message||error)});});
                     const items=['none','natural','walking','crouching','sitting','jumping','aiming'].map(id=>({name:tl('panel.skin_pose.'+id),icon:'accessibility_new',click:()=>apply(id)}));
                     const saved=StateMemory.get('skin_poses')||[];
-                    if(saved.length)items.push('_',{name:t('Saved poses','Poses guardadas'),icon:'format_list_bulleted',children:saved.map(pose=>({name:pose.name,icon:'accessibility',click:()=>apply(undefined,JSON.parse(JSON.stringify(pose.data)))}))});
-                    items.push('_',{name:t('Restore source pose','Restaurar pose del origen'),icon:'restart_alt',click:()=>{
+                    if(saved.length)items.push('_',{name:t("saved_poses"),icon:'format_list_bulleted',children:saved.map(pose=>({name:pose.name,icon:'accessibility',click:()=>apply(undefined,JSON.parse(JSON.stringify(pose.data)))}))});
+                    items.push('_',{name:t("restore_source_pose"),icon:'restart_alt',click:()=>{
                         const poses=[...treeFor(root).values()];Undo.initEdit({elements:poses});
                         for(const pose of poses){pose.extend({pose_mode:'additive',position:[0,0,0],rotation:[0,0,0],scale:[1,1,1]});pose.preview_controller.updateTransform(pose);}
-                        Undo.finishEdit(t('Restore source pose','Restaurar pose del origen'));updateOutline();syncPanel();window.updateSelection?.();
+                        Undo.finishEdit(t("restore_source_pose"));updateOutline();syncPanel();window.updateSelection?.();
                     }});return items;
                 }
             });
@@ -1777,13 +2203,13 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
             const openAction=new Action('lightflow_scene_link_open',{name:'lightflow_links.open',icon:'open_in_new',category:'edit',condition:()=>!!rootOf(selected()),click:()=>openSource(selected())});
             const refreshAction=new Action('lightflow_scene_link_refresh',{name:'lightflow_links.refresh',icon:'sync',category:'edit',condition:()=>!!rootOf(selected()),click:()=>refreshInstance(rootOf(selected()),true)});
             const relocateAction=new Action('lightflow_scene_link_relocate',{name:'lightflow_links.relocate',icon:'folder_open',category:'edit',condition:()=>!!rootOf(selected()),click:()=>chooseSource(rootOf(selected()))});
-            const resetAction=new Action('lightflow_scene_link_reset_pose',{name:'lightflow_links.reset',icon:'restart_alt',category:'edit',condition:()=>selected()?.type==='lightflow_pose_group',click:()=>edit(selected(),{position:[0,0,0],rotation:[0,0,0],scale:[1,1,1]},t('Reset local pose','Restablecer pose local'))});
-            const inspectAction=new Action('lightflow_scene_link_inspect',{name:t('Instance settings','Ajustes de instancia'),icon:'kid_star',category:'edit',condition:()=>!!rootOf(selected()),click:()=>{arrangeInspector();syncPanel();inspector?.getHostPanel?.()?.selectTab?.(inspector);}});
-            const materialAction=new Action('lightflow_scene_link_material',{name:t('Material override','Sobrescribir material'),icon:'palette',condition:()=>!!rootOf(selected()),click:event=>{
+            const resetAction=new Action('lightflow_scene_link_reset_pose',{name:'lightflow_links.reset',icon:'restart_alt',category:'edit',condition:()=>selected()?.type==='lightflow_pose_group',click:()=>edit(selected(),{position:[0,0,0],rotation:[0,0,0],scale:[1,1,1]},t("reset_local_pose"))});
+            const inspectAction=new Action('lightflow_scene_link_inspect',{name:t("instance_settings"),icon:'kid_star',category:'edit',condition:()=>!!rootOf(selected()),click:()=>{arrangeInspector();syncPanel();inspector?.getHostPanel?.()?.selectTab?.(inspector);}});
+            const materialAction=new Action('lightflow_scene_link_material',{name:t("material_override"),icon:'palette',condition:()=>!!rootOf(selected()),click:event=>{
                 const node=selected(),manager=window.MaterialManager;if(!node||!manager)return;
-                const assign=id=>{edit(node,{lightflow_material_override:id},t('Override linked material','Sobrescribir material vinculado'));refreshLinkedMaterials();syncPanel();};
+                const assign=id=>{edit(node,{lightflow_material_override:id},t("override_linked_material"));refreshLinkedMaterials();syncPanel();};
                 new Menu([
-                    {name:t('Inherit material','Heredar material'),icon:node.lightflow_material_override?'radio_button_unchecked':'radio_button_checked',click:()=>assign('')},
+                    {name:t("inherit_material"),icon:node.lightflow_material_override?'radio_button_unchecked':'radio_button_checked',click:()=>assign('')},
                     '_',
                     ...Object.values(manager.instances||{}).map(instance=>({name:instance.name||instance.id,icon:node.lightflow_material_override===instance.id?'radio_button_checked':instance.icon||'palette',click:()=>assign(instance.id)})),
                     '_',
@@ -1810,12 +2236,12 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
             ScenePoseElement.prototype.menu=new Menu(['lightflow_scene_link_inspect','lightflow_scene_link_skin_pose','lightflow_scene_link_material','lightflow_scene_link_reset_pose','lightflow_scene_link_open','_',...Outliner.control_menu_group,'_','rename','delete']);
 
             const inspectorFields=[
-                {key:'position',icon:'open_with',label:t('Position','Posición'),poseLabel:t('Offset','Desplazamiento'),step:.25,reset:0},
-                {key:'rotation',icon:'sync',label:t('Rotation','Rotación'),poseLabel:t('Rotation','Rotación'),step:1,reset:0},
-                {key:'scale',icon:'aspect_ratio',label:t('Scale','Escala'),poseLabel:t('Scale','Escala'),step:.1,reset:1}
+                {key:'position',icon:'open_with',label:t("position"),poseLabel:t("offset"),step:.25,reset:0},
+                {key:'rotation',icon:'sync',label:t("rotation"),poseLabel:t("rotation"),step:1,reset:0},
+                {key:'scale',icon:'aspect_ratio',label:t("scale"),poseLabel:t("scale"),step:.1,reset:1}
             ];
-            inspector=new Panel('lightflow_scene_links_inspector',{name:t('Scene Links','Escenas vinculadas'),icon:'kid_star',growable:true,resizable:true,
-                condition:{modes:['edit'],project:true},default_position:{slot:'right_bar',height:350,folded:false,attached_to:'transform',attached_index:1},
+            inspector=new Panel('lightflow_scene_links_inspector',{name:t("scene_links"),icon:'kid_star',growable:true,resizable:true,
+                condition:{modes:['edit','render'],project:true},default_position:{slot:'right_bar',height:350,folded:false,attached_to:'transform',attached_index:1},
                 component:{
                     data(){return {currentId:'',rootId:'',name:'',rootName:'',pose:false,renderMode:false,status:'',statusKey:'ready',path:'',file:'',poseMode:'additive',modified:0,stats:null,materialLimit:false,animations:[],animationId:'',playing:false,playbackTime:0,animationLength:0,loop:false,values:{position:[0,0,0],rotation:[0,0,0],scale:[1,1,1]},fields:inspectorFields};},
                     methods:{
@@ -1823,7 +2249,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                             const element=selected(),root=rootOf(element);
                             this.currentId=element?.uuid||'';this.rootId=root?.uuid||'';this.pose=element?.type==='lightflow_pose_group';this.renderMode=!!Modes.render;
                             this.name=element?.name||'';this.rootName=root?.name||'';this.status=root?statusText(root):'';this.statusKey=root?._lightflowStatus||'ready';
-                            this.path=root?sourcePath(root):'';this.file=this.path.split(/[\\/]/).pop()||t('Source unavailable','Origen no disponible');
+                            this.path=root?sourcePath(root):'';this.file=this.path.split(/[\\/]/).pop()||t("source_unavailable");
                             this.poseMode=this.pose?element.pose_mode||'additive':'additive';
                             this.values={position:element?.position?.slice()||[0,0,0],rotation:element?.rotation?.slice()||[0,0,0],scale:element?.scale?.slice()||[1,1,1]};
                             this.stats=root?._lightflowManifest||null;this.materialLimit=!!root?._lightflowMaterialLimit;
@@ -1837,58 +2263,59 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                         play(){togglePlayback(selected());},
                         scrub(event){setAnimationTime(selected(),event.target.value);},
                         previewTime(event){const root=rootOf(selected());if(!root)return;root._lightflowPlaying=false;root._lightflowTime=Number(event.target.value)||0;updateAnimatedTree(root);this.syncPlayback();},
-                        toggleLoop(){const root=rootOf(selected());if(root)edit(root,{animation_loop:!root.animation_loop},t('Change linked animation loop','Cambiar repetición de animación vinculada'));},
+                        toggleLoop(){const root=rootOf(selected());if(root)edit(root,{animation_loop:!root.animation_loop},t("change_linked_animation_loop"));},
                         commitAxis(event,key,axis){
                             const element=selected();if(!element||element.uuid!==this.currentId)return;
-                            const value=Number(event.target.value);if(!Number.isFinite(value)){event.target.value=this.values[key][axis];return;}
+                            const value=Number(event.target.value);if(!event.target.value.trim()||!Number.isFinite(value)){event.target.value=this.values[key][axis];return;}
                             if(value===element[key][axis])return;
                             const next=element[key].slice();next[axis]=value;
-                            edit(element,{[key]:next},t('Edit linked transform','Editar transformación vinculada'));
+                            edit(element,{[key]:next},t("edit_linked_transform"));
                         },
-                        resetField(field){const element=selected();if(element?.uuid!==this.currentId)return;edit(element,{[field.key]:[field.reset,field.reset,field.reset]},t('Reset linked transform','Restablecer transformación vinculada'));},
-                        setPoseMode(mode){const element=selected();if(element?.type==='lightflow_pose_group'&&element.pose_mode!==mode)edit(element,{pose_mode:mode},t('Change pose mode','Cambiar modo de pose'));},
+                        resetField(field){const element=selected();if(element?.uuid!==this.currentId)return;edit(element,{[field.key]:[field.reset,field.reset,field.reset]},t("reset_linked_transform"));},
+                        cancelAxis(event,key,axis){event.target.value=this.values[key][axis];event.target.blur();},
+                        setPoseMode(mode){const element=selected();if(element?.type==='lightflow_pose_group'&&element.pose_mode!==mode)edit(element,{pose_mode:mode},t("change_pose_mode"));},
                         selectRoot(){const root=OutlinerNode.uuids[this.rootId];root?.clickSelect?.();if(root&&!root.selected)root.select();},
                         openSource(){openAction.trigger();},refresh(){refreshAction.trigger();},relink(){relocateAction.trigger();},resetPose(){resetAction.trigger();},add(){showSourcePicker();}
                     },
                     mounted(){this.syncSelection();},
                     template:`<div class="lf-links-inspector">
-                        <div v-if="!currentId" class="lf-links-inspector-empty"><i class="material-icons">kid_star</i><strong>${t('Build a scene with linked projects','Compón una escena con proyectos vinculados')}</strong><p>${t('Choose an instance in the Outliner to place it, or open a group to pose it.','Selecciona una instancia en el Outliner para colocarla, o abre un grupo para posarlo.')}</p><button type="button" @click="add"><i class="material-icons">add</i>${t('Add linked scene','Añadir escena vinculada')}</button></div>
+                        <div v-if="!currentId" class="lf-links-inspector-empty"><i class="material-icons">kid_star</i><strong>${t("build_a_scene_with_linked_projects")}</strong><p>${t("choose_an_instance_in_the_outliner_to_place_it_or_open_a_group_t")}</p><button type="button" @click="add"><i class="material-icons">add</i>${t("add_linked_scene")}</button></div>
                         <template v-else>
                             <div class="lf-links-inspector-head">
-                                <button v-if="pose" type="button" class="lf-links-back" @click="selectRoot" :title="rootName" :aria-label="'${t('Select instance','Seleccionar instancia')}'"><i class="material-icons">arrow_back</i></button>
+                                <button v-if="pose" type="button" class="lf-links-back" @click="selectRoot" :title="rootName" :aria-label="'${t("select_instance")}'"><i class="material-icons">arrow_back</i></button>
                                 <i v-else class="material-icons lf-links-head-icon">kid_star</i>
                                 <div class="lf-links-title"><strong :title="name">{{ name }}</strong></div>
                                 <span v-if="!pose" class="lf-links-status" :class="'lf-links-status-'+statusKey"><span class="lf-links-status-dot"></span>{{ status }}</span>
-                                <button v-else type="button" class="lf-links-icon-action" @click="resetPose" :title="'${t('Reset group pose','Restablecer pose del grupo')}'" :aria-label="'${t('Reset group pose','Restablecer pose del grupo')}'"><i class="material-icons">restart_alt</i></button>
+                                <button v-else type="button" class="lf-links-icon-action" @click="resetPose" :title="'${t("reset_group_pose")}'" :aria-label="'${t("reset_group_pose")}'"><i class="material-icons">restart_alt</i></button>
                             </div>
-                            <div v-if="!pose" class="lf-links-source-card"><div class="lf-links-source-title"><i class="material-icons">description</i><span :title="path+(stats ? ' · '+stats.groups.length+' ${t('groups','grupos')}, '+stats.elements.length+' ${t('elements','elementos')}, '+stats.textures.length+' ${t('textures','texturas')}' : '')">{{ file }}</span><span v-if="materialLimit" class="lf-links-material-badge" :title="'${t('Source material overrides are not linked yet','Los materiales personalizados del origen aún no se vinculan')}'">${t('Textures only','Solo texturas')}</span></div></div>
-                            <div v-if="!pose" class="lf-links-quick-actions"><button type="button" @click="refresh" :disabled="statusKey==='updating'" :title="'${t('Read the latest saved source','Leer la última versión guardada del origen')}'"><i class="material-icons">sync</i>${t('Update','Actualizar')}</button><button type="button" @click="openSource" :title="'${t('Edit the source project','Editar el proyecto origen')}'"><i class="material-icons">open_in_new</i>${t('Open','Abrir')}</button><button type="button" @click="relink" :title="'${t('Find a moved source','Buscar un origen movido')}'"><i class="material-icons">folder_open</i>${t('Find','Buscar')}</button></div>
+                            <div v-if="!pose" class="lf-links-source-card"><div class="lf-links-source-title"><i class="material-icons">description</i><span :title="path+(stats ? ' · '+stats.groups.length+' ${t("groups")}, '+stats.elements.length+' ${t("elements")}, '+stats.textures.length+' ${t("textures")}' : '')">{{ file }}</span><span v-if="materialLimit" class="lf-links-material-badge" :title="'${t("source_material_overrides_are_not_linked_yet")}'">${t("textures_only")}</span></div></div>
+                            <div v-if="!pose" class="lf-links-quick-actions"><button type="button" @click="refresh" :disabled="statusKey==='updating'" :title="'${t("read_the_latest_saved_source")}'"><i class="material-icons">sync</i>${t("update")}</button><button type="button" @click="openSource" :title="'${t("edit_the_source_project")}'"><i class="material-icons">open_in_new</i>${t("open_2")}</button><button type="button" @click="relink" :title="'${t("find_a_moved_source")}'"><i class="material-icons">folder_open</i>${t("find")}</button></div>
                             <div v-if="!pose && statusKey!=='ready'" class="lf-links-notice" role="status"><i class="material-icons">{{ statusKey==='updating' ? 'sync' : 'info_outline' }}</i><span>{{ status }}</span></div>
-                            <div v-if="renderMode" class="lf-links-section-label"><span>{{ pose ? '${t('Pose this group','Posar este grupo')}' : '${t('Place the instance','Colocar la instancia')}' }}</span><span v-if="!pose && modified" class="lf-links-pose-count">{{ modified }} ${t('posed','con pose')}</span></div>
-                            <div v-if="pose" class="lf-links-mode" role="group" :aria-label="'${t('Pose mode','Modo de pose')}'"><button type="button" :class="{active:poseMode==='additive'}" :aria-pressed="poseMode==='additive'" :title="'${t('Adds to the source pose; follows later source edits.','Se suma a la pose original y sigue sus cambios.')}'" @click="setPoseMode('additive')">${t('Additive','Aditiva')}</button><button type="button" :class="{active:poseMode==='absolute'}" :aria-pressed="poseMode==='absolute'" :title="'${t('Keeps fixed values if the source pose changes.','Conserva valores fijos si cambia la pose original.')}'" @click="setPoseMode('absolute')">${t('Absolute','Absoluta')}</button></div>
-                            <template v-if="renderMode"><div class="lf-links-transform" v-for="field in fields" :key="field.key"><div class="lf-links-transform-head"><label><i class="material-icons">{{ field.icon }}</i>{{ pose ? field.poseLabel : field.label }}</label><button type="button" class="lf-links-reset-field" @click="resetField(field)" :title="'${t('Reset','Restablecer')}'+' '+field.label" :aria-label="'${t('Reset','Restablecer')}'+' '+field.label"><i class="material-icons">restart_alt</i></button></div><div class="lf-links-axis-row"><label v-for="(axis,index) in ['X','Y','Z']" :key="axis" :class="'lf-links-axis-'+axis.toLowerCase()"><span>{{ axis }}</span><input type="number" :step="field.step" :value="values[field.key][index]" :aria-label="(pose ? field.poseLabel : field.label)+' '+axis" @change="commitAxis($event,field.key,index)" @keydown.enter="$event.target.blur()"></label></div></div></template>
+                            <div v-if="renderMode" class="lf-links-section-label"><span>{{ pose ? '${t("pose_this_group")}' : '${t("place_the_instance")}' }}</span><span v-if="!pose && modified" class="lf-links-pose-count">{{ modified }} ${t("posed")}</span></div>
+                            <div v-if="pose" class="lf-links-mode" role="group" :aria-label="'${t("pose_mode")}'"><button type="button" :class="{active:poseMode==='additive'}" :aria-pressed="poseMode==='additive'" :title="'${t("adds_to_the_source_pose_follows_later_source_edits")}'" @click="setPoseMode('additive')">${t("additive")}</button><button type="button" :class="{active:poseMode==='absolute'}" :aria-pressed="poseMode==='absolute'" :title="'${t("keeps_fixed_values_if_the_source_pose_changes")}'" @click="setPoseMode('absolute')">${t("absolute")}</button></div>
+                            <template v-if="renderMode"><div class="lf-links-transform" v-for="field in fields" :key="field.key"><div class="lf-links-transform-head"><label><i class="material-icons">{{ field.icon }}</i>{{ pose ? field.poseLabel : field.label }}</label><button type="button" class="lf-links-reset-field" @click="resetField(field)" :title="'${t("reset")}'+' '+field.label" :aria-label="'${t("reset")}'+' '+field.label"><i class="material-icons">restart_alt</i></button></div><div class="lf-links-axis-row"><label v-for="(axis,index) in ['X','Y','Z']" :key="axis" :class="'lf-links-axis-'+axis.toLowerCase()"><span>{{ axis }}</span><input type="number" :step="field.step" :value="values[field.key][index]" :aria-label="(pose ? field.poseLabel : field.label)+' '+axis" @change="commitAxis($event,field.key,index)" @keydown.enter="$event.target.blur()" @keydown.esc.stop.prevent="cancelAxis($event,field.key,index)"></label></div></div></template>
                         </template>
                     </div>`
                 }});
             motionPanel=new Panel('lightflow_scene_links_animation',{
-                name:t('Linked animation','Animación vinculada'),icon:'cinematic_blur',growable:false,resizable:false,
+                name:t("linked_animation"),icon:'cinematic_blur',growable:false,resizable:false,
                 condition:()=>!!Project&&!!Modes.animate&&!!rootOf(selected()),
                 default_position:{slot:'right_bar',height:100,folded:false,sidebar_index:7},
                 component:{
                     data(){return {rootName:'',summary:'',locked:false,offset:0,loop:false,time:0,count:0};},
                     methods:{
                         syncSelection(){const root=rootOf(selected());this.rootName=root?.name||'';this.locked=!!root?.animation_locked;this.offset=Number(root?.animation_offset)||0;this.loop=root?.animation_loop_override?!!root.animation_loop:animationFor(root)?.loop==='loop';
-                            const clips=animationsFor(root);this.count=clips.length;this.summary=clips.length===1?clips[0].name:clips.length?clips.length+' '+t('animations','animaciones'):t('Original pose','Pose original');this.syncPlayback();},
+                            const clips=animationsFor(root);this.count=clips.length;this.summary=clips.length===1?clips[0].name:clips.length?clips.length+' '+t("animations"):t("original_pose");this.syncPlayback();},
                         syncPlayback(){const root=rootOf(selected());this.time=animationTime(root);},
                         choose(event){showAnimationMenu(rootOf(selected()),event.currentTarget);},
-                        setClock(locked){const root=rootOf(selected());if(!root)return;edit(root,{animation_locked:locked,...(locked?{animation_time:timelineClock(root)}:{})},t('Change linked clock','Cambiar reloj vinculado'));updateAnimatedTree(root);ensureTimeline();},
-                        setOffset(event){const root=rootOf(selected()),value=Number(event.target.value);if(!root||!Number.isFinite(value))return;edit(root,{animation_offset:value},t('Offset linked animation','Desfasar animación vinculada'));ensureTimeline();updateAnimatedTree(root);},
-                        toggleLoop(){const root=rootOf(selected());if(!root)return;edit(root,{animation_loop:!this.loop,animation_loop_override:true},t('Change linked loop','Cambiar repetición vinculada'));updateAnimatedTree(root);}
+                        setClock(locked){const root=rootOf(selected());if(!root)return;edit(root,{animation_locked:locked,...(locked?{animation_time:timelineClock(root)}:{})},t("change_linked_clock"));updateAnimatedTree(root);ensureTimeline();},
+                        setOffset(event){const root=rootOf(selected()),value=Number(event.target.value);if(!root||!Number.isFinite(value))return;edit(root,{animation_offset:value},t("offset_linked_animation"));ensureTimeline();updateAnimatedTree(root);},
+                        toggleLoop(){const root=rootOf(selected());if(!root)return;edit(root,{animation_loop:!this.loop,animation_loop_override:true},t("change_linked_loop"));updateAnimatedTree(root);}
                     },
                     mounted(){this.syncSelection();},
                     template:`<div class="lf-links-inspector lf-links-animation-panel">
-                        <div class="lf-links-clock-head"><strong :title="rootName">{{ rootName }}</strong><span :title="'${t('Evaluated clip time','Tiempo evaluado del clip')}'">{{ time.toFixed(2) }} s</span></div>
-                        <div class="lf-links-mode lf-links-clock-mode" role="group" :aria-label="'${t('Animation clock','Reloj de animación')}'"><button type="button" :class="{active:!locked}" :aria-pressed="!locked" @click="setClock(false)" :title="'${t('Follow the native timeline plus Offset','Seguir el timeline nativo más Offset')}'"><i class="material-icons">timeline</i>Timeline</button><button type="button" :class="{active:locked}" :aria-pressed="locked" @click="setClock(true)" :title="'${t('Keep the pose at the current timeline time','Conservar la pose en el instante actual del timeline')}'"><i class="material-icons">lock</i>Lock in</button></div>
+                        <div class="lf-links-clock-head"><strong :title="rootName">{{ rootName }}</strong><span :title="'${t("evaluated_clip_time")}'">{{ time.toFixed(2) }} s</span></div>
+                        <div class="lf-links-mode lf-links-clock-mode" role="group" :aria-label="'${t("animation_clock")}'"><button type="button" :class="{active:!locked}" :aria-pressed="!locked" @click="setClock(false)" :title="'${t("follow_the_native_timeline_plus_offset")}'"><i class="material-icons">timeline</i>Timeline</button><button type="button" :class="{active:locked}" :aria-pressed="locked" @click="setClock(true)" :title="'${t("keep_the_pose_at_the_current_timeline_time")}'"><i class="material-icons">lock</i>Lock in</button></div>
 
                     </div>`
                 }
@@ -1913,7 +2340,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 },
                 template:`<li class="lf-links-animation-library" @mousedown.stop @touchstart.stop><ul class="lf-links-source-groups"><li v-for="instance in instances" :key="instance.id" v-show="!query || visibleClips(instance).length" class="animation_file lf-links-animation-group" :style="{'--lf-link-color':instance.color}">
                     <div class="animation_file_head lf-links-library-head" role="button" tabindex="0" :aria-expanded="selectedId===instance.id && !folded[instance.id]" @click.stop="expand(instance.id)" @keydown.enter.prevent="expand(instance.id)" @keydown.space.prevent="expand(instance.id)" @contextmenu.stop.prevent="menu(instance.id,$event)"><i class="material-icons lf-links-disclosure">{{ selectedId===instance.id && !folded[instance.id] ? 'expand_more':'chevron_right' }}</i><i class="material-icons">cinematic_blur</i><label :title="instance.name">{{ instance.name }}</label><span v-if="instance.active.length" class="lf-links-clip-count">{{ instance.active.length }}</span></div>
-                    <ul v-if="selectedId===instance.id && !folded[instance.id]" class="indented lf-links-clip-list"><li v-for="clip in visibleClips(instance)" :key="clip.id" class="animation lf-links-library-clip" :class="{selected:instance.focus===clip.id,unsupported:!clip.supported}" :title="clip.name+(clip.supported?'':' · ${t('unsupported','incompatible')}')" :aria-disabled="!clip.supported" role="button" tabindex="0" @click.stop="choose(instance.id,clip,$event)" @keydown.enter.prevent="choose(instance.id,clip,$event)" @contextmenu.prevent.stop="clipMenu(instance.id,clip,$event)"><i class="material-icons">movie</i><label>{{ shortName(clip.name) }}</label><small v-if="Math.abs(offset(instance,clip.id))>0.00001" class="lf-links-clip-offset" :title="'${t('Clip time offset','Desfase de tiempo del clip')}'">{{ offsetLabel(offset(instance,clip.id)) }}</small><div class="in_list_button" role="button" tabindex="0" :aria-label="clip.name+' · '+state(instance,clip.id)" :title="state(instance,clip.id)==='locked'?'${t('Locked pose','Pose bloqueada')}':state(instance,clip.id)==='playing'?'${t('Playing — click to lock','Reproduciendo — clic para bloquear')}':'${t('Off — click to play','Apagada — clic para reproducir')}'" @click.stop="toggle(instance.id,clip)" @keydown.enter.stop.prevent="toggle(instance.id,clip)" @dblclick.stop><i v-if="state(instance,clip.id)==='locked'" class="fa_big fas fa-lock"></i><i v-else-if="state(instance,clip.id)==='playing'" class="fa_big far fa-play-circle"></i><i v-else class="fa_big far fa-circle"></i></div></li></ul>
+                    <ul v-if="selectedId===instance.id && !folded[instance.id]" class="indented lf-links-clip-list"><li v-for="clip in visibleClips(instance)" :key="clip.id" class="animation lf-links-library-clip" :class="{selected:instance.focus===clip.id,unsupported:!clip.supported}" :title="clip.name+(clip.supported?'':' · ${t("unsupported")}')" :aria-disabled="!clip.supported" role="button" tabindex="0" @click.stop="choose(instance.id,clip,$event)" @keydown.enter.prevent="choose(instance.id,clip,$event)" @contextmenu.prevent.stop="clipMenu(instance.id,clip,$event)"><i class="material-icons">movie</i><label>{{ shortName(clip.name) }}</label><small v-if="Math.abs(offset(instance,clip.id))>0.00001" class="lf-links-clip-offset" :title="'${t("clip_time_offset")}'">{{ offsetLabel(offset(instance,clip.id)) }}</small><div class="in_list_button" role="button" tabindex="0" :aria-label="clip.name+' · '+state(instance,clip.id)" :title="state(instance,clip.id)==='locked'?'${t("locked_pose")}':state(instance,clip.id)==='playing'?'${t("playing_click_to_lock")}':'${t("off_click_to_play")}'" @click.stop="toggle(instance.id,clip)" @keydown.enter.stop.prevent="toggle(instance.id,clip)" @dblclick.stop><i v-if="state(instance,clip.id)==='locked'" class="fa_big fas fa-lock"></i><i v-else-if="state(instance,clip.id)==='playing'" class="fa_big far fa-play-circle"></i><i v-else class="fa_big far fa-circle"></i></div></li></ul>
                 </li></ul></li>`
             });
             libraryVM.$mount(libraryHost);animationLibrary=libraryVM;
@@ -1936,14 +2363,20 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                     if(below||motionPanel.position_data.sidebar_index>=outliner.position_data.sidebar_index)motionPanel.moveTo('right_bar',outliner,true);
                 }
                 if(!inspector)return;
-                const target=Panels.transform;
-                if(target&&(inspector.getHostPanel()?.id!==target.id||!inspector.handle?.isConnected))target.attachPanel(inspector,1);
-                inspector.handle?.setAttribute?.('title',t('Scene Links','Escenas vinculadas'));
-                inspector.handle?.setAttribute?.('aria-label',t('Scene Links','Escenas vinculadas'));
-                const label=inspector.handle?.querySelector('span');if(label&&Modes.edit)label.textContent=t('Links','Vínculo');
+                const target=Modes.render?Panels.light_properties||Panels.transform:Panels.transform;
+                if(target&&(inspector.getHostPanel()?.id!==target.id||!inspector.handle?.isConnected))target.attachPanel(inspector,Modes.render?4:1);
+                inspector.handle?.setAttribute?.('title',t("scene_links"));
+                inspector.handle?.setAttribute?.('aria-label',t("scene_links"));
+                const label=inspector.handle?.querySelector('span');if(label&&Modes.edit)label.textContent=t("links");
             };
             arrangeInspector();
             owned.push(inspector);
+            window.LightManagerUI?.workspace?.register?.(inspector);
+            owned.push({delete(){window.LightManagerUI?.workspace?.unregister?.(inspector);}});
+            owned.push(Blockbench.on('loaded_plugin',({plugin})=>{
+                if(plugin?.id!=='light_manager'||disposed)return;
+                arrangeInspector();window.LightManagerUI?.workspace?.register?.(inspector);syncPanel();
+            }));
             const outlinerClasses=Blockbench.on('get_outliner_node_classes',({node,classes})=>{
                 if(node?.type!=='lightflow_scene_instance')return;
                 classes.push('lightflow_scene_link');
@@ -1972,12 +2405,12 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 .lf-links-inspector-head{display:flex;align-items:center;gap:7px;min-height:36px;border-bottom:1px solid var(--color-border);}
                 .lf-links-head-icon{flex:none;color:var(--color-accent);font-size:19px;}
                 .lf-links-title{min-width:0;flex:1;}
-                .lf-links-title strong{font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600;}
+                .lf-links-title strong{display:block;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600;}
                 .lf-links-status{display:flex;align-items:center;gap:5px;max-width:102px;font-size:11px;color:var(--color-subtle_text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
                 .lf-links-status-dot{width:6px;height:6px;flex:none;border-radius:50%;background:#54b783;}
                 .lf-links-status-missing .lf-links-status-dot,.lf-links-status-incompatible .lf-links-status-dot,.lf-links-status-read_error .lf-links-status-dot{background:#e7a35b;}
                 .lf-links-status-updating .lf-links-status-dot{background:var(--color-accent);}
-                .lf-links-back,.lf-links-icon-action{display:grid;place-items:center;width:27px;height:27px;flex:none;border-radius:8px;background:var(--color-button);}
+                .lf-links-inspector .lf-links-back,.lf-links-inspector .lf-links-icon-action{display:grid;place-items:center;width:28px;min-width:28px;max-width:28px;height:28px;min-height:28px;padding:0;flex:0 0 28px;border-radius:8px;background:var(--color-button);}
                 .lf-links-back i,.lf-links-icon-action i{font-size:17px;}
                 .lf-links-icon-action{background:transparent;color:var(--color-subtle_text)!important;}
                 .lf-links-icon-action:hover{background:var(--color-button);color:var(--color-text)!important;}
@@ -2145,7 +2578,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 const linked=[];
                 for(const root of SceneInstanceElement.all){
                     if(root.visibility===false||root.locked||!root.mesh?.visible)continue;
-                    for(const holder of mountedCubes.get(root)||[])holder.traverse(object=>{if(object.isMesh&&object.visible)linked.push(object);});
+                    for(const holder of mountedCubes.get(root)||[])holder.traverse(object=>{if(object.isMesh&&object.visible&&!object.userData.lightflowTerrainBufferOwner)linked.push(object);});
                 }
                 if(!linked.length)return null;
                 const native=Outliner.elements.map(element=>element.mesh).filter(mesh=>mesh?.geometry&&mesh.visible);

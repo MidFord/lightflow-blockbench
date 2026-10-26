@@ -15,6 +15,12 @@
     const SKY_GRADIENT_VERSION = 2;
     const SKY_GRADIENT_MAX_STOPS = 12;
     const SKY_TIME_GRADIENT_MAX_FRAMES = 24;
+    const SKY_REFERENCE_CUSTOM_ANCHORS = Object.freeze([
+        {time: 6000, phase: 'day'},
+        {time: 12500, phase: 'sunset'},
+        {time: 18000, phase: 'night'},
+        {time: 23500, phase: 'sunrise'}
+    ]);
     const CLOUD_TIME_PROFILE_MAX_FRAMES = 24;
     // Clock profiles change appearance, never texture topology or cloud motion.
     const CLOUD_TIME_NUMERIC_FIELDS = Object.freeze({
@@ -24,10 +30,20 @@
         cloud_bevel_roundness: [0, 1], cloud_bevel_strength: [0, 2],
         cloud_bevel_distance_min_scale: [0.02, 1],
         cloud_edge_strength: [0, 2], cloud_shadow_bevel_strength: [0, 2],
+        cloud_environment_influence: [0, 1], cloud_time_tint_strength: [0, 1],
         cloud_sky_tint_strength: [0, 1], cloud_sun_tint_strength: [0, 1],
         cloud_fog_strength: [0, 1], cloud_fog_start: [0, 0.98],
         cloud_fog_end: [0.01, 1], cloud_density: [0.05, 4],
         cloud_absorption: [0, 3], cloud_translucency: [0, 1],
+        cloud_scattering_strength: [0, 3],
+        cloud_scattering_size: [0.1, 4],
+        cloud_edge_hardness: [0, 1],
+        cloud_view_response: [0, 1],
+        cloud_gradient_thickness: [0, 8],
+        cloud_gradient_alpha: [0, 1],
+        cloud_optical_thickness: [0.05, 4],
+        cloud_phase_anisotropy: [0, 0.85],
+        cloud_density_variation: [0, 0.3],
         cloud_bloom_contribution: [0, 4]
     });
     const CLOUD_TIME_COLOR_FIELDS = Object.freeze([
@@ -121,11 +137,20 @@
         distance_fog_start: 32,
         distance_fog_end: 160,
         distance_fog_smoothness: 0.8,
+        distance_fog_curve: 1,
+        distance_fog_sky_blend: 0,
+        distance_fog_noise: 0,
+        distance_fog_noise_scale: 24,
         distance_fog_gradient: 0.35,
         distance_fog_dither: 0,
         distance_fog_max_opacity: 1,
         distance_fog_sync_background: true,
         distance_grade_enabled: false,
+        distance_grade_follow_fog: false,
+        distance_grade_curve: 1,
+        distance_grade_pivot: 0.5,
+        distance_grade_pivot_mode: 'fixed',
+        distance_grade_tint_mode: 'fixed',
         distance_grade_start: 32,
         distance_grade_end: 160,
         distance_grade_saturation: 0.75,
@@ -209,13 +234,25 @@
         cloud_bevel_softness: 0.62,
         cloud_bevel_roundness: 0.82,
         cloud_bevel_strength: 0.72,
+        cloud_bevel_enabled: true,
         cloud_bevel_smooth: true,
+        cloud_scattering_strength: 1,
+        cloud_scattering_size: 1,
+        cloud_edge_hardness: 0,
+        cloud_view_response: 0,
+        cloud_gradient_thickness: 1,
+        cloud_gradient_alpha: 0,
+        cloud_optical_thickness: 1,
+        cloud_phase_anisotropy: 0.46,
+        cloud_density_variation: 0.03,
         cloud_bevel_distance_fade: true,
         cloud_bevel_distance_min_scale: 0.28,
         cloud_edge_strength: 0.2,
         cloud_shadow_bevel_color: '#8fa4b8',
         cloud_shadow_bevel_strength: 0.34,
         cloud_lighting_mode: 'mixed',
+        cloud_environment_influence: 1,
+        cloud_time_tint_strength: 1,
         cloud_sky_tint_strength: 0.42,
         cloud_sun_tint_strength: 0.58,
         cloud_fog_enabled: true,
@@ -262,8 +299,8 @@
         smooth: false,
         distanceFade: true,
         distanceMinScale: 0.22,
-        highlightStrength: 0.28,
-        shadowStrength: 0.38
+        highlightStrength: 2.0,
+        shadowStrength: 1.32
     });
 
     const PRESETS = {
@@ -306,10 +343,10 @@
         },
         rendercraft: {
             name: 'Rendercraft',
-            zenith: '#0783f7', horizon: '#1aa6f2',
-            sunrise_zenith: '#6968b2', sunrise_horizon: '#ffad74',
-            night_zenith: '#07132f', night_horizon: '#243d64',
-            ground: '#1aa6f2', sunrise_ground: '#72556d', night_ground: '#07101e',
+            zenith: '#41b6f8', horizon: '#e4f8ea',
+            sunrise_zenith: '#5473a5', sunrise_horizon: '#d1b5aa',
+            night_zenith: '#040f22', night_horizon: '#3a72ae',
+            ground: '#c4dcd7', sunrise_ground: '#7c687b', night_ground: '#0b1828',
             sun: '#fff7c7', moon: '#dce9ff', cloud: '#edf8ff',
             cloud_top: '#fcfeff', cloud_sun_side: '#e9f4fa',
             cloud_shadow_side: '#bed2e2', cloud_bottom: '#8fa8bc', cloud_edge: '#fff3c4',
@@ -318,32 +355,32 @@
             cloud_brightness: 1.25,
             day_sky_gradient: {
                 version: SKY_GRADIENT_VERSION, domain: 'full_sky', horizon_position: SKY_HORIZON_POSITION,
-                color_space: 'oklab', interpolation: 'smooth',
+                color_space: 'srgb', interpolation: 'smooth',
                 stops: [
-                    { id: 'rendercraft_day_ground', position: 0, color: '#1aa6f2', midpoint: 0.48 },
-                    { id: 'rendercraft_day_horizon', position: SKY_HORIZON_POSITION, color: '#1aa6f2', midpoint: 0.48 },
-                    { id: 'rendercraft_day_middle', position: 0.68, color: '#0989f8', midpoint: 0.5 },
-                    { id: 'rendercraft_day_zenith', position: 1, color: '#0783f7', midpoint: 0.5 }
+                    { id: 'rendercraft_day_ground', position: 0, color: '#c4dcd7', midpoint: 0.5 },
+                    { id: 'rendercraft_day_horizon', position: SKY_HORIZON_POSITION, color: '#e4f8ea', midpoint: 0.5 },
+                    { id: 'rendercraft_day_middle', position: 0.74, color: '#77cef5', midpoint: 0.5 },
+                    { id: 'rendercraft_day_zenith', position: 1, color: '#41b6f8', midpoint: 0.5 }
                 ]
             },
             sunrise_sky_gradient: {
                 version: SKY_GRADIENT_VERSION, domain: 'full_sky', horizon_position: SKY_HORIZON_POSITION,
-                color_space: 'oklab', interpolation: 'smooth',
+                color_space: 'srgb', interpolation: 'smooth',
                 stops: [
-                    { id: 'rendercraft_sunrise_ground', position: 0, color: '#72556d', midpoint: 0.46 },
-                    { id: 'rendercraft_sunrise_horizon', position: SKY_HORIZON_POSITION, color: '#ffad74', midpoint: 0.4 },
-                    { id: 'rendercraft_sunrise_middle', position: 0.72, color: '#c98fc5', midpoint: 0.52 },
-                    { id: 'rendercraft_sunrise_zenith', position: 1, color: '#6968b2', midpoint: 0.5 }
+                    { id: 'rendercraft_sunrise_ground', position: 0, color: '#7c687b', midpoint: 0.5 },
+                    { id: 'rendercraft_sunrise_horizon', position: SKY_HORIZON_POSITION, color: '#d1b5aa', midpoint: 0.5 },
+                    { id: 'rendercraft_sunrise_middle', position: 0.74, color: '#9690c1', midpoint: 0.5 },
+                    { id: 'rendercraft_sunrise_zenith', position: 1, color: '#5473a5', midpoint: 0.5 }
                 ]
             },
             night_sky_gradient: {
                 version: SKY_GRADIENT_VERSION, domain: 'full_sky', horizon_position: SKY_HORIZON_POSITION,
-                color_space: 'oklab', interpolation: 'smooth',
+                color_space: 'srgb', interpolation: 'smooth',
                 stops: [
-                    { id: 'rendercraft_night_ground', position: 0, color: '#07101e', midpoint: 0.46 },
-                    { id: 'rendercraft_night_horizon', position: SKY_HORIZON_POSITION, color: '#243d64', midpoint: 0.44 },
-                    { id: 'rendercraft_night_middle', position: 0.73, color: '#101f45', midpoint: 0.5 },
-                    { id: 'rendercraft_night_zenith', position: 1, color: '#07132f', midpoint: 0.5 }
+                    { id: 'rendercraft_night_ground', position: 0, color: '#0b1828', midpoint: 0.5 },
+                    { id: 'rendercraft_night_horizon', position: SKY_HORIZON_POSITION, color: '#3a72ae', midpoint: 0.5 },
+                    { id: 'rendercraft_night_middle', position: 0.74, color: '#22416f', midpoint: 0.5 },
+                    { id: 'rendercraft_night_zenith', position: 1, color: '#040f22', midpoint: 0.5 }
                 ]
             }
         }
@@ -501,6 +538,8 @@
         time: true,
         sky: false,
         fog: false,
+        fog_texture: false,
+        distance_grade: false,
         celestial: true,
         moon: false,
         stars: false,
@@ -516,11 +555,12 @@
     const environmentPanelLayoutKeys = new Set([
         'dimension', 'dimension_fog_mode', 'sky_cycle_mode', 'animate_time', 'palette_mode',
         'sky_time_gradients_enabled', 'sky_time_gradients', 'distance_fog_enabled',
-        'distance_fog_color_mode', 'distance_fog_gradient', 'sun_enabled',
+        'distance_fog_color_mode', 'distance_fog_gradient', 'distance_fog_noise',
+        'distance_grade_enabled', 'distance_grade_follow_fog', 'distance_grade_tint_mode', 'distance_grade_pivot_mode', 'sun_enabled',
         'sun_mode', 'moon_mode', 'moon_texture_layout', 'stars_enabled',
         'clouds_enabled', 'cloud_style', 'cloud_mode', 'cloud_palette_mode',
         'cloud_time_profiles_enabled', 'cloud_time_profiles',
-        'cloud_bevel_smooth', 'cloud_bevel_distance_fade', 'cloud_lighting_mode',
+        'cloud_bevel_enabled', 'cloud_bevel_smooth', 'cloud_bevel_distance_fade', 'cloud_lighting_mode',
         'cloud_fog_enabled', 'cloud_fog_color_mode', 'environment_bloom_enabled',
         'sun_cast_shadows', 'shadow_auto_fit', 'shadow_scene_fit', 'shadow_region_locked', 'pixelated_shadows'
     ]);
@@ -532,6 +572,12 @@
     let proceduralCloudTexture = null;
     let cloudOccupancyCache = new WeakMap();
     const cloudOccupancyTextures = new Set();
+    let cloudDistanceCache = new WeakMap();
+    const cloudDistanceTextures = new Set();
+    let cloudDistanceWorker = null;
+    let cloudDistanceWorkerUrl = null;
+    let cloudDistancePending = null;
+    let cloudDistanceJob = null;
     let fallbackTexture = null;
     let builtInSkyTexturesReady = false;
     let missingSkyTexture = null;
@@ -555,6 +601,8 @@
     const cloudRuntimeStats = {
         sourceCacheBuilds: 0,
         occupancyBuilds: 0,
+        distanceBuilds: 0,
+        distanceBuildMs: 0,
         lastAnimationIntervalMs: 33,
         requestedFrames: 0
     };
@@ -1157,13 +1205,6 @@
         return tick >= 6000 && tick < 18000 ? 'sunset' : 'sunrise';
     }
 
-    const SKY_REFERENCE_CUSTOM_ANCHORS = Object.freeze([
-        {time: 6000, phase: 'day'},
-        {time: 12500, phase: 'sunset'},
-        {time: 18000, phase: 'night'},
-        {time: 23500, phase: 'sunrise'}
-    ]);
-
     function getCustomSkyReferenceBlend(time = settings.time) {
         return settings.palette_mode === 'custom' && settings.sky_custom_reference_match &&
             !settings.sky_time_gradients_enabled && settings.sky_cycle_mode === 'reference' &&
@@ -1589,11 +1630,20 @@
         result.distance_fog_start = Math.max(0, finite(result.distance_fog_start, DEFAULT_SETTINGS.distance_fog_start));
         result.distance_fog_end = Math.max(result.distance_fog_start + 0.001, finite(result.distance_fog_end, DEFAULT_SETTINGS.distance_fog_end));
         result.distance_fog_smoothness = clamp(finite(result.distance_fog_smoothness, DEFAULT_SETTINGS.distance_fog_smoothness), 0, 1);
+        result.distance_fog_curve = clamp(finite(result.distance_fog_curve, 1), 0.25, 4);
+        result.distance_fog_sky_blend = clamp(finite(result.distance_fog_sky_blend, 0), 0, 1);
+        result.distance_fog_noise = clamp(finite(result.distance_fog_noise, 0), 0, 1);
+        result.distance_fog_noise_scale = clamp(finite(result.distance_fog_noise_scale, 24), 0.25, 4096);
         result.distance_fog_gradient = clamp(finite(result.distance_fog_gradient, DEFAULT_SETTINGS.distance_fog_gradient), 0, 1);
         result.distance_fog_dither = clamp(finite(result.distance_fog_dither, DEFAULT_SETTINGS.distance_fog_dither), 0, 1);
         result.distance_fog_max_opacity = clamp(finite(result.distance_fog_max_opacity, DEFAULT_SETTINGS.distance_fog_max_opacity), 0, 1);
         result.distance_fog_sync_background = result.distance_fog_sync_background !== false;
         result.distance_grade_enabled = !!result.distance_grade_enabled;
+        result.distance_grade_follow_fog = !!result.distance_grade_follow_fog;
+        result.distance_grade_curve = clamp(finite(result.distance_grade_curve, 1), 0.25, 4);
+        result.distance_grade_pivot = clamp(finite(result.distance_grade_pivot, 0.5), 0, 1);
+        result.distance_grade_pivot_mode = result.distance_grade_pivot_mode === 'sky' ? 'sky' : 'fixed';
+        result.distance_grade_tint_mode = result.distance_grade_tint_mode === 'sky' ? 'sky' : 'fixed';
         result.distance_grade_start = Math.max(0, finite(result.distance_grade_start, DEFAULT_SETTINGS.distance_grade_start));
         result.distance_grade_end = Math.max(result.distance_grade_start + 0.001, finite(result.distance_grade_end, DEFAULT_SETTINGS.distance_grade_end));
         result.distance_grade_saturation = clamp(finite(result.distance_grade_saturation, DEFAULT_SETTINGS.distance_grade_saturation), 0, 2);
@@ -1676,6 +1726,16 @@
         result.cloud_bevel_softness = clamp(finite(result.cloud_bevel_softness, DEFAULT_SETTINGS.cloud_bevel_softness), 0, 1);
         result.cloud_bevel_roundness = clamp(finite(result.cloud_bevel_roundness, DEFAULT_SETTINGS.cloud_bevel_roundness), 0, 1);
         result.cloud_bevel_strength = clamp(finite(result.cloud_bevel_strength, DEFAULT_SETTINGS.cloud_bevel_strength), 0, 2);
+        result.cloud_bevel_enabled = result.cloud_bevel_enabled !== false;
+        result.cloud_scattering_strength = clamp(finite(result.cloud_scattering_strength, DEFAULT_SETTINGS.cloud_scattering_strength), 0, 3);
+        result.cloud_gradient_thickness = clamp(finite(result.cloud_gradient_thickness, DEFAULT_SETTINGS.cloud_gradient_thickness), 0, 8);
+        result.cloud_gradient_alpha = clamp(finite(result.cloud_gradient_alpha, DEFAULT_SETTINGS.cloud_gradient_alpha), 0, 1);
+        result.cloud_view_response = clamp(finite(result.cloud_view_response, DEFAULT_SETTINGS.cloud_view_response), 0, 1);
+        result.cloud_edge_hardness = clamp(finite(result.cloud_edge_hardness, DEFAULT_SETTINGS.cloud_edge_hardness), 0, 1);
+        result.cloud_scattering_size = clamp(finite(result.cloud_scattering_size, DEFAULT_SETTINGS.cloud_scattering_size), 0.1, 4);
+        result.cloud_optical_thickness = clamp(finite(result.cloud_optical_thickness, DEFAULT_SETTINGS.cloud_optical_thickness), 0.05, 4);
+        result.cloud_phase_anisotropy = clamp(finite(result.cloud_phase_anisotropy, DEFAULT_SETTINGS.cloud_phase_anisotropy), 0, 0.85);
+        result.cloud_density_variation = clamp(finite(result.cloud_density_variation, DEFAULT_SETTINGS.cloud_density_variation), 0, 0.3);
         result.cloud_bevel_smooth = result.cloud_bevel_smooth !== false;
         result.cloud_bevel_distance_fade = result.cloud_bevel_distance_fade !== false;
         result.cloud_bevel_distance_min_scale = clamp(finite(result.cloud_bevel_distance_min_scale, DEFAULT_SETTINGS.cloud_bevel_distance_min_scale), 0.02, 1);
@@ -1684,6 +1744,8 @@
         result.cloud_shadow_bevel_strength = clamp(finite(result.cloud_shadow_bevel_strength, DEFAULT_SETTINGS.cloud_shadow_bevel_strength), 0, 2);
         result.cloud_lighting_mode = ['palette', 'sky', 'mixed'].includes(result.cloud_lighting_mode) ? result.cloud_lighting_mode : 'mixed';
         result.cloud_sky_tint_strength = clamp(finite(result.cloud_sky_tint_strength, DEFAULT_SETTINGS.cloud_sky_tint_strength), 0, 1);
+        result.cloud_environment_influence = clamp(finite(result.cloud_environment_influence, DEFAULT_SETTINGS.cloud_environment_influence), 0, 1);
+        result.cloud_time_tint_strength = clamp(finite(result.cloud_time_tint_strength, DEFAULT_SETTINGS.cloud_time_tint_strength), 0, 1);
         result.cloud_sun_tint_strength = clamp(finite(result.cloud_sun_tint_strength, DEFAULT_SETTINGS.cloud_sun_tint_strength), 0, 1);
         result.cloud_fog_enabled = result.cloud_fog_enabled !== false;
         result.cloud_fog_color_mode = result.cloud_fog_color_mode === 'custom' ? 'custom' : 'sky';
@@ -2008,6 +2070,12 @@
     }
 
     function clearCloudOccupancyCache() {
+        cloudDistanceWorker?.terminate();
+        if (cloudDistanceWorkerUrl) URL.revokeObjectURL(cloudDistanceWorkerUrl);
+        cloudDistanceWorker = cloudDistanceWorkerUrl = cloudDistancePending = cloudDistanceJob = null;
+        cloudDistanceTextures.forEach(texture => texture?.dispose?.());
+        cloudDistanceTextures.clear();
+        cloudDistanceCache = new WeakMap();
         cloudOccupancyTextures.forEach(texture => texture?.dispose?.());
         cloudOccupancyTextures.clear();
         cloudOccupancyCache = new WeakMap();
@@ -2166,6 +2234,168 @@
         cloudOccupancyTextures.add(texture);
         cloudRuntimeStats.occupancyBuilds++;
         return record;
+    }
+
+    // Periodic rectangular (L-infinity) distance to the union of occupied cells.
+    // RG stores signed center distance; B stores nearest-ring side/corner flags.
+    // The shader reconstructs the exact subcell distance instead of bilinearly
+    // rounding or chamfering a rectangular contour at convex/concave corners.
+    function buildCloudDistanceField(source, threshold) {
+        const width = source.width, height = source.height;
+        if (width > 512 || height > 512) return null;
+        const count = width * height, cap = 8;
+        const mask = new Uint8Array(count), distance = new Float32Array(count);
+        const queue = new Int32Array(count);
+        const index = (x,y) => ((y%height+height)%height)*width+(x%width+width)%width;
+        for (let i = 0; i < count; i++) {
+            const offset = i*4, alpha = source.data[offset+3]/255;
+            const value = alpha < .999 ? alpha : (source.data[offset]*.299+source.data[offset+1]*.587+source.data[offset+2]*.114)/255;
+            mask[i] = value >= threshold ? 1 : 0;
+            distance[i] = cap;
+        }
+        let head = 0, tail = 0;
+        for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+            const i = y*width+x;
+            let boundary = false;
+            for (let dy = -1; dy <= 1 && !boundary; dy++) for (let dx = -1; dx <= 1; dx++) {
+                if (mask[index(x+dx,y+dy)] !== mask[i]) { boundary = true; break; }
+            }
+            if (boundary) { distance[i] = .5; queue[tail++] = i; }
+        }
+        // Multi-source eight-neighbor transform, bounded to eight cells. This
+        // runs only when topology changes, using the existing background worker.
+        while (head < tail) {
+            const i = queue[head++], x = i%width, y = Math.floor(i/width);
+            const next = distance[i]+1;
+            if (next >= cap) continue;
+            for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+                const j = index(x+dx,y+dy);
+                if (mask[j] === mask[i] && distance[j] > next) {
+                    distance[j] = next; queue[tail++] = j;
+                }
+            }
+        }
+        const data = new Uint8Array(count*4);
+        for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+            const i = y*width+x, value = mask[i];
+            let flags = 0;
+            if (distance[i] < cap) {
+                const r = Math.round(distance[i]+.5);
+                // Ring side interiors have a single dominant axis. Corners
+                // need max(dx,dy); keeping them distinct preserves square insets.
+                for (let k = -r+1; k < r; k++) {
+                    if (mask[index(x+r,y+k)] !== value) flags |= 1;
+                    if (mask[index(x-r,y+k)] !== value) flags |= 2;
+                    if (mask[index(x+k,y+r)] !== value) flags |= 4;
+                    if (mask[index(x+k,y-r)] !== value) flags |= 8;
+                }
+                if (mask[index(x+r,y+r)] !== value) flags |= 16;
+                if (mask[index(x-r,y+r)] !== value) flags |= 32;
+                if (mask[index(x+r,y-r)] !== value) flags |= 64;
+                if (mask[index(x-r,y-r)] !== value) flags |= 128;
+            }
+            const signed = distance[i]*(value ? 1 : -1);
+            const encoded = Math.round(clamp(signed/16+.5,0,1)*65535);
+            data[i*4] = encoded >> 8; data[i*4+1] = encoded & 255;
+            data[i*4+2] = flags; data[i*4+3] = 255;
+        }
+        return {data, width, height};
+    }
+
+    function installCloudDistanceField(cached, field, bucket) {
+        if (!field) return;
+        if (cached.texture) { cached.texture.dispose(); cloudDistanceTextures.delete(cached.texture); }
+        const texture = configureEnvironmentTexture(new THREE.DataTexture(field.data, field.width, field.height, THREE.RGBAFormat),
+            {name: 'Lightflow_Vibrant_Cloud_Distance', repeat: true});
+        texture.minFilter = texture.magFilter = THREE.NearestFilter;
+        cached.texture = texture;
+        cached.bucket = bucket;
+        cloudDistanceTextures.add(texture);
+    }
+
+    function dispatchCloudDistanceJob() {
+        if (cloudDistanceJob || !cloudDistancePending) return;
+        cloudDistanceJob = cloudDistancePending;
+        cloudDistancePending = null;
+        const {cached, threshold} = cloudDistanceJob;
+        const data = new Uint8Array(cached.source.data);
+        cloudDistanceWorker.postMessage({source: {width: cached.source.width, height: cached.source.height, data},threshold}, [data.buffer]);
+    }
+
+    function getCloudDistanceTexture(sourceTexture, coverage, contrast) {
+        if (!sourceTexture || !window.THREE?.DataTexture) return null;
+        const image = sourceTexture.image || sourceTexture.source?.data;
+        let cached = cloudDistanceCache.get(sourceTexture);
+        if (Math.max(image?.width || image?.naturalWidth || 0, image?.height || image?.naturalHeight || 0) > 512) {
+            if (cached) {
+                cached.disposed = true;
+                cached.texture?.dispose(); cloudDistanceTextures.delete(cached.texture);
+                cloudDistanceCache.delete(sourceTexture);
+            }
+            return null;
+        }
+        if (!cached || cached.stamp !== (image?.data || image) || cached.version !== sourceTexture.version) {
+            if (cached) cached.disposed = true;
+            if (cached?.texture) { cached.texture.dispose(); cloudDistanceTextures.delete(cached.texture); }
+            const source = readCloudTexturePixels(sourceTexture);
+            if (!source) return null;
+            const levels = new Set();
+            for (let i = 0; i < source.data.length; i += 4) levels.add(source.data[i + 3] < 255
+                ? source.data[i + 3] / 255 : (source.data[i] * .299 + source.data[i + 1] * .587 + source.data[i + 2] * .114) / 255);
+            cached = {source, levels: Array.from(levels).sort((a,b) => a-b), stamp: source.stamp, version: sourceTexture.version, bucket: -1};
+            cloudDistanceCache.set(sourceTexture, cached);
+        }
+        const threshold = .5 + (.5 - coverage) / Math.max(contrast, .1);
+        const bucket = cached.levels.filter(value => value < threshold).length;
+        cached.requestedBucket = bucket;
+        if (cached.bucket === bucket) {
+            if (cloudDistancePending?.cached === cached) cloudDistancePending = null;
+            return cached.texture ? cached : null;
+        }
+        // Keep only the newest requested topology while a worker is busy.
+        // Until that exact mask is ready the shader uses its occupancy fallback,
+        // never a stale field from a different layout or an unbounded job queue.
+        if (typeof Worker !== 'undefined' && typeof Blob !== 'undefined') {
+            if (!cloudDistanceWorker) {
+                cloudDistanceWorkerUrl = URL.createObjectURL(new Blob([
+                    'const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));', buildCloudDistanceField.toString(),
+                    'onmessage=e=>{const start=performance.now();const field=buildCloudDistanceField(e.data.source,e.data.threshold);postMessage({field,ms:performance.now()-start},field?[field.data.buffer]:[])};'
+                ], {type: 'text/javascript'}));
+                cloudDistanceWorker = new Worker(cloudDistanceWorkerUrl);
+                cloudDistanceWorker.onmessage = event => {
+                    const job = cloudDistanceJob;
+                    cloudDistanceJob = null;
+                    if (job && !job.cached.disposed && job.cached.requestedBucket === job.bucket) {
+                        installCloudDistanceField(job.cached,event.data.field,job.bucket);
+                        job.cached.bucket = job.bucket;
+                    }
+                    cloudRuntimeStats.distanceBuilds++;
+                    cloudRuntimeStats.distanceBuildMs = event.data.ms;
+                    dispatchCloudDistanceJob();
+                    if (environmentRuntimeLoaded) { updateScene({forceShadow:false}); requestPreviewRender(); }
+                };
+                cloudDistanceWorker.onerror = () => {
+                    cloudDistanceWorker?.terminate();
+                    cloudDistanceWorker = null;
+                    if (cloudDistanceWorkerUrl) URL.revokeObjectURL(cloudDistanceWorkerUrl);
+                    cloudDistanceWorkerUrl = null;
+                    cloudDistanceJob = cloudDistancePending = null;
+                };
+            }
+            cached.requestedBucket = bucket;
+            if (cloudDistanceJob?.cached !== cached || cloudDistanceJob.bucket !== bucket)
+                cloudDistancePending = {cached,threshold,bucket};
+            dispatchCloudDistanceJob();
+            return null;
+        }
+        const start = performance.now();
+        const field = buildCloudDistanceField(cached.source, threshold);
+        cached.bucket = bucket;
+        if (!field) return null;
+        installCloudDistanceField(cached,field,bucket);
+        cloudRuntimeStats.distanceBuilds++;
+        cloudRuntimeStats.distanceBuildMs = performance.now() - start;
+        return cached;
     }
 
     const VANILLA_RESOURCE_STORAGE_KEY = 'lightflow_environment.local_vanilla.v1';
@@ -2767,23 +2997,54 @@ uniform bool uEnvironmentVisibilityPass;
         }
     }
 
-    function getLightingState() {
-        const preset = getPalette();
-        const cloudLook = getEffectiveCloudAppearance() || getBaseCloudAppearance();
-        const dimension = getDimensionAtmosphere();
-        const cycleFrame = getReferenceCycleFrame();
-        // Sky palette edits must not switch the cloud illumination model.
-        // Cloud phase colors follow the preset's clock even with a custom sky.
-        const cloudCycleFrame = cycleFrame || getReferenceCycleFrame(settings.time, true);
+    // Shadow/program-key queries need only the celestial light. Keep sky
+    // gradients, cloud timelines, fog and Bloom out of this per-draw path.
+    function getCelestialLightingState(preset = getPalette(), dimension = getDimensionAtmosphere()) {
         const sunDirection = getSunDirection();
         const sunHeight = sunDirection[1];
         const daylight = dimension ? 0 : smoothstep(-0.12, 0.16, sunHeight);
         const night = dimension ? 0 : 1 - smoothstep(-0.28, 0.04, sunHeight);
         const twilight = dimension ? 0 : clamp(1 - Math.abs(sunHeight) / 0.28, 0, 1) * (1 - night * 0.35);
+        const celestialDirection = sunHeight >= -0.04 ? sunDirection : sunDirection.map(value => -value);
+        const daylightKeyColor = settings.sun_light_color_mode === 'time'
+            ? mixColor(hexToRgb(settings.sun_light_day_color), hexToRgb(settings.sun_light_twilight_color), twilight)
+            : hexToRgb(preset.sun);
+        const moonLightColor = settings.moon_light_color_mode === 'custom'
+            ? hexToRgb(settings.moon_light_custom_color)
+            : hexToRgb(preset.moon);
+        const sunColor = sunHeight >= -0.04 ? daylightKeyColor : moonLightColor;
+        // Change hemisphere only while the caster's energy is zero.
+        const sunWeight = smoothstep(-.04, .10, sunHeight);
+        const moonWeight = 1 - smoothstep(-.18, -.04, sunHeight);
+        const sunIntensity = settings.sun_enabled && !dimension
+            ? (sunHeight >= -0.04 ? settings.sun_intensity * daylight * sunWeight : settings.moon_intensity * night * moonWeight)
+            : 0;
+        return { enabled: !!settings.enabled, sunDirection, celestialDirection,
+            daylight, night, twilight, daylightKeyColor, sunColor, sunIntensity };
+    }
+
+    function getLightingState() {
+        const preset = getPalette();
+        const timedCloudLook = getEffectiveCloudAppearance();
+        const cloudLook = timedCloudLook || getBaseCloudAppearance();
+        const dimension = getDimensionAtmosphere();
+        const cycleFrame = getReferenceCycleFrame();
+        // Keep the illumination model, but an authored sky must supply its
+        // current colors instead of the preset's hidden cloud phase palette.
+        const cloudCycleFrame = cycleFrame || getReferenceCycleFrame(settings.time, true);
+        const { sunDirection, celestialDirection, daylight, night, twilight,
+            daylightKeyColor, sunColor, sunIntensity } = getCelestialLightingState(preset, dimension);
 
         const zenith = sampleCurrentSkyColor(1, daylight, twilight, false);
         const horizon = sampleCurrentSkyColor(SKY_HORIZON_POSITION, daylight, twilight, false);
         const ground = sampleCurrentSkyColor(0, daylight, twilight, false);
+        const customCloudSky = settings.palette_mode === 'custom' && !dimension;
+        const cloudPhaseTop = customCloudSky
+            ? sampleCurrentSkyColor(0.85, daylight, twilight, false)
+            : cloudCycleFrame?.cloudTop || [1,1,1];
+        const cloudPhaseBottom = customCloudSky
+            ? sampleCurrentSkyColor(0.55, daylight, twilight, false)
+            : cloudCycleFrame?.cloudBottom || [1,1,1];
         const customAmbient = settings.ambient_fill_color_mode === 'custom';
         const paletteFill = (side, fallback) => {
             if (!preset[`ambient_${side}_day`]) return fallback;
@@ -2805,22 +3066,6 @@ uniform bool uEnvironmentVisibilityPass;
         const dayFill = preset.ambient_day * settings.ambient_fill_day_multiplier;
         const nightFill = preset.ambient_night * settings.ambient_fill_night_multiplier;
         const ambientIntensity = (dimension ? dimension.fill : nightFill + (dayFill - nightFill) * daylight) * settings.environment_strength;
-        const celestialDirection = sunHeight >= -0.04 ? sunDirection : sunDirection.map(value => -value);
-        const daylightKeyColor = settings.sun_light_color_mode === 'time'
-            ? mixColor(hexToRgb(settings.sun_light_day_color), hexToRgb(settings.sun_light_twilight_color), twilight)
-            : hexToRgb(preset.sun);
-        const moonLightColor = settings.moon_light_color_mode === 'custom'
-            ? hexToRgb(settings.moon_light_custom_color)
-            : hexToRgb(preset.moon);
-        const sunColor = sunHeight >= -0.04 ? daylightKeyColor : moonLightColor;
-        // The one shadow caster changes hemisphere only while its energy is
-        // zero. This prevents an illuminated 180-degree shadow jump at dusk.
-        const sunWeight = smoothstep(-.04, .10, sunHeight);
-        const moonWeight = 1 - smoothstep(-.18, -.04, sunHeight);
-        const sunIntensity = settings.sun_enabled && !dimension
-            ? (sunHeight >= -0.04 ? settings.sun_intensity * daylight * sunWeight : settings.moon_intensity * night * moonWeight)
-            : 0;
-
         return {
             enabled: !!settings.enabled,
             preset: settings.preset,
@@ -2861,6 +3106,15 @@ uniform bool uEnvironmentVisibilityPass;
             cloudBottomColor: hexToRgb(cloudLook.cloud_bottom_color),
             cloudEdgeColor: hexToRgb(cloudLook.cloud_edge_color),
             cloudShadowBevelColor: hexToRgb(cloudLook.cloud_shadow_bevel_color),
+            cloudScatteringStrength: cloudLook.cloud_scattering_strength,
+            cloudScatteringSize: cloudLook.cloud_scattering_size,
+            cloudEdgeHardness: cloudLook.cloud_edge_hardness,
+            cloudViewResponse: cloudLook.cloud_view_response,
+            cloudGradientThickness: cloudLook.cloud_gradient_thickness,
+            cloudGradientAlpha: cloudLook.cloud_gradient_alpha,
+            cloudOpticalThickness: cloudLook.cloud_optical_thickness,
+            cloudPhaseAnisotropy: cloudLook.cloud_phase_anisotropy,
+            cloudDensityVariation: cloudLook.cloud_density_variation,
             cloudBevelWidth: cloudLook.cloud_bevel_width,
             cloudBevelSoftness: cloudLook.cloud_bevel_softness,
             cloudBevelRoundness: cloudLook.cloud_bevel_roundness,
@@ -2871,6 +3125,9 @@ uniform bool uEnvironmentVisibilityPass;
             cloudEdgeStrength: cloudLook.cloud_edge_strength,
             cloudShadowBevelStrength: cloudLook.cloud_shadow_bevel_strength,
             cloudLightingMode: settings.cloud_lighting_mode,
+            cloudUsePalette: settings.cloud_palette_mode === 'custom' || !!timedCloudLook,
+            cloudEnvironmentInfluence: cloudLook.cloud_environment_influence,
+            cloudTimeTintStrength: cloudLook.cloud_time_tint_strength,
             cloudSkyTintStrength: cloudLook.cloud_sky_tint_strength,
             cloudSunTintStrength: cloudLook.cloud_sun_tint_strength,
             cloudFogEnabled: settings.cloud_fog_enabled,
@@ -2892,8 +3149,8 @@ uniform bool uEnvironmentVisibilityPass;
             cloudExtrusion: settings.cloud_extrusion,
             cloudTime: getCloudMotionTime(),
             skyGradientPower: settings.sky_gradient_power,
-            cloudPhaseTop: cloudCycleFrame?.cloudTop || [1,1,1],
-            cloudPhaseBottom: cloudCycleFrame?.cloudBottom || [1,1,1],
+            cloudPhaseTop,
+            cloudPhaseBottom,
             skyGradientDomain: 'full_sky',
             starDensity: settings.star_density,
             vibrant: settings.preset === 'vibrant_visuals',
@@ -2911,6 +3168,53 @@ uniform bool uEnvironmentVisibilityPass;
             pixelShadowSteps: settings.pixel_shadow_steps,
             pixelShadowScale: settings.pixel_shadow_scale
         };
+    }
+
+    // Palette-independent starting points: the artist keeps scene distances,
+    // the sky preset and its clock. All resulting sliders remain editable.
+    const DISTANCE_LOOK_PROFILES = {
+        air: { opacity: 0.55, saturation: 0.9, contrast: 0.93, curve: 1.6, noise: 0.03 },
+        landscape: { opacity: 0.88, saturation: 0.68, contrast: 0.78, curve: 1.25, noise: 0.07 },
+        silhouette: { opacity: 1, saturation: 0.4, contrast: 0.55, curve: 0.85, noise: 0.1 }
+    };
+
+    function applyDistanceLook(id) {
+        const look = DISTANCE_LOOK_PROFILES[id];
+        if (!look) return false;
+        applySettings({
+            distance_fog_enabled: true, distance_fog_color_mode: 'sky',
+            distance_fog_smoothness: 0.8, distance_fog_curve: look.curve,
+            distance_fog_gradient: 0, distance_fog_sky_blend: 1,
+            distance_fog_max_opacity: look.opacity, distance_fog_dither: 0.65,
+            distance_fog_noise: look.noise, distance_fog_noise_scale: 24,
+            distance_grade_enabled: true, distance_grade_follow_fog: true,
+            distance_grade_saturation: look.saturation, distance_grade_contrast: look.contrast,
+            distance_grade_curve: 1.3, distance_grade_pivot_mode: 'sky',
+            distance_grade_tint_mode: 'sky', distance_grade_tint_strength: 0
+        }, {cause: 'distance_look'});
+        return true;
+    }
+
+    function openDistanceLookMenu(anchor) {
+        const composer = Dialog.open?.id === 'lightflow_environment_composer_dialog' ? Dialog.open : null;
+        environmentIdentityMenu?.delete?.();
+        environmentIdentityMenu = new Menu('lightflow_environment_distance_looks',
+            Object.keys(DISTANCE_LOOK_PROFILES).map(id => ({
+                id: `lightflow_environment_distance_look_${id}`, name: `lightflow_environment.distance_look.${id}`, icon: 'blur_on',
+                click() {
+                    if (composer) {
+                        // The full editor owns one edit, including Cancel. Keep
+                        // its form current so the next slider cannot undo this look.
+                        applyDistanceLook(id);
+                        composer.form.setValues(Object.fromEntries(Object.entries(settings)
+                            .filter(([key]) => key.startsWith('distance_fog_') || key.startsWith('distance_grade_'))));
+                    } else {
+                        runEnvironmentUndo('lightflow_environment.undo.edit', () => applyDistanceLook(id));
+                    }
+                    rebuildEnvironmentPanelForm();
+                }
+            })));
+        environmentIdentityMenu.open(anchor?.currentTarget || anchor?.target || anchor);
     }
 
     function colorToByteArray(color) {
@@ -2955,6 +3259,12 @@ uniform bool uEnvironmentVisibilityPass;
             maximumOpacity: settings.distance_fog_max_opacity,
             strictLinear: settings.distance_fog_smoothness <= 0.001,
             smoothness: settings.distance_fog_smoothness,
+            curve: settings.distance_fog_curve,
+            skyBlend: dimension ? 0 : settings.distance_fog_sky_blend,
+            skyIntensity: settings.sky_intensity,
+            skyGradientPower: settings.sky_gradient_power,
+            noise: settings.distance_fog_noise,
+            noiseScale: settings.distance_fog_noise_scale,
             gradientStrength: dimensionFog ? 0 : settings.distance_fog_gradient,
             dither: settings.distance_fog_dither,
             syncBackground: settings.distance_fog_sync_background
@@ -2962,13 +3272,22 @@ uniform bool uEnvironmentVisibilityPass;
     }
 
     function getDistanceGradeConfig() {
+        const fog = settings.distance_grade_follow_fog ? getDistanceFogConfig() : null;
+        const horizon = settings.distance_grade_pivot_mode === 'sky' || settings.distance_grade_tint_mode === 'sky'
+            ? getLightingState().horizonColor : null;
         return {
             enabled: settings.enabled !== false && settings.distance_grade_enabled === true,
-            start: settings.distance_grade_start,
-            end: settings.distance_grade_end,
+            start: fog ? fog.start : settings.distance_grade_start,
+            end: fog ? fog.end : settings.distance_grade_end,
+            curve: settings.distance_grade_curve,
+            pivot: settings.distance_grade_pivot_mode === 'sky'
+                ? clamp(horizon[0] * 0.2126 + horizon[1] * 0.7152 + horizon[2] * 0.0722, 0, 1)
+                : settings.distance_grade_pivot,
             saturation: settings.distance_grade_saturation,
             contrast: settings.distance_grade_contrast,
-            tint: colorToByteArray(hexToRgb(settings.distance_grade_tint)),
+            tint: settings.distance_grade_tint_mode === 'sky'
+                ? colorToByteArray(horizon)
+                : colorToByteArray(hexToRgb(settings.distance_grade_tint)),
             tintStrength: settings.distance_grade_tint_strength
         };
     }
@@ -3065,6 +3384,7 @@ uniform bool uEnvironmentVisibilityPass;
         'uniform float uMoonPhaseOffset;',
         'uniform vec2 uMoonAtlasGrid;',
         'uniform float uVibrant;',
+        'uniform bool uVibrantCelestialCalibration;',
         'uniform float uSkyGradientPower;',
         'uniform float uReferenceCycle;',
         'uniform float uEndAtmosphere;',
@@ -3164,12 +3484,19 @@ uniform bool uEnvironmentVisibilityPass;
         // Recover its color before alpha compositing; faint halo pixels must
         // not become an opaque dark square around the luminous core.
         '    vec3 sunDisplay = sunTexel.rgb*uSunColor / (sunTexel.a < .999 ? 1. : max(celestialMask(sunTexel),.001));',
+        '    if (uVibrantCelestialCalibration && uSunBlendMode == 0 && uSunMode == 1) {',
+        '        float discLuma = dot(sunDisplay,vec3(.2126,.7152,.0722));',
+        '        vec3 discTint = mix(vec3(1.,.98,.95),vec3(1.,.70,.40),horizonGrowth);',
+        '        discTint = mix(discTint,vec3(1.,.98,.92),smoothstep(.65,.95,discLuma)*.85);',
+        '        sunDisplay = mix(vec3(discLuma),sunDisplay,.08)*discTint*1.30;',
+        '    }',
         '    if (uSunBlendMode != 0) color = blendCelestial(color,sunDisplay,sunAlpha,uSunBlendMode);',
         '    else if (uReferenceCycle > .5) color = mix(color,sunDisplay,sunAlpha);',
         '    else color += sunTexel.rgb*uSunColor * sunAlpha * uDaylight;',
         '    float sunAngle = saturate(dot(direction,uSunDirection));',
         '    float tightGlare = pow(sunAngle, mix(540.0,250.0,horizonGrowth));',
         '    float broadGlare = pow(sunAngle, mix(38.0,18.0,horizonGrowth));',
+        '    if (uVibrantCelestialCalibration) { tightGlare *= 1.35; broadGlare *= 1.6; }',
         '    float glareAmount = uDaylight*uSunGlare*sunVisibility*uSunOpacity*(tightGlare*.58+broadGlare*.12)*(1.0+.45*gazeAlignment);',
         '    if (uReferenceCycle > .5) color = mix(color,uSunGlareColor,saturate(glareAmount));',
         '    else color += uSunGlareColor*glareAmount;',
@@ -3185,11 +3512,15 @@ uniform bool uEnvironmentVisibilityPass;
         '    if (uMoonBlendMode != 0) color = blendCelestial(color,moonDisplay,moonAlpha,uMoonBlendMode);',
         '    else if (uReferenceCycle > .5) color = mix(color,moonDisplay,moonAlpha);',
         '    else color += moonTexel.rgb*uMoonColor*moonAlpha*uNight;',
+        '    float moonHalo = uVibrant > .5 && uMoonMode == 1 && uMoonBlendMode != 3 ? pow(saturate(dot(direction,moonDirection)),120.)*.055*uNight*moonVisibility*uMoonOpacity : 0.;',
+        '    color += uMoonColor*moonHalo;',
         '',
         '    if (uEnvironmentBloomPass) {',
         '        vec3 sunBloom = sunDisplay*sunAlpha*mix(uDaylight,1.,uReferenceCycle)*uSunBloomContribution*(uSunBlendMode == 3 ? 0.0 : 1.0);',
         '        sunBloom += uSunGlareColor*uDaylight*uSunGlare*sunVisibility*uSunOpacity*(tightGlare*.58+broadGlare*.12)*uSunBloomContribution;',
         '        vec3 moonBloom = moonDisplay*moonAlpha*mix(uNight,1.,uReferenceCycle)*uMoonBloomContribution*(uMoonBlendMode == 3 ? 0.0 : 1.0);',
+        '        if (uVibrantCelestialCalibration && uSunBlendMode == 0) sunBloom *= 1.8;',
+        '        moonBloom += uMoonColor*moonHalo*uMoonBloomContribution;',
         '        vec3 displayBloom = max(sunBloom+moonBloom,vec3(0));',
         '        vec3 linearBloom = mix(displayBloom/12.92,pow((displayBloom+.055)/1.055,vec3(2.4)),step(vec3(.04045),displayBloom));',
         '        float discCoverage = max(sunAlpha*(uSunBlendMode == 3 ? 0.0 : 1.0),moonAlpha*(uMoonBlendMode == 3 ? 0.0 : 1.0));',
@@ -3313,6 +3644,25 @@ uniform float uCloudBevelDistanceMinScale;
 uniform float uCloudEdgeStrength;
 uniform float uCloudShadowBevelStrength;
 uniform float uCloudSkyTintStrength;
+uniform float uCloudEnvironmentInfluence;
+uniform float uCloudTimeTintStrength;
+uniform bool uCloudUsePalette;
+uniform bool uCloudBevelEnabled;
+uniform float uCloudScatteringStrength;
+uniform float uCloudScatteringSize;
+uniform float uCloudEdgeHardness;
+uniform float uCloudViewResponse;
+uniform float uCloudGradientThickness;
+uniform float uCloudGradientAlpha;
+uniform float uCloudOpticalThickness;
+uniform float uCloudPhaseAnisotropy;
+uniform float uCloudDensityVariation;
+uniform bool uVibrantCloudModel;
+uniform bool uCloudDistanceEnabled;
+uniform sampler2D uCloudDistanceTexture;
+uniform vec3 uCloudKeyDirection;
+uniform vec3 uCloudKeyColor;
+uniform float uCloudKeyEnergy;
 uniform float uCloudSunTintStrength;
 uniform float uCloudFogStrength;
 uniform float uCloudFogStart;
@@ -3441,6 +3791,162 @@ float cloudRoundedAlpha(
     return smoothstep(0.0, feather, insideDistance);
 }
 
+vec3 vibrantDecode(vec3 color) {
+    return mix(color / 12.92, pow((max(color, vec3(0.0)) + .055) / 1.055, vec3(2.4)), step(vec3(.04045), color));
+}
+vec3 vibrantEncode(vec3 color) {
+    return mix(color * 12.92, 1.055 * pow(max(color,vec3(0.0)), vec3(1.0/2.4)) - .055, step(vec3(.0031308),color));
+}
+void vibrantContourCandidate(float candidate, vec2 direction, inout float best, inout vec2 outward) {
+    if (candidate < best-.0001) { best = candidate; outward = direction; }
+    else if (abs(candidate-best) <= .0001) outward += direction;
+}
+float vibrantDistance(vec2 position, out vec2 outward) {
+    vec2 cell = floor(position);
+    vec2 local = position-cell-.5;
+    vec4 field = texture2D(uCloudDistanceTexture, fract((cell+.5)/uCloudTextureSize));
+    float center = (dot(field.rg,vec2(65280.,255.))/65535.-.5)*16.;
+    float flags = floor(field.b*255.+.5);
+    float offset = 1.;
+    outward = vec2(0.);
+    if (mod(flags,2.) >= 1.) vibrantContourCandidate(-local.x,vec2(1,0),offset,outward);
+    if (mod(floor(flags/2.),2.) >= 1.) vibrantContourCandidate(local.x,vec2(-1,0),offset,outward);
+    if (mod(floor(flags/4.),2.) >= 1.) vibrantContourCandidate(-local.y,vec2(0,1),offset,outward);
+    if (mod(floor(flags/8.),2.) >= 1.) vibrantContourCandidate(local.y,vec2(0,-1),offset,outward);
+    // At a corner, the dominant coordinate determines the rectangular inset.
+    vec2 diagonal = vec2(step(local.x,local.y),step(local.y,local.x));
+    if (mod(floor(flags/16.),2.) >= 1.) vibrantContourCandidate(max(-local.x,-local.y),diagonal,offset,outward);
+    diagonal = vec2(-step(-local.x,local.y),step(local.y,-local.x));
+    if (mod(floor(flags/32.),2.) >= 1.) vibrantContourCandidate(max(local.x,-local.y),diagonal,offset,outward);
+    diagonal = vec2(step(local.x,-local.y),-step(-local.y,local.x));
+    if (mod(floor(flags/64.),2.) >= 1.) vibrantContourCandidate(max(-local.x,local.y),diagonal,offset,outward);
+    diagonal = -vec2(step(-local.x,-local.y),step(-local.y,-local.x));
+    if (mod(floor(flags/128.),2.) >= 1.) vibrantContourCandidate(max(local.x,local.y),diagonal,offset,outward);
+    float normalLength = length(outward);
+    if (normalLength > .0001) outward /= normalLength;
+    return flags < .5 ? center : sign(center)*max(0.,abs(center)+offset);
+}
+float vibrantEdgeProfile(float distance, float width) {
+    // Width fixes the outer limit; hardness only changes the feather inside it.
+    // Even at one, derivatives retain a pixel-wide antialiased transition.
+    if (width <= .0001) return 1.0;
+    float aa = min(width,max(fwidth(distance),.0001));
+    float feather = mix(width,aa,uCloudEdgeHardness);
+    return smoothstep(max(0.0,width-feather),width,distance);
+}
+// An analytic single-scattering slab with a footprint-derived optical chord.
+// It is an equivalent material, not RenderDragon's internal implementation.
+void vibrantCloud(vec3 ray, vec3 position, vec3 normal, float hitDistance,
+    float slabExit, float baseHeight, float thickness, float cellSize, vec2 motion,
+    vec2 cell, float rayFootprint) {
+    vec2 footprint = (position.xz + motion) / cellSize;
+    float edgeDistance;
+    vec2 outward = vec2(0.0);
+    if (uCloudDistanceEnabled) edgeDistance = max(0.0, vibrantDistance(footprint,outward));
+    else {
+        vec2 local = fract(footprint);
+        edgeDistance = min(min(mix(1.,local.x,1.-cloudCell(cell+vec2(-1,0))),mix(1.,1.-local.x,1.-cloudCell(cell+vec2(1,0)))),
+            min(mix(1.,local.y,1.-cloudCell(cell+vec2(0,-1))),mix(1.,1.-local.y,1.-cloudCell(cell+vec2(0,1)))));
+    }
+    float side = 1.0 - abs(normal.y);
+    float h = saturate((position.y - baseHeight) / thickness);
+    float gradientAmount = (1.0-uCloudGradientAlpha)*step(.0001,uCloudGradientThickness);
+    vec3 lightDirection = normalize(uCloudKeyDirection);
+    float mu = clamp(dot(ray,lightDirection),-1.0,1.0);
+    float facingCamera = saturate(dot(normal,-ray));
+    float grazingView = 1.0-facingCamera;
+    // Artist-controlled angular response, using the actual hit face and active
+    // sun/moon direction. Zero preserves the original analytic slab exactly.
+    float angularAmount = uCloudViewResponse*gradientAmount;
+    float viewExtinction = mix(1.0,mix(.45,1.65,facingCamera),angularAmount);
+    float viewLight = mix(1.0,mix(.65,1.10,grazingView*grazingView),angularAmount);
+    float viewGlow = mix(1.0,mix(.30,1.80,grazingView*grazingView),
+        angularAmount*(.40+.60*max(mu,0.0)));
+    // One explicit rectangular support for the entire optical edge treatment.
+    // Thickness is a footprint distance in cells, never an opacity/energy gain.
+    float gradientWidth = uCloudGradientThickness;
+    float edgeBand = (1.0-vibrantEdgeProfile(edgeDistance,gradientWidth))*gradientAmount;
+    float body = 1.0-edgeBand;
+    float edgeDensity = mix(.36, 1.0, body);
+    edgeDensity = mix(edgeDensity, max(edgeDensity,.52), side);
+    float macroDensity = 1.0-uCloudDensityVariation + uCloudDensityVariation * sin(footprint.x*.37 + sin(footprint.y*.23));
+    float density = max(uCloudDensity,.05) * edgeDensity * macroDensity;
+    float slabChord = max(slabExit-hitDistance,.04);
+    float edgeChord = min(slabChord,(edgeDistance+.22)*2.0*cellSize*uCloudScatteringSize/max(length(ray.xz),.12));
+    float chord = mix(slabChord,edgeChord,edgeBand);
+    chord = min(chord, thickness * 8.0);
+    float sigma = -log(max(1.0-uCloudOpacity,.0001)) * (4.2+uCloudAbsorption) / 3.0;
+    float opticalDepth = max(.001, sigma * density * chord * uCloudOpticalThickness * viewExtinction);
+    float transmittance = exp(-opticalDepth);
+    float alpha = 1.0 - transmittance;
+    float cellPixels = cellSize / max(rayFootprint * hitDistance,.0001);
+    // Geometric antialiasing stays independent of gradient thickness/alpha,
+    // so disabling the optical transition does not expose internal cell seams.
+    vec2 local = fract(footprint);
+    vec2 aa = max(fwidth(footprint)*.65,vec2(.001));
+    float coverageX = min(mix(1.,smoothstep(0.,aa.x,local.x),1.-cloudCell(cell+vec2(-1,0))),
+        mix(1.,smoothstep(0.,aa.x,1.-local.x),1.-cloudCell(cell+vec2(1,0))));
+    float coverageZ = min(mix(1.,smoothstep(0.,aa.y,local.y),1.-cloudCell(cell+vec2(0,-1))),
+        mix(1.,smoothstep(0.,aa.y,1.-local.y),1.-cloudCell(cell+vec2(0,1))));
+    float coverage = mix(min(coverageX,coverageZ),1.0,side);
+    alpha *= coverage * smoothstep(.35,1.1,cellPixels);
+    alpha *= 1.0-smoothstep(uCloudDerived.w*.92,uCloudDerived.w,hitDistance);
+    alpha *= smoothstep(.0005,.006,abs(ray.y));
+
+    float lightHeight = max(abs(lightDirection.y),.08);
+    float verticalPath = thickness * (lightDirection.y > 0.0 ? 1.0-h : h) / lightHeight;
+    float sidePath = (edgeDistance+.10) * cellSize / max(length(lightDirection.xz),.10);
+    float lightDepth = mix(verticalPath,min(verticalPath,sidePath),edgeBand) * density * uCloudOpticalThickness / 3.0;
+    float lightTransmission = exp(-lightDepth*(.30+uCloudAbsorption));
+    float g = uCloudPhaseAnisotropy;
+    float phaseDenominator = max(1.0+g*g-2.0*g*mu,.08);
+    float phase = (1.0-g*g) / (phaseDenominator*sqrt(phaseDenominator));
+    vec3 softNormal = normalize(normal + vec3(outward.x,0.,outward.y) * (uCloudBevelEnabled && uCloudBevelWidth > .0001 ? exp(-edgeDistance/max(uCloudBevelWidth*17.5,.001)) * uCloudBevelStrength*.45 : 0.0));
+    float wrappedLight = .35 + .65 * saturate(dot(softNormal,lightDirection)*.5+.5);
+    float rim = edgeBand * lightTransmission;
+    float skyWeight = saturate(normal.y*.5+.5);
+    float sunSide = saturate(dot(horizontalDirection(normal),horizontalDirection(lightDirection))*.5+.5);
+    vec3 palette = mix(uCloudShadowSideColor,uCloudSunSideColor,sunSide);
+    palette = mix(palette,uCloudTopColor,saturate(normal.y));
+    palette = mix(palette,uCloudBottomColor,saturate(-normal.y));
+    // Palette remains an artist-owned albedo. Native VV faces are pale instead
+    // of multiplying a blue surface and a blue phase into each other twice.
+    vec3 albedo = vibrantDecode(palette);
+    if (!uCloudUsePalette) albedo = mix(vec3(1.0),albedo,.16);
+    vec3 phaseAmbient = vibrantDecode(mix(uCloudPhaseBottom,uCloudPhaseTop,.80+.12*skyWeight));
+    if (uReferenceCycle < .5) phaseAmbient *= mix(.035,1.0,uDaylight);
+    vec3 ambient = mix(vec3(1.0),phaseAmbient,uCloudTimeTintStrength*uCloudEnvironmentInfluence);
+    if (uCloudLightingMode != 0) {
+        vec3 sky = vibrantDecode(sampleSkyLight(softNormal));
+        ambient = mix(ambient,uCloudLightingMode == 1 ? sky : ambient*(.58+sky*.82),uCloudSkyTintStrength*uCloudEnvironmentInfluence);
+    }
+    float selfShade = 1.0 - .18 * body * min(uCloudScatteringStrength,1.0);
+    vec3 key = vibrantDecode(mix(vec3(1.0),uCloudKeyColor,saturate(uCloudSunTintStrength*2.5))) * uCloudKeyEnergy * uCloudEnvironmentInfluence;
+    vec3 incident = ambient * selfShade * (.88+.12*skyWeight);
+    incident += key * lightTransmission * (wrappedLight*.70 + phase*.055*uCloudScatteringStrength*viewGlow);
+    float rimFacing = .25+.75*saturate(dot(vec3(outward.x,0.,outward.y),lightDirection));
+    incident += key * rim * rimFacing * (.10+.14*saturate(mu)) * uCloudTranslucency * uCloudEdgeStrength/ .16 * uCloudScatteringStrength * viewGlow;
+    vec3 radiance = albedo * incident * uCloudBrightness * viewLight;
+    // Extinction and aerial in-scattering affect contrast, never the geometric
+    // opacity. Thus distant clouds merge into their sky without showing stars.
+    float fogCoordinate = max(0.0,(hitDistance/uCloudDerived.w-uCloudFogStart)/max(uCloudFogEnd-uCloudFogStart,.01));
+    float airDepth = pow(fogCoordinate,1.35)*2.4;
+    float airAmount = uCloudFogEnabled == 1 ? (1.0-exp(-airDepth*uCloudFogStrength)) * uCloudEnvironmentInfluence : 0.0;
+    vec3 air = vibrantDecode(uCloudFogColorMode == 1 ? uCloudFogColor : sampleSkyLight(ray));
+    air += key * pow(saturate(mu),8.0) * .025 * (1.0-abs(ray.y));
+    radiance = mix(radiance,air,airAmount);
+    if (uEnvironmentVisibilityPass) { gl_FragColor=vec4(0.,0.,0.,alpha); return; }
+    if (uEnvironmentBloomPass) {
+        gl_FragColor=vec4(max(radiance,vec3(0.0))*alpha*uCloudBloomContribution,alpha); return;
+    }
+    // The beauty target follows the existing display-space Environment contract;
+    // the dedicated bloom target above receives uncompressed linear radiance.
+    vec3 display = vibrantEncode(max(radiance,vec3(0.0)));
+    float peak = max(max(display.r,display.g),display.b);
+    if (peak > .93) display *= (.93+.07*(1.-exp(-(peak-.93)/.07))) / peak;
+    gl_FragColor=vec4(display,alpha);
+}
+
 void main() {
     vec3 ray = normalize(vSkyDirection);
     float rayFootprint = max(length(dFdx(ray)), length(dFdy(ray)));
@@ -3546,8 +4052,12 @@ void main() {
     float spatialAlpha = 1.0;
     float normalizedHitDistance = saturate(hitDistance / maxDistance);
     float cloudHeightPosition = saturate((hitPosition.y - baseHeight) / layerThickness);
+    if (uVibrantCloudModel) {
+        vibrantCloud(ray,hitPosition,hitNormal,hitDistance,tExit,baseHeight,layerThickness,cellSize,motion,cell,rayFootprint);
+        return;
+    }
 
-    if (uCloudStyle > 0 && uCloudBevelWidth > .0001) {
+    if (uCloudBevelEnabled && uCloudStyle > 0 && uCloudBevelWidth > .0001) {
         vec2 localCell = fract((hitPosition.xz + motion) / cellSize);
         float distanceRatio = normalizedHitDistance;
         float distanceWidthScale = uCloudBevelDistanceFade == 1
@@ -3634,7 +4144,7 @@ void main() {
         float diffuseKey = .82 + .18 * saturate(dot(shadingNormal, uSunDirection));
         dayColor *= diffuseKey;
 
-        float skyTint = saturate(uCloudSkyTintStrength);
+        float skyTint = saturate(uCloudSkyTintStrength) * uCloudEnvironmentInfluence;
         if (skyTint > 0.0 && uCloudLightingMode != 0) {
             vec3 skyLight = max(sampleSkyLight(shadingNormal), vec3(0.0));
             if (uCloudLightingMode == 1) {
@@ -3645,7 +4155,7 @@ void main() {
         }
 
         float sunFacing = saturate(dot(shadingNormal, uSunDirection) * .5 + .5);
-        vec3 sunTint = mix(vec3(1.0), max(uSunColor, vec3(.02)), saturate(uCloudSunTintStrength) * sunFacing * uDaylight);
+        vec3 sunTint = mix(vec3(1.0), max(uSunColor, vec3(.02)), saturate(uCloudSunTintStrength) * sunFacing * uDaylight * uCloudEnvironmentInfluence);
         dayColor *= sunTint;
 
         float bevelFacing = saturate(dot(shadingNormal, uSunDirection) * .5 + .5);
@@ -3671,8 +4181,22 @@ void main() {
         faceLight = 1.0;
     } else {
         dayColor = uCloudColor;
+        // Flat faces retain their native shading; custom/timed palettes also
+        // work with Vanilla and every cloud texture source.
+        if (uCloudUsePalette) {
+            float sideFacing = saturate(dot(horizontalDirection(hitNormal), sunHorizontal) * .5 + .5);
+            dayColor = hitNormal.y > .5 ? uCloudTopColor : (hitNormal.y < -.5
+                ? uCloudBottomColor : mix(uCloudShadowSideColor, uCloudSunSideColor, sideFacing));
+            float skyTint = saturate(uCloudSkyTintStrength) * uCloudEnvironmentInfluence;
+            vec3 skyLight = max(sampleSkyLight(hitNormal), vec3(0.0));
+            if (uCloudLightingMode == 1) dayColor = mix(dayColor, skyLight, skyTint);
+            else if (uCloudLightingMode == 2) dayColor = mix(dayColor, dayColor * (.58 + skyLight * .82), skyTint);
+            float sunFacing = saturate(dot(hitNormal, uSunDirection) * .5 + .5);
+            dayColor *= mix(vec3(1.0), max(uSunColor, vec3(.02)), saturate(uCloudSunTintStrength) * sunFacing * uDaylight * uCloudEnvironmentInfluence);
+        }
     }
 
+    vec3 untimedColor = dayColor * faceLight * uCloudBrightness;
     vec3 cloudColor;
     if (uReferenceCycle > .5) {
         float skyFacing = smoothstep(-.7, .8, shadingNormal.y);
@@ -3683,8 +4207,8 @@ void main() {
         float normalization = mix(1.0, max(facePeak,.15), uCloudStyle == 2 ? 1.0 : .65);
         cloudColor = dayColor / normalization * phaseLight * uCloudBrightness;
     } else {
+        vec3 nightColor = (uCloudStyle > 0 ? uCloudShadowSideColor : (uCloudUsePalette ? dayColor : uCloudColor)) * vec3(.16, .19, .27);
         dayColor *= mix(.43, 1.0, uDaylight);
-        vec3 nightColor = (uCloudStyle > 0 ? uCloudShadowSideColor : uCloudColor) * vec3(.16, .19, .27);
         cloudColor = mix(nightColor, dayColor, 1.0 - uNight * .72) * faceLight * uCloudBrightness;
     }
 
@@ -3692,6 +4216,7 @@ void main() {
     float sunsetFacingBase = saturate(dot(hitDirection, sunHorizontal));
     float sunsetFacing = sunsetFacingBase * sunsetFacingBase * sunsetFacingBase;
     cloudColor = mix(cloudColor, uSunsetColor * faceLight, uTwilight * sunsetFacing * .34 * (1.0-uReferenceCycle));
+    cloudColor = mix(untimedColor, cloudColor, uCloudTimeTintStrength * uCloudEnvironmentInfluence);
 
     if (uCloudStyle > 0) {
         float heightDepth = 1.0 - cloudHeightPosition;
@@ -3704,7 +4229,9 @@ void main() {
     // with narrow warm silhouettes that keep the Minecraft slab geometry.
     float forwardLight = pow(saturate(dot(ray,uSunDirection)), 6.0) * uDaylight;
     float transmission = saturate(uCloudTranslucency);
-    vec3 transmittedColor = mix(uCloudPhaseTop, vec3(1.0), .45) * mix(vec3(1.),uSunColor,.32);
+    vec3 transmittedPhase = mix(vec3(1.0), mix(uCloudPhaseTop, vec3(1.0), .45), uCloudTimeTintStrength);
+    vec3 transmittedColor = transmittedPhase * mix(vec3(1.),uSunColor,.32);
+    transmittedColor = mix(vec3(1.0), transmittedColor, uCloudEnvironmentInfluence);
     cloudColor = mix(cloudColor, max(cloudColor,transmittedColor), forwardLight * transmission * .65);
     if (uCloudStyle == 2) {
         float wrappedEdge = bevelMask * (.25 + .75 * forwardLight);
@@ -3718,7 +4245,7 @@ void main() {
             min(uCloudFogStart, uCloudFogEnd - .001),
             max(uCloudFogEnd, uCloudFogStart + .001),
             fogDistance
-        ) * saturate(uCloudFogStrength);
+        ) * saturate(uCloudFogStrength) * uCloudEnvironmentInfluence;
         vec3 fogColor = uCloudFogColorMode == 1 ? uCloudFogColor : sampleSkyLight(ray);
         cloudColor = mix(cloudColor, fogColor, fogAmount);
     }
@@ -3942,6 +4469,25 @@ void main() {
                 uCloudEdgeStrength: { value: settings.cloud_edge_strength },
                 uCloudShadowBevelStrength: { value: settings.cloud_shadow_bevel_strength },
                 uCloudSkyTintStrength: { value: settings.cloud_sky_tint_strength },
+                uCloudEnvironmentInfluence: { value: settings.cloud_environment_influence },
+                uCloudTimeTintStrength: { value: settings.cloud_time_tint_strength },
+                uCloudUsePalette: { value: false },
+                uCloudBevelEnabled: { value: settings.cloud_bevel_enabled },
+                uCloudScatteringStrength: { value: settings.cloud_scattering_strength },
+                uCloudScatteringSize: { value: settings.cloud_scattering_size },
+                uCloudEdgeHardness: { value: settings.cloud_edge_hardness },
+                uCloudViewResponse: { value: settings.cloud_view_response },
+                uCloudGradientThickness: { value: settings.cloud_gradient_thickness },
+                uCloudGradientAlpha: { value: settings.cloud_gradient_alpha },
+                uCloudOpticalThickness: { value: settings.cloud_optical_thickness },
+                uCloudPhaseAnisotropy: { value: settings.cloud_phase_anisotropy },
+                uCloudDensityVariation: { value: settings.cloud_density_variation },
+                uVibrantCloudModel: { value: false },
+                uCloudDistanceEnabled: { value: false },
+                uCloudDistanceTexture: { value: fallbackTexture },
+                uCloudKeyDirection: { value: new THREE.Vector3(0,1,0) },
+                uCloudKeyColor: { value: new THREE.Color(1,1,1) },
+                uCloudKeyEnergy: { value: 0 },
                 uCloudSunTintStrength: { value: settings.cloud_sun_tint_strength },
                 uCloudFogStrength: { value: settings.cloud_fog_strength },
                 uCloudFogStart: { value: settings.cloud_fog_start },
@@ -4250,6 +4796,7 @@ void main() {
                 uCloudOpacity: { value: settings.cloud_opacity },
                 uCloudTime: { value: 0 },
                 uVibrant: { value: 0 },
+                uVibrantCelestialCalibration: { value: false },
                 uSkyGradientPower: { value: settings.sky_gradient_power },
                 uStarDensity: { value: settings.star_density },
                 uSunHorizonScale: { value: settings.sun_horizon_scale },
@@ -4490,7 +5037,7 @@ void main() {
         settings.shadow_fit_corners = corners.flatMap(corner => corner.toArray());
     }
 
-    function isSunShadowActive(state = getLightingState()) {
+    function isSunShadowActive(state = getCelestialLightingState()) {
         return !!(
             state.enabled &&
             settings.sun_enabled &&
@@ -4522,7 +5069,7 @@ void main() {
         const frustum = getActiveShadowFrustum();
         const area = frustum.area;
         const shadow = sunLight.shadow;
-        const state = options.state || getLightingState();
+        const state = options.state || getCelestialLightingState();
         const castsShadow = isSunShadowActive(state);
         sunLight.userData = sunLight.userData || {};
         if (castsShadow) {
@@ -4936,6 +5483,7 @@ void main() {
         // A late texture-load callback can arrive after plugin unload. It must
         // not recreate disposed sky meshes alongside the next plugin instance.
         if (!environmentRuntimeLoaded || !window.THREE || !window.Canvas?.scene) return;
+        if (settings.enabled && typeof PreviewScene !== 'undefined') PreviewScene.active?.unselect?.();
         const studioRender = options.studio !== undefined
             ? !!options.studio
             : !!window.LightManagerStudioRenderSession;
@@ -4980,6 +5528,7 @@ void main() {
             skyMaterial.uniforms.uCloudOpacity.value = state.cloudOpacity;
             skyMaterial.uniforms.uCloudTime.value = getCloudMotionTime();
             skyMaterial.uniforms.uVibrant.value = settings.preset === 'vibrant_visuals' ? 1 : 0;
+            skyMaterial.uniforms.uVibrantCelestialCalibration.value = settings.preset === 'vibrant_visuals' && settings.palette_mode === 'preset';
             skyMaterial.uniforms.uSkyGradientPower.value = state.skyGradientPower;
             skyMaterial.uniforms.uStarDensity.value = settings.star_density;
             skyMaterial.uniforms.uSunHorizonScale.value = settings.sun_horizon_scale;
@@ -5069,6 +5618,29 @@ void main() {
                     occupancy?.height || 1
                 );
                 cloudMaterial.uniforms.uCloudHierarchyEnabled.value = occupancy?.conservative ? 1 : 0;
+                // The selected cloud material is independent of its sky preset or user copy.
+                const vibrantCloudModel = settings.cloud_style === 'vibrant_visuals';
+                cloudMaterial.uniforms.uCloudBevelEnabled.value = settings.cloud_bevel_enabled;
+                cloudMaterial.uniforms.uCloudScatteringStrength.value = state.cloudScatteringStrength;
+                cloudMaterial.uniforms.uCloudScatteringSize.value = state.cloudScatteringSize;
+                cloudMaterial.uniforms.uCloudEdgeHardness.value = state.cloudEdgeHardness;
+                cloudMaterial.uniforms.uCloudViewResponse.value = state.cloudViewResponse;
+                cloudMaterial.uniforms.uCloudGradientThickness.value = state.cloudGradientThickness;
+                cloudMaterial.uniforms.uCloudGradientAlpha.value = state.cloudGradientAlpha;
+                cloudMaterial.uniforms.uCloudOpticalThickness.value = state.cloudOpticalThickness;
+                cloudMaterial.uniforms.uCloudPhaseAnisotropy.value = state.cloudPhaseAnisotropy;
+                cloudMaterial.uniforms.uCloudDensityVariation.value = state.cloudDensityVariation;
+                cloudMaterial.uniforms.uVibrantCloudModel.value = vibrantCloudModel;
+                const distanceField = vibrantCloudModel && cloudTextureMode === 1
+                    ? getCloudDistanceTexture(activeCloudTexture, state.cloudCoverage, state.cloudContrast) : null;
+                cloudMaterial.uniforms.uCloudDistanceEnabled.value = !!distanceField;
+                cloudMaterial.uniforms.uCloudDistanceTexture.value = distanceField?.texture || fallbackTexture;
+                cloudMaterial.uniforms.uCloudKeyDirection.value.fromArray(state.celestialDirection);
+                const nativeSun = settings.palette_mode === 'preset' && settings.sun_light_color_mode === DEFAULT_SETTINGS.sun_light_color_mode && state.sunDirection[1] >= -.04;
+                const cloudKeyColor = nativeSun && vibrantCloudModel && settings.preset === 'vibrant_visuals'
+                    ? mixColor(hexToRgb('#fff7f0'),hexToRgb('#ffb16c'),1-smoothstep(.04,.50,state.sunDirection[1])) : state.sunColor;
+                setColor(cloudMaterial.uniforms.uCloudKeyColor.value,cloudKeyColor);
+                cloudMaterial.uniforms.uCloudKeyEnergy.value = state.sunIntensity * (state.sunDirection[1] < -.04 ? .147 : .42);
                 cloudMaterial.uniforms.uCloudScale.value = settings.cloud_scale;
                 cloudMaterial.uniforms.uCloudDirection.value = settings.cloud_direction / 180 * Math.PI;
                 cloudMaterial.uniforms.uCloudContrast.value = state.cloudContrast;
@@ -5087,6 +5659,9 @@ void main() {
                 cloudMaterial.uniforms.uCloudShadowBevelStrength.value = state.cloudShadowBevelStrength;
                 cloudMaterial.uniforms.uCloudLightingMode.value = settings.cloud_lighting_mode === 'sky' ? 1 : (settings.cloud_lighting_mode === 'mixed' ? 2 : 0);
                 cloudMaterial.uniforms.uCloudSkyTintStrength.value = state.cloudSkyTintStrength;
+                cloudMaterial.uniforms.uCloudEnvironmentInfluence.value = state.cloudEnvironmentInfluence;
+                cloudMaterial.uniforms.uCloudTimeTintStrength.value = state.cloudTimeTintStrength;
+                cloudMaterial.uniforms.uCloudUsePalette.value = state.cloudUsePalette;
                 cloudMaterial.uniforms.uCloudSunTintStrength.value = state.cloudSunTintStrength;
                 cloudMaterial.uniforms.uCloudFogEnabled.value = settings.cloud_fog_enabled ? 1 : 0;
                 cloudMaterial.uniforms.uCloudFogColorMode.value = settings.cloud_fog_color_mode === 'custom' ? 1 : 0;
@@ -5399,24 +5974,500 @@ void main() {
         return Object.assign({}, settings);
     }
 
+    // Authored appearance from the matching presets/*.lfenv exports. Session,
+    // project textures, fog/grading and shadow fitting remain outside this profile.
+    const AUTHORED_NATIVE_SKY_SETTINGS = Object.freeze({
+        rendercraft: {
+            palette_mode: "custom",
+            sky_custom_palette_saved: true,
+            sky_custom_reference_match: false,
+            sky_cycle_mode: "reference",
+            zenith_color: "#41b6f8",
+            horizon_color: "#e4f8ea",
+            sunrise_zenith_color: "#5473a5",
+            sunrise_horizon_color: "#d1b5aa",
+            night_zenith_color: "#040f22",
+            night_horizon_color: "#3a72ae",
+            ground_color: "#c4dcd7",
+            sun_color: "#fff7c7",
+            moon_color: "#dce9ff",
+            cloud_color: "#edf8ff",
+            sky_intensity: 1,
+            sky_gradient_power: 1,
+            sky_time_gradients_enabled: true,
+            sky_time_gradients: [
+                {"id": "clock_10000_4", "time": 1500, "gradient": {"version": 2, "color_space": "srgb", "interpolation": "smooth", "stops": [{"id": "clock_10000_ground", "position": 0, "color": "#ffd196", "midpoint": 0.5}, {"id": "clock_10000_horizon", "position": 0.5, "color": "#ffd196", "midpoint": 0.5042253950951805}, {"id": "clock_10000_zenith", "position": 1, "color": "#2773b4", "midpoint": 0.5}], "domain": "full_sky", "horizon_position": 0.5}},
+                {"id": "clock_2000_7", "time": 2500, "gradient": {"version": 2, "color_space": "srgb", "interpolation": "smooth", "stops": [{"id": "clock_2000_ground", "position": 0, "color": "#afeeff", "midpoint": 0.5}, {"id": "clock_2000_horizon", "position": 0.5, "color": "#afeeff", "midpoint": 0.5}, {"id": "clock_2000_zenith", "position": 1, "color": "#049eff", "midpoint": 0.5}], "domain": "full_sky", "horizon_position": 0.5}},
+                {"id": "sky_day", "phase": "day", "time": 6000, "gradient": {"version": 2, "color_space": "srgb", "interpolation": "smooth", "stops": [{"id": "day_ground", "position": 0, "color": "#afeeff", "midpoint": 0.5}, {"id": "day_horizon", "position": 0.5, "color": "#afeeff", "midpoint": 0.5}, {"id": "day_zenith", "position": 1, "color": "#049eff", "midpoint": 0.5}], "domain": "full_sky", "horizon_position": 0.5}},
+                {"id": "clock_10000_6", "time": 10000, "gradient": {"version": 2, "color_space": "srgb", "interpolation": "smooth", "stops": [{"id": "clock_10000_ground", "position": 0, "color": "#afeeff", "midpoint": 0.5}, {"id": "clock_10000_horizon", "position": 0.5, "color": "#afeeff", "midpoint": 0.5}, {"id": "clock_10000_zenith", "position": 1, "color": "#049eff", "midpoint": 0.5}], "domain": "full_sky", "horizon_position": 0.5}},
+                {"id": "clock_11000_5", "time": 11800, "gradient": {"version": 2, "color_space": "srgb", "interpolation": "smooth", "stops": [{"id": "clock_11000_ground", "position": 0, "color": "#ffee96", "midpoint": 0.5}, {"id": "clock_11000_horizon", "position": 0.5, "color": "#ffee96", "midpoint": 0.5}, {"id": "clock_11000_middle", "position": 0.74, "color": "#fe782f", "midpoint": 0.5}, {"id": "clock_11000_zenith", "position": 1, "color": "#ff6d4a", "midpoint": 0.5}], "domain": "full_sky", "horizon_position": 0.5}},
+                {"id": "sky_sunset", "phase": "sunset", "time": 12500, "gradient": {"version": 2, "color_space": "srgb", "interpolation": "smooth", "stops": [{"id": "sunset_ground", "position": 0, "color": "#4f4061", "midpoint": 0.5}, {"id": "sunset_horizon", "position": 0.5, "color": "#a06879", "midpoint": 0.5}, {"id": "sunset_middle", "position": 0.74, "color": "#4d3571", "midpoint": 0.5}, {"id": "sunset_zenith", "position": 1, "color": "#151140", "midpoint": 0.5}], "domain": "full_sky", "horizon_position": 0.5}},
+                {"id": "sky_night", "phase": "night", "time": 18000, "gradient": {"version": 2, "color_space": "srgb", "interpolation": "smooth", "stops": [{"id": "night_ground", "position": 0, "color": "#0b1828", "midpoint": 0.5}, {"id": "night_horizon", "position": 0.5, "color": "#3a72ae", "midpoint": 0.5}, {"id": "night_middle", "position": 0.74, "color": "#1d2356", "midpoint": 0.5}, {"id": "night_zenith", "position": 1, "color": "#0d1223", "midpoint": 0.5}], "domain": "full_sky", "horizon_position": 0.5}},
+                {"id": "sky_sunrise", "phase": "sunrise", "time": 23500, "gradient": {"version": 2, "color_space": "srgb", "interpolation": "smooth", "stops": [{"id": "sunrise_ground", "position": 0, "color": "#f8d679", "midpoint": 0.5}, {"id": "sunrise_horizon", "position": 0.5, "color": "#f8d679", "midpoint": 0.5}, {"id": "sunrise_middle", "position": 0.74, "color": "#9690c1", "midpoint": 0.5}, {"id": "sunrise_zenith", "position": 1, "color": "#545ec3", "midpoint": 0.5}], "domain": "full_sky", "horizon_position": 0.5}},
+            ],
+            day_sky_gradient: {"version": 2, "color_space": "srgb", "interpolation": "smooth", "stops": [{"id": "day_ground", "position": 0, "color": "#c4dcd7", "midpoint": 0.5}, {"id": "day_horizon", "position": 0.5, "color": "#e4f8ea", "midpoint": 0.5}, {"id": "day_middle", "position": 0.74, "color": "#77cef5", "midpoint": 0.5}, {"id": "day_zenith", "position": 1, "color": "#41b6f8", "midpoint": 0.5}], "domain": "full_sky", "horizon_position": 0.5},
+            sunrise_sky_gradient: {"version": 2, "color_space": "srgb", "interpolation": "smooth", "stops": [{"id": "sunrise_ground", "position": 0, "color": "#7c687b", "midpoint": 0.5}, {"id": "sunrise_horizon", "position": 0.5, "color": "#d1b5aa", "midpoint": 0.5}, {"id": "sunrise_middle", "position": 0.74, "color": "#9690c1", "midpoint": 0.5}, {"id": "sunrise_zenith", "position": 1, "color": "#5473a5", "midpoint": 0.5}], "domain": "full_sky", "horizon_position": 0.5},
+            sunset_sky_gradient: {"version": 2, "color_space": "srgb", "interpolation": "smooth", "stops": [{"id": "sunset_ground", "position": 0, "color": "#4f4061", "midpoint": 0.5}, {"id": "sunset_horizon", "position": 0.5, "color": "#a06879", "midpoint": 0.5}, {"id": "sunset_middle", "position": 0.74, "color": "#4d3571", "midpoint": 0.5}, {"id": "sunset_zenith", "position": 1, "color": "#151140", "midpoint": 0.5}], "domain": "full_sky", "horizon_position": 0.5},
+            night_sky_gradient: {"version": 2, "color_space": "srgb", "interpolation": "smooth", "stops": [{"id": "night_ground", "position": 0, "color": "#0b1828", "midpoint": 0.5}, {"id": "night_horizon", "position": 0.5, "color": "#3a72ae", "midpoint": 0.5}, {"id": "night_middle", "position": 0.74, "color": "#22416f", "midpoint": 0.5}, {"id": "night_zenith", "position": 1, "color": "#040f22", "midpoint": 0.5}], "domain": "full_sky", "horizon_position": 0.5},
+            star_density: 1,
+            environment_strength: 0.74,
+            ambient_fill_color_mode: "sky",
+            ambient_fill_shape: "preset",
+            ambient_fill_sky_color: "#ffffff",
+            ambient_fill_ground_color: "#ffffff",
+            ambient_fill_day_multiplier: 1,
+            ambient_fill_night_multiplier: 1,
+            sun_enabled: true,
+            sun_intensity: 2.45,
+            sun_light_color_mode: "time",
+            sun_light_day_color: "#fff7c7",
+            sun_light_twilight_color: "#ffad74",
+            moon_intensity: 0.28,
+            moon_light_color_mode: "moon",
+            moon_light_custom_color: "#a9c8ff",
+            celestial_size: 0.25,
+            moon_size: 0.25,
+            moon_phase: 0,
+            sun_mode: "vanilla",
+            moon_mode: "vanilla",
+            sun_blend_mode: "additive",
+            sun_opacity: 1,
+            moon_blend_mode: "preset",
+            moon_opacity: 1,
+            moon_texture_layout: "atlas",
+            moon_atlas_columns: 4,
+            moon_atlas_rows: 2,
+            moon_phase_offset: 0,
+            sun_horizon_scale: 2.5,
+            sun_gaze_scale: 1,
+            sun_glare: 0.75,
+            environment_bloom_enabled: true,
+            bloom_threshold: 0.78,
+            bloom_soft_knee: 0.48,
+            bloom_strength: 0.84,
+            bloom_core_strength: 0.82,
+            bloom_core_radius: 1.15,
+            bloom_halo_strength: 0.26,
+            bloom_halo_radius: 10.5,
+            bloom_hdr_strength: 0.7,
+            bloom_emissive_strength: 1.25,
+            bloom_occlusion: 0.95,
+            sun_bloom_contribution: 0.25,
+            moon_bloom_contribution: 0.92,
+            star_bloom_contribution: 0.38,
+            cloud_bloom_contribution: 0.2,
+            stars_enabled: true,
+            star_brightness: 0.72,
+            clouds_enabled: true,
+            cloud_mode: "vanilla",
+            cloud_style: "rendercraft",
+            cloud_palette_mode: "preset",
+            cloud_time_profiles_enabled: true,
+            cloud_time_profiles: [
+                {"id": "cloud_clock_0", "time": 0, "appearance": {"cloud_coverage": 0.44, "cloud_opacity": 0.9, "cloud_contrast": 4, "cloud_brightness": 1.25, "cloud_bevel_width": 0.025, "cloud_bevel_softness": 0, "cloud_bevel_roundness": 0, "cloud_bevel_strength": 2, "cloud_bevel_distance_min_scale": 0.22, "cloud_edge_strength": 2, "cloud_shadow_bevel_strength": 1.32, "cloud_environment_influence": 1, "cloud_time_tint_strength": 1, "cloud_sky_tint_strength": 0.25, "cloud_sun_tint_strength": 0.3, "cloud_fog_strength": 0.72, "cloud_fog_start": 0.42, "cloud_fog_end": 0.92, "cloud_density": 0.95, "cloud_absorption": 0.025, "cloud_translucency": 0.35, "cloud_scattering_strength": 1, "cloud_scattering_size": 1, "cloud_edge_hardness": 0, "cloud_view_response": 0, "cloud_gradient_thickness": 1, "cloud_gradient_alpha": 0, "cloud_optical_thickness": 1, "cloud_phase_anisotropy": 0.46, "cloud_density_variation": 0.03, "cloud_bloom_contribution": 0.2, "cloud_top_color": "#fcfeff", "cloud_sun_side_color": "#e9f4fa", "cloud_shadow_side_color": "#bed2e2", "cloud_bottom_color": "#8fa8bc", "cloud_edge_color": "#fff3c4", "cloud_shadow_bevel_color": "#7f98ad", "cloud_fog_color": "#1aa6f2"}},
+                {"id": "cloud_clock_6000", "time": 6000, "appearance": {"cloud_coverage": 0.44, "cloud_opacity": 0.9, "cloud_contrast": 4, "cloud_brightness": 1.85, "cloud_bevel_width": 0.025, "cloud_bevel_softness": 0, "cloud_bevel_roundness": 0, "cloud_bevel_strength": 2, "cloud_bevel_distance_min_scale": 0.22, "cloud_edge_strength": 2, "cloud_shadow_bevel_strength": 1.32, "cloud_environment_influence": 0.6, "cloud_time_tint_strength": 1, "cloud_sky_tint_strength": 0.25, "cloud_sun_tint_strength": 0.3, "cloud_fog_strength": 0.72, "cloud_fog_start": 0.42, "cloud_fog_end": 0.92, "cloud_density": 0.95, "cloud_absorption": 0.1, "cloud_translucency": 0.32, "cloud_scattering_strength": 1, "cloud_scattering_size": 1, "cloud_edge_hardness": 0, "cloud_view_response": 0, "cloud_gradient_thickness": 1, "cloud_gradient_alpha": 0, "cloud_optical_thickness": 1, "cloud_phase_anisotropy": 0.46, "cloud_density_variation": 0.03, "cloud_bloom_contribution": 0.06, "cloud_top_color": "#fcfeff", "cloud_sun_side_color": "#e9f4fa", "cloud_shadow_side_color": "#bed2e2", "cloud_bottom_color": "#8fa8bc", "cloud_edge_color": "#fff3c4", "cloud_shadow_bevel_color": "#7f98ad", "cloud_fog_color": "#1aa6f2"}},
+                {"id": "cloud_clock_12000", "time": 12000, "appearance": {"cloud_coverage": 0.44, "cloud_opacity": 0.76, "cloud_contrast": 4, "cloud_brightness": 2.65, "cloud_bevel_width": 0.025, "cloud_bevel_softness": 0, "cloud_bevel_roundness": 0, "cloud_bevel_strength": 2, "cloud_bevel_distance_min_scale": 0.22, "cloud_edge_strength": 2, "cloud_shadow_bevel_strength": 1.32, "cloud_environment_influence": 0.48, "cloud_time_tint_strength": 0.11, "cloud_sky_tint_strength": 0.42, "cloud_sun_tint_strength": 1, "cloud_fog_strength": 0.72, "cloud_fog_start": 0.42, "cloud_fog_end": 0.92, "cloud_density": 0.4, "cloud_absorption": 0.08, "cloud_translucency": 1, "cloud_scattering_strength": 1, "cloud_scattering_size": 1, "cloud_edge_hardness": 0, "cloud_view_response": 0, "cloud_gradient_thickness": 1, "cloud_gradient_alpha": 0, "cloud_optical_thickness": 1, "cloud_phase_anisotropy": 0.46, "cloud_density_variation": 0.03, "cloud_bloom_contribution": 0.06, "cloud_top_color": "#fcfeff", "cloud_sun_side_color": "#e9f4fa", "cloud_shadow_side_color": "#bed2e2", "cloud_bottom_color": "#ffe197", "cloud_edge_color": "#fff3c4", "cloud_shadow_bevel_color": "#7f98ad", "cloud_fog_color": "#1aa6f2"}},
+                {"id": "cloud_clock_18000", "time": 18000, "appearance": {"cloud_coverage": 0.44, "cloud_opacity": 0.54, "cloud_contrast": 4, "cloud_brightness": 1.75, "cloud_bevel_width": 0.025, "cloud_bevel_softness": 0, "cloud_bevel_roundness": 0, "cloud_bevel_strength": 2, "cloud_bevel_distance_min_scale": 0.22, "cloud_edge_strength": 2, "cloud_shadow_bevel_strength": 1.32, "cloud_environment_influence": 1, "cloud_time_tint_strength": 1, "cloud_sky_tint_strength": 0.25, "cloud_sun_tint_strength": 0.3, "cloud_fog_strength": 0.72, "cloud_fog_start": 0.42, "cloud_fog_end": 0.92, "cloud_density": 1.85, "cloud_absorption": 0.025, "cloud_translucency": 0.35, "cloud_scattering_strength": 1, "cloud_scattering_size": 1, "cloud_edge_hardness": 0, "cloud_view_response": 0, "cloud_gradient_thickness": 1, "cloud_gradient_alpha": 0, "cloud_optical_thickness": 1, "cloud_phase_anisotropy": 0.46, "cloud_density_variation": 0.03, "cloud_bloom_contribution": 0.2, "cloud_top_color": "#fcfeff", "cloud_sun_side_color": "#e9f4fa", "cloud_shadow_side_color": "#bed2e2", "cloud_bottom_color": "#8fa8bc", "cloud_edge_color": "#fff3c4", "cloud_shadow_bevel_color": "#7f98ad", "cloud_fog_color": "#1aa6f2"}},
+                {"id": "cloud_clock_23000", "time": 23000, "appearance": {"cloud_coverage": 0.54, "cloud_opacity": 0.34, "cloud_contrast": 4, "cloud_brightness": 1.85, "cloud_bevel_width": 0.025, "cloud_bevel_softness": 0, "cloud_bevel_roundness": 0, "cloud_bevel_strength": 2, "cloud_bevel_distance_min_scale": 0.22, "cloud_edge_strength": 2, "cloud_shadow_bevel_strength": 1.32, "cloud_environment_influence": 1, "cloud_time_tint_strength": 1, "cloud_sky_tint_strength": 1, "cloud_sun_tint_strength": 0.34, "cloud_fog_strength": 1, "cloud_fog_start": 0.42, "cloud_fog_end": 0.92, "cloud_density": 0.95, "cloud_absorption": 0, "cloud_translucency": 1, "cloud_scattering_strength": 1, "cloud_scattering_size": 1, "cloud_edge_hardness": 0, "cloud_view_response": 0, "cloud_gradient_thickness": 1, "cloud_gradient_alpha": 0, "cloud_optical_thickness": 1, "cloud_phase_anisotropy": 0.46, "cloud_density_variation": 0.03, "cloud_bloom_contribution": 0.2, "cloud_top_color": "#fcfeff", "cloud_sun_side_color": "#e9f4fa", "cloud_shadow_side_color": "#bed2e2", "cloud_bottom_color": "#8fa8bc", "cloud_edge_color": "#fff3c4", "cloud_shadow_bevel_color": "#7f98ad", "cloud_fog_color": "#1aa6f2"}},
+            ],
+            cloud_coverage: 0.44,
+            cloud_opacity: 0.9,
+            cloud_speed: 0.01,
+            cloud_scale: 0.72,
+            cloud_direction: 0,
+            cloud_contrast: 4,
+            cloud_brightness: 1.25,
+            cloud_height: 128,
+            cloud_thickness: 5,
+            cloud_extrusion: 1,
+            cloud_top_color: "#fcfeff",
+            cloud_sun_side_color: "#e9f4fa",
+            cloud_shadow_side_color: "#bed2e2",
+            cloud_bottom_color: "#8fa8bc",
+            cloud_edge_color: "#fff3c4",
+            cloud_bevel_width: 0.025,
+            cloud_bevel_softness: 0,
+            cloud_bevel_roundness: 0,
+            cloud_bevel_strength: 2,
+            cloud_bevel_enabled: true,
+            cloud_bevel_smooth: true,
+            cloud_scattering_strength: 1,
+            cloud_scattering_size: 1,
+            cloud_edge_hardness: 0,
+            cloud_view_response: 0,
+            cloud_gradient_thickness: 1,
+            cloud_gradient_alpha: 0,
+            cloud_optical_thickness: 1,
+            cloud_phase_anisotropy: 0.46,
+            cloud_density_variation: 0.03,
+            cloud_bevel_distance_fade: true,
+            cloud_bevel_distance_min_scale: 0.22,
+            cloud_edge_strength: 2,
+            cloud_shadow_bevel_color: "#7f98ad",
+            cloud_shadow_bevel_strength: 1.32,
+            cloud_lighting_mode: "mixed",
+            cloud_environment_influence: 1,
+            cloud_time_tint_strength: 1,
+            cloud_sky_tint_strength: 0.25,
+            cloud_sun_tint_strength: 0.3,
+            cloud_fog_enabled: true,
+            cloud_fog_color_mode: "sky",
+            cloud_fog_color: "#1aa6f2",
+            cloud_fog_strength: 0.72,
+            cloud_fog_start: 0.42,
+            cloud_fog_end: 0.92,
+            cloud_density: 0.95,
+            cloud_absorption: 0.025,
+            cloud_translucency: 0.35,
+            lens_flare_enabled: true,
+            lens_flare_strength: 0.45,
+            lens_flare_scale: 1,
+        },
+        cineflow: {
+            palette_mode: "custom",
+            sky_custom_palette_saved: true,
+            sky_custom_reference_match: true,
+            sky_cycle_mode: "reference",
+            zenith_color: "#41b6f8",
+            horizon_color: "#e4f8ea",
+            sunrise_zenith_color: "#5473a5",
+            sunrise_horizon_color: "#d1b5aa",
+            night_zenith_color: "#040f22",
+            night_horizon_color: "#3a72ae",
+            ground_color: "#c4dcd7",
+            sun_color: "#fff1cf",
+            moon_color: "#bdd5ff",
+            cloud_color: "#f6f5ee",
+            sky_intensity: 1,
+            sky_gradient_power: 1,
+            sky_time_gradients_enabled: true,
+            sky_time_gradients: [
+                {"id": "clock_1500_4", "time": 1500, "gradient": {"version": 2, "color_space": "hsl", "interpolation": "smooth", "stops": [{"id": "clock_1500_ground", "position": 0, "color": "#e2f8fc", "midpoint": 0.5}, {"id": "clock_1500_horizon", "position": 0.5, "color": "#e2f8fc", "midpoint": 0.5}, {"id": "clock_1500_zenith", "position": 1, "color": "#1e84d3", "midpoint": 0.5}], "domain": "full_sky", "horizon_position": 0.5}},
+                {"id": "sky_day", "phase": "day", "time": 6000, "gradient": {"version": 2, "color_space": "hsl", "interpolation": "smooth", "stops": [{"id": "day_ground", "position": 0, "color": "#e2f8fc", "midpoint": 0.5}, {"id": "day_horizon", "position": 0.5, "color": "#e2f8fc", "midpoint": 0.397183055609045}, {"id": "day_zenith", "position": 1, "color": "#1e84d3", "midpoint": 0.5}], "domain": "full_sky", "horizon_position": 0.5}},
+                {"id": "sky_sunset", "phase": "sunset", "time": 12500, "gradient": {"version": 2, "color_space": "oklab", "interpolation": "smooth", "stops": [{"id": "sunset_ground", "position": 0, "color": "#fff29e", "midpoint": 0.5}, {"id": "sunset_horizon", "position": 0.5, "color": "#fff29e", "midpoint": 0.5}, {"id": "e5cbb762-09a4-5829-e236-f2cd1db921a3", "position": 0.7341549295774648, "color": "#f87531", "midpoint": 0.5}, {"id": "sunset_zenith", "position": 1, "color": "#d6191c", "midpoint": 0.5}], "domain": "full_sky", "horizon_position": 0.5}},
+                {"id": "sky_night", "phase": "night", "time": 18000, "gradient": {"version": 2, "color_space": "hsl", "interpolation": "smooth", "stops": [{"id": "night_ground", "position": 0, "color": "#0b1828", "midpoint": 0.5}, {"id": "night_horizon", "position": 0.5, "color": "#3a72ae", "midpoint": 0.5}, {"id": "night_middle", "position": 0.74, "color": "#22416f", "midpoint": 0.5}, {"id": "night_zenith", "position": 1, "color": "#040f22", "midpoint": 0.5}], "domain": "full_sky", "horizon_position": 0.5}},
+                {"id": "sky_sunrise", "phase": "sunrise", "time": 23500, "gradient": {"version": 2, "color_space": "oklab", "interpolation": "smooth", "stops": [{"id": "sunrise_ground", "position": 0, "color": "#d1b5aa", "midpoint": 0.5}, {"id": "sunrise_horizon", "position": 0.5, "color": "#d1b5aa", "midpoint": 0.5}, {"id": "sunrise_zenith", "position": 1, "color": "#362791", "midpoint": 0.5}], "domain": "full_sky", "horizon_position": 0.5}},
+            ],
+            day_sky_gradient: {"version": 2, "color_space": "srgb", "interpolation": "smooth", "stops": [{"id": "day_ground", "position": 0, "color": "#c4dcd7", "midpoint": 0.5}, {"id": "day_horizon", "position": 0.5, "color": "#e4f8ea", "midpoint": 0.5}, {"id": "day_middle", "position": 0.74, "color": "#77cef5", "midpoint": 0.5}, {"id": "day_zenith", "position": 1, "color": "#41b6f8", "midpoint": 0.5}], "domain": "full_sky", "horizon_position": 0.5},
+            sunrise_sky_gradient: {"version": 2, "color_space": "srgb", "interpolation": "smooth", "stops": [{"id": "sunrise_ground", "position": 0, "color": "#7c687b", "midpoint": 0.5}, {"id": "sunrise_horizon", "position": 0.5, "color": "#d1b5aa", "midpoint": 0.5}, {"id": "sunrise_middle", "position": 0.74, "color": "#9690c1", "midpoint": 0.5}, {"id": "sunrise_zenith", "position": 1, "color": "#5473a5", "midpoint": 0.5}], "domain": "full_sky", "horizon_position": 0.5},
+            sunset_sky_gradient: {"version": 2, "color_space": "srgb", "interpolation": "smooth", "stops": [{"id": "sunset_ground", "position": 0, "color": "#4f4061", "midpoint": 0.5}, {"id": "sunset_horizon", "position": 0.5, "color": "#a06879", "midpoint": 0.5}, {"id": "sunset_middle", "position": 0.74, "color": "#4d3571", "midpoint": 0.5}, {"id": "sunset_zenith", "position": 1, "color": "#151140", "midpoint": 0.5}], "domain": "full_sky", "horizon_position": 0.5},
+            night_sky_gradient: {"version": 2, "color_space": "srgb", "interpolation": "smooth", "stops": [{"id": "night_ground", "position": 0, "color": "#0b1828", "midpoint": 0.5}, {"id": "night_horizon", "position": 0.5, "color": "#3a72ae", "midpoint": 0.5}, {"id": "night_middle", "position": 0.74, "color": "#22416f", "midpoint": 0.5}, {"id": "night_zenith", "position": 1, "color": "#040f22", "midpoint": 0.5}], "domain": "full_sky", "horizon_position": 0.5},
+            star_density: 1,
+            environment_strength: 0.75,
+            ambient_fill_color_mode: "sky",
+            ambient_fill_shape: "preset",
+            ambient_fill_sky_color: "#ffffff",
+            ambient_fill_ground_color: "#ffffff",
+            ambient_fill_day_multiplier: 1,
+            ambient_fill_night_multiplier: 1,
+            sun_enabled: true,
+            sun_intensity: 2.2,
+            sun_light_color_mode: "sun",
+            sun_light_day_color: "#fff7c7",
+            sun_light_twilight_color: "#ffad74",
+            moon_intensity: 0.28,
+            moon_light_color_mode: "moon",
+            moon_light_custom_color: "#a9c8ff",
+            celestial_size: 0.25,
+            moon_size: 0.25,
+            moon_phase: 0,
+            sun_mode: "vanilla",
+            moon_mode: "vanilla",
+            sun_blend_mode: "additive",
+            sun_opacity: 1,
+            moon_blend_mode: "preset",
+            moon_opacity: 1,
+            moon_texture_layout: "atlas",
+            moon_atlas_columns: 4,
+            moon_atlas_rows: 2,
+            moon_phase_offset: 0,
+            sun_horizon_scale: 1,
+            sun_gaze_scale: 1,
+            sun_glare: 0.25,
+            environment_bloom_enabled: true,
+            bloom_threshold: 2.18,
+            bloom_soft_knee: 0.38,
+            bloom_strength: 0.72,
+            bloom_core_strength: 0.46,
+            bloom_core_radius: 8,
+            bloom_halo_strength: 0.24,
+            bloom_halo_radius: 64,
+            bloom_hdr_strength: 0.75,
+            bloom_emissive_strength: 1.2,
+            bloom_occlusion: 0.92,
+            sun_bloom_contribution: 0.78,
+            moon_bloom_contribution: 1.02,
+            star_bloom_contribution: 0.66,
+            cloud_bloom_contribution: 0.08,
+            stars_enabled: true,
+            star_brightness: 0.72,
+            clouds_enabled: true,
+            cloud_mode: "vanilla",
+            cloud_style: "vibrant_visuals",
+            cloud_palette_mode: "preset",
+            cloud_time_profiles_enabled: true,
+            cloud_time_profiles: [
+                {"id": "cloud_clock_0", "time": 0, "appearance": {"cloud_coverage": 0.54, "cloud_opacity": 0.68, "cloud_contrast": 1, "cloud_brightness": 1.45, "cloud_bevel_width": 0.14, "cloud_bevel_softness": 0.62, "cloud_bevel_roundness": 0.82, "cloud_bevel_strength": 0.72, "cloud_bevel_distance_min_scale": 0.28, "cloud_edge_strength": 2, "cloud_shadow_bevel_strength": 0.34, "cloud_environment_influence": 1, "cloud_time_tint_strength": 1, "cloud_sky_tint_strength": 0.42, "cloud_sun_tint_strength": 0.58, "cloud_fog_strength": 0.72, "cloud_fog_start": 0.42, "cloud_fog_end": 0.92, "cloud_density": 1, "cloud_absorption": 0, "cloud_translucency": 0.28, "cloud_scattering_strength": 1, "cloud_scattering_size": 1, "cloud_edge_hardness": 0, "cloud_view_response": 0, "cloud_gradient_thickness": 0.55, "cloud_gradient_alpha": 0.9, "cloud_optical_thickness": 1, "cloud_phase_anisotropy": 0.46, "cloud_density_variation": 0.03, "cloud_bloom_contribution": 0.08, "cloud_top_color": "#f6f5ee", "cloud_sun_side_color": "#f6f5ee", "cloud_shadow_side_color": "#f6f5ee", "cloud_bottom_color": "#f6f5ee", "cloud_edge_color": "#f6f5ee", "cloud_shadow_bevel_color": "#9daec7", "cloud_fog_color": "#cbe1ee"}},
+                {"id": "cloud_clock_6000", "time": 6000, "appearance": {"cloud_coverage": 0.54, "cloud_opacity": 0.68, "cloud_contrast": 1, "cloud_brightness": 1.25, "cloud_bevel_width": 0, "cloud_bevel_softness": 0, "cloud_bevel_roundness": 0, "cloud_bevel_strength": 0, "cloud_bevel_distance_min_scale": 0.02, "cloud_edge_strength": 2, "cloud_shadow_bevel_strength": 0.82, "cloud_environment_influence": 1, "cloud_time_tint_strength": 1, "cloud_sky_tint_strength": 1, "cloud_sun_tint_strength": 0.69, "cloud_fog_strength": 0.77, "cloud_fog_start": 0.42, "cloud_fog_end": 0.92, "cloud_density": 1, "cloud_absorption": 0, "cloud_translucency": 0.28, "cloud_scattering_strength": 1, "cloud_scattering_size": 1, "cloud_edge_hardness": 0, "cloud_view_response": 0, "cloud_gradient_thickness": 0.35, "cloud_gradient_alpha": 0.66, "cloud_optical_thickness": 1, "cloud_phase_anisotropy": 0.46, "cloud_density_variation": 0.03, "cloud_bloom_contribution": 0.08, "cloud_top_color": "#f6f5ee", "cloud_sun_side_color": "#f6f5ee", "cloud_shadow_side_color": "#f6f5ee", "cloud_bottom_color": "#f6f5ee", "cloud_edge_color": "#f6f5ee", "cloud_shadow_bevel_color": "#c9d8ee", "cloud_fog_color": "#cbe1ee"}},
+                {"id": "cloud_clock_12000", "time": 12000, "appearance": {"cloud_coverage": 0.54, "cloud_opacity": 0.68, "cloud_contrast": 1, "cloud_brightness": 1.165, "cloud_bevel_width": 0.07, "cloud_bevel_softness": 0.31, "cloud_bevel_roundness": 0.41, "cloud_bevel_strength": 0.36, "cloud_bevel_distance_min_scale": 0.15, "cloud_edge_strength": 2, "cloud_shadow_bevel_strength": 0.58, "cloud_environment_influence": 0.55, "cloud_time_tint_strength": 1, "cloud_sky_tint_strength": 0.71, "cloud_sun_tint_strength": 0.635, "cloud_fog_strength": 0.745, "cloud_fog_start": 0.42, "cloud_fog_end": 0.92, "cloud_density": 1, "cloud_absorption": 0, "cloud_translucency": 0.28, "cloud_scattering_strength": 1, "cloud_scattering_size": 1, "cloud_edge_hardness": 0, "cloud_view_response": 0, "cloud_gradient_thickness": 0.7, "cloud_gradient_alpha": 0.76, "cloud_optical_thickness": 1, "cloud_phase_anisotropy": 0.46, "cloud_density_variation": 0.03, "cloud_bloom_contribution": 0.08, "cloud_top_color": "#f6f5ee", "cloud_sun_side_color": "#f6f5ee", "cloud_shadow_side_color": "#f6f5ee", "cloud_bottom_color": "#f6f5ee", "cloud_edge_color": "#f6f5ee", "cloud_shadow_bevel_color": "#b3c3db", "cloud_fog_color": "#cbe1ee"}},
+                {"id": "cloud_clock_18000", "time": 18000, "appearance": {"cloud_coverage": 0.8, "cloud_opacity": 0.68, "cloud_contrast": 1, "cloud_brightness": 4, "cloud_bevel_width": 0.14, "cloud_bevel_softness": 0.62, "cloud_bevel_roundness": 0.82, "cloud_bevel_strength": 0.72, "cloud_bevel_distance_min_scale": 0.28, "cloud_edge_strength": 2, "cloud_shadow_bevel_strength": 0.34, "cloud_environment_influence": 1, "cloud_time_tint_strength": 1, "cloud_sky_tint_strength": 0.42, "cloud_sun_tint_strength": 0.58, "cloud_fog_strength": 0.72, "cloud_fog_start": 0.42, "cloud_fog_end": 0.92, "cloud_density": 1, "cloud_absorption": 0, "cloud_translucency": 0.28, "cloud_scattering_strength": 1, "cloud_scattering_size": 1, "cloud_edge_hardness": 0, "cloud_view_response": 0, "cloud_gradient_thickness": 1, "cloud_gradient_alpha": 0.52, "cloud_optical_thickness": 1, "cloud_phase_anisotropy": 0.46, "cloud_density_variation": 0.03, "cloud_bloom_contribution": 0.08, "cloud_top_color": "#f6f5ee", "cloud_sun_side_color": "#f6f5ee", "cloud_shadow_side_color": "#f6f5ee", "cloud_bottom_color": "#f6f5ee", "cloud_edge_color": "#f6f5ee", "cloud_shadow_bevel_color": "#9daec7", "cloud_fog_color": "#cbe1ee"}},
+                {"id": "cloud_clock_23000", "time": 23000, "appearance": {"cloud_coverage": 0.54, "cloud_opacity": 0.68, "cloud_contrast": 0.4, "cloud_brightness": 2.25, "cloud_bevel_width": 0.14, "cloud_bevel_softness": 0.62, "cloud_bevel_roundness": 0.82, "cloud_bevel_strength": 0.72, "cloud_bevel_distance_min_scale": 0.28, "cloud_edge_strength": 0.2, "cloud_shadow_bevel_strength": 0.34, "cloud_environment_influence": 0.86, "cloud_time_tint_strength": 1, "cloud_sky_tint_strength": 0.42, "cloud_sun_tint_strength": 0.58, "cloud_fog_strength": 0.72, "cloud_fog_start": 0.42, "cloud_fog_end": 0.92, "cloud_density": 1.1, "cloud_absorption": 0, "cloud_translucency": 1, "cloud_scattering_strength": 0, "cloud_scattering_size": 0.4, "cloud_edge_hardness": 0.12, "cloud_view_response": 0, "cloud_gradient_thickness": 0.7, "cloud_gradient_alpha": 0, "cloud_optical_thickness": 1.85, "cloud_phase_anisotropy": 0.85, "cloud_density_variation": 0, "cloud_bloom_contribution": 0.08, "cloud_top_color": "#f6f5ee", "cloud_sun_side_color": "#f6f5ee", "cloud_shadow_side_color": "#f6f5ee", "cloud_bottom_color": "#f6f5ee", "cloud_edge_color": "#f6f5ee", "cloud_shadow_bevel_color": "#9daec7", "cloud_fog_color": "#cbe1ee"}},
+            ],
+            cloud_coverage: 0.54,
+            cloud_opacity: 0.68,
+            cloud_speed: 0.016,
+            cloud_scale: 1,
+            cloud_direction: 0,
+            cloud_contrast: 1,
+            cloud_brightness: 1.08,
+            cloud_height: 128,
+            cloud_thickness: 2,
+            cloud_extrusion: 1,
+            cloud_top_color: "#f6f5ee",
+            cloud_sun_side_color: "#f6f5ee",
+            cloud_shadow_side_color: "#f6f5ee",
+            cloud_bottom_color: "#f6f5ee",
+            cloud_edge_color: "#f6f5ee",
+            cloud_bevel_width: 0.14,
+            cloud_bevel_softness: 0.62,
+            cloud_bevel_roundness: 0.82,
+            cloud_bevel_strength: 0.72,
+            cloud_bevel_enabled: false,
+            cloud_bevel_smooth: true,
+            cloud_scattering_strength: 1,
+            cloud_scattering_size: 1,
+            cloud_edge_hardness: 0,
+            cloud_view_response: 0,
+            cloud_gradient_thickness: 1,
+            cloud_gradient_alpha: 0,
+            cloud_optical_thickness: 1,
+            cloud_phase_anisotropy: 0.46,
+            cloud_density_variation: 0.03,
+            cloud_bevel_distance_fade: true,
+            cloud_bevel_distance_min_scale: 0.28,
+            cloud_edge_strength: 0.2,
+            cloud_shadow_bevel_color: "#9daec7",
+            cloud_shadow_bevel_strength: 0.34,
+            cloud_lighting_mode: "mixed",
+            cloud_environment_influence: 1,
+            cloud_time_tint_strength: 1,
+            cloud_sky_tint_strength: 0.42,
+            cloud_sun_tint_strength: 0.58,
+            cloud_fog_enabled: true,
+            cloud_fog_color_mode: "sky",
+            cloud_fog_color: "#cbe1ee",
+            cloud_fog_strength: 0.72,
+            cloud_fog_start: 0.42,
+            cloud_fog_end: 0.92,
+            cloud_density: 1,
+            cloud_absorption: 0,
+            cloud_translucency: 0.28,
+            lens_flare_enabled: false,
+            lens_flare_strength: 0.45,
+            lens_flare_scale: 1,
+        },
+        vibrant_visuals: {
+            palette_mode: "preset",
+            sky_custom_palette_saved: false,
+            sky_custom_reference_match: false,
+            sky_cycle_mode: "reference",
+            zenith_color: "#79a7ff",
+            horizon_color: "#bdd6ff",
+            sunrise_zenith_color: "#647db5",
+            sunrise_horizon_color: "#f59a62",
+            night_zenith_color: "#05091d",
+            night_horizon_color: "#151d3d",
+            ground_color: "#bdd6ff",
+            sun_color: "#fff1b0",
+            moon_color: "#cbdcff",
+            cloud_color: "#fff7ec",
+            sky_intensity: 1,
+            sky_gradient_power: 1,
+            sky_time_gradients_enabled: false,
+            sky_time_gradients: [
+            ],
+            day_sky_gradient: {"version": 2, "color_space": "oklab", "interpolation": "smooth", "stops": [{"id": "day_ground", "position": 0, "color": "#bdd6ff", "midpoint": 0.5}, {"id": "day_horizon", "position": 0.5, "color": "#bdd6ff", "midpoint": 0.5}, {"id": "day_zenith", "position": 1, "color": "#79a7ff", "midpoint": 0.5}], "domain": "full_sky", "horizon_position": 0.5},
+            sunrise_sky_gradient: {"version": 2, "color_space": "oklab", "interpolation": "smooth", "stops": [{"id": "sunrise_ground", "position": 0, "color": "#6a5973", "midpoint": 0.48}, {"id": "sunrise_horizon", "position": 0.5, "color": "#f59a62", "midpoint": 0.46}, {"id": "sunrise_middle", "position": 0.76, "color": "#8a78c4", "midpoint": 0.54}, {"id": "sunrise_zenith", "position": 1, "color": "#647db5", "midpoint": 0.5}], "domain": "full_sky", "horizon_position": 0.5},
+            sunset_sky_gradient: null,
+            night_sky_gradient: {"version": 2, "color_space": "oklab", "interpolation": "smooth", "stops": [{"id": "night_ground", "position": 0, "color": "#0a0c16", "midpoint": 0.48}, {"id": "night_horizon", "position": 0.5, "color": "#151d3d", "midpoint": 0.48}, {"id": "night_middle", "position": 0.74, "color": "#0b102d", "midpoint": 0.5}, {"id": "night_zenith", "position": 1, "color": "#05091d", "midpoint": 0.5}], "domain": "full_sky", "horizon_position": 0.5},
+            star_density: 1,
+            environment_strength: 0.92,
+            ambient_fill_color_mode: "sky",
+            ambient_fill_shape: "preset",
+            ambient_fill_sky_color: "#ffffff",
+            ambient_fill_ground_color: "#ffffff",
+            ambient_fill_day_multiplier: 1,
+            ambient_fill_night_multiplier: 1,
+            sun_enabled: true,
+            sun_intensity: 2.8,
+            sun_light_color_mode: "sun",
+            sun_light_day_color: "#fff7c7",
+            sun_light_twilight_color: "#ffad74",
+            moon_intensity: 0.28,
+            moon_light_color_mode: "moon",
+            moon_light_custom_color: "#a9c8ff",
+            celestial_size: 0.25,
+            moon_size: 0.25,
+            moon_phase: 0,
+            sun_mode: "vanilla",
+            moon_mode: "vanilla",
+            sun_blend_mode: "preset",
+            sun_opacity: 1,
+            moon_blend_mode: "additive",
+            moon_opacity: 1,
+            moon_texture_layout: "atlas",
+            moon_atlas_columns: 4,
+            moon_atlas_rows: 2,
+            moon_phase_offset: 0,
+            sun_horizon_scale: 1,
+            sun_gaze_scale: 1,
+            sun_glare: 0,
+            environment_bloom_enabled: true,
+            bloom_threshold: 0.82,
+            bloom_soft_knee: 0.42,
+            bloom_strength: 0.28,
+            bloom_core_strength: 0.48,
+            bloom_core_radius: 1.25,
+            bloom_halo_strength: 0.08,
+            bloom_halo_radius: 6,
+            bloom_hdr_strength: 1.15,
+            bloom_emissive_strength: 1.2,
+            bloom_occlusion: 0.92,
+            sun_bloom_contribution: 0.44,
+            moon_bloom_contribution: 0.2,
+            star_bloom_contribution: 0.08,
+            cloud_bloom_contribution: 0.015,
+            stars_enabled: true,
+            star_brightness: 0.72,
+            clouds_enabled: true,
+            cloud_mode: "vanilla",
+            cloud_style: "vibrant_visuals",
+            cloud_palette_mode: "preset",
+            cloud_time_profiles_enabled: true,
+            cloud_time_profiles: [
+                {"id": "cloud_clock_6000", "time": 6000, "appearance": {"cloud_coverage": 0.5, "cloud_opacity": 0.76, "cloud_contrast": 1, "cloud_brightness": 1.25, "cloud_bevel_width": 0.02, "cloud_bevel_softness": 0, "cloud_bevel_roundness": 0, "cloud_bevel_strength": 1.2, "cloud_bevel_distance_min_scale": 0.28, "cloud_edge_strength": 0.16, "cloud_shadow_bevel_strength": 0.34, "cloud_environment_influence": 1, "cloud_time_tint_strength": 1, "cloud_sky_tint_strength": 0.18, "cloud_sun_tint_strength": 0.22, "cloud_fog_strength": 0.72, "cloud_fog_start": 0.42, "cloud_fog_end": 0.92, "cloud_density": 0.85, "cloud_absorption": 0, "cloud_translucency": 0.65, "cloud_scattering_strength": 1, "cloud_scattering_size": 1, "cloud_edge_hardness": 0, "cloud_view_response": 0.77, "cloud_gradient_thickness": 1, "cloud_gradient_alpha": 0.53, "cloud_optical_thickness": 1, "cloud_phase_anisotropy": 0.46, "cloud_density_variation": 0.03, "cloud_bloom_contribution": 0.015, "cloud_top_color": "#fff9ee", "cloud_sun_side_color": "#eeeaf4", "cloud_shadow_side_color": "#d7d9e8", "cloud_bottom_color": "#d4d8e7", "cloud_edge_color": "#fff4dc", "cloud_shadow_bevel_color": "#adbad0", "cloud_fog_color": "#a6dcff"}},
+                {"id": "cloud_clock_12000", "time": 12000, "appearance": {"cloud_coverage": 0.5, "cloud_opacity": 0.76, "cloud_contrast": 1, "cloud_brightness": 1.25, "cloud_bevel_width": 0, "cloud_bevel_softness": 0, "cloud_bevel_roundness": 0, "cloud_bevel_strength": 0.76, "cloud_bevel_distance_min_scale": 0.28, "cloud_edge_strength": 0.14, "cloud_shadow_bevel_strength": 0.34, "cloud_environment_influence": 1, "cloud_time_tint_strength": 1, "cloud_sky_tint_strength": 0.18, "cloud_sun_tint_strength": 0.22, "cloud_fog_strength": 0.72, "cloud_fog_start": 0.42, "cloud_fog_end": 0.92, "cloud_density": 0.85, "cloud_absorption": 0, "cloud_translucency": 0.65, "cloud_scattering_strength": 1, "cloud_scattering_size": 1, "cloud_edge_hardness": 0, "cloud_view_response": 0, "cloud_gradient_thickness": 0.25, "cloud_gradient_alpha": 0.78, "cloud_optical_thickness": 1, "cloud_phase_anisotropy": 0.46, "cloud_density_variation": 0.03, "cloud_bloom_contribution": 0.015, "cloud_top_color": "#fff9ee", "cloud_sun_side_color": "#eeeaf4", "cloud_shadow_side_color": "#d7d9e8", "cloud_bottom_color": "#d4d8e7", "cloud_edge_color": "#fff4dc", "cloud_shadow_bevel_color": "#adbad0", "cloud_fog_color": "#a6dcff"}},
+                {"id": "cloud_clock_18000", "time": 18000, "appearance": {"cloud_coverage": 0.5, "cloud_opacity": 0.76, "cloud_contrast": 1, "cloud_brightness": 1.12, "cloud_bevel_width": 0.02, "cloud_bevel_softness": 0, "cloud_bevel_roundness": 0, "cloud_bevel_strength": 1.58, "cloud_bevel_distance_min_scale": 0.28, "cloud_edge_strength": 2, "cloud_shadow_bevel_strength": 0.34, "cloud_environment_influence": 1, "cloud_time_tint_strength": 1, "cloud_sky_tint_strength": 0.18, "cloud_sun_tint_strength": 0.22, "cloud_fog_strength": 0.72, "cloud_fog_start": 0.42, "cloud_fog_end": 0.92, "cloud_density": 0.85, "cloud_absorption": 0, "cloud_translucency": 0.65, "cloud_scattering_strength": 1, "cloud_scattering_size": 1, "cloud_edge_hardness": 0, "cloud_view_response": 0.35, "cloud_gradient_thickness": 0.15, "cloud_gradient_alpha": 0.33, "cloud_optical_thickness": 1, "cloud_phase_anisotropy": 0.46, "cloud_density_variation": 0.03, "cloud_bloom_contribution": 0.015, "cloud_top_color": "#fff9ee", "cloud_sun_side_color": "#eeeaf4", "cloud_shadow_side_color": "#d7d9e8", "cloud_bottom_color": "#d4d8e7", "cloud_edge_color": "#fff4dc", "cloud_shadow_bevel_color": "#adbad0", "cloud_fog_color": "#a6dcff"}},
+                {"id": "cloud_clock_23000", "time": 23000, "appearance": {"cloud_coverage": 0.5, "cloud_opacity": 0.76, "cloud_contrast": 1, "cloud_brightness": 1.4, "cloud_bevel_width": 0.02, "cloud_bevel_softness": 0, "cloud_bevel_roundness": 0, "cloud_bevel_strength": 1.2, "cloud_bevel_distance_min_scale": 0.28, "cloud_edge_strength": 1.36, "cloud_shadow_bevel_strength": 0.34, "cloud_environment_influence": 1, "cloud_time_tint_strength": 1, "cloud_sky_tint_strength": 0.18, "cloud_sun_tint_strength": 0.22, "cloud_fog_strength": 0.72, "cloud_fog_start": 0.42, "cloud_fog_end": 0.92, "cloud_density": 0.85, "cloud_absorption": 0, "cloud_translucency": 0.65, "cloud_scattering_strength": 1, "cloud_scattering_size": 1, "cloud_edge_hardness": 0, "cloud_view_response": 0.73, "cloud_gradient_thickness": 0.2, "cloud_gradient_alpha": 0.26, "cloud_optical_thickness": 1, "cloud_phase_anisotropy": 0.46, "cloud_density_variation": 0.03, "cloud_bloom_contribution": 0.015, "cloud_top_color": "#fff9ee", "cloud_sun_side_color": "#eeeaf4", "cloud_shadow_side_color": "#d7d9e8", "cloud_bottom_color": "#d4d8e7", "cloud_edge_color": "#fff4dc", "cloud_shadow_bevel_color": "#adbad0", "cloud_fog_color": "#a6dcff"}},
+            ],
+            cloud_coverage: 0.5,
+            cloud_opacity: 0.76,
+            cloud_speed: 0.016,
+            cloud_scale: 1.35,
+            cloud_direction: 0,
+            cloud_contrast: 1,
+            cloud_brightness: 1.12,
+            cloud_height: 128,
+            cloud_thickness: 3,
+            cloud_extrusion: 1,
+            cloud_top_color: "#fff9ee",
+            cloud_sun_side_color: "#eeeaf4",
+            cloud_shadow_side_color: "#d7d9e8",
+            cloud_bottom_color: "#d4d8e7",
+            cloud_edge_color: "#fff4dc",
+            cloud_bevel_width: 0.02,
+            cloud_bevel_softness: 0,
+            cloud_bevel_roundness: 0,
+            cloud_bevel_strength: 1.2,
+            cloud_bevel_enabled: true,
+            cloud_bevel_smooth: false,
+            cloud_scattering_strength: 1,
+            cloud_scattering_size: 1,
+            cloud_edge_hardness: 0,
+            cloud_view_response: 0,
+            cloud_gradient_thickness: 1,
+            cloud_gradient_alpha: 0,
+            cloud_optical_thickness: 1,
+            cloud_phase_anisotropy: 0.46,
+            cloud_density_variation: 0.03,
+            cloud_bevel_distance_fade: true,
+            cloud_bevel_distance_min_scale: 0.28,
+            cloud_edge_strength: 0.16,
+            cloud_shadow_bevel_color: "#adbad0",
+            cloud_shadow_bevel_strength: 0.34,
+            cloud_lighting_mode: "mixed",
+            cloud_environment_influence: 1,
+            cloud_time_tint_strength: 1,
+            cloud_sky_tint_strength: 0.18,
+            cloud_sun_tint_strength: 0.22,
+            cloud_fog_enabled: true,
+            cloud_fog_color_mode: "sky",
+            cloud_fog_color: "#a6dcff",
+            cloud_fog_strength: 0.72,
+            cloud_fog_start: 0.42,
+            cloud_fog_end: 0.92,
+            cloud_density: 0.85,
+            cloud_absorption: 0,
+            cloud_translucency: 0.65,
+            lens_flare_enabled: false,
+            lens_flare_strength: 0.45,
+            lens_flare_scale: 1,
+        },
+    });
+
     function getNativeSkyPresetSettings(presetId, options = {}) {
         const preset = PRESETS[presetId] ? presetId : 'vanilla';
         const vibrant = preset === 'vibrant_visuals';
         const rendercraft = preset === 'rendercraft';
         const profile = {
             preset,
-            palette_mode: 'preset',
+            palette_mode: rendercraft ? 'custom' : 'preset',
+            sky_custom_palette_saved: rendercraft,
+            sky_custom_reference_match: false,
+            zenith_color: rendercraft ? '#41b6f8' : PRESETS[preset].zenith,
+            horizon_color: rendercraft ? '#e4f8ea' : PRESETS[preset].horizon,
+            sunrise_zenith_color: rendercraft ? '#5473a5' : PRESETS[preset].sunrise_zenith,
+            sunrise_horizon_color: rendercraft ? '#d1b5aa' : PRESETS[preset].sunrise_horizon,
+            night_zenith_color: rendercraft ? '#040f22' : PRESETS[preset].night_zenith,
+            night_horizon_color: rendercraft ? '#3a72ae' : PRESETS[preset].night_horizon,
+            ground_color: rendercraft ? '#c4dcd7' : PRESETS[preset].ground,
+            sun_color: rendercraft ? '#fff7c7' : PRESETS[preset].sun,
+            moon_color: rendercraft ? '#dce9ff' : PRESETS[preset].moon,
+            cloud_color: rendercraft ? '#edf8ff' : PRESETS[preset].cloud,
             sky_intensity: 1,
             sky_gradient_power: 1,
+            sky_time_gradients_enabled: rendercraft,
+            sky_time_gradients: rendercraft ? [
+                { id: 'clock_10000_4', time: 1500, gradient: { version: 2, color_space: 'srgb', interpolation: 'smooth', domain: 'full_sky', horizon_position: SKY_HORIZON_POSITION, stops: [
+                    { id: 'clock_10000_ground', position: 0, color: '#ffd196', midpoint: 0.5 }, { id: 'clock_10000_horizon', position: 0.5, color: '#ffd196', midpoint: 0.5042253950951805 }, { id: 'clock_10000_zenith', position: 1, color: '#2773b4', midpoint: 0.5 }
+                ] } },
+                { id: 'clock_2000_7', time: 2500, gradient: { version: 2, color_space: 'srgb', interpolation: 'smooth', domain: 'full_sky', horizon_position: SKY_HORIZON_POSITION, stops: [
+                    { id: 'clock_2000_ground', position: 0, color: '#afeeff', midpoint: 0.5 }, { id: 'clock_2000_horizon', position: 0.5, color: '#afeeff', midpoint: 0.5 }, { id: 'clock_2000_zenith', position: 1, color: '#049eff', midpoint: 0.5 }
+                ] } },
+                { id: 'sky_day', phase: 'day', time: 6000, gradient: { version: 2, color_space: 'srgb', interpolation: 'smooth', domain: 'full_sky', horizon_position: SKY_HORIZON_POSITION, stops: [
+                    { id: 'day_ground', position: 0, color: '#afeeff', midpoint: 0.5 }, { id: 'day_horizon', position: 0.5, color: '#afeeff', midpoint: 0.5 }, { id: 'day_zenith', position: 1, color: '#049eff', midpoint: 0.5 }
+                ] } },
+                { id: 'clock_10000_6', time: 10000, gradient: { version: 2, color_space: 'srgb', interpolation: 'smooth', domain: 'full_sky', horizon_position: SKY_HORIZON_POSITION, stops: [
+                    { id: 'clock_10000_ground', position: 0, color: '#afeeff', midpoint: 0.5 }, { id: 'clock_10000_horizon', position: 0.5, color: '#afeeff', midpoint: 0.5 }, { id: 'clock_10000_zenith', position: 1, color: '#049eff', midpoint: 0.5 }
+                ] } },
+                { id: 'clock_11000_5', time: 11800, gradient: { version: 2, color_space: 'srgb', interpolation: 'smooth', domain: 'full_sky', horizon_position: SKY_HORIZON_POSITION, stops: [
+                    { id: 'clock_11000_ground', position: 0, color: '#ffee96', midpoint: 0.5 }, { id: 'clock_11000_horizon', position: 0.5, color: '#ffee96', midpoint: 0.5 }, { id: 'clock_11000_middle', position: 0.74, color: '#fe782f', midpoint: 0.5 }, { id: 'clock_11000_zenith', position: 1, color: '#ff6d4a', midpoint: 0.5 }
+                ] } },
+                { id: 'sky_sunset', phase: 'sunset', time: 12500, gradient: { version: 2, color_space: 'srgb', interpolation: 'smooth', domain: 'full_sky', horizon_position: SKY_HORIZON_POSITION, stops: [
+                    { id: 'sunset_ground', position: 0, color: '#4f4061', midpoint: 0.5 }, { id: 'sunset_horizon', position: 0.5, color: '#a06879', midpoint: 0.5 }, { id: 'sunset_middle', position: 0.74, color: '#4d3571', midpoint: 0.5 }, { id: 'sunset_zenith', position: 1, color: '#151140', midpoint: 0.5 }
+                ] } },
+                { id: 'sky_night', phase: 'night', time: 18000, gradient: { version: 2, color_space: 'srgb', interpolation: 'smooth', domain: 'full_sky', horizon_position: SKY_HORIZON_POSITION, stops: [
+                    { id: 'night_ground', position: 0, color: '#0b1828', midpoint: 0.5 }, { id: 'night_horizon', position: 0.5, color: '#3a72ae', midpoint: 0.5 }, { id: 'night_middle', position: 0.74, color: '#1d2356', midpoint: 0.5 }, { id: 'night_zenith', position: 1, color: '#0d1223', midpoint: 0.5 }
+                ] } },
+                { id: 'sky_sunrise', phase: 'sunrise', time: 23500, gradient: { version: 2, color_space: 'srgb', interpolation: 'smooth', domain: 'full_sky', horizon_position: SKY_HORIZON_POSITION, stops: [
+                    { id: 'sunrise_ground', position: 0, color: '#f8d679', midpoint: 0.5 }, { id: 'sunrise_horizon', position: 0.5, color: '#f8d679', midpoint: 0.5 }, { id: 'sunrise_middle', position: 0.74, color: '#9690c1', midpoint: 0.5 }, { id: 'sunrise_zenith', position: 1, color: '#545ec3', midpoint: 0.5 }
+                ] } }
+            ] : [],
             environment_strength: vibrant ? 0.92 : (rendercraft ? 0.74 : 0.75),
+            sun_enabled: true,
             sun_intensity: vibrant ? 2.8 : (rendercraft ? 2.45 : 2.2),
             sun_light_color_mode: rendercraft ? 'time' : DEFAULT_SETTINGS.sun_light_color_mode,
-            celestial_size: rendercraft ? 0.10 : (vibrant ? 0.13 : 0.25),
-            moon_size: rendercraft ? 0.10 : 0.13,
-            sun_horizon_scale: 1,
+            sun_light_day_color: rendercraft ? '#fff7c7' : DEFAULT_SETTINGS.sun_light_day_color,
+            sun_light_twilight_color: rendercraft ? '#ffad74' : DEFAULT_SETTINGS.sun_light_twilight_color,
+            moon_intensity: rendercraft ? 0.28 : DEFAULT_SETTINGS.moon_intensity,
+            moon_light_color_mode: rendercraft ? 'moon' : DEFAULT_SETTINGS.moon_light_color_mode,
+            moon_light_custom_color: rendercraft ? '#a9c8ff' : DEFAULT_SETTINGS.moon_light_custom_color,
+            celestial_size: rendercraft ? 0.25 : (vibrant ? 0.13 : 0.25),
+            moon_size: rendercraft ? 0.25 : 0.13,
+            sun_horizon_scale: rendercraft ? 2.5 : 1,
             sun_gaze_scale: 1,
-            sun_glare: rendercraft ? 0.38 : (vibrant ? 0.32 : 0.25),
-            sunset_directional_glow: rendercraft ? 0.78 : 1,
+            sun_glare: rendercraft ? 0.75 : (vibrant ? 0.32 : 0.25),
+            sunset_directional_glow: 1,
             environment_bloom_enabled: rendercraft || vibrant,
             bloom_threshold: rendercraft ? 0.78 : DEFAULT_SETTINGS.bloom_threshold,
             bloom_soft_knee: rendercraft ? 0.48 : DEFAULT_SETTINGS.bloom_soft_knee,
@@ -5425,23 +6476,23 @@ void main() {
             bloom_core_radius: rendercraft ? 1.15 : DEFAULT_SETTINGS.bloom_core_radius,
             bloom_halo_strength: rendercraft ? 0.26 : (vibrant ? 0.08 : DEFAULT_SETTINGS.bloom_halo_strength),
             bloom_halo_radius: rendercraft ? 10.5 : (vibrant ? 6 : DEFAULT_SETTINGS.bloom_halo_radius),
-            bloom_hdr_strength: rendercraft ? 1.25 : DEFAULT_SETTINGS.bloom_hdr_strength,
+            bloom_hdr_strength: rendercraft ? 0.7 : DEFAULT_SETTINGS.bloom_hdr_strength,
             bloom_emissive_strength: rendercraft ? 1.25 : DEFAULT_SETTINGS.bloom_emissive_strength,
             bloom_occlusion: rendercraft ? 0.95 : DEFAULT_SETTINGS.bloom_occlusion,
-            sun_bloom_contribution: rendercraft || vibrant ? 1 : DEFAULT_SETTINGS.sun_bloom_contribution,
-            moon_bloom_contribution: rendercraft ? 0.45 : (vibrant ? 0.20 : DEFAULT_SETTINGS.moon_bloom_contribution),
+            sun_bloom_contribution: rendercraft ? 0.25 : (vibrant ? 1 : DEFAULT_SETTINGS.sun_bloom_contribution),
+            moon_bloom_contribution: rendercraft ? 0.92 : (vibrant ? 0.20 : DEFAULT_SETTINGS.moon_bloom_contribution),
             star_bloom_contribution: rendercraft ? 0.38 : (vibrant ? 0.08 : DEFAULT_SETTINGS.star_bloom_contribution),
-            cloud_bloom_contribution: rendercraft ? 0.12 : (vibrant ? 0.015 : DEFAULT_SETTINGS.cloud_bloom_contribution),
+            cloud_bloom_contribution: rendercraft ? 0.2 : (vibrant ? 0.015 : DEFAULT_SETTINGS.cloud_bloom_contribution),
             shadow_resolution: vibrant ? 2048 : DEFAULT_SETTINGS.shadow_resolution,
             shadow_softness_mode: 'hard',
             pixelated_shadows: vibrant,
             pixel_shadow_steps: vibrant ? 4 : DEFAULT_SETTINGS.pixel_shadow_steps,
             pixel_shadow_scale: vibrant ? 2 : DEFAULT_SETTINGS.pixel_shadow_scale,
             cloud_coverage: vibrant ? 0.5 : (rendercraft ? 0.44 : 0.54),
-            cloud_opacity: vibrant ? 0.76 : (rendercraft ? 0.74 : 0.68),
+            cloud_opacity: vibrant ? 0.76 : (rendercraft ? 0.90 : 0.68),
             cloud_speed: rendercraft ? 0.01 : 0.016,
             cloud_scale: rendercraft ? 0.72 : (vibrant ? 1.35 : 1),
-            cloud_contrast: rendercraft ? 1.25 : 1,
+            cloud_contrast: rendercraft ? 4 : 1,
             cloud_brightness: rendercraft ? 1.25 : (vibrant ? 1.12 : 1.08),
             cloud_height: 128,
             cloud_thickness: vibrant ? 3 : (rendercraft ? 5 : 4),
@@ -5449,6 +6500,32 @@ void main() {
             cloud_mode: 'vanilla',
             cloud_style: rendercraft ? 'rendercraft' : (vibrant ? 'vibrant_visuals' : 'vanilla'),
             cloud_palette_mode: 'preset',
+            sun_blend_mode: rendercraft ? 'additive' : DEFAULT_SETTINGS.sun_blend_mode,
+            sun_opacity: 1,
+            moon_blend_mode: 'preset',
+            moon_opacity: 1,
+            cloud_time_profiles_enabled: rendercraft,
+            cloud_time_profiles: rendercraft ? (() => {
+                const base = {
+                    cloud_coverage: 0.44, cloud_opacity: 0.9, cloud_contrast: 4, cloud_brightness: 1.25,
+                    cloud_bevel_width: 0.025, cloud_bevel_softness: 0, cloud_bevel_roundness: 0,
+                    cloud_bevel_strength: 2, cloud_bevel_distance_min_scale: 0.22, cloud_edge_strength: 2,
+                    cloud_shadow_bevel_strength: 1.32, cloud_sky_tint_strength: 0.25, cloud_sun_tint_strength: 0.3,
+                    cloud_fog_strength: 0.72, cloud_fog_start: 0.42, cloud_fog_end: 0.92, cloud_density: 0.95,
+                    cloud_absorption: 0.025, cloud_translucency: 0.35, cloud_bloom_contribution: 0.2,
+                    cloud_top_color: '#fcfeff', cloud_sun_side_color: '#e9f4fa', cloud_shadow_side_color: '#bed2e2',
+                    cloud_bottom_color: '#8fa8bc', cloud_edge_color: '#fff3c4', cloud_shadow_bevel_color: '#7f98ad',
+                    cloud_fog_color: '#1aa6f2'
+                };
+                const frames = [
+                    ['cloud_clock_0', 0, {}],
+                    ['cloud_clock_6000', 6000, { cloud_brightness: 1.85, cloud_absorption: 0.1, cloud_translucency: 0.32 }],
+                    ['cloud_clock_12000', 12000, { cloud_opacity: 0.76, cloud_brightness: 2.65, cloud_sky_tint_strength: 1, cloud_sun_tint_strength: 1, cloud_density: 0.4, cloud_absorption: 0.08, cloud_translucency: 1, cloud_bottom_color: '#ffe197' }],
+                    ['cloud_clock_18000', 18000, { cloud_opacity: 0.54, cloud_brightness: 1.75, cloud_density: 1.85 }],
+                    ['cloud_clock_23000', 23000, { cloud_coverage: 0.54, cloud_opacity: 0.34, cloud_brightness: 1.85, cloud_sky_tint_strength: 1, cloud_sun_tint_strength: 0.34, cloud_fog_strength: 1, cloud_absorption: 0, cloud_translucency: 1 }]
+                ];
+                return frames.map(([id, time, overrides]) => ({ id, time, appearance: { ...base, ...overrides } }));
+            })() : [],
             cloud_top_color: PRESETS[preset].cloud_top || PRESETS[preset].cloud || DEFAULT_SETTINGS.cloud_top_color,
             cloud_sun_side_color: PRESETS[preset].cloud_sun_side || PRESETS[preset].cloud || DEFAULT_SETTINGS.cloud_sun_side_color,
             cloud_shadow_side_color: PRESETS[preset].cloud_shadow_side || PRESETS[preset].cloud || DEFAULT_SETTINGS.cloud_shadow_side_color,
@@ -5458,6 +6535,16 @@ void main() {
             cloud_bevel_softness: rendercraft ? RENDERCRAFT_CLOUD_BEVEL_DEFAULTS.softness : (vibrant ? 0 : DEFAULT_SETTINGS.cloud_bevel_softness),
             cloud_bevel_roundness: rendercraft ? RENDERCRAFT_CLOUD_BEVEL_DEFAULTS.roundness : (vibrant ? 0 : DEFAULT_SETTINGS.cloud_bevel_roundness),
             cloud_bevel_strength: rendercraft ? RENDERCRAFT_CLOUD_BEVEL_DEFAULTS.strength : (vibrant ? 1.2 : DEFAULT_SETTINGS.cloud_bevel_strength),
+            cloud_bevel_enabled: true,
+            cloud_scattering_strength: DEFAULT_SETTINGS.cloud_scattering_strength,
+            cloud_scattering_size: DEFAULT_SETTINGS.cloud_scattering_size,
+            cloud_edge_hardness: DEFAULT_SETTINGS.cloud_edge_hardness,
+            cloud_view_response: DEFAULT_SETTINGS.cloud_view_response,
+            cloud_gradient_thickness: DEFAULT_SETTINGS.cloud_gradient_thickness,
+            cloud_gradient_alpha: DEFAULT_SETTINGS.cloud_gradient_alpha,
+            cloud_optical_thickness: DEFAULT_SETTINGS.cloud_optical_thickness,
+            cloud_phase_anisotropy: DEFAULT_SETTINGS.cloud_phase_anisotropy,
+            cloud_density_variation: DEFAULT_SETTINGS.cloud_density_variation,
             cloud_bevel_smooth: rendercraft ? RENDERCRAFT_CLOUD_BEVEL_DEFAULTS.smooth : (vibrant ? false : DEFAULT_SETTINGS.cloud_bevel_smooth),
             cloud_bevel_distance_fade: rendercraft ? RENDERCRAFT_CLOUD_BEVEL_DEFAULTS.distanceFade : DEFAULT_SETTINGS.cloud_bevel_distance_fade,
             cloud_bevel_distance_min_scale: rendercraft ? RENDERCRAFT_CLOUD_BEVEL_DEFAULTS.distanceMinScale : DEFAULT_SETTINGS.cloud_bevel_distance_min_scale,
@@ -5469,7 +6556,7 @@ void main() {
             cloud_sun_tint_strength: rendercraft ? 0.30 : (vibrant ? 0.22 : DEFAULT_SETTINGS.cloud_sun_tint_strength),
             cloud_fog_enabled: rendercraft || vibrant,
             cloud_fog_color_mode: 'sky',
-            cloud_fog_color: PRESETS[preset].horizon || DEFAULT_SETTINGS.cloud_fog_color,
+            cloud_fog_color: rendercraft ? '#1aa6f2' : (PRESETS[preset].horizon || DEFAULT_SETTINGS.cloud_fog_color),
             cloud_fog_strength: rendercraft ? 0.72 : DEFAULT_SETTINGS.cloud_fog_strength,
             cloud_fog_start: rendercraft ? 0.42 : DEFAULT_SETTINGS.cloud_fog_start,
             cloud_fog_end: rendercraft ? 0.92 : DEFAULT_SETTINGS.cloud_fog_end,
@@ -5479,7 +6566,8 @@ void main() {
             sun_mode: 'vanilla',
             moon_mode: 'vanilla'
         };
-        return normalizeSettings(Object.assign({}, DEFAULT_SETTINGS, profile, {
+        return normalizeSettings(Object.assign({}, DEFAULT_SETTINGS, profile,
+            cloneEnvironmentData(AUTHORED_NATIVE_SKY_SETTINGS[preset] || {}), {
             enabled: options.enabled !== undefined ? !!options.enabled : settings.enabled
         }));
     }
@@ -5492,7 +6580,8 @@ void main() {
     }
 
     function getVirtualLight(options = {}) {
-        const state = getLightingState();
+        if (!sunLight) return null;
+        const state = getCelestialLightingState();
         const inactive = !state.enabled || !settings.sun_enabled || state.sunIntensity <= 0.0001;
         const retainedShadowSlot = options?.includeInactiveShadowSlot === true && inactive &&
             settings.sun_cast_shadows && sunLight?.castShadow === true &&
@@ -5984,7 +7073,10 @@ void main() {
             ambient_fill_day_multiplier: { type: 'range', label: 'lightflow_environment.field.ambient_fill_day_multiplier', value: settings.ambient_fill_day_multiplier, min: 0, max: 4, step: 0.05 },
             ambient_fill_night_multiplier: { type: 'range', label: 'lightflow_environment.field.ambient_fill_night_multiplier', value: settings.ambient_fill_night_multiplier, min: 0, max: 4, step: 0.05 },
             _fog: '_',
-            distance_fog_enabled: { type: 'checkbox', label: 'lightflow_environment.field.distance_fog_enabled', value: settings.distance_fog_enabled },
+            distance_look_presets: { type: 'action_button', semantic_button: true, icon: 'tune',
+                text: 'lightflow_environment.action.distance_looks', description: 'lightflow_environment.info.distance_looks', click: openDistanceLookMenu },
+            distance_fog_enabled: { type: 'checkbox', label: 'lightflow_environment.field.distance_fog_enabled', value: settings.distance_fog_enabled,
+                description: 'lightflow_environment.info.distance_fog_art' },
             distance_fog_color_mode: { type: 'select', label: 'lightflow_environment.field.distance_fog_color_mode', value: settings.distance_fog_color_mode,
                 options: { sky: 'lightflow_environment.option.fog_color_sky', time: 'lightflow_environment.option.fog_color_time', fixed: 'lightflow_environment.option.fog_color_fixed' },
                 condition: form => !!form.distance_fog_enabled },
@@ -6004,25 +7096,43 @@ void main() {
                 condition: form => !!form.distance_fog_enabled },
             distance_fog_smoothness: { type: 'range', label: 'lightflow_environment.field.distance_fog_smoothness', value: settings.distance_fog_smoothness, min: 0, max: 1, step: 0.01,
                 condition: form => !!form.distance_fog_enabled },
-            distance_fog_gradient: { type: 'range', label: 'lightflow_environment.field.distance_fog_gradient', value: settings.distance_fog_gradient, min: 0, max: 1, step: 0.01,
+            distance_fog_curve: { type: 'range', label: 'lightflow_environment.field.distance_fog_curve', description: 'lightflow_environment.info.distance_curve', value: settings.distance_fog_curve, min: 0.25, max: 4, step: 0.05,
                 condition: form => !!form.distance_fog_enabled },
-            distance_fog_dither: { type: 'range', label: 'lightflow_environment.field.distance_fog_dither', value: settings.distance_fog_dither, min: 0, max: 1, step: 0.01,
+            distance_fog_sky_blend: { type: 'range', label: 'lightflow_environment.field.distance_fog_sky_blend', description: 'lightflow_environment.info.distance_sky_blend', value: settings.distance_fog_sky_blend, min: 0, max: 1, step: 0.01,
+                condition: form => !!form.distance_fog_enabled && form.dimension === 'overworld' },
+            distance_fog_gradient: { type: 'range', label: 'lightflow_environment.field.distance_fog_gradient', value: settings.distance_fog_gradient, min: 0, max: 1, step: 0.01,
                 condition: form => !!form.distance_fog_enabled },
             distance_fog_max_opacity: { type: 'range', label: 'lightflow_environment.field.distance_fog_max_opacity', value: settings.distance_fog_max_opacity, min: 0, max: 1, step: 0.01,
                 condition: form => !!form.distance_fog_enabled },
             distance_fog_sync_background: { type: 'checkbox', label: 'lightflow_environment.field.distance_fog_sync_background', value: settings.distance_fog_sync_background,
                 condition: form => !!form.distance_fog_enabled },
+            distance_fog_noise: { type: 'range', label: 'lightflow_environment.field.distance_fog_noise', description: 'lightflow_environment.info.distance_noise', value: settings.distance_fog_noise, min: 0, max: 1, step: 0.01,
+                condition: form => !!form.distance_fog_enabled },
+            distance_fog_noise_scale: { type: 'number', label: 'lightflow_environment.field.distance_fog_noise_scale', value: settings.distance_fog_noise_scale, min: 0.25, max: 4096, step: 1,
+                condition: form => !!form.distance_fog_enabled && form.distance_fog_noise > 0 },
+            distance_fog_dither: { type: 'range', label: 'lightflow_environment.field.distance_fog_dither', value: settings.distance_fog_dither, min: 0, max: 1, step: 0.01,
+                condition: form => !!form.distance_fog_enabled },
             distance_grade_enabled: { type: 'checkbox', label: 'lightflow_environment.field.distance_grade_enabled', value: settings.distance_grade_enabled },
-            distance_grade_start: { type: 'number', label: 'lightflow_environment.field.distance_grade_start', value: settings.distance_grade_start, min: 0,
+            distance_grade_follow_fog: { type: 'checkbox', label: 'lightflow_environment.field.distance_grade_follow_fog', description: 'lightflow_environment.info.distance_grade_range', value: settings.distance_grade_follow_fog,
                 condition: form => !!form.distance_grade_enabled },
+            distance_grade_start: { type: 'number', label: 'lightflow_environment.field.distance_grade_start', value: settings.distance_grade_start, min: 0,
+                condition: form => !!form.distance_grade_enabled && !form.distance_grade_follow_fog },
             distance_grade_end: { type: 'number', label: 'lightflow_environment.field.distance_grade_end', value: settings.distance_grade_end, min: 0.001,
+                condition: form => !!form.distance_grade_enabled && !form.distance_grade_follow_fog },
+            distance_grade_curve: { type: 'range', label: 'lightflow_environment.field.distance_grade_curve', description: 'lightflow_environment.info.distance_curve', value: settings.distance_grade_curve, min: 0.25, max: 4, step: 0.05,
                 condition: form => !!form.distance_grade_enabled },
             distance_grade_saturation: { type: 'range', label: 'lightflow_environment.field.distance_grade_saturation', value: settings.distance_grade_saturation, min: 0, max: 2, step: 0.01,
                 condition: form => !!form.distance_grade_enabled },
             distance_grade_contrast: { type: 'range', label: 'lightflow_environment.field.distance_grade_contrast', value: settings.distance_grade_contrast, min: 0, max: 2, step: 0.01,
                 condition: form => !!form.distance_grade_enabled },
+            distance_grade_pivot_mode: { type: 'select', label: 'lightflow_environment.field.distance_grade_pivot_mode', value: settings.distance_grade_pivot_mode,
+                options: { fixed: 'lightflow_environment.option.fog_color_fixed', sky: 'lightflow_environment.option.fog_color_sky' }, condition: form => !!form.distance_grade_enabled },
+            distance_grade_pivot: { type: 'range', label: 'lightflow_environment.field.distance_grade_pivot', description: 'lightflow_environment.info.distance_pivot', value: settings.distance_grade_pivot, min: 0, max: 1, step: 0.01,
+                condition: form => !!form.distance_grade_enabled && form.distance_grade_pivot_mode !== 'sky' },
+            distance_grade_tint_mode: { type: 'select', label: 'lightflow_environment.field.distance_grade_tint_mode', value: settings.distance_grade_tint_mode,
+                options: { fixed: 'lightflow_environment.option.fog_color_fixed', sky: 'lightflow_environment.option.fog_color_sky' }, condition: form => !!form.distance_grade_enabled },
             distance_grade_tint: { type: 'color', label: 'lightflow_environment.field.distance_grade_tint', value: settings.distance_grade_tint,
-                condition: form => !!form.distance_grade_enabled },
+                condition: form => !!form.distance_grade_enabled && form.distance_grade_tint_mode !== 'sky' },
             distance_grade_tint_strength: { type: 'range', label: 'lightflow_environment.field.distance_grade_tint_strength', value: settings.distance_grade_tint_strength, min: 0, max: 1, step: 0.01,
                 condition: form => !!form.distance_grade_enabled },
             _celestial: '_',
@@ -6110,7 +7220,7 @@ void main() {
                 options: { vanilla: 'lightflow_environment.option.cloud_style_vanilla', rendercraft: 'lightflow_environment.option.cloud_style_rendercraft', vibrant_visuals: 'lightflow_environment.option.cloud_style_vibrant' }, condition: form => !!form.clouds_enabled },
             cloud_palette_mode: { type: 'select', label: 'lightflow_environment.field.cloud_palette_mode', value: settings.cloud_palette_mode,
                 options: { preset: 'lightflow_environment.option.cloud_palette_preset', custom: 'lightflow_environment.option.cloud_palette_custom' },
-                condition: form => !!form.clouds_enabled && form.cloud_style !== 'vanilla' },
+                condition: form => !!form.clouds_enabled },
             cloud_texture_uuid: { type: 'select', label: 'lightflow_environment.field.cloud_texture', value: settings.cloud_texture_uuid,
                 options: textureOptions, condition: form => !!form.clouds_enabled && form.cloud_mode === 'texture' },
             cloud_coverage: { type: 'range', label: 'lightflow_environment.field.cloud_coverage', value: settings.cloud_coverage, min: 0, max: 1, step: 0.01, condition: form => !!form.clouds_enabled },
@@ -6128,55 +7238,81 @@ void main() {
             cloud_thickness: { type: 'range', label: 'lightflow_environment.field.cloud_thickness', value: settings.cloud_thickness, min: 0.25, max: 64, step: 0.25, condition: form => !!form.clouds_enabled },
             cloud_extrusion: { type: 'range', label: 'lightflow_environment.field.cloud_extrusion', value: settings.cloud_extrusion, min: 0, max: 1, step: 0.01, condition: form => !!form.clouds_enabled },
             cloud_top_color: { type: 'color', label: 'lightflow_environment.field.cloud_top_color', value: settings.cloud_top_color,
-                condition: form => !!form.clouds_enabled && form.cloud_style !== 'vanilla' && form.cloud_palette_mode === 'custom' },
+                condition: form => !!form.clouds_enabled && form.cloud_palette_mode === 'custom' },
             cloud_sun_side_color: { type: 'color', label: 'lightflow_environment.field.cloud_sun_side_color', value: settings.cloud_sun_side_color,
-                condition: form => !!form.clouds_enabled && form.cloud_style !== 'vanilla' && form.cloud_palette_mode === 'custom' },
+                condition: form => !!form.clouds_enabled && form.cloud_palette_mode === 'custom' },
             cloud_shadow_side_color: { type: 'color', label: 'lightflow_environment.field.cloud_shadow_side_color', value: settings.cloud_shadow_side_color,
-                condition: form => !!form.clouds_enabled && form.cloud_style !== 'vanilla' && form.cloud_palette_mode === 'custom' },
+                condition: form => !!form.clouds_enabled && form.cloud_palette_mode === 'custom' },
             cloud_bottom_color: { type: 'color', label: 'lightflow_environment.field.cloud_bottom_color', value: settings.cloud_bottom_color,
-                condition: form => !!form.clouds_enabled && form.cloud_style !== 'vanilla' && form.cloud_palette_mode === 'custom' },
+                condition: form => !!form.clouds_enabled && form.cloud_palette_mode === 'custom' },
             cloud_edge_color: { type: 'color', label: 'lightflow_environment.field.cloud_edge_color', value: settings.cloud_edge_color,
                 condition: form => !!form.clouds_enabled && form.cloud_style !== 'vanilla' && form.cloud_palette_mode === 'custom' },
             cloud_shadow_bevel_color: { type: 'color', label: 'lightflow_environment.field.cloud_shadow_bevel_color', value: settings.cloud_shadow_bevel_color,
-                condition: form => !!form.clouds_enabled && form.cloud_style !== 'vanilla' && form.cloud_palette_mode === 'custom' },
+                condition: form => !!form.clouds_enabled && form.cloud_style !== 'vanilla' && form.cloud_bevel_enabled !== false && form.cloud_palette_mode === 'custom' },
+            cloud_bevel_enabled: { type: 'checkbox', label: 'lightflow_environment.field.cloud_bevel_enabled', value: settings.cloud_bevel_enabled,
+                condition: form => !!form.clouds_enabled && form.cloud_style !== 'vanilla' },
+            cloud_scattering_strength: { type: 'range', label: 'lightflow_environment.field.cloud_scattering_strength', description: 'lightflow_environment.info.cloud_scattering_strength', value: settings.cloud_scattering_strength, reset_value: DEFAULT_SETTINGS.cloud_scattering_strength, min: 0, max: 3, step: 0.02,
+                condition: form => !!form.clouds_enabled && form.cloud_style === 'vibrant_visuals' },
+            cloud_gradient_thickness: { type: 'range', label: 'lightflow_environment.field.cloud_gradient_thickness', description: 'lightflow_environment.info.cloud_gradient_thickness', value: settings.cloud_gradient_thickness, reset_value: DEFAULT_SETTINGS.cloud_gradient_thickness, min: 0, max: 8, step: 0.05,
+                condition: form => !!form.clouds_enabled && form.cloud_style === 'vibrant_visuals' },
+            cloud_gradient_alpha: { type: 'range', label: 'lightflow_environment.field.cloud_gradient_alpha', description: 'lightflow_environment.info.cloud_gradient_alpha', value: settings.cloud_gradient_alpha, reset_value: DEFAULT_SETTINGS.cloud_gradient_alpha, min: 0, max: 1, step: 0.01,
+                condition: form => !!form.clouds_enabled && form.cloud_style === 'vibrant_visuals' },
+            cloud_view_response: { type: 'range', label: 'lightflow_environment.field.cloud_view_response', description: 'lightflow_environment.info.cloud_view_response', value: settings.cloud_view_response, reset_value: DEFAULT_SETTINGS.cloud_view_response, min: 0, max: 1, step: 0.01,
+                condition: form => !!form.clouds_enabled && form.cloud_style === 'vibrant_visuals' },
+            cloud_edge_hardness: { type: 'range', label: 'lightflow_environment.field.cloud_edge_hardness', description: 'lightflow_environment.info.cloud_edge_hardness', value: settings.cloud_edge_hardness, reset_value: DEFAULT_SETTINGS.cloud_edge_hardness, min: 0, max: 1, step: 0.01,
+                condition: form => !!form.clouds_enabled && form.cloud_style === 'vibrant_visuals' },
+            cloud_scattering_size: { type: 'range', label: 'lightflow_environment.field.cloud_scattering_size', description: 'lightflow_environment.info.cloud_scattering_size', value: settings.cloud_scattering_size, reset_value: DEFAULT_SETTINGS.cloud_scattering_size, min: 0.1, max: 4, step: 0.05,
+                condition: form => !!form.clouds_enabled && form.cloud_style === 'vibrant_visuals' },
+            cloud_optical_thickness: { type: 'range', label: 'lightflow_environment.field.cloud_optical_thickness', description: 'lightflow_environment.info.cloud_optical_thickness', value: settings.cloud_optical_thickness, reset_value: DEFAULT_SETTINGS.cloud_optical_thickness, min: 0.05, max: 4, step: 0.05,
+                condition: form => !!form.clouds_enabled && form.cloud_style === 'vibrant_visuals' },
+            cloud_phase_anisotropy: { type: 'range', label: 'lightflow_environment.field.cloud_phase_anisotropy', description: 'lightflow_environment.info.cloud_phase_anisotropy', value: settings.cloud_phase_anisotropy, reset_value: DEFAULT_SETTINGS.cloud_phase_anisotropy, min: 0, max: 0.85, step: 0.01,
+                condition: form => !!form.clouds_enabled && form.cloud_style === 'vibrant_visuals' },
+            cloud_density_variation: { type: 'range', label: 'lightflow_environment.field.cloud_density_variation', description: 'lightflow_environment.info.cloud_density_variation', value: settings.cloud_density_variation, reset_value: DEFAULT_SETTINGS.cloud_density_variation, min: 0, max: 0.3, step: 0.01,
+                condition: form => !!form.clouds_enabled && form.cloud_style === 'vibrant_visuals' },
             cloud_bevel_width: { type: 'range', label: 'lightflow_environment.field.cloud_bevel_width', value: settings.cloud_bevel_width, reset_value: RENDERCRAFT_CLOUD_BEVEL_DEFAULTS.width, min: 0, max: 0.45, step: 0.005,
-                condition: form => !!form.clouds_enabled && form.cloud_style !== 'vanilla' },
+                condition: form => !!form.clouds_enabled && form.cloud_style !== 'vanilla' && form.cloud_bevel_enabled !== false },
             cloud_bevel_smooth: { type: 'checkbox', label: 'lightflow_environment.field.cloud_bevel_smooth', value: settings.cloud_bevel_smooth,
-                condition: form => !!form.clouds_enabled && form.cloud_style !== 'vanilla' },
+                condition: form => !!form.clouds_enabled && form.cloud_style !== 'vanilla' && form.cloud_bevel_enabled !== false },
             cloud_bevel_softness: { type: 'range', label: 'lightflow_environment.field.cloud_bevel_softness', value: settings.cloud_bevel_softness, reset_value: RENDERCRAFT_CLOUD_BEVEL_DEFAULTS.softness, min: 0, max: 1, step: 0.01,
-                condition: form => !!form.clouds_enabled && form.cloud_style !== 'vanilla' && !!form.cloud_bevel_smooth },
+                condition: form => !!form.clouds_enabled && form.cloud_style !== 'vanilla' && form.cloud_bevel_enabled !== false && !!form.cloud_bevel_smooth },
             cloud_bevel_roundness: { type: 'range', label: 'lightflow_environment.field.cloud_bevel_roundness', value: settings.cloud_bevel_roundness, reset_value: RENDERCRAFT_CLOUD_BEVEL_DEFAULTS.roundness, min: 0, max: 1, step: 0.01,
-                condition: form => !!form.clouds_enabled && form.cloud_style !== 'vanilla' },
+                condition: form => !!form.clouds_enabled && form.cloud_style !== 'vanilla' && form.cloud_bevel_enabled !== false },
             cloud_bevel_strength: { type: 'range', label: 'lightflow_environment.field.cloud_bevel_strength', value: settings.cloud_bevel_strength, reset_value: RENDERCRAFT_CLOUD_BEVEL_DEFAULTS.strength, min: 0, max: 2, step: 0.02,
-                condition: form => !!form.clouds_enabled && form.cloud_style !== 'vanilla' },
+                condition: form => !!form.clouds_enabled && form.cloud_style !== 'vanilla' && form.cloud_bevel_enabled !== false },
             cloud_bevel_distance_fade: { type: 'checkbox', label: 'lightflow_environment.field.cloud_bevel_distance_fade', value: settings.cloud_bevel_distance_fade,
-                condition: form => !!form.clouds_enabled && form.cloud_style !== 'vanilla' },
+                condition: form => !!form.clouds_enabled && form.cloud_style !== 'vanilla' && form.cloud_bevel_enabled !== false },
             cloud_bevel_distance_min_scale: { type: 'range', label: 'lightflow_environment.field.cloud_bevel_distance_min_scale', value: settings.cloud_bevel_distance_min_scale, min: 0.02, max: 1, step: 0.01,
-                condition: form => !!form.clouds_enabled && form.cloud_style !== 'vanilla' && !!form.cloud_bevel_distance_fade },
+                condition: form => !!form.clouds_enabled && form.cloud_style !== 'vanilla' && form.cloud_bevel_enabled !== false && !!form.cloud_bevel_distance_fade },
             cloud_edge_strength: { type: 'range', label: 'lightflow_environment.field.cloud_edge_strength', value: settings.cloud_edge_strength, min: 0, max: 2, step: 0.02,
                 condition: form => !!form.clouds_enabled && form.cloud_style !== 'vanilla' },
             cloud_shadow_bevel_strength: { type: 'range', label: 'lightflow_environment.field.cloud_shadow_bevel_strength', value: settings.cloud_shadow_bevel_strength, min: 0, max: 2, step: 0.02,
-                condition: form => !!form.clouds_enabled && form.cloud_style !== 'vanilla' },
+                condition: form => !!form.clouds_enabled && form.cloud_style !== 'vanilla' && form.cloud_bevel_enabled !== false },
+            cloud_environment_influence: { type: 'range', label: 'lightflow_environment.field.cloud_environment_influence',
+                description: 'lightflow_environment.info.cloud_environment_influence', value: settings.cloud_environment_influence,
+                min: 0, max: 1, step: 0.01, condition: form => !!form.clouds_enabled },
+            cloud_time_tint_strength: { type: 'range', label: 'lightflow_environment.field.cloud_time_tint_strength',
+                description: 'lightflow_environment.info.cloud_time_tint_strength', value: settings.cloud_time_tint_strength,
+                min: 0, max: 1, step: 0.01, condition: form => !!form.clouds_enabled },
             cloud_lighting_mode: { type: 'select', label: 'lightflow_environment.field.cloud_lighting_mode', value: settings.cloud_lighting_mode,
                 options: { palette: 'lightflow_environment.option.cloud_lighting_palette', sky: 'lightflow_environment.option.cloud_lighting_sky', mixed: 'lightflow_environment.option.cloud_lighting_mixed' },
-                condition: form => !!form.clouds_enabled && form.cloud_style !== 'vanilla' },
+                condition: form => !!form.clouds_enabled && (form.cloud_style !== 'vanilla' || form.cloud_palette_mode === 'custom' || form.cloud_time_profiles_enabled) },
             cloud_sky_tint_strength: { type: 'range', label: 'lightflow_environment.field.cloud_sky_tint_strength', value: settings.cloud_sky_tint_strength, min: 0, max: 1, step: 0.01,
-                condition: form => !!form.clouds_enabled && form.cloud_style !== 'vanilla' && form.cloud_lighting_mode !== 'palette' },
+                condition: form => !!form.clouds_enabled && (form.cloud_style !== 'vanilla' || form.cloud_palette_mode === 'custom' || form.cloud_time_profiles_enabled) && form.cloud_lighting_mode !== 'palette' },
             cloud_sun_tint_strength: { type: 'range', label: 'lightflow_environment.field.cloud_sun_tint_strength', value: settings.cloud_sun_tint_strength, min: 0, max: 1, step: 0.01,
-                condition: form => !!form.clouds_enabled && form.cloud_style !== 'vanilla' },
+                condition: form => !!form.clouds_enabled && (form.cloud_style !== 'vanilla' || form.cloud_palette_mode === 'custom' || form.cloud_time_profiles_enabled) },
             cloud_fog_enabled: { type: 'checkbox', label: 'lightflow_environment.field.cloud_fog_enabled', value: settings.cloud_fog_enabled,
-                condition: form => !!form.clouds_enabled && form.cloud_style !== 'vanilla' },
+                condition: form => !!form.clouds_enabled },
             cloud_fog_color_mode: { type: 'select', label: 'lightflow_environment.field.cloud_fog_color_mode', value: settings.cloud_fog_color_mode,
                 options: { sky: 'lightflow_environment.option.cloud_fog_sky', custom: 'lightflow_environment.option.cloud_fog_custom' },
-                condition: form => !!form.clouds_enabled && form.cloud_style !== 'vanilla' && !!form.cloud_fog_enabled },
+                condition: form => !!form.clouds_enabled && !!form.cloud_fog_enabled },
             cloud_fog_color: { type: 'color', label: 'lightflow_environment.field.cloud_fog_color', value: settings.cloud_fog_color,
-                condition: form => !!form.clouds_enabled && form.cloud_style !== 'vanilla' && !!form.cloud_fog_enabled && form.cloud_fog_color_mode === 'custom' },
+                condition: form => !!form.clouds_enabled && !!form.cloud_fog_enabled && form.cloud_fog_color_mode === 'custom' },
             cloud_fog_strength: { type: 'range', label: 'lightflow_environment.field.cloud_fog_strength', value: settings.cloud_fog_strength, min: 0, max: 1, step: 0.01,
-                condition: form => !!form.clouds_enabled && form.cloud_style !== 'vanilla' && !!form.cloud_fog_enabled },
+                condition: form => !!form.clouds_enabled && !!form.cloud_fog_enabled },
             cloud_fog_start: { type: 'range', label: 'lightflow_environment.field.cloud_fog_start', value: settings.cloud_fog_start, min: 0, max: 0.98, step: 0.01,
-                condition: form => !!form.clouds_enabled && form.cloud_style !== 'vanilla' && !!form.cloud_fog_enabled },
+                condition: form => !!form.clouds_enabled && !!form.cloud_fog_enabled },
             cloud_fog_end: { type: 'range', label: 'lightflow_environment.field.cloud_fog_end', value: settings.cloud_fog_end, min: 0.01, max: 1, step: 0.01,
-                condition: form => !!form.clouds_enabled && form.cloud_style !== 'vanilla' && !!form.cloud_fog_enabled },
+                condition: form => !!form.clouds_enabled && !!form.cloud_fog_enabled },
             cloud_density: { type: 'range', label: 'lightflow_environment.field.cloud_density', value: settings.cloud_density, min: 0.05, max: 4, step: 0.05,
                 condition: form => !!form.clouds_enabled && form.cloud_style !== 'vanilla' },
             cloud_absorption: { type: 'range', label: 'lightflow_environment.field.cloud_absorption', value: settings.cloud_absorption, min: 0, max: 3, step: 0.02,
@@ -6289,15 +7425,24 @@ void main() {
         {
             id: 'fog', label: 'lightflow_environment.group.fog', icon: 'blur_on', color: '#91BFD8',
             entries: [
-                'distance_fog_enabled', 'distance_fog_color_mode',
+                'distance_look_presets', 'distance_fog_enabled', 'distance_fog_color_mode',
                 'distance_fog_fixed_color', 'distance_fog_day_color', 'distance_fog_sunrise_color', 'distance_fog_night_color',
                 { subsection: 'lightflow_environment.field.distance_fog_start', icon: 'straighten' },
-                'distance_fog_start', 'distance_fog_end', 'distance_fog_smoothness',
+                'distance_fog_start', 'distance_fog_end', 'distance_fog_smoothness', 'distance_fog_curve',
                 { subsection: 'lightflow_environment.field.distance_fog_gradient', icon: 'gradient' },
-                'distance_fog_gradient', 'distance_fog_near_color', 'distance_fog_dither', 'distance_fog_max_opacity', 'distance_fog_sync_background',
-                { subsection: 'lightflow_environment.field.distance_grade_enabled', icon: 'tune' },
-                'distance_grade_enabled', 'distance_grade_start', 'distance_grade_end',
-                'distance_grade_saturation', 'distance_grade_contrast', 'distance_grade_tint', 'distance_grade_tint_strength'
+                'distance_fog_gradient', 'distance_fog_near_color', 'distance_fog_sky_blend', 'distance_fog_max_opacity', 'distance_fog_sync_background'
+            ]
+        },
+        {
+            id: 'fog_texture', label: 'lightflow_environment.field.distance_fog_noise', icon: 'grain', color: '#91BFD8',
+            entries: ['distance_fog_noise', 'distance_fog_noise_scale', 'distance_fog_dither']
+        },
+        {
+            id: 'distance_grade', label: 'lightflow_environment.group.distance_grade', icon: 'tune', color: '#91BFD8',
+            entries: [
+                'distance_grade_enabled', 'distance_grade_follow_fog', 'distance_grade_start', 'distance_grade_end', 'distance_grade_curve',
+                'distance_grade_saturation', 'distance_grade_contrast', 'distance_grade_pivot_mode', 'distance_grade_pivot',
+                'distance_grade_tint_mode', 'distance_grade_tint', 'distance_grade_tint_strength'
             ]
         },
         {
@@ -6344,6 +7489,7 @@ void main() {
         {
             id: 'cloud_lighting', label: 'lightflow_environment.group.cloud_lighting', icon: 'lightbulb', color: '#6ED9FF',
             entries: [
+                'cloud_environment_influence', 'cloud_time_tint_strength',
                 'cloud_lighting_mode', 'cloud_sky_tint_strength', 'cloud_sun_tint_strength',
                 { subsection: 'lightflow_environment.field.cloud_fog_enabled', icon: 'foggy' },
                 'cloud_fog_enabled', 'cloud_fog_color_mode', 'cloud_fog_color', 'cloud_fog_strength', 'cloud_fog_start', 'cloud_fog_end', 'cloud_density', 'cloud_absorption', 'cloud_translucency'
@@ -6351,7 +7497,7 @@ void main() {
         },
         {
             id: 'cloud_detail', label: 'lightflow_environment.group.cloud_detail', icon: 'view_in_ar', color: '#6ED9FF',
-            entries: ['cloud_bevel_width', 'cloud_bevel_smooth', 'cloud_bevel_softness', 'cloud_bevel_roundness', 'cloud_bevel_strength', 'cloud_bevel_distance_fade', 'cloud_bevel_distance_min_scale', 'cloud_edge_strength', 'cloud_shadow_bevel_strength']
+            entries: ['cloud_scattering_strength', 'cloud_scattering_size', 'cloud_edge_hardness', 'cloud_view_response', 'cloud_gradient_thickness', 'cloud_gradient_alpha', 'cloud_optical_thickness', 'cloud_phase_anisotropy', 'cloud_density_variation', 'cloud_bevel_enabled', 'cloud_bevel_width', 'cloud_bevel_smooth', 'cloud_bevel_softness', 'cloud_bevel_roundness', 'cloud_bevel_strength', 'cloud_bevel_distance_fade', 'cloud_bevel_distance_min_scale', 'cloud_edge_strength', 'cloud_shadow_bevel_strength']
         },
         {
             id: 'bloom', label: 'lightflow_environment.group.bloom', icon: 'flare', color: '#FF9FD0',
@@ -6381,7 +7527,7 @@ void main() {
 
     // Keep panel and full editor navigation identical; every field has one home.
     function getEnvironmentGroupCategory(id) {
-        if (id === 'fog' || id === 'clouds' || id.startsWith('cloud_')) return 'atmosphere';
+        if (id === 'fog' || id === 'fog_texture' || id === 'distance_grade' || id === 'clouds' || id.startsWith('cloud_')) return 'atmosphere';
         if (['ambient', 'shadows', 'bloom'].includes(id)) return 'lighting';
         return 'sky';
     }
@@ -6782,7 +7928,7 @@ void main() {
             id: `lightflow_environment_color_${preset.id}_${marker.id}`,
             name: '\u00a0',
             description: marker.name || marker.id,
-            icon: marker.id === currentColor ? 'radio_button_checked' : 'circle',
+            icon: 'circle',
             color: marker.standard || marker.pastel,
             marked: marker.id === currentColor,
             click: () => runEnvironmentUndo('lightflow_environment.undo.change_preset_color', () => updateEnvironmentSkyPresetMetadata(preset.id, { iconColor: marker.id }))
@@ -6790,13 +7936,18 @@ void main() {
     }
 
     function getEnvironmentPresetIconMenuItems(preset) {
-        const usesPresetIcon = ENVIRONMENT_PRESET_ICON_OPTIONS.some(option => !option.custom && option.icon === preset.icon);
-        return ENVIRONMENT_PRESET_ICON_OPTIONS.map(option => ({
+        // Aspect-ratio glyphs are frame controls; custom input still accepts their IDs.
+        const registeredIcons = (window.LightManagerIcons?.list?.() || [])
+            .filter(icon => icon.startsWith('lightflow:') && !icon.startsWith('lightflow:aspect-'))
+            .map(icon => ({ id: 'registered_' + icon.slice('lightflow:'.length), icon, label: icon }));
+        const options = [...ENVIRONMENT_PRESET_ICON_OPTIONS.filter(option => !option.custom), ...registeredIcons,
+            { id: 'custom', icon: 'edit', label: tr('lightflow_environment.action.other_icon'), custom: true }];
+        const usesPresetIcon = options.some(option => !option.custom && option.icon === preset.icon);
+        return options.map(option => ({
             id: `lightflow_environment_icon_${preset.id}_${option.id}`,
-            name: '\u00a0',
+            name: option.custom ? option.label : '\u00a0',
             description: option.custom && !usesPresetIcon ? `${option.label} (${preset.icon})` : option.label,
             icon: option.icon,
-            color: option.custom ? 'var(--color-axis-y)' : undefined,
             marked: option.custom ? !usesPresetIcon : option.icon === preset.icon,
             click: () => option.custom
                 ? openEnvironmentSkyPresetIconDialog(preset.id)
@@ -6920,11 +8071,12 @@ void main() {
         });
         window.LightManagerUI.GridMenu.decorate(menu, {
             itemSelector: 'li[menu_item^="lightflow_environment_color_"]',
-            maxColumns: 4, cellSize: 40, padding: 4
+            columns: 5, maxColumns: 5, cellSize: 36, padding: 6, refined: true
         });
         window.LightManagerUI.GridMenu.decorate(menu, {
             itemSelector: 'li[menu_item^="lightflow_environment_icon_"]',
-            columns: 4, maxColumns: 4, cellSize: 40, padding: 4
+            columns: 5, maxColumns: 5, cellSize: 36, padding: 6, refined: true,
+            footerSelector: '[menu_item$="_custom"]'
         });
         menu.node?.querySelectorAll('li[menu_item^="lightflow_environment_icon_"][menu_item$="_custom"]')
             .forEach(item => item.classList.add('light_manager_identity_custom_icon_item'));
@@ -7141,7 +8293,7 @@ void main() {
             _environment_edit_copy: {
                 type: 'action_button', semantic_button: true, icon: 'content_copy',
                 text: 'lightflow_environment.action.create_editable_copy',
-                description: 'lightflow_environment.info.quick_preset',
+                description: tl('lightflow_environment.info.quick_preset'),
                 condition: result => result.enabled !== false && isNativeSkyPresetSelected(),
                 click: () => runEnvironmentUndo('lightflow_environment.undo.duplicate_preset', () => duplicateEnvironmentSkyPreset(activeSkyPresetId))
             },
@@ -7150,8 +8302,8 @@ void main() {
             })
         };
         form._environment_quick_hint = {
-            type: 'bar_display', value: 'lightflow_environment.info.quick_preset', icon: 'tune',
-            paragraph: true, expand: true, color: 'var(--color-subtle_text)',
+            type: 'bar_display', value: tl('lightflow_environment.info.quick_preset'), icon: 'tune',
+            paragraph: true, expand: true, color: 'var(--color-subtle_text)', font_size: 11,
             condition: () => isNativeSkyPresetSelected()
         };
 
@@ -7548,17 +8700,42 @@ void main() {
         const current = () => frames.find(frame => frame.id === selectedId) || frames[0];
         const sorted = () => cloneEnvironmentData(frames).sort((a, b) => a.time - b.time);
         const preview = () => {
-            if (closed) return;
-            applySettings({cloud_time_profiles_enabled: true, cloud_time_profiles: sorted(),
-                time: current().time, animate_time: false},
-            {cause: 'cloud_time_preview', forceShadow: false, syncPanel: false});
-            refreshEnvironmentTimeGallery(dialog, frames, current().time);
+            if (closed || updating) return;
+            updating = true;
+            try {
+                applySettings({cloud_time_profiles_enabled: true, cloud_time_profiles: sorted(),
+                    time: current().time, animate_time: false},
+                {cause: 'cloud_time_preview', forceShadow: false, syncPanel: false});
+                refreshEnvironmentTimeGallery(dialog, frames, current().time);
+            } finally { updating = false; }
         };
         const fieldCategory = key => {
+            if (key.startsWith('cloud_fog_')) return 'fog';
             if (CLOUD_TIME_COLOR_FIELDS.includes(key)) return 'colors';
-            if (['cloud_coverage', 'cloud_opacity', 'cloud_contrast', 'cloud_brightness',
-                'cloud_density', 'cloud_absorption', 'cloud_translucency'].includes(key)) return 'appearance';
+            if (['cloud_coverage','cloud_opacity','cloud_contrast','cloud_brightness'].includes(key)) return 'appearance';
+            if (key.startsWith('cloud_bevel_') || ['cloud_gradient_thickness','cloud_gradient_alpha',
+                'cloud_edge_hardness','cloud_view_response','cloud_edge_strength','cloud_shadow_bevel_strength'].includes(key)) return 'edges';
+            if (['cloud_scattering_strength','cloud_scattering_size','cloud_optical_thickness',
+                'cloud_phase_anisotropy','cloud_density_variation','cloud_density','cloud_absorption','cloud_translucency'].includes(key)) return 'advanced';
             return 'lighting';
+        };
+        const fieldVisible = (key, values, definition) => {
+            const context = Object.assign({}, settings, current().appearance, values,
+                {cloud_time_profiles_enabled:false, cloud_palette_mode:'custom'});
+            if (values.cloud_time_section !== fieldCategory(key)) return false;
+            if (definition.condition && !Condition(definition.condition,context)) return false;
+            const sculpted = settings.cloud_style === 'vibrant_visuals';
+            // These older bevel controls have no consumer in the optical shader.
+            if (sculpted && ['cloud_bevel_softness','cloud_bevel_roundness','cloud_bevel_distance_min_scale',
+                'cloud_shadow_bevel_color','cloud_shadow_bevel_strength','cloud_edge_color'].includes(key)) return false;
+            if (!settings.cloud_bevel_enabled && key.startsWith('cloud_bevel_')) return false;
+            const gradient = context.cloud_gradient_thickness > 0 && context.cloud_gradient_alpha < 1;
+            if (sculpted && ['cloud_edge_hardness','cloud_view_response'].includes(key) && !gradient) return false;
+            if (sculpted && key === 'cloud_edge_strength' && (!gradient || context.cloud_scattering_strength <= 0 ||
+                context.cloud_environment_influence <= 0 || context.cloud_translucency <= 0)) return false;
+            if (['cloud_time_tint_strength','cloud_sky_tint_strength','cloud_sun_tint_strength'].includes(key) &&
+                context.cloud_environment_influence <= 0) return false;
+            return true;
         };
         const build = () => {
             const frame = current();
@@ -7577,21 +8754,24 @@ void main() {
                     value: category, options: {
                         appearance: 'lightflow_environment.option.cloud_time_appearance',
                         colors: 'lightflow_environment.option.cloud_time_colors',
-                        lighting: 'lightflow_environment.option.cloud_time_lighting'
+                        edges: 'lightflow_environment.option.cloud_time_edges',
+                        lighting: 'lightflow_environment.option.cloud_time_light_only',
+                        fog: 'lightflow_environment.option.cloud_time_fog',
+                        advanced: 'lightflow_environment.option.cloud_time_advanced'
                     }}
             };
             for (const key of [...Object.keys(CLOUD_TIME_NUMERIC_FIELDS), ...CLOUD_TIME_COLOR_FIELDS]) {
                 const definition = originals[key];
                 form[key] = Object.assign({}, definition, {
                     value: frame.appearance[key],
-                    condition: values => values.cloud_time_section === fieldCategory(key) &&
-                        (!CLOUD_TIME_COLOR_FIELDS.includes(key) || key === 'cloud_fog_color' || settings.cloud_style !== 'vanilla') &&
-                        (key !== 'cloud_fog_color' || (settings.cloud_fog_enabled && settings.cloud_fog_color_mode === 'custom')) &&
-                        (!key.startsWith('cloud_bevel_') || settings.cloud_style !== 'vanilla') &&
-                        (!['cloud_edge_strength', 'cloud_shadow_bevel_strength', 'cloud_sky_tint_strength',
-                            'cloud_sun_tint_strength', 'cloud_absorption'].includes(key) || settings.cloud_style !== 'vanilla')
+                    ...(key === 'cloud_gradient_alpha' ? {label:'lightflow_environment.field.cloud_gradient_hide'} : {}),
+                    condition: values => fieldVisible(key,values,definition)
                 });
             }
+            form._cloud_effect_status = {type:'bar_display', icon:'info', paragraph:true, expand:true,
+                value:tr('lightflow_environment.info.cloud_effect_inactive'),
+                condition:values => settings.cloud_style === 'vibrant_visuals' && values.cloud_time_section === 'edges' &&
+                    (values.cloud_gradient_thickness <= 0 || values.cloud_gradient_alpha >= 1 || values.cloud_scattering_strength <= 0)};
             form.add_time = {type: 'number', label: 'lightflow_environment.field.cloud_time_new',
                 value: newTime, min: 0, max: 23999, step: 1};
             form._add_frame = {type: 'action_button', semantic_button: true, icon: 'add',
@@ -7630,13 +8810,16 @@ void main() {
             try {
                 dialog.form.form_config = (window.LightManagerUI?.prepareForm || (form => form))(build());
                 dialog.form.buildForm();
+                dialog.form.updateValues({cause:'setup'});
             } finally { updating = false; }
         };
-        const applyFields = form => {
+        const applyFields = (form, changedKeys) => {
             if (!form) return false;
             const frame = current();
             let changed = false;
-            const tick = readEnvironmentFrameTime(form, frame.time);
+            const edited = Array.isArray(changedKeys) && changedKeys.length ? new Set(changedKeys) : null;
+            const tick = !edited || edited.has('frame_time') || edited.has('frame_clock')
+                ? readEnvironmentFrameTime(form,frame.time) : frame.time;
             if (tick !== frame.time) {
                 if (!frames.some(other => other !== frame && other.time === tick)) {
                     frame.time = tick; changed = true;
@@ -7647,7 +8830,9 @@ void main() {
                 }
             }
             for (const key of [...Object.keys(CLOUD_TIME_NUMERIC_FIELDS), ...CLOUD_TIME_COLOR_FIELDS]) {
-                if (form[key] === undefined) continue;
+                if (form[key] === undefined || (edited && !edited.has(key))) continue;
+                if (!edited && dialog?.form?.form_config[key]?.condition &&
+                    !Condition(dialog.form.form_config[key].condition,form)) continue;
                 const value = CLOUD_TIME_COLOR_FIELDS.includes(key)
                     ? normalizeHex(form[key], frame.appearance[key])
                     : clamp(finite(form[key], frame.appearance[key]), ...CLOUD_TIME_NUMERIC_FIELDS[key]);
@@ -7659,21 +8844,21 @@ void main() {
                 frame.appearance.cloud_fog_start + 0.01);
             return changed;
         };
+        const onEditorChange = (form,changedKeys) => {
+            if (updating || closed) return;
+            if (form.active_frame !== selectedId && frames.some(frame => frame.id === form.active_frame)) {
+                selectedId = form.active_frame;
+                rebuild(); preview(); return;
+            }
+            category = ['appearance','colors','edges','lighting','fog','advanced'].includes(form.cloud_time_section)
+                ? form.cloud_time_section : category;
+            newTime = parseEnvironmentClockTime(form.add_time, newTime);
+            if (applyFields(form,changedKeys)) preview();
+        };
         beginEnvironmentUndo('lightflow_environment.undo.edit');
         dialog = new Dialog('lightflow_environment_cloud_time_dialog', {
             title: 'lightflow_environment.dialog.cloud_time_profiles', width: 640,
             form: (window.LightManagerUI?.prepareForm || (form => form))(build()),
-            onFormChange(form) {
-                if (updating || closed) return;
-                if (form.active_frame !== selectedId && frames.some(frame => frame.id === form.active_frame)) {
-                    selectedId = form.active_frame;
-                    rebuild(); preview(); return;
-                }
-                category = ['appearance', 'colors', 'lighting'].includes(form.cloud_time_section)
-                    ? form.cloud_time_section : category;
-                newTime = parseEnvironmentClockTime(form.add_time, newTime);
-                if (applyFields(form)) preview();
-            },
             onConfirm(form) {
                 if (closed) return;
                 if (!updating && form?.active_frame === selectedId) applyFields(form);
@@ -7692,6 +8877,7 @@ void main() {
             }
         });
         dialog.show();
+        dialog.form.on('change',({result,changed_keys}) => onEditorChange(result,changed_keys));
         preview();
     }
 
@@ -7896,7 +9082,7 @@ void main() {
         'lightflow_environment.panel.category_atmosphere': 'Atmosphere',
         'lightflow_environment.panel.category_lighting': 'Lighting',
             'lightflow_environment.action.open': 'Environment Composer...',
-            'lightflow_environment.action.open.desc': 'Compose a Minecraft sky, time, sun, moon, clouds, ambient response, and directional shadows',
+            'lightflow_environment.action.open.desc': 'Edit Minecraft sky, time, sun, moon, clouds, ambient lighting and directional shadows.',
             'lightflow_environment.action.manage_presets': 'Manage Sky Presets',
             'lightflow_environment.action.create_preset': 'New Sky Preset...',
             'lightflow_environment.action.create_editable_copy': 'Create Editable Copy',
@@ -7906,17 +9092,18 @@ void main() {
             'lightflow_environment.action.delete_preset': 'Delete Sky Preset',
             'lightflow_environment.action.rename_preset': 'Rename...',
             'lightflow_environment.action.change_preset_icon': 'Change Icon',
+            'lightflow_environment.action.other_icon': 'Other icon...',
             'lightflow_environment.action.change_preset_color': 'Marker Color',
             'lightflow_environment.action.change_base_sky_model': 'Change Base Sky Model...',
-            'lightflow_environment.action.fit_shadow_region': 'Fit Shadow Region to Selection / Scene',
-            'lightflow_environment.action.fit_shadow_region.desc': 'Fit environment shadows to selected geometry, or to all scene geometry when nothing is selected',
+            'lightflow_environment.action.fit_shadow_region': 'Fit Shadows to Selection / Scene',
+            'lightflow_environment.action.fit_shadow_region.desc': 'Fit the shadow region to selected geometry, or the whole scene if nothing is selected.',
             'lightflow_environment.dialog.title': 'Minecraft Environment Composer',
             'lightflow_environment.dialog.gradient_title': 'Sky Gradient Editor',
             'lightflow_environment.dialog.create_preset': 'New Sky Preset',
             'lightflow_environment.dialog.rename_preset': 'Rename Sky Preset',
             'lightflow_environment.dialog.change_preset_icon': 'Change Sky Preset Icon',
             'lightflow_environment.dialog.change_base_sky_model': 'Change Base Sky Model',
-            'lightflow_environment.action.edit_gradients': 'Edit Sky Gradients...',
+            'lightflow_environment.action.edit_gradients': 'Edit sky gradients…',
             'lightflow_environment.action.edit_gradients.desc': 'Edit separate day, dawn, sunset, and night sky gradients',
             'lightflow_environment.gradient.info': 'Double-click the bar to add a color. Drag stops to position them, or enter a percentage below. Diamonds adjust the blend. Use Up/Down to select a stop, Left/Right to fine-tune, and Shift for larger steps. The endpoint positions stay fixed; their colors are editable.',
             'lightflow_environment.gradient.day_sky_gradient': 'Day',
@@ -7925,7 +9112,6 @@ void main() {
             'lightflow_environment.time.midnight': 'Midnight',
             'lightflow_environment.time.sunrise': 'Sunrise',
             'lightflow_environment.gradient.quick_info': 'Select a color or double-click to add one. Diamonds adjust the blend. The scene previews this palette; its original time returns when you close the editor.',
-            'lightflow_environment.action.edit_gradients': 'Edit sky gradients…',
             'lightflow_environment.gradient.sunrise_sky_gradient': 'Dawn',
             'lightflow_environment.gradient.sunset_sky_gradient': 'Sunset',
             'lightflow_environment.gradient.night_sky_gradient': 'Night',
@@ -7935,6 +9121,27 @@ void main() {
             'lightflow_environment.group.time': 'Time & Cycle',
             'lightflow_environment.group.sky': 'Sky colors',
             'lightflow_environment.group.fog': 'Distance Fog',
+            'lightflow_environment.group.distance_grade': 'Distance Color Grading',
+            'lightflow_environment.action.distance_looks': 'Distance Look',
+            'lightflow_environment.distance_look.air': 'Clear air · gentle separation',
+            'lightflow_environment.distance_look.landscape': 'Landscape · layered depth',
+            'lightflow_environment.distance_look.silhouette': 'Silhouette · dissolve distant masses',
+            'lightflow_environment.info.distance_looks': 'Applies editable fog and grading values using the current sky and clock. Keeps your distances. Set Start beyond your subject, then adjust End to place the background. Requires Atmosphere and Lightflow surface materials for the complete look.',
+            'lightflow_environment.info.distance_fog_art': 'Keep Start beyond the foreground you want to protect. End places the distant atmosphere. Advanced curves, sky blending, grading and texture require Atmosphere with Lightflow materials.',
+            'lightflow_environment.field.distance_fog_curve': 'Fog Entry Curve',
+            'lightflow_environment.info.distance_curve': '1 is neutral. Above 1 delays the effect to protect the middle ground; below 1 brings it forward. Start and End remain unchanged.',
+            'lightflow_environment.field.distance_fog_sky_blend': 'Distant Sky Blend',
+            'lightflow_environment.info.distance_sky_blend': 'Blend the far fog into the current sky gradient at each viewing height. Follows time and custom gradients; does not include sun discs, glare, stars or clouds. Available in the Overworld.',
+            'lightflow_environment.field.distance_fog_noise': 'Atmosphere Texture',
+            'lightflow_environment.field.distance_fog_noise_scale': 'Texture Size (scene units)',
+            'lightflow_environment.info.distance_noise': 'Subtle world-anchored variation within the transition. 0 disables it. Stable in stills and tiles; this is surface haze, not a volume of clouds.',
+            'lightflow_environment.field.distance_grade_follow_fog': 'Use Fog Distances',
+            'lightflow_environment.info.distance_grade_range': 'Shares the fog Start and End so one distance adjustment protects the foreground for both effects. Disable to place grading independently.',
+            'lightflow_environment.field.distance_grade_curve': 'Grading Entry Curve',
+            'lightflow_environment.field.distance_grade_pivot_mode': 'Contrast Pivot',
+            'lightflow_environment.field.distance_grade_pivot': 'Pivot Value',
+            'lightflow_environment.info.distance_pivot': 'Value around which far contrast is compressed. Lower values preserve dark nights. Follow Sky Horizon adapts this value to the preset and clock.',
+            'lightflow_environment.field.distance_grade_tint_mode': 'Far Tint',
             'lightflow_environment.group.celestial': 'Sun & Moon',
             'lightflow_environment.group.weather': 'Stars & Clouds',
             'lightflow_environment.group.bloom': 'Environment Bloom',
@@ -7954,7 +9161,7 @@ void main() {
             'lightflow_environment.field.enabled': 'Render Environment',
             'lightflow_environment.field.time': 'Minecraft Time',
             'lightflow_environment.field.animate': 'Animate Day Cycle',
-            'lightflow_environment.field.day_length': 'Full Day Length (seconds)',
+            'lightflow_environment.field.day_length': 'Day Cycle Duration (s)',
             'lightflow_environment.field.azimuth': 'Sun Path Rotation',
             'lightflow_environment.field.palette_mode': 'Sky Color Source',
             'lightflow_environment.option.palette_preset': 'Use Preset Palette',
@@ -8023,15 +9230,15 @@ void main() {
             'lightflow_environment.field.distance_fog_gradient': 'Color Gradient Strength',
             'lightflow_environment.field.distance_fog_dither': 'Dither',
             'lightflow_environment.field.distance_fog_max_opacity': 'Maximum Opacity',
-            'lightflow_environment.field.distance_fog_sync_background': 'Match Color Background',
-            'lightflow_environment.field.distance_grade_enabled': 'Distance Color Grade',
-            'lightflow_environment.field.distance_grade_start': 'Grade Start Distance',
-            'lightflow_environment.field.distance_grade_end': 'Grade End Distance',
+            'lightflow_environment.field.distance_fog_sync_background': 'Match Background Color',
+            'lightflow_environment.field.distance_grade_enabled': 'Distance Color Grading',
+            'lightflow_environment.field.distance_grade_start': 'Grading Start',
+            'lightflow_environment.field.distance_grade_end': 'Grading End',
             'lightflow_environment.field.distance_grade_saturation': 'Far Saturation',
             'lightflow_environment.field.distance_grade_contrast': 'Far Contrast',
             'lightflow_environment.field.distance_grade_tint': 'Far Tint',
             'lightflow_environment.field.distance_grade_tint_strength': 'Far Tint Strength',
-            'lightflow_environment.field.sun_enabled': 'Sun / Moon Light',
+            'lightflow_environment.field.sun_enabled': 'Sun / Moon Lighting',
             'lightflow_environment.field.sun_intensity': 'Sun Intensity',
             'lightflow_environment.field.sun_light_color_mode': 'Sunlight Color',
             'lightflow_environment.option.sun_light_follow_disc': 'Follow Sun Disc',
@@ -8059,19 +9266,19 @@ void main() {
             'lightflow_environment.field.sun_opacity': 'Sun Opacity',
             'lightflow_environment.field.moon_blend_mode': 'Moon Blending',
             'lightflow_environment.field.moon_opacity': 'Moon Opacity',
-            'lightflow_environment.field.sun_texture': 'Sun Project Texture',
-            'lightflow_environment.field.moon_texture': 'Moon Project Texture',
+            'lightflow_environment.field.sun_texture': 'Sun Texture',
+            'lightflow_environment.field.moon_texture': 'Moon Texture',
             'lightflow_environment.field.moon_texture_layout': 'Moon Texture Layout',
             'lightflow_environment.field.moon_atlas_columns': 'Moon Atlas Columns',
             'lightflow_environment.field.moon_atlas_rows': 'Moon Atlas Rows',
             'lightflow_environment.field.moon_phase_offset': 'Moon Phase Offset',
-            'lightflow_environment.field.sun_horizon_scale': 'Sunset Sun Scale',
-            'lightflow_environment.field.sun_gaze_scale': 'Direct-view Sun Scale',
+            'lightflow_environment.field.sun_horizon_scale': 'Sunset Sun Size',
+            'lightflow_environment.field.sun_gaze_scale': 'Direct-View Sun Size',
             'lightflow_environment.field.sun_glare': 'Sun Glare',
             'lightflow_environment.field.lens_flare_enabled': 'Minecraft Lens Flare',
             'lightflow_environment.field.lens_flare_strength': 'Lens Flare Strength',
             'lightflow_environment.field.lens_flare_scale': 'Lens Flare Size',
-            'lightflow_environment.field.cloud_translucency': 'Cloud Transmitted Light',
+            'lightflow_environment.field.cloud_translucency': 'Cloud Light Transmission',
             'lightflow_environment.field.sunset_directional_glow': 'Directional Sunset Glow',
             'lightflow_environment.option.celestial_vanilla': 'Minecraft Texture',
             'lightflow_environment.option.celestial_texture': 'Project Texture',
@@ -8088,18 +9295,26 @@ void main() {
             'lightflow_environment.field.star_density': 'Star Density',
             'lightflow_environment.field.clouds': 'Minecraft Clouds',
             'lightflow_environment.field.cloud_time_profiles_enabled': 'Use Timed Cloud Profiles',
-            'lightflow_environment.field.cloud_time_frame': 'Cloud Appearance Keyframe',
+            'lightflow_environment.field.cloud_time_frame': 'Cloud Keyframe',
             'lightflow_environment.field.cloud_time_tick': 'Keyframe Time (0–23999)',
-            'lightflow_environment.field.cloud_time_section': 'Edit Appearance',
+            'lightflow_environment.field.cloud_time_section': 'Edit Cloud Look',
             'lightflow_environment.field.cloud_time_new': 'New Keyframe Time',
             'lightflow_environment.option.cloud_time_appearance': 'Coverage & Appearance',
             'lightflow_environment.option.cloud_time_colors': 'Cloud Colors',
             'lightflow_environment.option.cloud_time_lighting': 'Lighting & Fog',
+            'lightflow_environment.option.cloud_time_edges': 'Gradient & Bevel',
+            'lightflow_environment.option.cloud_time_light_only': 'Lighting',
+            'lightflow_environment.option.cloud_time_fog': 'Distance Fog',
+            'lightflow_environment.option.cloud_time_advanced': 'Advanced Material',
+            'lightflow_environment.option.gradient_visible': 'Visible',
+            'lightflow_environment.option.gradient_hidden': 'Hidden',
+            'lightflow_environment.field.cloud_gradient_hide': 'Hide Gradient',
+            'lightflow_environment.info.cloud_effect_inactive': 'Thickness 0 or Hide Gradient 1 disables the gradient. Edge light also needs scattering above 0. Hidden controls keep their saved values.',
             'lightflow_environment.action.cloud_time_profiles': 'Edit Timed Cloud Profiles',
             'lightflow_environment.action.cloud_time_add': 'Add Cloud Profile at Time',
             'lightflow_environment.action.cloud_time_remove': 'Delete Selected Cloud Profile',
             'lightflow_environment.dialog.cloud_time_profiles': 'Cloud Appearance Timeline',
-            'lightflow_environment.info.cloud_time_profiles': 'Create different cloud looks for day, sunset, and night. Appearance interpolates smoothly across the Minecraft clock, including midnight. Texture, motion, scale and structure stay global to avoid visual jumps. Turn off Use Timed Cloud Profiles to restore your static cloud appearance.',
+            'lightflow_environment.info.cloud_time_profiles': 'Create cloud looks for day, sunset and night. They blend smoothly across midnight. Texture, motion, scale and structure remain shared to avoid jumps. Disable Timed Cloud Profiles to return to a fixed appearance.',
             'lightflow_environment.field.cloud_mode': 'Cloud Source',
             'lightflow_environment.field.cloud_style': 'Cloud Shading',
             'lightflow_environment.field.cloud_palette_mode': 'Cloud Palette',
@@ -8134,22 +9349,45 @@ void main() {
             'lightflow_environment.field.cloud_thickness': 'Cloud Thickness',
             'lightflow_environment.field.cloud_extrusion': '3D Cloud Extrusion',
             'lightflow_environment.field.cloud_bevel_width': 'Cloud Bevel Width',
-            'lightflow_environment.field.cloud_bevel_smooth': 'Smooth Bevel with Smoothstep',
-            'lightflow_environment.field.cloud_bevel_softness': 'Smooth Bevel Feather',
-            'lightflow_environment.field.cloud_bevel_roundness': 'Cloud Bevel Roundness',
-            'lightflow_environment.field.cloud_bevel_strength': 'Cloud Bevel Normal Strength',
-            'lightflow_environment.field.cloud_bevel_distance_fade': 'Reduce Bevel Width with Distance',
-            'lightflow_environment.field.cloud_bevel_distance_min_scale': 'Distant Bevel Minimum Width',
-            'lightflow_environment.field.cloud_edge_strength': 'Bevel Highlight Brightness',
-            'lightflow_environment.field.cloud_shadow_bevel_strength': 'Bevel Shadow Tint Strength',
+            'lightflow_environment.field.cloud_bevel_enabled': 'Enable Bevel',
+            'lightflow_environment.field.cloud_scattering_strength': 'Scattering Intensity',
+            'lightflow_environment.info.cloud_scattering_strength': 'Scales optical edge lighting and directional scattering. Zero removes these additions; diffuse lighting remains.',
+            'lightflow_environment.field.cloud_gradient_thickness': 'Edge Gradient Width (cells)',
+            'lightflow_environment.info.cloud_gradient_thickness': 'Visible width measured inward from the rectangular cloud contour, in cloud cells. 0 removes the band; 1 spans one cell. Independent of bevel and layer thickness.',
+            'lightflow_environment.field.cloud_gradient_alpha': 'Edge Gradient Fade',
+            'lightflow_environment.info.cloud_gradient_alpha': '0: full edge gradient. 1: no edge gradient. Does not hide the cloud or change its global opacity.',
+            'lightflow_environment.field.cloud_view_response': 'View / Light Response',
+            'lightflow_environment.info.cloud_view_response': '0: unchanged. 1: front-facing cloud faces have less soft glow and transmission; grazing faces scatter more light, especially toward the sun or moon.',
+            'lightflow_environment.field.cloud_edge_hardness': 'Edge Hardness',
+            'lightflow_environment.info.cloud_edge_hardness': '0: soft feather. 1: hard rectangular transition with pixel antialiasing. Independent of bevel.',
+            'lightflow_environment.field.cloud_scattering_size': 'Edge Optical Path',
+            'lightflow_environment.info.cloud_scattering_size': 'Advanced multiplier for optical travel inside the edge band. Changes absorption, not the gradient width.',
+            'lightflow_environment.field.cloud_optical_thickness': 'Optical Thickness',
+            'lightflow_environment.info.cloud_optical_thickness': 'Multiplies absorption along view and light paths. Does not change geometric layer thickness.',
+            'lightflow_environment.field.cloud_phase_anisotropy': 'Forward Scattering',
+            'lightflow_environment.info.cloud_phase_anisotropy': 'Controls how strongly clouds scatter light toward the light-facing view direction.',
+            'lightflow_environment.field.cloud_density_variation': 'Interior Density Variation',
+            'lightflow_environment.info.cloud_density_variation': 'Deterministic interior density variation anchored to cloud space. Zero gives uniform interior density.',
+            'lightflow_environment.field.cloud_bevel_smooth': 'Smooth Bevel (smoothstep)',
+            'lightflow_environment.field.cloud_bevel_softness': 'Bevel Feather',
+            'lightflow_environment.field.cloud_bevel_roundness': 'Bevel Roundness',
+            'lightflow_environment.field.cloud_bevel_strength': 'Bevel Normal Strength',
+            'lightflow_environment.field.cloud_bevel_distance_fade': 'Shrink Bevel with Distance',
+            'lightflow_environment.field.cloud_bevel_distance_min_scale': 'Distant Bevel Minimum',
+            'lightflow_environment.field.cloud_edge_strength': 'Exterior Edge Light',
+            'lightflow_environment.field.cloud_shadow_bevel_strength': 'Bevel Shadow Tint',
             'lightflow_environment.field.cloud_lighting_mode': 'Cloud Color Lighting',
             'lightflow_environment.option.cloud_lighting_palette': 'Palette Only',
             'lightflow_environment.option.cloud_lighting_sky': 'Sky Color',
             'lightflow_environment.option.cloud_lighting_mixed': 'Palette + Sky Light',
+            'lightflow_environment.field.cloud_environment_influence': 'Environment Color Influence',
+            'lightflow_environment.info.cloud_environment_influence': '0 keeps your cloud palette independent of sky, sun, time and fog color; 1 keeps the full environment look. Set the face colors to white for neutral clouds. Opacity still reveals the sky behind clouds.',
+            'lightflow_environment.field.cloud_time_tint_strength': 'Time of Day Influence',
+            'lightflow_environment.info.cloud_time_tint_strength': 'Blend the day, sunset and night cloud lighting from 0 (fixed palette and brightness) to 1 (full cycle). Sky, sun and fog have separate controls.',
             'lightflow_environment.field.cloud_sky_tint_strength': 'Sky Color Influence',
             'lightflow_environment.field.cloud_sun_tint_strength': 'Sun Color Influence',
             'lightflow_environment.field.cloud_fog_enabled': 'Cloud Distance Fog',
-            'lightflow_environment.field.cloud_fog_color_mode': 'Cloud Fog Color',
+            'lightflow_environment.field.cloud_fog_color_mode': 'Cloud Fog Color Source',
             'lightflow_environment.option.cloud_fog_sky': 'Use Current Sky Gradient',
             'lightflow_environment.option.cloud_fog_custom': 'Custom Fog Color',
             'lightflow_environment.field.cloud_fog_color': 'Custom Cloud Fog Color',
@@ -8158,7 +9396,7 @@ void main() {
             'lightflow_environment.field.cloud_fog_end': 'Cloud Fog End Distance',
             'lightflow_environment.field.cloud_density': 'Cloud Optical Density',
             'lightflow_environment.field.cloud_absorption': 'Cloud Light Absorption',
-            'lightflow_environment.field.environment_bloom_enabled': 'Use Environment Bloom Profile',
+            'lightflow_environment.field.environment_bloom_enabled': 'Use Environment Bloom',
             'lightflow_environment.field.bloom_threshold': 'Bloom Threshold',
             'lightflow_environment.field.bloom_soft_knee': 'Bloom Soft Knee',
             'lightflow_environment.field.bloom_strength': 'Bloom Strength',
@@ -8173,10 +9411,10 @@ void main() {
             'lightflow_environment.field.moon_bloom_contribution': 'Moon Bloom Contribution',
             'lightflow_environment.field.star_bloom_contribution': 'Star Bloom Contribution',
             'lightflow_environment.field.cloud_bloom_contribution': 'Cloud Bloom Contribution',
-            'lightflow_environment.field.cast_shadows': 'Sun Cast Shadows',
+            'lightflow_environment.field.cast_shadows': 'Cast Sun Shadows',
             'lightflow_environment.field.shadows_disabled.desc': 'Enable Sun / Moon Light to use environment shadows.',
-            'lightflow_environment.field.shadow_auto_fit': 'Fixed World Shadow Coverage Box',
-            'lightflow_environment.field.show_shadow_gizmo': 'Show Editable Fixed Shadow Box',
+            'lightflow_environment.field.shadow_auto_fit': 'Fixed Shadow Region',
+            'lightflow_environment.field.show_shadow_gizmo': 'Show Editable Shadow Box',
             'lightflow_environment.field.shadow_area': 'Shadow Capture Area',
             'lightflow_environment.field.shadow_resolution': 'Shadow Resolution',
             'lightflow_environment.field.shadow_camera_quality': 'Camera Shadow Detail',
@@ -8187,7 +9425,7 @@ void main() {
             'lightflow_environment.option.camera_shadow.balanced': 'Balanced',
             'lightflow_environment.option.camera_shadow.high': 'High',
             'lightflow_environment.field.shadow_softness_mode': "Shadow Style",
-            'lightflow_environment.field.shadow_softness_mode.desc': "Crisp: antialiased edge without penumbra. Artistic: constant blur. Distance: physical penumbra. Classic: preserves the filter of older projects.",
+            'lightflow_environment.field.shadow_softness_mode.desc': "Crisp: sharp antialiased edges. Artistic: constant blur. Distance: physically growing penumbra. Classic: legacy shadow filtering.",
             'lightflow_environment.shadow_mode.hard': "Crisp (AA)",
             'lightflow_environment.shadow_mode.artistic': "Artistic",
             'lightflow_environment.shadow_mode.distance': "Distance",
@@ -8221,10 +9459,10 @@ void main() {
             'lightflow_environment.message.light_manager_required': 'Lightflow Environment requires Light Manager 1.8.0 or newer.',
             'lightflow_environment.field.shadow_scene_fit': 'Automatically cover the whole scene',
             'lightflow_environment.field.shadow_region_locked': 'Lock shadow region in world space',
-            'lightflow_environment.info.quick_preset': 'Time, cycle speed and quick lighting/shadow settings edit this project. Advanced edits automatically create a custom copy.',
+            'lightflow_environment.info.quick_preset': 'Time, cycle speed and quick lighting or shadow changes affect this project. Advanced edits create an editable copy.',
             'lightflow_environment.info.native_preset_locked': 'Global Sky Preset · Quick Adjustments',
             'lightflow_environment.info.environment_disabled': 'Enable Render Environment to edit this control.',
-            'lightflow_environment.info.custom_preset_editable': 'Custom Sky Preset - Editable',
+            'lightflow_environment.info.custom_preset_editable': 'Custom Sky Preset · Editable',
             'lightflow_environment.info.no_custom_presets': 'No custom sky presets yet',
             'lightflow_environment.message.native_preset_locked': 'Native sky presets cannot be edited.',
             'lightflow_environment.message.create_copy_to_edit': 'This is a native sky preset. Create an editable copy to customize it.',
@@ -8264,7 +9502,7 @@ void main() {
         'lightflow_environment.panel.category_lighting': 'Luz',
             'lightflow_environment.info.environment_disabled': 'Activa Renderizar entorno para editar este control.',
             'lightflow_environment.action.open': 'Compositor de entorno...',
-            'lightflow_environment.action.open.desc': 'Compón un cielo de Minecraft con hora, sol, luna, nubes, respuesta ambiental y sombras direccionales',
+            'lightflow_environment.action.open.desc': 'Edita el cielo, la hora, el sol, la luna, las nubes, la luz ambiental y las sombras de Minecraft.',
             'lightflow_environment.action.manage_presets': 'Gestionar presets de cielo',
             'lightflow_environment.action.create_preset': 'Nuevo preset de cielo...',
             'lightflow_environment.action.create_editable_copy': 'Crear copia editable',
@@ -8274,18 +9512,19 @@ void main() {
             'lightflow_environment.action.delete_preset': 'Eliminar preset de cielo',
             'lightflow_environment.action.rename_preset': 'Renombrar...',
             'lightflow_environment.action.change_preset_icon': 'Cambiar icono',
+            'lightflow_environment.action.other_icon': 'Otro icono...',
             'lightflow_environment.action.change_preset_color': 'Color del marcador',
             'lightflow_environment.action.change_base_sky_model': 'Cambiar modelo de cielo base...',
-            'lightflow_environment.action.fit_shadow_region': 'Ajustar región de sombras a selección / escena',
-            'lightflow_environment.action.fit_shadow_region.desc': 'Ajusta las sombras a la geometría seleccionada o a toda la escena cuando no hay selección',
-            'lightflow_environment.dialog.title': 'Compositor de entorno Minecraft',
+            'lightflow_environment.action.fit_shadow_region': 'Ajustar sombras a selección / escena',
+            'lightflow_environment.action.fit_shadow_region.desc': 'Ajusta la región de sombras a la selección o a toda la escena si no hay nada seleccionado.',
+            'lightflow_environment.dialog.title': 'Compositor de entorno de Minecraft',
             'lightflow_environment.dialog.gradient_title': 'Editor de gradientes del cielo',
             'lightflow_environment.dialog.create_preset': 'Nuevo preset de cielo',
             'lightflow_environment.dialog.rename_preset': 'Renombrar preset de cielo',
             'lightflow_environment.dialog.change_preset_icon': 'Cambiar icono del preset',
             'lightflow_environment.dialog.change_base_sky_model': 'Cambiar modelo de cielo base',
-            'lightflow_environment.action.edit_gradients': 'Editar gradientes del cielo...',
-            'lightflow_environment.action.edit_gradients.desc': 'Abre el editor enfocado de gradientes de día, amanecer y noche',
+            'lightflow_environment.action.edit_gradients': 'Editar degradados del cielo…',
+            'lightflow_environment.action.edit_gradients.desc': 'Edita los degradados del cielo de día, amanecer, atardecer y noche.',
             'lightflow_environment.gradient.info': 'Doble clic en la barra para añadir un color. Arrastra los puntos o escribe su posición en porcentaje. Los diamantes ajustan la mezcla. Usa Arriba/Abajo para seleccionar un punto, Izquierda/Derecha para afinar y Mayús para pasos mayores. La posición de los extremos es fija; sus colores se pueden editar.',
             'lightflow_environment.gradient.day_sky_gradient': 'Día',
             'lightflow_environment.time.noon': 'Mediodía',
@@ -8293,7 +9532,6 @@ void main() {
             'lightflow_environment.time.midnight': 'Medianoche',
             'lightflow_environment.time.sunrise': 'Amanecer',
             'lightflow_environment.gradient.quick_info': 'Selecciona un color o haz doble clic para añadirlo. Los diamantes ajustan la mezcla. La escena muestra esta paleta; su hora original se restaura al cerrar el editor.',
-            'lightflow_environment.action.edit_gradients': 'Editar degradados del cielo…',
             'lightflow_environment.gradient.sunrise_sky_gradient': 'Amanecer',
             'lightflow_environment.gradient.sunset_sky_gradient': 'Atardecer',
             'lightflow_environment.gradient.night_sky_gradient': 'Noche',
@@ -8303,6 +9541,27 @@ void main() {
             'lightflow_environment.group.time': 'Hora y ciclo',
             'lightflow_environment.group.sky': 'Colores del cielo',
             'lightflow_environment.group.fog': 'Niebla por distancia',
+            'lightflow_environment.group.distance_grade': 'Color por distancia',
+            'lightflow_environment.action.distance_looks': 'Puntos de partida',
+            'lightflow_environment.distance_look.air': 'Aire claro · separación suave',
+            'lightflow_environment.distance_look.landscape': 'Paisaje · profundidad por planos',
+            'lightflow_environment.distance_look.silhouette': 'Silueta · disolver masas lejanas',
+            'lightflow_environment.info.distance_looks': 'Aplica valores editables de niebla y corrección con el cielo y la hora actuales. Conserva tus distancias. Coloca Inicio después del sujeto y ajusta Fin para situar el fondo. El resultado completo requiere Atmosphere y materiales Lightflow.',
+            'lightflow_environment.info.distance_fog_art': 'Coloca Inicio después del primer plano que quieres proteger. Fin sitúa la atmósfera lejana. Las curvas, el fundido al cielo, la corrección y la textura requieren Atmosphere con materiales Lightflow.',
+            'lightflow_environment.field.distance_fog_curve': 'Curva de entrada de niebla',
+            'lightflow_environment.info.distance_curve': '1 es neutro. Más de 1 retrasa el efecto para proteger el plano medio; menos de 1 lo adelanta. Inicio y Fin se mantienen.',
+            'lightflow_environment.field.distance_fog_sky_blend': 'Fundido lejano con el cielo',
+            'lightflow_environment.info.distance_sky_blend': 'Acerca la niebla al degradado actual del cielo según la altura de la mirada. Sigue la hora y los degradados personalizados; excluye discos solares, resplandor, estrellas y nubes. Disponible en Overworld.',
+            'lightflow_environment.field.distance_fog_noise': 'Textura de la atmósfera',
+            'lightflow_environment.field.distance_fog_noise_scale': 'Tamaño de textura (unidades de escena)',
+            'lightflow_environment.info.distance_noise': 'Variación sutil anclada al mundo dentro de la transición. 0 la desactiva. Estable en imágenes y tiles; es bruma de superficie, no un volumen de nubes.',
+            'lightflow_environment.field.distance_grade_follow_fog': 'Compartir distancias',
+            'lightflow_environment.info.distance_grade_range': 'Comparte Inicio y Fin con la niebla: una sola distancia protege el primer plano de ambos efectos. Desactívalo para situar la corrección por separado.',
+            'lightflow_environment.field.distance_grade_curve': 'Curva de entrada de corrección',
+            'lightflow_environment.field.distance_grade_pivot_mode': 'Pivote',
+            'lightflow_environment.field.distance_grade_pivot': 'Valor del pivote',
+            'lightflow_environment.info.distance_pivot': 'Valor hacia el que se comprime el contraste lejano. Valores bajos conservan noches oscuras. Seguir el horizonte adapta el pivote al preset y la hora.',
+            'lightflow_environment.field.distance_grade_tint_mode': 'Tinte',
             'lightflow_environment.group.celestial': 'Sol y luna',
             'lightflow_environment.group.weather': 'Estrellas y nubes',
             'lightflow_environment.group.bloom': 'Bloom del entorno',
@@ -8313,7 +9572,7 @@ void main() {
             'lightflow_environment.option.dimension_fog_preset': 'Seguir dimensión',
             'lightflow_environment.field.sky_cycle_mode': 'Ciclo del día',
             'lightflow_environment.field.moon_size': 'Tamaño de la luna',
-            'lightflow_environment.option.cycle_reference': 'Ciclo de referencias',
+            'lightflow_environment.option.cycle_reference': 'Ciclo de referencia',
             'lightflow_environment.option.cycle_legacy': 'Mezcla anterior de tres fases',
             'lightflow_environment.field.base_sky_model': 'Modelo de cielo base',
             'lightflow_environment.field.preset_name': 'Nombre del preset',
@@ -8322,28 +9581,28 @@ void main() {
             'lightflow_environment.field.enabled': 'Renderizar entorno',
             'lightflow_environment.field.time': 'Hora de Minecraft',
             'lightflow_environment.field.animate': 'Animar ciclo del día',
-            'lightflow_environment.field.day_length': 'Duración del día completo (segundos)',
+            'lightflow_environment.field.day_length': 'Duración del ciclo (s)',
             'lightflow_environment.field.azimuth': 'Rotación de la trayectoria solar',
             'lightflow_environment.field.palette_mode': 'Origen de colores del cielo',
             'lightflow_environment.option.palette_preset': 'Usar paleta del preset',
             'lightflow_environment.option.palette_custom': 'Paleta personalizada',
-            'lightflow_environment.field.day_sky_gradient': 'Gradiente del cielo diurno',
+            'lightflow_environment.field.day_sky_gradient': 'Degradado diurno',
             'lightflow_environment.field.sky_time_gradients_enabled': 'Usar gradientes por hora',
-            'lightflow_environment.field.sky_time_select': 'Fotograma de gradiente',
-            'lightflow_environment.field.sky_time_tick': 'Hora del fotograma (0–23999)',
-            'lightflow_environment.field.sky_time_gradient': 'Gradiente del cielo a esta hora',
-            'lightflow_environment.field.sky_time_new': 'Hora del nuevo fotograma',
+            'lightflow_environment.field.sky_time_select': 'Clave del degradado',
+            'lightflow_environment.field.sky_time_tick': 'Hora de la clave (0–23999)',
+            'lightflow_environment.field.sky_time_gradient': 'Degradado a esta hora',
+            'lightflow_environment.field.sky_time_new': 'Nueva hora clave',
             'lightflow_environment.action.edit_timed_gradients': 'Editar gradientes por hora',
             'lightflow_environment.action.sky_time_add': 'Añadir gradiente a esta hora',
-            'lightflow_environment.action.sky_time_remove': 'Eliminar fotograma seleccionado',
+            'lightflow_environment.action.sky_time_remove': 'Eliminar clave seleccionada',
             'lightflow_environment.dialog.sky_time_gradients': 'Línea de tiempo del cielo',
-            'lightflow_environment.info.sky_time_gradients': 'Crea gradientes a cualquier hora de Minecraft (6000 = mediodía, 12000 = atardecer). Los colores se interpolan suavemente, también al cruzar medianoche. Desactiva Usar gradientes por hora para recuperar Día / Amanecer / Atardecer / Noche sin borrar tus fotogramas.',
+            'lightflow_environment.info.sky_time_gradients': 'Añade degradados a cualquier hora de Minecraft (6000 = mediodía; 12000 = atardecer). Las claves se mezclan suavemente, incluso al cruzar medianoche. Desactiva los degradados por hora para volver a Día / Amanecer / Atardecer / Noche sin perder las claves.',
             'lightflow_environment.field.day_sky_gradient.desc': 'Gradiente diurno completo desde el cielo inferior / suelo, pasando por el horizonte, hasta el cénit',
-            'lightflow_environment.field.sunrise_sky_gradient': 'Gradiente del amanecer',
+            'lightflow_environment.field.sunrise_sky_gradient': 'Degradado del amanecer',
             'lightflow_environment.field.sunrise_sky_gradient.desc': 'Gradiente completo de suelo, horizonte y cénit mezclado durante el amanecer',
-            'lightflow_environment.field.sunset_sky_gradient': 'Gradiente del atardecer',
+            'lightflow_environment.field.sunset_sky_gradient': 'Degradado del atardecer',
             'lightflow_environment.field.sunset_sky_gradient.desc': 'Gradiente completo de suelo, horizonte y cénit mezclado durante el atardecer, independiente del amanecer',
-            'lightflow_environment.field.night_sky_gradient': 'Gradiente del cielo nocturno',
+            'lightflow_environment.field.night_sky_gradient': 'Degradado nocturno',
             'lightflow_environment.field.night_sky_gradient.desc': 'Gradiente nocturno completo desde el cielo inferior / suelo, pasando por el horizonte, hasta el cénit',
             'lightflow_environment.field.zenith_color': 'Cénit diurno',
             'lightflow_environment.field.horizon_color': 'Horizonte diurno',
@@ -8356,27 +9615,27 @@ void main() {
             'lightflow_environment.field.moon_color': 'Color de la luna',
             'lightflow_environment.field.cloud_color': 'Color de las nubes',
             'lightflow_environment.field.cloud_top_color': 'Color superior de las nubes',
-            'lightflow_environment.field.cloud_sun_side_color': 'Color de nubes hacia el sol',
-            'lightflow_environment.field.cloud_shadow_side_color': 'Color de nubes en sombra',
+            'lightflow_environment.field.cloud_sun_side_color': 'Cara iluminada de las nubes',
+            'lightflow_environment.field.cloud_shadow_side_color': 'Cara en sombra de las nubes',
             'lightflow_environment.field.cloud_bottom_color': 'Color inferior de las nubes',
             'lightflow_environment.field.cloud_edge_color': 'Brillo del bisel de nubes',
-            'lightflow_environment.field.cloud_shadow_bevel_color': 'Color de sombra del bisel de nubes',
+            'lightflow_environment.field.cloud_shadow_bevel_color': 'Sombra del bisel',
             'lightflow_environment.field.sky_intensity': 'Brillo del cielo',
-            'lightflow_environment.field.gradient_power': 'Forma del gradiente del cielo',
+            'lightflow_environment.field.gradient_power': 'Curva del degradado',
             'lightflow_environment.field.environment': 'Influencia del entorno',
             'lightflow_environment.field.ambient_fill_color_mode': 'Colores de luz ambiente',
             'lightflow_environment.option.ambient_fill_sky': 'Seguir el cielo',
             'lightflow_environment.option.ambient_fill_custom': 'Colores personalizados',
-            'lightflow_environment.field.ambient_fill_shape': 'Forma de luz ambiente',
+            'lightflow_environment.field.ambient_fill_shape': 'Distribución de luz ambiental',
             'lightflow_environment.option.ambient_fill_preset': 'Seguir el preset',
             'lightflow_environment.option.ambient_fill_flat': 'Uniforme',
             'lightflow_environment.option.ambient_fill_hemisphere': 'Cielo y suelo',
-            'lightflow_environment.field.ambient_fill_sky_color': 'Color del cielo / relleno uniforme',
-            'lightflow_environment.field.ambient_fill_ground_color': 'Color de relleno desde el suelo',
-            'lightflow_environment.field.ambient_fill_day_multiplier': 'Nivel de relleno diurno',
-            'lightflow_environment.field.ambient_fill_night_multiplier': 'Nivel de relleno nocturno',
-            'lightflow_environment.field.distance_fog_enabled': 'Niebla por distancia estilo Minecraft',
-            'lightflow_environment.field.distance_fog_color_mode': 'Origen del color de niebla',
+            'lightflow_environment.field.ambient_fill_sky_color': 'Luz del cielo / uniforme',
+            'lightflow_environment.field.ambient_fill_ground_color': 'Color de luz del suelo',
+            'lightflow_environment.field.ambient_fill_day_multiplier': 'Luz ambiental diurna',
+            'lightflow_environment.field.ambient_fill_night_multiplier': 'Luz ambiental nocturna',
+            'lightflow_environment.field.distance_fog_enabled': 'Activar niebla',
+            'lightflow_environment.field.distance_fog_color_mode': 'Color',
             'lightflow_environment.option.fog_color_sky': 'Seguir el horizonte del cielo',
             'lightflow_environment.option.fog_color_time': 'Colores personalizados por hora',
             'lightflow_environment.option.fog_color_fixed': 'Color fijo',
@@ -8388,18 +9647,18 @@ void main() {
             'lightflow_environment.field.distance_fog_start': 'Distancia inicial',
             'lightflow_environment.field.distance_fog_end': 'Distancia final',
             'lightflow_environment.field.distance_fog_smoothness': 'Suavidad de transición',
-            'lightflow_environment.field.distance_fog_gradient': 'Intensidad del gradiente de color',
+            'lightflow_environment.field.distance_fog_gradient': 'Intensidad del degradado',
             'lightflow_environment.field.distance_fog_dither': 'Dither',
             'lightflow_environment.field.distance_fog_max_opacity': 'Opacidad máxima',
-            'lightflow_environment.field.distance_fog_sync_background': 'Igualar fondo de color',
-            'lightflow_environment.field.distance_grade_enabled': 'Gradación de color por distancia',
-            'lightflow_environment.field.distance_grade_start': 'Inicio de la gradación',
-            'lightflow_environment.field.distance_grade_end': 'Final de la gradación',
+            'lightflow_environment.field.distance_fog_sync_background': 'Igualar color del fondo',
+            'lightflow_environment.field.distance_grade_enabled': 'Activar corrección',
+            'lightflow_environment.field.distance_grade_start': 'Inicio de corrección',
+            'lightflow_environment.field.distance_grade_end': 'Fin de corrección',
             'lightflow_environment.field.distance_grade_saturation': 'Saturación lejana',
             'lightflow_environment.field.distance_grade_contrast': 'Contraste lejano',
             'lightflow_environment.field.distance_grade_tint': 'Tinte lejano',
             'lightflow_environment.field.distance_grade_tint_strength': 'Intensidad del tinte lejano',
-            'lightflow_environment.field.sun_enabled': 'Luz del sol / luna',
+            'lightflow_environment.field.sun_enabled': 'Iluminación solar y lunar',
             'lightflow_environment.field.sun_intensity': 'Intensidad del sol',
             'lightflow_environment.field.sun_light_color_mode': 'Color de la luz solar',
             'lightflow_environment.option.sun_light_follow_disc': 'Seguir el disco solar',
@@ -8427,19 +9686,19 @@ void main() {
             'lightflow_environment.field.sun_opacity': 'Opacidad del sol',
             'lightflow_environment.field.moon_blend_mode': 'Fusión de la luna',
             'lightflow_environment.field.moon_opacity': 'Opacidad de la luna',
-            'lightflow_environment.field.sun_texture': 'Textura del proyecto para el sol',
-            'lightflow_environment.field.moon_texture': 'Textura del proyecto para la luna',
+            'lightflow_environment.field.sun_texture': 'Textura del sol',
+            'lightflow_environment.field.moon_texture': 'Textura de la luna',
             'lightflow_environment.field.moon_texture_layout': 'Formato de textura lunar',
             'lightflow_environment.field.moon_atlas_columns': 'Columnas del atlas lunar',
             'lightflow_environment.field.moon_atlas_rows': 'Filas del atlas lunar',
             'lightflow_environment.field.moon_phase_offset': 'Desfase de fase lunar',
-            'lightflow_environment.field.sun_horizon_scale': 'Escala del sol al atardecer',
-            'lightflow_environment.field.sun_gaze_scale': 'Escala del sol al mirarlo',
+            'lightflow_environment.field.sun_horizon_scale': 'Tamaño del sol al atardecer',
+            'lightflow_environment.field.sun_gaze_scale': 'Tamaño del sol al mirarlo',
             'lightflow_environment.field.sun_glare': 'Resplandor solar',
-            'lightflow_environment.field.lens_flare_enabled': 'Lens flare Minecraft',
-            'lightflow_environment.field.lens_flare_strength': 'Intensidad del lens flare',
-            'lightflow_environment.field.lens_flare_scale': 'Tamaño del lens flare',
-            'lightflow_environment.field.cloud_translucency': 'Luz transmitida por nubes',
+            'lightflow_environment.field.lens_flare_enabled': 'Destellos de lente de Minecraft',
+            'lightflow_environment.field.lens_flare_strength': 'Intensidad de destellos',
+            'lightflow_environment.field.lens_flare_scale': 'Tamaño de destellos',
+            'lightflow_environment.field.cloud_translucency': 'Transmisión de luz en nubes',
             'lightflow_environment.field.sunset_directional_glow': 'Resplandor direccional del atardecer',
             'lightflow_environment.option.celestial_vanilla': 'Textura de Minecraft',
             'lightflow_environment.option.celestial_texture': 'Textura del proyecto',
@@ -8456,24 +9715,32 @@ void main() {
             'lightflow_environment.field.star_density': 'Densidad de estrellas',
             'lightflow_environment.field.clouds': 'Nubes de Minecraft',
             'lightflow_environment.field.cloud_time_profiles_enabled': 'Usar perfiles de nubes por hora',
-            'lightflow_environment.field.cloud_time_frame': 'Fotograma de apariencia de nubes',
-            'lightflow_environment.field.cloud_time_tick': 'Hora del fotograma (0–23999)',
+            'lightflow_environment.field.cloud_time_frame': 'Clave de aspecto de nubes',
+            'lightflow_environment.field.cloud_time_tick': 'Hora de la clave (0–23999)',
             'lightflow_environment.field.cloud_time_section': 'Editar apariencia',
-            'lightflow_environment.field.cloud_time_new': 'Hora del nuevo fotograma',
+            'lightflow_environment.field.cloud_time_new': 'Nueva hora clave',
             'lightflow_environment.option.cloud_time_appearance': 'Cobertura y apariencia',
             'lightflow_environment.option.cloud_time_colors': 'Colores de las nubes',
             'lightflow_environment.option.cloud_time_lighting': 'Iluminación y niebla',
+            'lightflow_environment.option.cloud_time_edges': 'Degradado y bisel',
+            'lightflow_environment.option.cloud_time_light_only': 'Iluminación',
+            'lightflow_environment.option.cloud_time_fog': 'Niebla por distancia',
+            'lightflow_environment.option.cloud_time_advanced': 'Material avanzado',
+            'lightflow_environment.option.gradient_visible': 'Visible',
+            'lightflow_environment.option.gradient_hidden': 'Oculto',
+            'lightflow_environment.field.cloud_gradient_hide': 'Ocultar degradado',
+            'lightflow_environment.info.cloud_effect_inactive': 'Grosor 0 u Ocultar degradado 1 desactiva el degradado. La luz del borde también necesita dispersión mayor que 0. Los controles ocultos conservan sus valores.',
             'lightflow_environment.action.cloud_time_profiles': 'Editar perfiles de nubes por hora',
             'lightflow_environment.action.cloud_time_add': 'Añadir perfil de nubes a esta hora',
             'lightflow_environment.action.cloud_time_remove': 'Eliminar perfil seleccionado',
             'lightflow_environment.dialog.cloud_time_profiles': 'Línea de tiempo de las nubes',
-            'lightflow_environment.info.cloud_time_profiles': 'Crea apariencias distintas para el día, atardecer y noche. Se interpolan suavemente durante el ciclo de Minecraft, incluso al cruzar medianoche. La textura, el movimiento, la escala y la estructura permanecen globales para evitar saltos. Desactiva Usar perfiles de nubes por hora para recuperar la apariencia estática.',
+            'lightflow_environment.info.cloud_time_profiles': 'Crea apariencias distintas para el día, el atardecer y la noche. Se mezclan suavemente, incluso al cruzar medianoche. La textura, el movimiento, la escala y la estructura se comparten para evitar saltos. Desactiva los perfiles por hora para recuperar el aspecto fijo.',
             'lightflow_environment.field.cloud_mode': 'Origen de las nubes',
             'lightflow_environment.field.cloud_style': 'Sombreado de nubes',
             'lightflow_environment.field.cloud_palette_mode': 'Paleta de nubes',
             'lightflow_environment.option.cloud_palette_preset': 'Paleta del preset Rendercraft',
             'lightflow_environment.option.cloud_palette_custom': 'Paleta de nubes personalizada',
-            'lightflow_environment.field.cloud_texture': 'Textura del proyecto para nubes',
+            'lightflow_environment.field.cloud_texture': 'Textura de las nubes',
             'lightflow_environment.option.cloud_procedural': 'Bloques procedurales',
             'lightflow_environment.option.cloud_vanilla': 'Vanilla (recursos locales)',
             'lightflow_environment.resources.title': "Recursos Vanilla",
@@ -8492,8 +9759,8 @@ void main() {
             'lightflow_environment.field.cloud_opacity': 'Opacidad de las nubes',
             'lightflow_environment.field.cloud_speed': 'Velocidad de las nubes',
             'lightflow_environment.field.cloud_paused': 'Pausar nubes aquí',
-            'lightflow_environment.field.cloud_offset_x': 'Desplazamiento de nubes X',
-            'lightflow_environment.field.cloud_offset_y': 'Desplazamiento de nubes Y (horizontal)',
+            'lightflow_environment.field.cloud_offset_x': 'Desplazamiento X',
+            'lightflow_environment.field.cloud_offset_y': 'Desplazamiento Y (horizontal)',
             'lightflow_environment.field.cloud_scale': 'Escala de nubes',
             'lightflow_environment.field.cloud_direction': 'Dirección de nubes',
             'lightflow_environment.field.cloud_contrast': 'Contraste de nubes',
@@ -8501,61 +9768,84 @@ void main() {
             'lightflow_environment.field.cloud_height': 'Altura de la capa de nubes',
             'lightflow_environment.field.cloud_thickness': 'Grosor de las nubes',
             'lightflow_environment.field.cloud_extrusion': 'Extrusión 3D de las nubes',
-            'lightflow_environment.field.cloud_bevel_width': 'Ancho del bisel de nubes',
-            'lightflow_environment.field.cloud_bevel_smooth': 'Bisel suave con Smoothstep',
-            'lightflow_environment.field.cloud_bevel_softness': 'Suavidad del bisel suave',
-            'lightflow_environment.field.cloud_bevel_roundness': 'Redondez del bisel de nubes',
-            'lightflow_environment.field.cloud_bevel_strength': 'Fuerza normal del bisel de nubes',
-            'lightflow_environment.field.cloud_bevel_distance_fade': 'Reducir ancho del bisel con la distancia',
+            'lightflow_environment.field.cloud_bevel_width': 'Ancho del bisel',
+            'lightflow_environment.field.cloud_bevel_enabled': 'Activar bisel',
+            'lightflow_environment.field.cloud_scattering_strength': 'Intensidad de dispersión',
+            'lightflow_environment.info.cloud_scattering_strength': 'Escala la luz de bordes y la dispersión direccional. Cero elimina esos aportes; conserva la luz difusa.',
+            'lightflow_environment.field.cloud_gradient_thickness': 'Ancho del degradado (celdas)',
+            'lightflow_environment.info.cloud_gradient_thickness': 'Ancho visible hacia dentro del contorno rectangular, en celdas. 0 elimina la franja; 1 abarca una celda. Independiente del bisel y del espesor de la capa.',
+            'lightflow_environment.field.cloud_gradient_alpha': 'Desvanecimiento del borde',
+            'lightflow_environment.info.cloud_gradient_alpha': '0: degradado completo. 1: sin degradado de borde. No oculta la nube ni cambia su opacidad global.',
+            'lightflow_environment.field.cloud_view_response': 'Respuesta a cámara y luz',
+            'lightflow_environment.info.cloud_view_response': '0: sin cambio. 1: las caras de frente muestran menos brillo suave y transmisión; las rasantes dispersan más luz, especialmente hacia el sol o la luna.',
+            'lightflow_environment.field.cloud_edge_hardness': 'Dureza del borde',
+            'lightflow_environment.info.cloud_edge_hardness': '0: difuminado suave. 1: transición rectangular dura con antialiasing. Independiente del bisel.',
+            'lightflow_environment.field.cloud_scattering_size': 'Recorrido óptico del borde',
+            'lightflow_environment.info.cloud_scattering_size': 'Multiplicador avanzado del recorrido óptico dentro de la franja. Cambia la absorción, no el grosor del degradado.',
+            'lightflow_environment.field.cloud_optical_thickness': 'Grosor óptico',
+            'lightflow_environment.info.cloud_optical_thickness': 'Multiplica la absorción a lo largo de la vista y la luz. No cambia el espesor geométrico de la capa.',
+            'lightflow_environment.field.cloud_phase_anisotropy': 'Dispersión hacia delante',
+            'lightflow_environment.info.cloud_phase_anisotropy': 'Controla cuánto se concentra la dispersión al mirar hacia la fuente de luz.',
+            'lightflow_environment.field.cloud_density_variation': 'Variación de densidad interior',
+            'lightflow_environment.info.cloud_density_variation': 'Variación interior determinista anclada a las nubes. Cero da densidad interior uniforme.',
+            'lightflow_environment.field.cloud_bevel_smooth': 'Bisel suave (smoothstep)',
+            'lightflow_environment.field.cloud_bevel_softness': 'Difuminado del bisel',
+            'lightflow_environment.field.cloud_bevel_roundness': 'Redondez del bisel',
+            'lightflow_environment.field.cloud_bevel_strength': 'Intensidad de normales del bisel',
+            'lightflow_environment.field.cloud_bevel_distance_fade': 'Reducir bisel con la distancia',
             'lightflow_environment.field.cloud_bevel_distance_min_scale': 'Ancho mínimo del bisel lejano',
-            'lightflow_environment.field.cloud_edge_strength': 'Brillo del bisel iluminado',
-            'lightflow_environment.field.cloud_shadow_bevel_strength': 'Fuerza del tinte de sombra del bisel',
+            'lightflow_environment.field.cloud_edge_strength': 'Luz del borde exterior',
+            'lightflow_environment.field.cloud_shadow_bevel_strength': 'Tinte de sombra del bisel',
             'lightflow_environment.field.cloud_lighting_mode': 'Iluminación de color de nubes',
             'lightflow_environment.option.cloud_lighting_palette': 'Solo paleta',
             'lightflow_environment.option.cloud_lighting_sky': 'Color del cielo',
             'lightflow_environment.option.cloud_lighting_mixed': 'Paleta + luz del cielo',
+            'lightflow_environment.field.cloud_environment_influence': 'Influencia del color ambiental',
+            'lightflow_environment.info.cloud_environment_influence': '0 conserva tu paleta sin coloración del cielo, sol, hora ni niebla; 1 conserva toda la influencia ambiental. Usa blanco en las caras para nubes neutras. La opacidad sigue mostrando el cielo detrás de las nubes.',
+            'lightflow_environment.field.cloud_time_tint_strength': 'Influencia de la hora del día',
+            'lightflow_environment.info.cloud_time_tint_strength': 'Interpola la iluminación de día, atardecer y noche entre 0 (paleta y brillo fijos) y 1 (ciclo completo). Cielo, sol y niebla tienen controles independientes.',
             'lightflow_environment.field.cloud_sky_tint_strength': 'Influencia del color del cielo',
             'lightflow_environment.field.cloud_sun_tint_strength': 'Influencia del color del sol',
-            'lightflow_environment.field.cloud_fog_enabled': 'Fog de distancia para nubes',
-            'lightflow_environment.field.cloud_fog_color_mode': 'Color del fog de nubes',
-            'lightflow_environment.option.cloud_fog_sky': 'Usar gradiente actual del cielo',
-            'lightflow_environment.option.cloud_fog_custom': 'Color de fog personalizado',
-            'lightflow_environment.field.cloud_fog_color': 'Color personalizado del fog de nubes',
-            'lightflow_environment.field.cloud_fog_strength': 'Fuerza del fog de nubes',
-            'lightflow_environment.field.cloud_fog_start': 'Inicio del fog de nubes',
-            'lightflow_environment.field.cloud_fog_end': 'Final del fog de nubes',
+            'lightflow_environment.field.cloud_fog_enabled': 'Niebla de distancia en nubes',
+            'lightflow_environment.field.cloud_fog_color_mode': 'Origen del color de niebla',
+            'lightflow_environment.option.cloud_fog_sky': 'Seguir degradado del cielo',
+            'lightflow_environment.option.cloud_fog_custom': 'Color de niebla personalizado',
+            'lightflow_environment.field.cloud_fog_color': 'Color de niebla de nubes',
+            'lightflow_environment.field.cloud_fog_strength': 'Intensidad de niebla en nubes',
+            'lightflow_environment.field.cloud_fog_start': 'Inicio de niebla en nubes',
+            'lightflow_environment.field.cloud_fog_end': 'Fin de niebla en nubes',
             'lightflow_environment.field.cloud_density': 'Densidad óptica de nubes',
-            'lightflow_environment.field.cloud_absorption': 'Absorcion de luz en nubes',
-            'lightflow_environment.field.environment_bloom_enabled': 'Usar perfil Bloom del entorno',
+            'lightflow_environment.field.cloud_absorption': 'Absorción de luz en nubes',
+            'lightflow_environment.field.environment_bloom_enabled': 'Usar Bloom del entorno',
             'lightflow_environment.field.bloom_threshold': 'Umbral de Bloom',
-            'lightflow_environment.field.bloom_soft_knee': 'Transicion suave de Bloom',
+            'lightflow_environment.field.bloom_soft_knee': 'Transición suave de Bloom',
             'lightflow_environment.field.bloom_strength': 'Fuerza de Bloom',
-            'lightflow_environment.field.bloom_core_strength': 'Fuerza del nucleo de Bloom',
-            'lightflow_environment.field.bloom_core_radius': 'Radio del nucleo de Bloom',
+            'lightflow_environment.field.bloom_core_strength': 'Intensidad del núcleo de Bloom',
+            'lightflow_environment.field.bloom_core_radius': 'Radio del núcleo de Bloom',
             'lightflow_environment.field.bloom_halo_strength': 'Fuerza del halo de Bloom',
             'lightflow_environment.field.bloom_halo_radius': 'Radio del halo de Bloom',
-            'lightflow_environment.field.bloom_hdr_strength': 'Contribucion HDR al Bloom',
-            'lightflow_environment.field.bloom_emissive_strength': 'Contribucion emisiva al Bloom',
-            'lightflow_environment.field.bloom_occlusion': 'Oclusion de Bloom',
-            'lightflow_environment.field.sun_bloom_contribution': 'Contribucion del sol al Bloom',
-            'lightflow_environment.field.moon_bloom_contribution': 'Contribucion de la luna al Bloom',
-            'lightflow_environment.field.star_bloom_contribution': 'Contribucion de estrellas al Bloom',
-            'lightflow_environment.field.cloud_bloom_contribution': 'Contribucion de nubes al Bloom',
-            'lightflow_environment.field.cast_shadows': 'El sol proyecta sombras',
+            'lightflow_environment.field.bloom_hdr_strength': 'Aporte HDR al Bloom',
+            'lightflow_environment.field.bloom_emissive_strength': 'Aporte emisivo al Bloom',
+            'lightflow_environment.field.bloom_occlusion': 'Oclusión de Bloom',
+            'lightflow_environment.field.sun_bloom_contribution': 'Aporte del sol al Bloom',
+            'lightflow_environment.field.moon_bloom_contribution': 'Aporte de la luna al Bloom',
+            'lightflow_environment.field.star_bloom_contribution': 'Aporte de estrellas al Bloom',
+            'lightflow_environment.field.cloud_bloom_contribution': 'Aporte de nubes al Bloom',
+            'lightflow_environment.field.cast_shadows': 'Proyectar sombras solares',
             'lightflow_environment.field.shadows_disabled.desc': 'Activa la luz del sol / luna para usar las sombras del entorno.',
-            'lightflow_environment.field.shadow_auto_fit': 'Caja fija mundial de cobertura de sombras',
-            'lightflow_environment.field.show_shadow_gizmo': 'Mostrar caja fija de sombras editable',
+            'lightflow_environment.field.shadow_auto_fit': 'Región fija de sombras',
+            'lightflow_environment.field.show_shadow_gizmo': 'Mostrar caja de sombras editable',
             'lightflow_environment.field.shadow_area': 'Área de captura de sombras',
             'lightflow_environment.field.shadow_resolution': 'Resolución de sombras',
-            'lightflow_environment.field.shadow_camera_quality': 'Detalle de sombras por cámara',
+            'lightflow_environment.field.shadow_camera_quality': 'Detalle de sombras de cámara',
             'lightflow_environment.field.shadow_camera_quality.desc': 'Dos mapas de detalle siguen la cámara para la luz direccional principal. Equilibrado limita el mapa cercano a 2048; Alto a 4096 en preview y 8192 en Studio. Las demás luces conservan sus mapas.',
-            'lightflow_environment.field.shadow_camera_distance': 'Distancia de detalle de cámara',
+            'lightflow_environment.field.shadow_camera_distance': 'Alcance del detalle cercano',
             'lightflow_environment.field.shadow_camera_distance.desc': 'Profundidad cubierta desde la parte más cercana de la escena. El espacio vacío anterior no consume detalle. Una distancia menor concentra más texeles cerca. La caja original conserva la cobertura lejana y toda la profundidad de los objetos que proyectan sombras.',
             'lightflow_environment.option.camera_shadow.off': 'Desactivado — mapa original',
             'lightflow_environment.option.camera_shadow.balanced': 'Equilibrado',
             'lightflow_environment.option.camera_shadow.high': 'Alto',
             'lightflow_environment.field.shadow_softness_mode': "Estilo de sombra",
-            'lightflow_environment.field.shadow_softness_mode.desc': "Nítida: borde con antialiasing, sin penumbra. Artística: desenfoque constante. Por distancia: penumbra física. Clásica: conserva el filtro de proyectos anteriores.",
+            'lightflow_environment.field.shadow_softness_mode.desc': "Nítida: bordes definidos con antialiasing. Artística: desenfoque constante. Por distancia: penumbra creciente. Clásica: filtro de proyectos anteriores.",
             'lightflow_environment.shadow_mode.hard': "Nítida (AA)",
             'lightflow_environment.shadow_mode.artistic': "Artística",
             'lightflow_environment.shadow_mode.distance': "Por distancia",
@@ -8564,9 +9854,9 @@ void main() {
             'lightflow_environment.field.shadow_blur.desc': "Desenfoque constante, incluso en el contacto. 0 = sombra dura; 8 = suave; 32–64 = amplio. Mantiene el tamaño al cambiar la resolución.",
             'lightflow_environment.field.shadow_softness': 'Tamaño angular del sol',
             'lightflow_environment.field.shadow_softness.desc': 'Diámetro angular del sol en grados. Valores mayores ensanchan la penumbra al aumentar la distancia entre bloqueador y receptor; 0 mantiene sombras duras.',
-            'lightflow_environment.field.studio_shadow_resolution': 'Calidad de sombra Studio',
-            'lightflow_environment.field.studio_shadow_resolution.desc': 'Resolución del mapa de sombras usada solamente por Studio Render. Igual que Preview conserva la calidad del viewport.',
-            'lightflow_environment.option.studio_shadow.same': 'Igual que Preview',
+            'lightflow_environment.field.studio_shadow_resolution': 'Calidad de sombras en Studio',
+            'lightflow_environment.field.studio_shadow_resolution.desc': 'Resolución de sombras usada solo en Studio Render. Igual que vista previa conserva la calidad del visor.',
+            'lightflow_environment.option.studio_shadow.same': 'Igual que vista previa',
             'lightflow_environment.field.shadow_near': 'Plano cercano de sombras',
             'lightflow_environment.field.shadow_far': 'Plano lejano de sombras',
             'lightflow_environment.field.shadow_bias': 'Bias de sombras',
@@ -8589,9 +9879,9 @@ void main() {
             'lightflow_environment.message.light_manager_required': 'Lightflow Environment requiere Light Manager 1.8.0 o posterior.',
             'lightflow_environment.field.shadow_scene_fit': 'Abarcar toda la escena automáticamente',
             'lightflow_environment.field.shadow_region_locked': 'Bloquear región de sombras en el mundo',
-            'lightflow_environment.info.quick_preset': 'La hora, velocidad del ciclo y ajustes rápidos de luz/sombras se aplican al proyecto. Los cambios avanzados crean una copia automáticamente.',
+            'lightflow_environment.info.quick_preset': 'Los cambios rápidos de hora, ciclo, luz y sombras afectan al proyecto. Los ajustes avanzados crean una copia editable.',
             'lightflow_environment.info.native_preset_locked': 'Preset global · Ajustes rápidos',
-            'lightflow_environment.info.custom_preset_editable': 'Preset de cielo personalizado - Editable',
+            'lightflow_environment.info.custom_preset_editable': 'Preset de cielo personalizado · Editable',
             'lightflow_environment.info.no_custom_presets': 'Aún no hay presets de cielo personalizados',
             'lightflow_environment.message.native_preset_locked': 'Los presets de cielo nativos no se pueden editar.',
             'lightflow_environment.message.create_copy_to_edit': 'Este es un preset de cielo nativo. Crea una copia editable para personalizarlo.',
@@ -8898,8 +10188,9 @@ void main() {
             publishWindowBinding('LightflowEnvironment', {
                 prepareShadowRegion(preview, options = {}) {
                     if (!settings.enabled || !sunLight || !settings.shadow_auto_fit) return false;
-                    updateSunShadowPlacement(getLightingState().celestialDirection, preview);
-                    const changed = configureSunShadow(false, { ...options, preview });
+                    const state = getCelestialLightingState();
+                    updateSunShadowPlacement(state.celestialDirection, preview);
+                    const changed = configureSunShadow(false, { ...options, preview, state });
                     if (changed && preview?.renderer?.shadowMap) preview.renderer.shadowMap.needsUpdate = true;
                     if (sunShadowGizmo?.root?.visible) updateSunShadowGizmo();
                     return changed;
@@ -8927,6 +10218,7 @@ void main() {
                 getLightingState,
                 getDistanceFogConfig,
                 getDistanceGradeConfig,
+                applyDistanceLook,
                 getSkyGradientProfiles: () => JSON.parse(JSON.stringify(getSkyGradientProfiles())),
                 getSkyGradientTexture() {
                     const state = getLightingState();
@@ -8944,6 +10236,7 @@ void main() {
                     clonedTextures: projectEnvironmentTextures.size,
                     proceduralCloudCached: !!proceduralCloudTexture,
                     cloudOccupancyTextures: cloudOccupancyTextures.size,
+                    cloudDistanceTextures: cloudDistanceTextures.size,
                     cloudTraversal: '4x4-conservative-max-dda',
                     cloudRuntime: { ...cloudRuntimeStats },
                     settingsPerformance: {
@@ -9003,6 +10296,9 @@ void main() {
             });
             deletables.push(packsListener);
             const viewListener = Blockbench.on('update_view', () => updateSunShadowGizmo());
+            deletables.push(Blockbench.on('select_preview_scene', () => {
+                if (settings.enabled && typeof PreviewScene !== 'undefined') PreviewScene.active?.unselect?.();
+            }));
             const studioRenderPreTileListener = Blockbench.on('studio_render_pre_tile', event => {
                 updateScene({
                     forceShadow: false,

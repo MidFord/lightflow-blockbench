@@ -1817,27 +1817,27 @@
             length: { default: 48, min: 0.01, max: 100000, label: 'Length', es: 'Longitud' },
             width: { default: 4, min: 0, max: 100000, label: 'Source width', es: 'Ancho inicial' },
             end_width: { default: 18, min: 0, max: 100000, label: 'End width', es: 'Ancho final' },
-            taper: { default: 1, min: 0.05, max: 8, step: 0.01, label: 'Expansion curve', es: 'Curva de apertura' },
-            roll: { default: 0, min: -180, max: 180, label: 'Ribbon roll', es: 'Giro del plano' },
+            taper: { default: 1, min: 0.05, max: 8, step: 0.01, label: 'Spread curve', es: 'Curva de apertura' },
+            roll: { default: 0, min: -180, max: 180, label: 'Plane rotation', es: 'Giro del plano' },
             opacity: { default: 0.22, min: 0, max: 1, step: 0.01, label: 'Opacity', es: 'Opacidad' },
             intensity: { default: 1, min: 0, max: 32, step: 0.01, label: 'Brightness', es: 'Brillo' },
             color: { type: 'vector', default: [255, 233, 185], label: 'Source color', es: 'Color inicial' },
             end_color: { type: 'vector', default: [168, 200, 255], label: 'End color', es: 'Color final' },
-            gradient_curve: { default: 1, min: 0.05, max: 8, step: 0.01, label: 'Color gradient', es: 'Curva del degradado' },
-            edge_softness: { default: 0.12, min: 0, max: 1, step: 0.01, label: 'Edge softness', es: 'Suavidad lateral' },
-            fade_start: { default: 0.02, min: 0, max: 1, step: 0.01, label: 'Source fade', es: 'Desvanecimiento inicial' },
-            fade_end: { default: 0.7, min: 0, max: 1, step: 0.01, label: 'End fade', es: 'Desvanecimiento final' },
+            gradient_curve: { default: 1, min: 0.05, max: 8, step: 0.01, label: 'Gradient curve', es: 'Curva del degradado' },
+            edge_softness: { default: 0.12, min: 0, max: 1, step: 0.01, label: 'Edge softness', es: 'Suavidad de bordes' },
+            fade_start: { default: 0.02, min: 0, max: 1, step: 0.01, label: 'Source fade', es: 'Desvanecer origen' },
+            fade_end: { default: 0.7, min: 0, max: 1, step: 0.01, label: 'End fade', es: 'Desvanecer extremo' },
             falloff: { default: 1, min: 0.05, max: 8, step: 0.01, label: 'Fade curve', es: 'Curva de desvanecimiento' },
-            bloom: { default: 0.15, min: 0, max: 8, step: 0.01, label: 'Bloom contribution', es: 'Contribucion a Bloom' },
-            near_fade: { default: 0, min: 0, max: 100000, label: 'Camera near fade', es: 'Desvanecer cerca de camara' },
-            far_start: { default: 0, min: 0, max: 100000, label: 'Distance fade start', es: 'Inicio del desvanecimiento por distancia' },
-            far_end: { default: 0, min: 0, max: 100000, label: 'Distance fade end (0: off)', es: 'Fin por distancia (0: desactivado)' },
-            orientation: { type: 'string', default: 'camera', options: { camera: 'Camera / ray axis', y: 'Camera / world Y', fixed: 'Fixed plane' }, label: 'Orientation', es: 'Orientacion' },
+            bloom: { default: 0.15, min: 0, max: 8, step: 0.01, label: 'Bloom contribution', es: 'Aporte al Bloom' },
+            near_fade: { default: 0, min: 0, max: 100000, label: 'Near-camera fade', es: 'Desvanecer cerca de cámara' },
+            far_start: { default: 0, min: 0, max: 100000, label: 'Distance fade start', es: 'Inicio del desvanecimiento' },
+            far_end: { default: 0, min: 0, max: 100000, label: 'Distance fade end (0: off)', es: 'Fin del desvanecimiento (0: desactivado)' },
+            orientation: { type: 'string', default: 'camera', options: { camera: 'Camera / ray axis', y: 'Camera / world Y', fixed: 'Fixed plane' }, label: 'Orientation', es: 'Orientación' },
             blend: { type: 'string', default: 'additive', options: { additive: 'Additive', normal: 'Alpha' }, label: 'Blend', es: 'Mezcla' },
-            light_uuid: { type: 'string', default: '', label: 'Light direction', es: 'Direccion de una luz' },
+            light_uuid: { type: 'string', default: '', label: 'Linked light', es: 'Luz vinculada' },
             inherit_color: { type: 'boolean', default: false, label: 'Use light color', es: 'Usar color de la luz' },
-            occlusion: { type: 'string', default: 'scene', options: { scene: 'Scene depth', shadow: 'Scene + light shadows', none: 'Always visible' }, label: 'Occlusion', es: 'Oclusion' },
-            shadow_strength: { default: 1, min: 0, max: 1, step: 0.01, label: 'Shadow strength', es: 'Intensidad de oclusion' }
+            occlusion: { type: 'string', default: 'scene', options: { scene: 'Scene depth', shadow: 'Scene + light shadows', none: 'Always visible' }, label: 'Occlusion', es: 'Oclusión' },
+            shadow_strength: { default: 1, min: 0, max: 1, step: 0.01, label: 'Shadow strength', es: 'Intensidad de oclusión' }
         };
         const number = (v, fallback) => Number.isFinite(Number(v)) ? Number(v) : fallback;
         function sanitize(data) {
@@ -2156,6 +2156,10 @@
                 lfAtmosphereFogParams: { value: [0, 0, 1, 0] },
                 lfAtmosphereHeightParams: { value: [0, 0, 1, 0] },
                 lfAtmosphereStyleParams: { value: [1, 0, 0, 0] },
+                lfAtmosphereArtParams: { value: [1, 0, 0, 24] },
+                lfAtmosphereSkyParams: { value: [1, 1, 0, 0] },
+                lfAtmosphereSkyGradient: { value: null },
+                lfAtmosphereFrameParams: { value: [1, 1, 0, 0] },
                 lfAtmosphereGradeParams: { value: [0, 0, 1, 0] },
                 lfAtmosphereGradeLook: { value: [1, 1, 0, 0] },
                 lfAtmosphereGradeTint: { value: new THREE.Vector3(1, 1, 1) },
@@ -2333,15 +2337,29 @@
                 grade.enabled ? 1 : 0,
                 Math.max(0, finite(grade.start, 32)),
                 Math.max(finite(grade.start, 32) + 0.001, finite(grade.end, 160)),
-                0
+                clamp(finite(grade.curve, 1), 0.25, 4)
             );
             setVec4(this.surfaceFogUniforms.lfAtmosphereGradeLook,
                 clamp(finite(grade.saturation, 1), 0, 2),
                 clamp(finite(grade.contrast, 1), 0, 2),
                 clamp(finite(grade.tintStrength, 0), 0, 1),
-                0
+                clamp(finite(grade.pivot, 0.5), 0, 1)
             );
             colorArrayToVector(grade.tint || [255, 255, 255], this.surfaceFogUniforms.lfAtmosphereGradeTint.value);
+            const skyGradient = fog.enabled && fog.skyBlend > 0
+                ? window.LightflowEnvironment?.getSkyGradientTexture?.() : null;
+            // Borrow Environment's texture. Atmosphere never owns or disposes it.
+            this.surfaceFogUniforms.lfAtmosphereSkyGradient.value = skyGradient || this.whiteTexture || null;
+            setVec4(this.surfaceFogUniforms.lfAtmosphereArtParams,
+                clamp(finite(fog.curve, 1), 0.25, 4),
+                skyGradient ? clamp(finite(fog.skyBlend, 0), 0, 1) : 0,
+                clamp(finite(fog.noise, 0), 0, 1),
+                Math.max(0.25, finite(fog.noiseScale, 24))
+            );
+            setVec4(this.surfaceFogUniforms.lfAtmosphereSkyParams,
+                Math.max(0, finite(fog.skyIntensity, 1)),
+                Math.max(0.1, finite(fog.skyGradientPower, 1)), 0, 0
+            );
         },
 
         decorateSurfaceProgram(program = {}) {
@@ -2360,19 +2378,42 @@
             const vertexPreamble = `
 ${glsl3 ? 'out' : 'varying'} vec3 lfAtmosphereViewPosition;
 ${glsl3 ? 'out' : 'varying'} float lfAtmosphereWorldHeight;
+${glsl3 ? 'out' : 'varying'} vec3 lfAtmosphereWorldPosition;
 `;
             const fragmentPreamble = `
 ${glsl3 ? 'in' : 'varying'} vec3 lfAtmosphereViewPosition;
 ${glsl3 ? 'in' : 'varying'} float lfAtmosphereWorldHeight;
+${glsl3 ? 'in' : 'varying'} vec3 lfAtmosphereWorldPosition;
 uniform vec3 lfAtmosphereFogColor;
 uniform vec3 lfAtmosphereFogNearColor;
 uniform vec4 lfAtmosphereFogParams;
 uniform vec4 lfAtmosphereHeightParams;
 uniform vec4 lfAtmosphereStyleParams;
+uniform vec4 lfAtmosphereArtParams;
+uniform vec4 lfAtmosphereSkyParams;
+uniform sampler2D lfAtmosphereSkyGradient;
+uniform vec4 lfAtmosphereFrameParams;
 uniform vec4 lfAtmosphereGradeParams;
 uniform vec4 lfAtmosphereGradeLook;
 uniform vec3 lfAtmosphereGradeTint;
 uniform float lfAtmosphereCameraHeight;
+float lfAtmosphereDistanceRamp(float distanceValue, float start, float end, float curve) {
+    float t = clamp((distanceValue - start) / max(end - start, 0.0001), 0.0, 1.0);
+    return pow(t, curve);
+}
+float lfAtmosphereNoiseHash(vec3 p) {
+    p = fract(p * 0.1031);
+    p += dot(p, p.yzx + 33.33);
+    return fract((p.x + p.y) * p.z);
+}
+float lfAtmosphereNoise(vec3 p) {
+    vec3 cell = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(mix(lfAtmosphereNoiseHash(cell), lfAtmosphereNoiseHash(cell + vec3(1,0,0)), f.x),
+                   mix(lfAtmosphereNoiseHash(cell + vec3(0,1,0)), lfAtmosphereNoiseHash(cell + vec3(1,1,0)), f.x), f.y),
+               mix(mix(lfAtmosphereNoiseHash(cell + vec3(0,0,1)), lfAtmosphereNoiseHash(cell + vec3(1,0,1)), f.x),
+                   mix(lfAtmosphereNoiseHash(cell + vec3(0,1,1)), lfAtmosphereNoiseHash(cell + vec3(1,1,1)), f.x), f.y), f.z);
+}
 vec3 lfAtmosphereDecodeDisplay(vec3 color) {
     color = max(color, vec3(0.0));
     return mix(color / 12.92, pow((color + 0.055) / 1.055, vec3(2.4)),
@@ -2393,7 +2434,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
     float distanceValue = max(distanceToCamera - fogStart, 0.0);
     float factor = 0.0;
     if (mode < 1.5) {
-        float linearFactor = clamp((distanceToCamera - fogStart) / max(fogEnd - fogStart, 0.0001), 0.0, 1.0);
+        float linearFactor = lfAtmosphereDistanceRamp(distanceToCamera, fogStart, fogEnd, lfAtmosphereArtParams.x);
         float smoothFactor = linearFactor * linearFactor * (3.0 - 2.0 * linearFactor);
         factor = mix(linearFactor, smoothFactor, lfAtmosphereStyleParams.x);
     } else if (mode < 2.5) {
@@ -2413,8 +2454,15 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             : originDensity * (1.0 - exp(clamp(-slope * rayLength, -40.0, 40.0))) / slope;
         factor = 1.0 - exp(-max(densityIntegral, 0.0));
     }
-    if (lfAtmosphereStyleParams.y > 0.0001) {
-        float dither = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715)))) - 0.5;
+    // Endpoint envelope protects the foreground and fully covered silhouettes.
+    float envelope = factor * (1.0 - factor) * 4.0;
+    if (lfAtmosphereArtParams.z > 0.0001) {
+        factor += (lfAtmosphereNoise(lfAtmosphereWorldPosition / lfAtmosphereArtParams.w) - 0.5)
+            * lfAtmosphereArtParams.z * envelope * 0.35;
+    }
+    if (lfAtmosphereStyleParams.y > 0.0001 && envelope > 0.0) {
+        vec2 framePixel = gl_FragCoord.xy * lfAtmosphereFrameParams.xy + lfAtmosphereFrameParams.zw;
+        float dither = (fract(52.9829189 * fract(dot(framePixel, vec2(0.06711056, 0.00583715)))) - 0.5) * envelope;
         factor += dither * lfAtmosphereStyleParams.y / 255.0;
     }
     return min(clamp(factor, 0.0, 1.0), maximumOpacity);
@@ -2432,6 +2480,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
 #endif
     lfAtmosphereViewPosition = (modelViewMatrix * lfFogLocalPosition).xyz;
     lfAtmosphereWorldHeight = (modelMatrix * lfFogLocalPosition).y;
+    lfAtmosphereWorldPosition = (modelMatrix * lfFogLocalPosition).xyz;
 ` + vertexShader.slice(vertexEnd);
             const decoratedFragment = fragmentShader.slice(0, fragmentEnd) + `
     // Interpolate position, then measure distance. Interpolated vertex lengths
@@ -2439,21 +2488,32 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
     float lfDistance = length(lfAtmosphereViewPosition);
     if (lfAtmosphereGradeParams.x > 0.5) {
         float lfGradeWeight = smoothstep(lfAtmosphereGradeParams.y, lfAtmosphereGradeParams.z, lfDistance);
+        lfGradeWeight = pow(lfGradeWeight, lfAtmosphereGradeParams.w);
         vec3 lfSource = gl_FragColor.rgb;
         float lfLuma = dot(lfSource, vec3(0.2126, 0.7152, 0.0722));
         vec3 lfGraded = mix(vec3(lfLuma), lfSource, lfAtmosphereGradeLook.x);
-        lfGraded = (lfGraded - 0.5) * lfAtmosphereGradeLook.y + 0.5;
+        lfGraded = (lfGraded - lfAtmosphereGradeLook.w) * lfAtmosphereGradeLook.y + lfAtmosphereGradeLook.w;
         float lfTintLuma = max(dot(lfAtmosphereGradeTint, vec3(0.2126, 0.7152, 0.0722)), 0.001);
         vec3 lfTinted = lfGraded * lfAtmosphereGradeTint / lfTintLuma;
         lfGraded = mix(lfGraded, lfTinted, lfAtmosphereGradeLook.z);
         gl_FragColor.rgb = mix(lfSource, max(lfGraded, vec3(0.0)), lfGradeWeight);
     }
     float lfFogFactor = lfAtmosphereFogFactor(lfDistance, lfAtmosphereWorldHeight);
+    float lfFogProgress = lfAtmosphereDistanceRamp(lfDistance, lfAtmosphereFogParams.y, lfAtmosphereFogParams.z, lfAtmosphereArtParams.x);
     vec3 lfFogColor = lfAtmosphereFogColor;
     if (lfAtmosphereStyleParams.z > 0.0001) {
-        float lfFogGradient = pow(clamp(lfFogFactor, 0.0, 1.0), 0.72);
+        // Keep the authored transition shape, independently of the opacity cap
+        // and texture. Neutral settings retain the previous color ramp.
+        float lfFogRampFactor = mix(lfFogProgress, lfFogProgress * lfFogProgress * (3.0 - 2.0 * lfFogProgress), lfAtmosphereStyleParams.x);
+        float lfFogGradient = pow(lfFogRampFactor, 0.72);
         vec3 lfFogRampColor = mix(lfAtmosphereFogNearColor, lfAtmosphereFogColor, lfFogGradient);
         lfFogColor = mix(lfAtmosphereFogColor, lfFogRampColor, lfAtmosphereStyleParams.z);
+    }
+    if (lfAtmosphereArtParams.y > 0.0001 && lfFogFactor > 0.0) {
+        float up = clamp((lfAtmosphereWorldHeight - lfAtmosphereCameraHeight) / max(lfDistance, 0.0001), -1.0, 1.0);
+        float skyPosition = 0.5 + sign(up) * 0.5 * pow(abs(up), lfAtmosphereSkyParams.y);
+        vec3 skyColor = ${glsl3 ? 'texture' : 'texture2D'}(lfAtmosphereSkyGradient, vec2(skyPosition, 0.5)).rgb * lfAtmosphereSkyParams.x;
+        lfFogColor = mix(lfFogColor, skyColor, lfAtmosphereArtParams.y * smoothstep(0.0, 1.0, lfFogProgress));
     }
     // Beauty and authored fog colors are display encoded here. Mix light in
     // display-linear space to avoid dark seams around bright silhouettes.
@@ -2470,7 +2530,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 vertexShader: prependPreamble(decoratedVertex, vertexPreamble),
                 fragmentShader: prependPreamble(decoratedFragment, fragmentPreamble),
                 uniforms: this.surfaceFogUniforms,
-                family: 'lightflow_surface_fog_v5'
+                family: 'lightflow_surface_fog_v6'
             };
         },
 
@@ -2484,6 +2544,13 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                     preview.camera.matrixWorld?.elements?.[13],
                     0
                 );
+                const tile = this.studioTile?.preview === preview &&
+                    (preview.sa_studio_render_active || window.LightManagerStudioRenderSession) ? this.studioTile.tile : null;
+                const frame = this.surfaceFogUniforms.lfAtmosphereFrameParams.value;
+                frame[0] = tile ? finite(tile.viewWidth, tile.renderWidth) / Math.max(1, finite(tile.renderWidth, 1)) : 1;
+                frame[1] = tile ? finite(tile.viewHeight, tile.renderHeight) / Math.max(1, finite(tile.renderHeight, 1)) : 1;
+                frame[2] = tile ? finite(tile.viewX, 0) : 0;
+                frame[3] = tile ? finite(tile.fullViewHeight, 0) - finite(tile.viewY, 0) - finite(tile.viewHeight, 0) : 0;
             }
             // Distance-fog sliders only change shared uniforms and the native
             // scene fog/background. Re-resolving volumetric shaft geometry for
@@ -5169,7 +5236,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             es['lightflow_god_ray.' + key] = field.es;
         }
         en['lightflow_god_ray.shadow_help'] = 'Light shadows require a linked Directional or Spot light with shadows enabled. The ray stays at its own position. No linked shadow map: scene occlusion only.';
-        es['lightflow_god_ray.shadow_help'] = 'La oclusion desde la luz requiere vincular una luz Directional o Spot con sombras activadas. El rayo conserva su posicion. Sin mapa de sombras se usa solo la oclusion de la escena.';
+        es['lightflow_god_ray.shadow_help'] = 'Las sombras requieren una luz Directional o Spot vinculada, con sombras activadas. El rayo conserva su posición; sin mapa de sombras solo se usa la oclusión de la escena.';
         Language.addTranslations('en', en); Language.addTranslations('es', es);
         allowAnimationModeInspection(GodRayElement);
         const reloadedGodRayElements = prepareReloadedAtmosphereElements(GodRayElement, 'lightflow_god_ray');
@@ -5315,6 +5382,22 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         if (OutlinerElement.types.lightflow_god_ray === GodRayElement) delete OutlinerElement.types.lightflow_god_ray;
         if (NodePreviewController.controllers?.lightflow_god_ray === godRayController) godRayController.delete();
         godRayRuntime = null; godRayPanel = null; GodRayElement = null; godRayController = null;
+    }
+
+    function installParticleEmitterLifecycle() {
+        const prototype = window.Wintersky?.Emitter?.prototype;
+        if (!prototype || typeof prototype.delete !== 'function') return;
+        const previous = prototype.delete;
+        const remove = function(...args) {
+            // Wintersky.delete disposes its material but leaves playLoop's
+            // interval alive; a controller state can delete a running emitter.
+            clearInterval(this.tick_interval);
+            delete this.tick_interval;
+            if (!this.material) return this;
+            return previous.apply(this, args);
+        };
+        prototype.delete = remove;
+        deletables.push({delete(){if(prototype.delete === remove) prototype.delete = previous;}});
     }
 
     function particleEffectRecordForIdentifier(identifier) {
@@ -5594,13 +5677,16 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         const visible = element.visibility !== false && element.enabled !== false;
         emitter.global_space.visible = visible;
         emitter.local_space.visible = visible;
-        const playing = element.enabled !== false && element.particle_playing !== false;
+        const cinematic = window.LightflowCinematicFrameContext;
+        const offline = cinematic?.source === 'lightflow_cinematic_render';
+        const playing = !offline && element.enabled !== false && element.particle_playing !== false;
         if (playing && !emitter.tick_interval) emitter.playLoop();
         // toggleLoop pauses in place; stopLoop clears particles and age while
         // leaving view_age intact, which breaks jumpTo at the saved pose.
         if (!playing && emitter.tick_interval) emitter.toggleLoop();
         if (!playing && element.enabled !== false) {
-            const previewTime = Math.max(0, finite(element.particle_time, 0));
+            const previewTime = Math.max(0, offline && element.particle_playing !== false
+                ? finite(cinematic.timeSeconds, 0) : finite(element.particle_time, 0));
             // Undo/Redo and native emitter resets can rewind age without
             // changing the requested still-frame time.
             if (record.previewTime !== previewTime ||
@@ -5930,11 +6016,15 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         }
         syncParticleEffect(element);syncParticlePanel();requestPreviewRender();
     }
-    function particlePresetMenu(element,event) {
-        new Menu('lightflow_particle_presets',[
+    function particlePresetItems(element) {
+        return [
             ...[['snow','ac_unit'],['rain','water_drop'],['sparks','auto_awesome']].map(([kind,icon])=>({name:uiText('preset_'+kind),icon,click:()=>applyParticlePreset(kind,element)})),
             new MenuSeparator(),{name:uiText('import_effect'),icon:'upload_file',click:()=>importParticleJSON(element)}
-        ]).open(event?.target || document.activeElement);
+        ];
+    }
+    function particlePresetMenu(element,event) {
+        const anchor = event?.currentTarget || event?.target?.closest?.('button,.tool') || event?.target || event || document.activeElement;
+        new Menu('lightflow_particle_presets', particlePresetItems(element)).open(anchor);
     }
     async function particleSnowstormURL(element) {
         const compress=async bytes=>{
@@ -5969,6 +6059,21 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
     function exportParticleJSON(element) {
         let content=element.particle_json;try{content=JSON.stringify(JSON.parse(content),null,2);}catch(error){/* Keep invalid source editable. */}
         Blockbench.export({type:'Bedrock Particle',extensions:['json'],name:element.name.replace(/[<>:"/\\|?*]/g,'_')+'.particle',content,savetype:'text'});
+    }
+
+    function reloadParticleEffect(element) {
+        const rebuild=()=>{releaseParticleEffect(element.uuid);syncParticleEffect(element);syncParticlePanel();requestPreviewRender();};
+        if (!element.particle_path || typeof isApp === 'undefined' || !isApp) {rebuild();return;}
+        const project=window.Project;
+        Blockbench.read(element.particle_path,{readtype:'text'},files=>{
+            if(window.Project!==project || !ParticleEffectElement.all.includes(element))return;
+            let json;try{json=JSON.parse(files?.[0]?.content);}catch(error){}
+            if(!json?.particle_effect?.components){Blockbench.showQuickMessage(uiText('invalid_source'));return;}
+            Undo.initEdit({elements:[element]});
+            element.particle_json=JSON.stringify(json);
+            Undo.finishEdit(uiText('reload'));
+            rebuild();
+        });
     }
 
     function restartParticleEffect(element) {
@@ -6290,10 +6395,16 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         const jsonAction = new Action('lightflow_particle_edit_json', { name: 'Edit Particle JSON / Molang', icon: 'code',
             category: 'edit', condition: () => !!ParticleEffectElement.selected.length,
             click: () => editParticleJSON(ParticleEffectElement.selected[0]) });
-        const createAction=new Action('lightflow_particle_create',{name:'lightflow_atmosphere.action.add_particle',icon:'ac_unit',category:'edit',condition:()=>!!Project && !!(Modes.edit || Modes.render),click:event=>particlePresetMenu(null,event)});
+        const createAction=new Action('lightflow_particle_create',{name:'lightflow_atmosphere.action.add_particle',icon:'ac_unit',category:'edit',condition:()=>!!Project && !!(Modes.edit || Modes.render),children:()=>particlePresetItems(null)});
+        const reloadAction = new Action('lightflow_particle_reload', {name:uiText('reload'),icon:'refresh',category:'edit',
+            condition:()=>!!ParticleEffectElement.selected.length,click:()=>{
+                for(const element of ParticleEffectElement.selected.slice())reloadParticleEffect(element);
+                requestPreviewRender();
+            }});
+        deletables.push(reloadAction);
         const snowstormAction=new Action('lightflow_particle_snowstorm',{name:'lightflow_atmosphere.ui.snowstorm',icon:'open_in_new',category:'edit',condition:()=>!!ParticleEffectElement.selected.length,click:()=>openParticleSnowstorm(ParticleEffectElement.selected[0])});
         ParticleEffectElement.prototype.menu = new Menu(['lightflow_particle_snowstorm', 'lightflow_particle_settings', 'lightflow_particle_edit_json',
-            'lightflow_particle_replace', 'lightflow_particle_texture', '_', ...Outliner.control_menu_group, '_', 'rename', 'delete']);
+            'lightflow_particle_replace', 'lightflow_particle_reload', 'lightflow_particle_texture', '_', ...Outliner.control_menu_group, '_', 'rename', 'delete']);
         deletables.push(addAction, replaceAction, textureAction, settingsAction, jsonAction,createAction,snowstormAction);
         particleEffectPanel = new Panel('lightflow_particle_properties', { name: 'lightflow_atmosphere.ui.particles', icon: 'ac_unit',
             growable: true, resizable: true,
@@ -6705,12 +6816,15 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         const preset = VOLUME_PRESETS[presetKey] || VOLUME_PRESETS.soft_mist;
         applyVolumeConfig(volume, preset);
         applyPresetArtDirection(preset);
-        const bounds = findSelectionBounds() || findSceneBounds();
+        // Capture the model selection before selecting the new domain. Reuse
+        // the existing fit operation inside this creation's single Undo entry.
+        const fitted = fitVolumeToSelection(volume, 2);
+        const bounds = !fitted && findSceneBounds();
         if (bounds) {
             const center = bounds.getCenter(new THREE.Vector3());
             volume.position = [center.x, center.y, center.z];
             VolumeElement.preview_controller?.updateTransform(volume);
-        } else {
+        } else if (!fitted) {
             volume.position = [0, 8, 0];
             VolumeElement.preview_controller?.updateTransform(volume);
         }
@@ -7827,14 +7941,14 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             'lightflow_atmosphere.ui.ray_from_light':'Create attached God Ray', 'lightflow_atmosphere.ui.ray_detach':'Detach God Ray',
             'lightflow_atmosphere.ui.ray_attached':'Follow light position',
             'lightflow_atmosphere.ui.ray_color_detail':'Color transition',
-            'lightflow_atmosphere.ui.ray_compositing':'Blending & bloom',
+            'lightflow_atmosphere.ui.ray_compositing':'Blending & Bloom',
             'lightflow_atmosphere.ui.ray_plane':'Plane & orientation',
             'lightflow_atmosphere.ui.ray_soft_edges':'Soft edges & fading',
             'lightflow_atmosphere.ui.ray_shadow_detail':'Light occlusion',
-            'lightflow_atmosphere.ui.ray_camera_fade':'Fade by camera distance',
+            'lightflow_atmosphere.ui.ray_camera_fade':'Camera distance fade',
             'lightflow_atmosphere.ui.volume_recipe':'Presets & blending',
             'lightflow_atmosphere.ui.height_distribution':'Height distribution',
-            'lightflow_atmosphere.ui.ray_attachment_help':'Move edits the offset from the light. Detach to keep the current world position and direction.',
+            'lightflow_atmosphere.ui.ray_attachment_help':'Moving the ray changes its offset from the light. Detach it to keep its current position and direction.',
             'lightflow_atmosphere.ui.activate_effect':'Enable effect', 'lightflow_atmosphere.ui.particle_texture':'Particle texture',
             'lightflow_atmosphere.ui.particle_setup':'Quick setup…', 'lightflow_atmosphere.ui.preset_snow':'Snow', 'lightflow_atmosphere.ui.preset_rain':'Rain', 'lightflow_atmosphere.ui.preset_sparks':'Sparks',
             'lightflow_atmosphere.ui.import_effect':'Import .particle.json…', 'lightflow_atmosphere.ui.export_effect':'Export .particle.json…',
@@ -7854,11 +7968,11 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             'lightflow_atmosphere.ui.ray_always_visible':'Always visible', 'lightflow_atmosphere.ui.ray_free_direction':'Free direction',
             'lightflow_atmosphere.ui.ray_missing_light':'Linked light unavailable',
             'lightflow_atmosphere.ui.preview':'Preview', 'lightflow_atmosphere.ui.emission':'Emission',
-            'lightflow_atmosphere.ui.select_effect':'Select an element in the Outliner to edit it, or add one here.',
+            'lightflow_atmosphere.ui.select_effect':'Select an effect in the Outliner or add one here.',
             'lightflow_atmosphere.ui.select_existing':'Select existing…', 'lightflow_atmosphere.ui.cloud_detail':'Cloud detail',
             'lightflow_atmosphere.ui.motion':'Motion', 'lightflow_atmosphere.ui.edit_particle':'Edit particle effect',
-            'lightflow_atmosphere.ui.play':'Play', 'lightflow_atmosphere.ui.pause':'Pause', 'lightflow_atmosphere.ui.restart':'Restart',
-            'lightflow_atmosphere.ui.frame':'Frame time (s)', 'lightflow_atmosphere.ui.repeat':'Repeat one-shot effect',
+            'lightflow_atmosphere.ui.play':'Play', 'lightflow_atmosphere.ui.pause':'Pause', 'lightflow_atmosphere.ui.restart':'Restart', 'lightflow_atmosphere.ui.reload':'Reload particle source', 'lightflow_atmosphere.ui.invalid_source':'Invalid particle source; current effect was kept.',
+            'lightflow_atmosphere.ui.frame':'Preview time (s)', 'lightflow_atmosphere.ui.repeat':'Repeat one-shot effect',
             'lightflow_atmosphere.ui.scrub_help':'Move the time slider to pause and preview a still frame.',
             'lightflow_atmosphere.ui.numeric_help':'Numeric components are shown here. Expressions and events are available under JSON / Molang.',
             'lightflow_atmosphere.ui.spawn_rate':'Particles per second', 'lightflow_atmosphere.ui.particle_limit':'Particle limit',
@@ -7888,7 +8002,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             'lightflow_atmosphere.name.volume': 'Volume Domain',
             'lightflow_atmosphere.action.add_vfx': 'Add VFX',
             'lightflow_atmosphere.action.add_vfx.desc': 'Add a volume, God Ray, or particle effect',
-            'lightflow_atmosphere.action.add_particle': 'Add Particle',
+            'lightflow_atmosphere.action.add_particle': 'Add Particle Effect',
             'lightflow_atmosphere.action.add': 'Add Volume Domain',
             'lightflow_atmosphere.action.add.desc': 'Add a local fog, cloud, or light-shaft rendering domain',
             'lightflow_atmosphere.action.add_god_ray': 'Add God Ray',
@@ -7899,23 +8013,23 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             'lightflow_atmosphere.panel.title': 'VOLUME',
             'lightflow_atmosphere.panel.none': 'Select a Volume Domain',
             'lightflow_atmosphere.panel.multiple': 'Volume Domains',
-            'lightflow_atmosphere.panel.multiple_hint': 'Changes apply to every selected Volume Domain',
+            'lightflow_atmosphere.panel.multiple_hint': 'Changes apply to all selected volumes.',
             'lightflow_atmosphere.panel.summary_hint': 'Selected Volume Domain',
             'lightflow_atmosphere.panel.look': 'Look',
-            'lightflow_atmosphere.panel.look_desc': 'The visible result',
+            'lightflow_atmosphere.panel.look_desc': 'Color, density and effect',
             'lightflow_atmosphere.panel.basic': 'Basic',
             'lightflow_atmosphere.panel.basic_desc': 'The visible result',
             'lightflow_atmosphere.panel.shape': 'Shape',
-            'lightflow_atmosphere.panel.shape_desc': 'Where the effect exists',
+            'lightflow_atmosphere.panel.shape_desc': 'Size, distribution and motion',
             'lightflow_atmosphere.panel.advanced': 'Advanced',
-            'lightflow_atmosphere.panel.advanced_desc': 'Detailed light response and performance controls',
+            'lightflow_atmosphere.panel.advanced_desc': 'Lighting and performance controls',
             'lightflow_atmosphere.panel.shape_distribution': 'Shape & Distribution',
             'lightflow_atmosphere.panel.light_response': 'Advanced Light Response',
             'lightflow_atmosphere.panel.quality': 'Quality',
             'lightflow_atmosphere.panel.quality_desc': 'Viewport and final render',
             'lightflow_atmosphere.panel.quality_advanced': 'Advanced Quality',
             'lightflow_atmosphere.panel.quick_setup': 'Quick Setup',
-            'lightflow_atmosphere.panel.geometry': 'Transform & Bounds',
+            'lightflow_atmosphere.panel.geometry': 'Transform & Size',
             'lightflow_atmosphere.panel.rendering_model': 'Rendering Model',
             'lightflow_atmosphere.panel.optics': 'Optics',
             'lightflow_atmosphere.panel.scattering': 'Scattering Medium',
@@ -7944,7 +8058,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             'lightflow_atmosphere.field.position': 'Position',
             'lightflow_atmosphere.field.rotation': 'Rotation',
             'lightflow_atmosphere.field.shape': 'Shape',
-            'lightflow_atmosphere.field.size': 'Domain Size',
+            'lightflow_atmosphere.field.size': 'Volume Size',
             'lightflow_atmosphere.field.density_mode': 'Distribution',
             'lightflow_atmosphere.field.composite_mode': 'Effect',
             'lightflow_atmosphere.field.density': 'Amount',
@@ -7952,10 +8066,10 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             'lightflow_atmosphere.field.scattering': 'Light Scatter',
             'lightflow_atmosphere.field.absorption_color': 'Shadow Color',
             'lightflow_atmosphere.field.absorption': 'Darkness',
-            'lightflow_atmosphere.field.anisotropy': 'Light Direction Bias',
+            'lightflow_atmosphere.field.anisotropy': 'Scattering Direction',
             'lightflow_atmosphere.field.ambient': 'Ambient Light',
-            'lightflow_atmosphere.field.receive_shadows': 'Receive Volumetric Shadows',
-            'lightflow_atmosphere.field.shadow_fill': 'Multiple-Scattering Fill',
+            'lightflow_atmosphere.field.receive_shadows': 'Receive Shadows',
+            'lightflow_atmosphere.field.shadow_fill': 'Scattering Fill',
             'lightflow_atmosphere.field.bloom': 'Bloom Contribution',
             'lightflow_atmosphere.field.edge_feather': 'Soft Edges',
             'lightflow_atmosphere.field.height_falloff': 'Height Falloff',
@@ -8012,7 +8126,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             'lightflow_atmosphere.help.scattering': 'How strongly the medium catches scene lights.',
             'lightflow_atmosphere.help.absorption_color': 'Color that remains in the darker parts of the medium.',
             'lightflow_atmosphere.help.absorption': 'How much light the medium blocks.',
-            'lightflow_atmosphere.help.anisotropy': 'Negative favors backlight; positive produces forward-facing beams.',
+            'lightflow_atmosphere.help.anisotropy': 'Negative values favor backscattering; positive values favor forward scattering.',
             'lightflow_atmosphere.help.ambient': 'Minimum light visible away from direct lights.',
             'lightflow_atmosphere.help.edge_feather': 'Softens the boundary of the volume.',
             'lightflow_atmosphere.button.advanced': 'Advanced Volume Settings...',
@@ -8038,9 +8152,9 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             'lightflow_atmosphere.settings.temporal_response': 'Temporal Response',
             'lightflow_atmosphere.settings.temporal_interleave': 'Checkerboard Temporal Interleave',
             'lightflow_atmosphere.settings.shadow_mode': 'Volumetric Shadows',
-            'lightflow_atmosphere.settings.helper_mask': 'Keep Gizmos and Helpers Clear',
-            'lightflow_atmosphere.settings.static_cache': 'Reuse Unchanged Volume Frames',
-            'lightflow_atmosphere.settings.frustum_culling': 'Cull Off-Screen Volume Domains',
+            'lightflow_atmosphere.settings.helper_mask': 'Keep Helpers Clear',
+            'lightflow_atmosphere.settings.static_cache': 'Cache Unchanged Frames',
+            'lightflow_atmosphere.settings.frustum_culling': 'Skip Off-Screen Volumes',
             'lightflow_atmosphere.undo.add': 'Add Volume Domain',
             'lightflow_atmosphere.undo.edit': 'Edit Volume Domain',
             'lightflow_atmosphere.undo.fit': 'Fit Volume Domain',
@@ -8053,18 +8167,18 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             'lightflow_atmosphere.ui.ray_from_light':'Crear rayo de luz vinculado', 'lightflow_atmosphere.ui.ray_detach':'Desvincular rayo de luz',
             'lightflow_atmosphere.ui.ray_attached':'Seguir posición de la luz',
             'lightflow_atmosphere.ui.ray_color_detail':'Transición de color',
-            'lightflow_atmosphere.ui.ray_compositing':'Mezcla y brillo difuso',
+            'lightflow_atmosphere.ui.ray_compositing':'Mezcla y Bloom',
             'lightflow_atmosphere.ui.ray_plane':'Plano y orientación',
-            'lightflow_atmosphere.ui.ray_soft_edges':'Bordes suaves y desvanecimiento',
+            'lightflow_atmosphere.ui.ray_soft_edges':'Bordes y desvanecimiento',
             'lightflow_atmosphere.ui.ray_shadow_detail':'Oclusión de la luz',
-            'lightflow_atmosphere.ui.ray_camera_fade':'Desvanecer por distancia a cámara',
+            'lightflow_atmosphere.ui.ray_camera_fade':'Desvanecer con la distancia',
             'lightflow_atmosphere.ui.volume_recipe':'Preajustes y mezcla',
             'lightflow_atmosphere.ui.height_distribution':'Distribución en altura',
-            'lightflow_atmosphere.ui.ray_attachment_help':'Mover edita el desplazamiento respecto de la luz. Desvincula para conservar la posición y dirección actuales en el mundo.',
+            'lightflow_atmosphere.ui.ray_attachment_help':'Mover el rayo ajusta su posición relativa a la luz. Desvincúlalo para conservar su posición y dirección actuales.',
             'lightflow_atmosphere.ui.activate_effect':'Activar efecto', 'lightflow_atmosphere.ui.particle_texture':'Textura de la partícula',
             'lightflow_atmosphere.ui.particle_setup':'Configuración rápida…', 'lightflow_atmosphere.ui.preset_snow':'Nieve', 'lightflow_atmosphere.ui.preset_rain':'Lluvia', 'lightflow_atmosphere.ui.preset_sparks':'Chispas',
             'lightflow_atmosphere.ui.import_effect':'Importar .particle.json…', 'lightflow_atmosphere.ui.export_effect':'Exportar .particle.json…',
-            'lightflow_atmosphere.ui.snowstorm':'Editar en Snowstorm…', 'lightflow_atmosphere.ui.snowstorm_help':'Snowstorm abre este efecto en su editor visual. Guarda allí el .particle.json y usa Reemplazar JSON para traerlo de vuelta.',
+            'lightflow_atmosphere.ui.snowstorm':'Editar en Snowstorm…', 'lightflow_atmosphere.ui.snowstorm_help':'Edita el efecto en Snowstorm, guarda el archivo .particle.json y usa Reemplazar JSON para importarlo de nuevo.',
             'lightflow_atmosphere.ui.snowstorm_export_help':'Este efecto es demasiado grande para un enlace. Exporta su .particle.json y ábrelo en Snowstorm.',
             'lightflow_atmosphere.ui.snowstorm_texture_help':'Importa esta textura por separado en Snowstorm; el enlace incluye imágenes PNG compactas.',
             'lightflow_atmosphere.ui.particle_distribution':'Forma del emisor', 'lightflow_atmosphere.ui.particle_motion':'Movimiento',
@@ -8080,18 +8194,18 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             'lightflow_atmosphere.ui.ray_always_visible':'Siempre visible', 'lightflow_atmosphere.ui.ray_free_direction':'Dirección libre',
             'lightflow_atmosphere.ui.ray_missing_light':'La luz vinculada no está disponible',
             'lightflow_atmosphere.ui.preview':'Vista', 'lightflow_atmosphere.ui.emission':'Emisión',
-            'lightflow_atmosphere.ui.select_effect':'Selecciona un elemento en el Outliner para editarlo o añade uno aquí.',
+            'lightflow_atmosphere.ui.select_effect':'Selecciona un efecto en el Outliner o añade uno aquí.',
             'lightflow_atmosphere.ui.select_existing':'Seleccionar existente…', 'lightflow_atmosphere.ui.cloud_detail':'Detalle de nubes',
             'lightflow_atmosphere.ui.motion':'Movimiento', 'lightflow_atmosphere.ui.edit_particle':'Editar partículas',
-            'lightflow_atmosphere.ui.play':'Reproducir', 'lightflow_atmosphere.ui.pause':'Pausar', 'lightflow_atmosphere.ui.restart':'Reiniciar',
-            'lightflow_atmosphere.ui.frame':'Tiempo del fotograma (s)', 'lightflow_atmosphere.ui.repeat':'Repetir efecto de una sola emisión',
-            'lightflow_atmosphere.ui.scrub_help':'Mueve el tiempo para pausar y previsualizar un fotograma.',
-            'lightflow_atmosphere.ui.numeric_help':'Aquí aparecen componentes numéricos. Las expresiones y eventos están en JSON / Molang.',
+            'lightflow_atmosphere.ui.play':'Reproducir', 'lightflow_atmosphere.ui.pause':'Pausar', 'lightflow_atmosphere.ui.restart':'Reiniciar', 'lightflow_atmosphere.ui.reload':'Recargar origen de partícula', 'lightflow_atmosphere.ui.invalid_source':'El origen no es válido; se conservó el efecto actual.',
+            'lightflow_atmosphere.ui.frame':'Tiempo de vista previa (s)', 'lightflow_atmosphere.ui.repeat':'Repetir emisión única',
+            'lightflow_atmosphere.ui.scrub_help':'Desliza el tiempo para pausar y ver un instante del efecto.',
+            'lightflow_atmosphere.ui.numeric_help':'Aquí puedes editar valores numéricos. Las expresiones y eventos están en JSON / Molang.',
             'lightflow_atmosphere.ui.spawn_rate':'Partículas por segundo', 'lightflow_atmosphere.ui.particle_limit':'Límite de partículas',
             'lightflow_atmosphere.ui.duration':'Duración del emisor (s)', 'lightflow_atmosphere.ui.lifetime':'Vida de cada partícula (s)',
             'lightflow_atmosphere.ui.speed':'Velocidad inicial', 'lightflow_atmosphere.ui.scene_scale':'Escala en la escena',
-            'lightflow_atmosphere.ui.bloom':'Contribución a Bloom', 'lightflow_atmosphere.ui.width':'Ancho de la partícula',
-            'lightflow_atmosphere.ui.height':'Alto de la partícula', 'lightflow_atmosphere.ui.tint':'Color',
+            'lightflow_atmosphere.ui.bloom':'Aporte al Bloom', 'lightflow_atmosphere.ui.width':'Ancho de partícula',
+            'lightflow_atmosphere.ui.height':'Alto de partícula', 'lightflow_atmosphere.ui.tint':'Tinte',
             'lightflow_atmosphere.ui.texture':'Elegir textura PNG…', 'lightflow_atmosphere.ui.source':'JSON / Molang',
             'lightflow_atmosphere.ui.edit_json':'Editar JSON / Molang…', 'lightflow_atmosphere.ui.replace':'Reemplazar JSON del efecto…',
             'lightflow_atmosphere.ui.select_child':'Seleccionar efecto hijo', 'lightflow_atmosphere.ui.import_child':'Importar efecto hijo',
@@ -8114,7 +8228,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             'lightflow_atmosphere.name.volume': 'Dominio de volumen',
             'lightflow_atmosphere.action.add_vfx': 'Añadir VFX',
             'lightflow_atmosphere.action.add_vfx.desc': 'Añade un volumen, un rayo de luz o un efecto de partículas',
-            'lightflow_atmosphere.action.add_particle': 'Añadir partícula',
+            'lightflow_atmosphere.action.add_particle': 'Añadir efecto de partículas',
             'lightflow_atmosphere.action.add': 'Añadir dominio volumétrico',
             'lightflow_atmosphere.action.add.desc': 'Añade un área local de niebla, nubes o rayos de luz',
             'lightflow_atmosphere.action.add_god_ray': 'Añadir rayo de luz',
@@ -8123,28 +8237,28 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             'lightflow_atmosphere.action.fit': 'Ajustar volumen a la selección',
             'lightflow_atmosphere.action.settings': 'Calidad de atmósfera...',
             'lightflow_atmosphere.panel.title': 'VOLUMEN',
-            'lightflow_atmosphere.panel.multiple': 'Dominios volumetricos',
-            'lightflow_atmosphere.panel.multiple_hint': 'Los cambios se aplican a todos los dominios seleccionados',
-            'lightflow_atmosphere.panel.summary_hint': 'Dominio volumetrico seleccionado',
+            'lightflow_atmosphere.panel.multiple': 'Dominios volumétricos',
+            'lightflow_atmosphere.panel.multiple_hint': 'Los cambios se aplican a todos los volúmenes seleccionados.',
+            'lightflow_atmosphere.panel.summary_hint': 'Dominio volumétrico seleccionado',
             'lightflow_atmosphere.panel.look': 'Aspecto',
-            'lightflow_atmosphere.panel.look_desc': 'El resultado visible',
+            'lightflow_atmosphere.panel.look_desc': 'Color, densidad y efecto',
             'lightflow_atmosphere.panel.basic': 'Básico',
             'lightflow_atmosphere.panel.basic_desc': 'El resultado visible',
             'lightflow_atmosphere.panel.shape': 'Forma',
-            'lightflow_atmosphere.panel.shape_desc': 'Dónde existe el efecto',
+            'lightflow_atmosphere.panel.shape_desc': 'Tamaño, distribución y movimiento',
             'lightflow_atmosphere.panel.advanced': 'Avanzado',
-            'lightflow_atmosphere.panel.advanced_desc': 'Respuesta de luz y controles de rendimiento detallados',
+            'lightflow_atmosphere.panel.advanced_desc': 'Iluminación y rendimiento',
             'lightflow_atmosphere.panel.shape_distribution': 'Forma y distribución',
             'lightflow_atmosphere.panel.light_response': 'Respuesta de luz avanzada',
             'lightflow_atmosphere.panel.quality': 'Calidad',
-            'lightflow_atmosphere.panel.quality_desc': 'Viewport y render final',
+            'lightflow_atmosphere.panel.quality_desc': 'Vista previa y render final',
             'lightflow_atmosphere.panel.quality_advanced': 'Calidad avanzada',
-            'lightflow_atmosphere.panel.quick_setup': 'Configuracion rapida',
-            'lightflow_atmosphere.panel.geometry': 'Transformacion y limites',
+            'lightflow_atmosphere.panel.quick_setup': 'Configuración rápida',
+            'lightflow_atmosphere.panel.geometry': 'Transformación y tamaño',
             'lightflow_atmosphere.panel.rendering_model': 'Modelo de renderizado',
-            'lightflow_atmosphere.panel.optics': 'Optica',
-            'lightflow_atmosphere.panel.scattering': 'Medio de dispersion',
-            'lightflow_atmosphere.panel.absorption': 'Absorcion y ambiente',
+            'lightflow_atmosphere.panel.optics': 'Óptica',
+            'lightflow_atmosphere.panel.scattering': 'Dispersión de luz',
+            'lightflow_atmosphere.panel.absorption': 'Absorción y ambiente',
             'lightflow_atmosphere.panel.lighting': 'Respuesta a la luz',
             'lightflow_atmosphere.panel.density_shape': 'Forma de densidad',
             'lightflow_atmosphere.panel.height_profile': 'Perfil de altura',
@@ -8160,10 +8274,10 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             'lightflow_atmosphere.help.volume_enabled': 'Activar este volumen en la vista y el render final.',
             'lightflow_atmosphere.help.visibility': 'Visibilidad del Outliner. Un volumen oculto no se renderiza. Para ocultar solo sus guías, usa Escena.',
             'lightflow_atmosphere.panel.inactive_reason': 'No se renderiza: revisa Activado, Visible y Atmósfera global.',
-            'lightflow_atmosphere.field.position': 'Posicion',
-            'lightflow_atmosphere.field.rotation': 'Rotacion',
+            'lightflow_atmosphere.field.position': 'Posición',
+            'lightflow_atmosphere.field.rotation': 'Rotación',
             'lightflow_atmosphere.field.shape': 'Forma',
-            'lightflow_atmosphere.field.size': 'Tamaño del dominio',
+            'lightflow_atmosphere.field.size': 'Tamaño del volumen',
             'lightflow_atmosphere.field.density_mode': 'Distribución',
             'lightflow_atmosphere.field.composite_mode': 'Efecto',
             'lightflow_atmosphere.field.density': 'Densidad',
@@ -8171,11 +8285,11 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             'lightflow_atmosphere.field.scattering': 'Dispersión de luz',
             'lightflow_atmosphere.field.absorption_color': 'Color de sombra',
             'lightflow_atmosphere.field.absorption': 'Oscuridad',
-            'lightflow_atmosphere.field.anisotropy': 'Dirección de la luz',
+            'lightflow_atmosphere.field.anisotropy': 'Dirección de dispersión',
             'lightflow_atmosphere.field.ambient': 'Luz ambiental',
-            'lightflow_atmosphere.field.receive_shadows': 'Recibir sombras volumétricas',
-            'lightflow_atmosphere.field.shadow_fill': 'Relleno de dispersión múltiple',
-            'lightflow_atmosphere.field.bloom': 'Contribución al Bloom',
+            'lightflow_atmosphere.field.receive_shadows': 'Recibir sombras',
+            'lightflow_atmosphere.field.shadow_fill': 'Relleno por dispersión',
+            'lightflow_atmosphere.field.bloom': 'Aporte al Bloom',
             'lightflow_atmosphere.field.edge_feather': 'Bordes suaves',
             'lightflow_atmosphere.field.height_falloff': 'Caída por altura',
             'lightflow_atmosphere.field.height_offset': 'Base de altura',
@@ -8231,7 +8345,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             'lightflow_atmosphere.help.scattering': 'Qué tanto responde el medio a las luces de la escena.',
             'lightflow_atmosphere.help.absorption_color': 'Color que permanece en las partes oscuras del medio.',
             'lightflow_atmosphere.help.absorption': 'Cuánta luz bloquea el medio.',
-            'lightflow_atmosphere.help.anisotropy': 'Negativo favorece contraluz; positivo produce haces hacia delante.',
+            'lightflow_atmosphere.help.anisotropy': 'Los valores negativos favorecen la retrodispersión; los positivos, la dispersión hacia delante.',
             'lightflow_atmosphere.help.ambient': 'Luz mínima visible lejos de las luces directas.',
             'lightflow_atmosphere.help.edge_feather': 'Suaviza el límite del volumen.',
             'lightflow_atmosphere.button.advanced': 'Ajustes avanzados del volumen...',
@@ -8249,7 +8363,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             'lightflow_atmosphere.settings.global_fog_height_falloff': 'Caída por altura',
             'lightflow_atmosphere.settings.global_fog_sync_background': 'Igualar fondo de color',
             'lightflow_atmosphere.settings.preview_quality': 'Pasos en el viewport',
-            'lightflow_atmosphere.settings.enabled': 'Renderizador atmosferico',
+            'lightflow_atmosphere.settings.enabled': 'Renderizador atmosférico',
             'lightflow_atmosphere.settings.preview_scale': 'Resolución del viewport',
             'lightflow_atmosphere.settings.render_quality': 'Pasos en Studio Render',
             'lightflow_atmosphere.settings.render_scale': 'Resolución de Studio Render',
@@ -8257,9 +8371,9 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             'lightflow_atmosphere.settings.temporal_response': 'Respuesta temporal',
             'lightflow_atmosphere.settings.temporal_interleave': 'Intercalado temporal checkerboard',
             'lightflow_atmosphere.settings.shadow_mode': 'Sombras volumétricas',
-            'lightflow_atmosphere.settings.helper_mask': 'Mantener gizmos y ayudas limpios',
-            'lightflow_atmosphere.settings.static_cache': 'Reutilizar frames volumétricos sin cambios',
-            'lightflow_atmosphere.settings.frustum_culling': 'Omitir dominios fuera de cámara',
+            'lightflow_atmosphere.settings.helper_mask': 'Mantener guías despejadas',
+            'lightflow_atmosphere.settings.static_cache': 'Reutilizar fotogramas sin cambios',
+            'lightflow_atmosphere.settings.frustum_culling': 'Omitir volúmenes fuera de cámara',
             'lightflow_atmosphere.undo.add': 'Añadir dominio volumétrico',
             'lightflow_atmosphere.undo.edit': 'Editar dominio volumétrico',
             'lightflow_atmosphere.undo.fit': 'Ajustar dominio volumétrico',
@@ -8368,6 +8482,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             ensureAtmosphereReloadPlaceholders();
             registerVolumeElement();
             registerGodRayElement();
+            installParticleEmitterLifecycle();
             registerParticleEffectElement();
             if (window.ModelProject && window.Property) {
                 atmosphereProjectSettingsProperty = new Property(
@@ -8378,6 +8493,8 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 );
                 deletables.push(atmosphereProjectSettingsProperty);
             }
+            deletables.push(Blockbench.on('lightflow_cinematic_frame_evaluated', () => syncParticleEffects(window.Preview?.selected?.camera)));
+            deletables.push(Blockbench.on('lightflow_cinematic_render_complete', () => syncParticleEffects(window.Preview?.selected?.camera)));
             installActions();
             createAtmospherePanel();
             AtmosphereManager.init();

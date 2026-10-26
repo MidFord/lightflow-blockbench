@@ -25,7 +25,7 @@ OR OTHER DEALINGS IN THE SOFTWARE.
 
 
     */
-    const cinematicGifCodec = (() => {
+    const cinematicGifCodec = (function createCinematicGifCodec() {
         const exports = {};
 var __defProp = Object.defineProperty;
 var __markAsModule = (target) => __defProp(target, "__esModule", {value: true});
@@ -852,6 +852,7 @@ function colorTableSize(length) {
 }
 var src_default = GIFEncoder;
 
+        exports.createCodec = createCinematicGifCodec;
         return exports;
     })();
     /* LIGHTFLOW_GIFENC_VENDOR_END */
@@ -1006,6 +1007,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
     let cinematicLookFrame=null;
     let renderedClipDialog;
     let renderedMediaViewerDispose;
+    let renderedResultProgressControl=null;
     let managerRefreshScheduled = false;
     let persistenceWarningShown = false;
     let activeRenderJob = null;
@@ -1020,6 +1022,8 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
     let managerMediaProbeGeneration = 0;
     let managerDraftForm = null;
     let lastRenderedArtifact = null;
+    let lastCompletedArtifact = null;
+    let reopenRecordingAction;
     let cinematicPreviewCachePrepared = false;
     let cinematicAudioProviderFactory = null;
     let unloading = false;
@@ -1531,6 +1535,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
             quaternion: normalizeQuaternion(source.quaternion, base.quaternion),
             up: finiteArray(source.up, 3, base.up),
             target: finiteArray(source.target, 3, base.target),
+            reference_aspect: Math.max(.0001, finite(source.reference_aspect, base.reference_aspect || sensorWidth / sensorHeight)),
             sensor_width_mm: sensorWidth,
             sensor_height_mm: sensorHeight,
             focal_length_mm: clamp(finite(requestedFocalLength, base.focal_length_mm), 0.1, 2000),
@@ -1557,7 +1562,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         const right = normalizePhysicalCameraState(rightValue, left);
         const t = easeAmount(amount, interpolation);
         const numericKeys = [
-            'sensor_width_mm', 'sensor_height_mm', 'focal_length_mm', 'aperture_f_stop',
+            'reference_aspect', 'sensor_width_mm', 'sensor_height_mm', 'focal_length_mm', 'aperture_f_stop',
             'focus_distance', 'shutter_angle', 'iso', 'exposure_compensation_ev',
             'lens_shift_x', 'lens_shift_y', 'anamorphic_squeeze', 'near_clip',
             'far_clip', 'ortho_world_height'
@@ -1584,7 +1589,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         if(channel==='rotation')return ['quaternion'];
         if(channel==='aim')return ['target','up','layers_mask'];
         if(channel==='exposure')return ['shutter_angle','iso','exposure_compensation_ev'];
-        return ['projection','sensor_width_mm','sensor_height_mm','focal_length_mm','focus_distance','aperture_f_stop','ortho_world_height','lens_shift_x','lens_shift_y','anamorphic_squeeze','blade_count','near_clip','far_clip'];
+        return ['projection','reference_aspect','sensor_width_mm','sensor_height_mm','focal_length_mm','focus_distance','aperture_f_stop','ortho_world_height','lens_shift_x','lens_shift_y','anamorphic_squeeze','blade_count','near_clip','far_clip'];
     }
 
     function normalizeCameraKeyframe(value, fallbackState) {
@@ -1682,10 +1687,10 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
     }
 
     function cinematicClipColorItems(sequenceId,clip) {
-        const labels=[['Light blue','Azul claro'],['Yellow','Amarillo'],['Orange','Naranja'],['Red','Rojo'],['Purple','Morado'],['Blue','Azul'],['Green','Verde'],['Lime','Lima'],['Pink','Rosa'],['Silver','Plata']];
+        const labels=["light_blue","yellow","orange","red","purple","blue","green","lime","pink","silver"];
         const apply=color=>updateSequenceClips(sequenceId,selectedSequenceClips(sequenceId,clip.id).map(item=>({id:item.id,color})));
-        return [{name:cinematicUI('Theme accent','Acento del tema'),icon:'lens',marked:clip.color<0,click:()=>apply(-1)},
-            '_',...(window.markerColors||[]).map((marker,index)=>({name:cinematicUI(...labels[index]),icon:'lens',color:cinematicClipColor(index),marked:clip.color===index,click:()=>apply(index)}))];
+        return [{name:cinematicUI("theme_accent"),icon:'lens',marked:clip.color<0,click:()=>apply(-1)},
+            '_',...(window.markerColors||[]).map((marker,index)=>({name:cinematicUI(labels[index]),icon:'lens',color:cinematicClipColor(index),marked:clip.color===index,click:()=>apply(index)}))];
     }
 
     function cinematicClipKeyMarkers(animation,clip,rate,playbackRate) {
@@ -1776,12 +1781,11 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
     }
 
     function createEmptyDocument() {
-        const sequence = createDefaultSequence(0);
         return {
             version: DOCUMENT_VERSION,
-            active_sequence_id: sequence.id,
+            active_sequence_id: '',
             active_camera_id: '',
-            sequences: [sequence],
+            sequences: [],
             cameras: [],
             montage: normalizeMontage({})
         };
@@ -1792,7 +1796,6 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         const sequences = (Array.isArray(source.sequences) ? source.sequences : [])
             .map(normalizeSequence)
             .filter(Boolean);
-        if (!sequences.length) sequences.push(createDefaultSequence(0));
         const cameras = (Array.isArray(source.cameras) ? source.cameras : [])
             .map(normalizeCamera)
             .filter(Boolean);
@@ -1802,10 +1805,10 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         });
         const activeSequenceId = sequences.some(sequence => sequence.id === source.active_sequence_id)
             ? String(source.active_sequence_id)
-            : sequences[0].id;
+            : (sequences[0]?.id || '');
         const activeSequence = sequences.find(sequence => sequence.id === activeSequenceId) || sequences[0];
-        const requestedCameraId = String(source.active_camera_id || activeSequence.camera_id || '');
-        const activeCameraId = cameraIds.has(requestedCameraId) ? requestedCameraId : (activeSequence.camera_id || '');
+        const requestedCameraId = String(source.active_camera_id || activeSequence?.camera_id || '');
+        const activeCameraId = cameraIds.has(requestedCameraId) ? requestedCameraId : (activeSequence?.camera_id || '');
         return {
             version: DOCUMENT_VERSION,
             active_sequence_id: activeSequenceId,
@@ -1900,8 +1903,8 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
 
     function validateSequenceReferences(document) {
         const visit = (sequence, path) => {
-            if (path.has(sequence.id)) throw new Error(cinematicUI('Sequences cannot reference themselves, directly or indirectly.', 'Las secuencias no pueden referenciarse a sí mismas, directa o indirectamente.'));
-            if (path.size >= 16) throw new Error(cinematicUI('Sequence nesting exceeds 16 levels.', 'La anidación supera 16 niveles.'));
+            if (path.has(sequence.id)) throw new Error(cinematicUI("sequences_cannot_reference_themselves_directly_or_indirectly"));
+            if (path.size >= 16) throw new Error(cinematicUI("sequence_nesting_exceeds_16_levels"));
             const next = new Set(path); next.add(sequence.id);
             for (const clip of sequence.clips || []) {
                 if (clip.type !== 'sequence') continue;
@@ -1951,7 +1954,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         const sequence=getSequence(readDocumentView(),sequenceId);if(!sequence||activeRenderJob)return null;
         const tracks=sequence.tracks.filter(track=>track.id!==id);
         tracks.push({...sequenceTrackState(sequence,id),...patch,id});
-        return updateSequence(sequenceId,{tracks},{undo_label:cinematicUI('Edit sequence track','Editar pista de secuencia')});
+        return updateSequence(sequenceId,{tracks},{undo_label:cinematicUI("edit_sequence_track")});
     }
 
     function updateSequenceClips(sequenceId,patches,options={}) {
@@ -1979,7 +1982,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
             created.push(right.id);
             return [normalizeSequenceClip({...clip,duration_frames:cut,blend_window:window}),right];
         });
-        if(created.length)updateSequence(sequenceId,{clips},{undo_label:cinematicUI('Split sequence clips','Cortar clips de secuencia')});
+        if(created.length)updateSequence(sequenceId,{clips},{undo_label:cinematicUI("split_sequence_clips")});
         return created;
     }
 
@@ -1993,7 +1996,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         const delta=Math.max(Math.round(frames),-Math.floor(Math.min(...clips.map(clip=>clip.source_start_seconds*rate/clip.speed))+1e-7));
         return updateSequenceClips(sequenceId,clips.map(clip=>({id:clip.id,
             source_start_seconds:Math.max(0,clip.source_start_seconds+delta/rate*clip.speed)
-        })),{undo_label:cinematicUI('Slip selected clips','Desplazar origen de clips')});
+        })),{undo_label:cinematicUI("slip_selected_clips")});
     }
 
     function sequenceTrackGap(sequence,track,frame) {
@@ -2010,16 +2013,16 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         if(!gap||activeRenderJob)return null;
         return updateSequenceClips(sequenceId,sequence.clips.filter(clip=>clip.track===track&&clip.start_frame>=gap.end)
             .map(clip=>({id:clip.id,start_frame:clip.start_frame-(gap.end-gap.start)})),
-            {undo_label:cinematicUI('Close track gap','Cerrar hueco de pista')});
+            {undo_label:cinematicUI("close_track_gap")});
     }
 
     function openSequenceSlipDialog(sequenceId,ids) {
         const sequence=getSequence(readDocumentView(),sequenceId),clips=sequence?.clips.filter(clip=>ids.includes(clip.id));
         if(!clips?.length||activeRenderJob||clips.some(clip=>sequenceTrackState(sequence,clip.track).locked))return;
         const minimum=-Math.floor(Math.min(...clips.map(clip=>clip.source_start_seconds*frameRateValue(sequence.frame_rate)/clip.speed))+1e-7);
-        new Dialog({id:'lightflow_cinematic_slip',title:cinematicUI('Slip source · '+clips.length+' clips','Desplazar origen · '+clips.length+' clips'),
-            width:420,form:(window.LightManagerUI?.prepareForm || (form => form))({frames:{type:'number',label:cinematicUI('Source shift (sequence frames)','Desplazamiento del origen (frames de secuencia)'),value:0,min:minimum,step:1,
-                description:cinematicUI('Positive values use a later source segment. Clip positions, lengths and fades stay unchanged.','Los valores positivos usan un tramo posterior del origen. Se conservan posición, duración y fundidos.')}}),
+        new Dialog({id:'lightflow_cinematic_slip',title:cinematicUI("slip_source_count_clips").replace('{count}', clips.length),
+            width:420,form:(window.LightManagerUI?.prepareForm || (form => form))({frames:{type:'number',label:cinematicUI("source_shift_sequence_frames"),value:0,min:minimum,step:1,
+                description:cinematicUI("positive_values_use_a_later_source_segment_clip_positions_length")}}),
             onConfirm:form=>{slipSequenceClips(sequenceId,ids,Number(form.frames));cinematicSequencerVue?.sync();Animator.preview();}
         }).show();
     }
@@ -2057,8 +2060,8 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         if(!sequence||activeRenderJob||copied?.project!==getActiveProject())return [];
         const rate=frameRateValue(sequence.frame_rate),scale=rate/copied.rate,start=Math.min(...copied.clips.map(clip=>clip.start_frame)),firstTrack=Math.min(...copied.clips.map(clip=>clip.track));
         const baseTrack=track??firstTrack,baseFrame=Math.max(0,Math.round(frame)-sequence.start_frame);
-        if(baseTrack<0||baseTrack+Math.max(...copied.clips.map(clip=>clip.track-firstTrack))>63){Blockbench.showQuickMessage(cinematicUI('Not enough tracks for this selection.','No hay suficientes pistas para esta selección.'));return [];}
-        if(copied.clips.some(clip=>clip.type==='sequence'?!doc.sequences.some(item=>item.id===clip.source_id):!getCinematicAnimations().some(item=>item.uuid===clip.source_id))){Blockbench.showQuickMessage(cinematicUI('A copied source is missing. Relink it before pasting.','Falta un origen copiado. Vuelve a vincularlo antes de pegar.'));return [];}
+        if(baseTrack<0||baseTrack+Math.max(...copied.clips.map(clip=>clip.track-firstTrack))>63){Blockbench.showQuickMessage(cinematicUI("not_enough_tracks_for_this_selection"));return [];}
+        if(copied.clips.some(clip=>clip.type==='sequence'?!doc.sequences.some(item=>item.id===clip.source_id):!getCinematicAnimations().some(item=>item.uuid===clip.source_id))){Blockbench.showQuickMessage(cinematicUI("a_copied_source_is_missing_relink_it_before_pasting"));return [];}
         const clips=copied.clips.map(clip=>normalizeSequenceClip({...clip,id:createId('sequence_clip'),
             start_frame:baseFrame+Math.round((clip.start_frame-start)*scale),track:clip.track-firstTrack+baseTrack,
             duration_frames:Math.max(1,Math.round(clip.duration_frames*scale)),fade_in_frames:Math.round(clip.fade_in_frames*scale),fade_out_frames:Math.round(clip.fade_out_frames*scale),
@@ -2068,14 +2071,14 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         // Validate before creating an Undo; pasting a nested sequence must not create cycles.
         const next={...sequence,clips:[...sequence.clips,...clips]};
         try{validateSequenceReferences({...doc,sequences:doc.sequences.map(item=>item.id===sequence.id?next:item)});}catch(error){Blockbench.showQuickMessage(error.message);return [];}
-        updateSequence(sequenceId,{clips:next.clips,end_frame:Math.max(sequence.end_frame,sequence.start_frame+Math.max(...clips.map(clip=>clip.start_frame+clip.duration_frames)))},{undo_label:cinematicUI('Paste sequence clips','Pegar clips de secuencia')});
+        updateSequence(sequenceId,{clips:next.clips,end_frame:Math.max(sequence.end_frame,sequence.start_frame+Math.max(...clips.map(clip=>clip.start_frame+clip.duration_frames)))},{undo_label:cinematicUI("paste_sequence_clips")});
         return clips.map(clip=>clip.id);
     }
 
     function deleteSequenceClips(sequenceId,ids) {
         const sequence=getSequence(readDocumentView(),sequenceId);if(!sequence||activeRenderJob)return;
         const clips=sequence.clips.filter(clip=>!ids.includes(clip.id)||sequenceTrackState(sequence,clip.track).locked);
-        if(clips.length!==sequence.clips.length)updateSequence(sequenceId,{clips},{undo_label:cinematicUI('Delete sequence clips','Eliminar clips de secuencia')});
+        if(clips.length!==sequence.clips.length)updateSequence(sequenceId,{clips},{undo_label:cinematicUI("delete_sequence_clips")});
     }
 
     function snapSequenceClipDelta(sequence,clips,delta,edge,altKey) {
@@ -2196,6 +2199,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
             const next = function(...args) {
                 if (!cinematicSequencePreview) return original.apply(this, args);
                 const sequence = getSequence(readDocumentView());
+                if (!sequence) return key === 'start' ? false : original.apply(this, args);
                 if (key === 'getMaxLength') return Math.max(original.apply(this,args), sequence.source_start_seconds + sequenceSourceDurationSeconds(sequence) + 1);
                 if (key === 'start') return startCinematicPlayback(sequence.id);
                 const result = original.apply(this,args); pauseCinematicPlayback({pauseTimeline:false}); return result;
@@ -2465,7 +2469,9 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
             const index = document.sequences.findIndex(sequence => sequence.id === id);
             if (index < 0) return null;
             const previous = document.sequences[index];
-            const next = normalizeSequence({ ...previous, ...(patch || {}), id: previous.id }, index);
+            const retimed = deepClone(previous);
+            if (patch?.frame_rate) retimeSequenceFrames(retimed, patch.frame_rate, document);
+            const next = normalizeSequence({ ...retimed, ...(patch || {}), id: previous.id }, index);
             next.created_at = previous.created_at;
             next.updated_at = Date.now();
             document.sequences[index] = next;
@@ -2480,12 +2486,11 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
 
     function deleteSequence(id, options = {}) {
         const remove = () => mutateDocument(document => {
-            if (document.sequences.length <= 1) return false;
             const index = document.sequences.findIndex(sequence => sequence.id === id);
             if (index < 0) return false;
             document.sequences.splice(index, 1);
             if (document.active_sequence_id === id) {
-                document.active_sequence_id = document.sequences[Math.max(0, index - 1)].id;
+                document.active_sequence_id = document.sequences[Math.max(0, index - 1)]?.id || '';
                 document.active_camera_id = getSequence(document)?.camera_id || '';
             }
             return true;
@@ -2577,13 +2582,29 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         ), adapt, options);
     }
 
+    function retimeSequenceFrames(sequence, rateValue, document) {
+        const oldRate = frameRateValue(sequence.frame_rate), rate = normalizeFrameRate(rateValue);
+        const scale = frameRateValue(rate) / oldRate;
+        if (Math.abs(scale - 1) < 1e-9) return;
+        sequence.start_frame = Math.round(sequence.start_frame * scale);
+        sequence.end_frame = Math.max(sequence.start_frame + 1, Math.round(sequence.end_frame * scale));
+        for (const clip of sequence.clips || []) {
+            for (const key of ['start_frame','duration_frames','fade_in_frames','fade_out_frames']) {
+                if (clip[key] != null) clip[key] = Math.max(key === 'duration_frames' ? 1 : 0, Math.round(clip[key] * scale));
+            }
+            if (clip.blend_window) for (const key of ['offset_frames','duration_frames']) clip.blend_window[key] *= scale;
+        }
+        const camera = document?.cameras.find(item => item.id === sequence.camera_id);
+        if (camera) for (const key of camera.keyframes) key.frame *= scale;
+        sequence.frame_rate = rate;
+    }
+
     function setSequenceFrameRate(sequenceId, rateValue, options = {}) {
         const update = () => mutateDocument(document => {
             const sequence = getSequence(document, sequenceId);
             if (!sequence) return null;
             const previousDurationSeconds = sequenceDurationSeconds(sequence);
-            const previousFrames = sequenceDurationFrames(sequence);
-            sequence.frame_rate = normalizeFrameRate(rateValue);
+            retimeSequenceFrames(sequence, rateValue, document);
             if (sequence.duration_mode === 'active_animation') {
                 const adapted = adaptSequenceValueToActiveAnimation(sequence);
                 Object.assign(sequence, adapted, { id: sequence.id, created_at: sequence.created_at });
@@ -2593,7 +2614,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                     Math.round(previousDurationSeconds * frameRateValue(sequence.frame_rate))
                 );
             } else {
-                sequence.end_frame = sequence.start_frame + previousFrames;
+                sequence.end_frame = sequence.start_frame + Math.max(1, Math.round(previousDurationSeconds * frameRateValue(sequence.frame_rate)));
             }
             sequence.updated_at = Date.now();
             return deepClone(sequence);
@@ -2682,13 +2703,14 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         return normalizePhysicalCameraState({
             ...fallback,
             projection: camera.projection,
+            reference_aspect: aspect,
             position: camera.position,
             quaternion: camera.quaternion,
             up: camera.up,
             target: camera.target,
             sensor_width_mm: sensorWidth,
             sensor_height_mm: sensorHeight,
-            focal_length_mm: verticalFovToFocalLength(camera.fov, sensorHeight),
+            focal_length_mm: verticalFovToFocalLength(2 * Math.atan(Math.tan(camera.fov * Math.PI / 360) / Math.max(.0001, finite(camera.zoom, 1))) * 180 / Math.PI, sensorHeight),
             focus_distance: camera.focus,
             lens_shift_x: finite(camera.projection_shift_x, 0) / 2,
             lens_shift_y: finite(camera.projection_shift_y, 0) / 2,
@@ -2702,7 +2724,8 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
     function shotFromPhysicalState(stateValue, sequenceValue, name = 'Cinematic Shot') {
         const state = normalizePhysicalCameraState(stateValue);
         const sequence = normalizeSequence(sequenceValue || {});
-        const aspect = sequence.resolution[0] / Math.max(1, sequence.resolution[1]);
+        const aspect = sequence.capture_area === 'frame' && sequence.render_frame?.reference_aspect
+            ? sequence.render_frame.reference_aspect : state.reference_aspect;
         return {
             id: createId('cinematic_shot'),
             name,
@@ -3095,7 +3118,15 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                 #panel_outliner .lightflow-cinematic-camera.selected > :is(.cube_name,.icon,.dynamic-icon){color:var(--lf-cinematic-camera-selected)!important;}
                 .lf-camera-panel{padding:6px 8px;display:flex;flex-direction:column;gap:5px;}
                 .lf-camera-actions{display:flex;flex-wrap:wrap;gap:3px;align-items:center;justify-content:space-between;border-top:1px solid var(--color-border);padding-top:5px;}.lf-camera-panel>*{min-width:0;}.lf-camera-panel button{background:transparent;box-shadow:none;border:0;border-radius:8px;padding:3px;min-width:28px;height:28px;}
-                .lf-camera-footer{display:flex;gap:6px;align-items:center;}.lf-camera-footer .lf-camera-monitor-toggle{flex:1;min-width:0;display:flex;align-items:center;justify-content:center;gap:6px;height:30px;} .lf-camera-monitor-toggle[aria-pressed=true]{color:var(--color-accent);}.lf-camera-footer .lf-camera-settings{flex:none;width:30px;height:30px;padding:3px;background:var(--color-button);border-radius:8px;}
+                .lf-camera-footer{display:none;}
+                #panel_lightflow_cinematic_camera .lf-camera-name-row{display:flex!important;align-items:center;gap:6px;}
+                #panel_lightflow_cinematic_camera .lf-camera-name-row>.bar_display{flex:1;min-width:0;}
+                #panel_lightflow_cinematic_camera .lf-camera-name-row>.lf-camera-settings{display:grid;place-items:center;flex:0 0 28px;width:28px;min-width:28px;height:28px;padding:4px;border:0;border-radius:8px;background:var(--color-button);color:var(--color-text);}
+                #panel_lightflow_cinematic_camera .lf-camera-name-row>.lf-camera-settings>span{display:none;}
+                #panel_lightflow_cinematic_camera .lf-camera-name-row>.lf-camera-settings>.material-icons{font-size:18px;line-height:18px;}
+                #panel_lightflow_cinematic_camera>.form .dialog_bar{margin-block:4px;}
+                #panel_lightflow_cinematic_camera>.form .form_bar:not(.form_bar_camera_name){display:none!important;}
+                #panel_lightflow_cinematic_camera .lf-camera-panel{display:none;}
                 .lf-camera-primary{display:flex;gap:6px;}.lf-camera-primary button{flex:1;min-width:0;height:auto;min-height:30px;white-space:normal;line-height:1.2;display:flex;gap:5px;align-items:center;justify-content:center;background:var(--color-button);}
                 .lf-camera-actions .lf-camera-divider{height:15px;border-left:1px solid var(--color-border);margin:0 3px;}.lf-camera-actions .lf-camera-settings{margin-left:auto;}
                 .lf-camera-section-label{font-size:11px;color:var(--color-subtle_text);margin:3px 0 0;}
@@ -3115,7 +3146,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         let cameraEdit=null;
         const beginCameraEdit=()=>{
             if(cameraEdit||activeRenderJob)return;
-            const element=getSelectedCameraElement(),doc=readDocumentView(),sequence=resolveCameraSequence(doc,element?.cinematic_camera_id);
+            const element=(getCameraElementById(cinematicCameraView?.cameraId)||getSelectedCameraElement()),doc=readDocumentView(),sequence=resolveCameraSequence(doc,element?.cinematic_camera_id);
             if(!element||!sequence)return;
             pauseCinematicPlayback();
             cameraEdit={cameraId:element.cinematic_camera_id,sequenceId:sequence.id,frame:currentCinematicFrame(sequence),before:JSON.stringify(doc)};
@@ -3124,30 +3155,30 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         cinematicCameraFormFinish=cancel=>{
             if(!cameraEdit)return;
             const changed=cameraEdit.before!==JSON.stringify(readDocumentView());cameraEdit=null;
-            if(cancel||!changed)Undo.cancelEdit(true);else Undo.finishEdit(cinematicUI('Edit camera lens','Editar lente de cámara'),{[CINEMATIC_UNDO_ASPECT]:true});
+            if(cancel||!changed)Undo.cancelEdit(true);else Undo.finishEdit(cinematicUI("edit_camera_lens"),{[CINEMATIC_UNDO_ASPECT]:true});
         };
         const orthographic=()=>{
-            const element=getSelectedCameraElement(),doc=readDocumentView(),sequence=resolveCameraSequence(doc,element?.cinematic_camera_id),camera=doc.cameras.find(item=>item.id===element?.cinematic_camera_id);
+            const element=(getCameraElementById(cinematicCameraView?.cameraId)||getSelectedCameraElement()),doc=readDocumentView(),sequence=resolveCameraSequence(doc,element?.cinematic_camera_id),camera=doc.cameras.find(item=>item.id===element?.cinematic_camera_id);
             return camera&&sequence&&sampleCamera(camera,currentCinematicFrame(sequence)).projection==='orthographic';
         };
-        const cameraField=(options,reset)=>cinematicSlider({...options,onBefore:beginCameraEdit,onAfter:()=>cinematicCameraFormFinish(false),compact:false,full_track:false,density:'compact',color:'var(--lf-cinematic-camera)'},reset);
+        const cameraField=(options,reset)=>cinematicSlider({...options,onBefore:beginCameraEdit,onAfter:()=>cinematicCameraFormFinish(false),onCancel:()=>cinematicCameraFormFinish(true),compact:false,full_track:true,color:'var(--lf-cinematic-camera)'},reset);
         cinematicCameraPanel = new Panel('lightflow_cinematic_camera',{
-            name:cinematicUI('Camera','Cámara'),icon:'videocam',growable:false,resizable:false,
+            name:cinematicUI("camera"),icon:'videocam',growable:false,resizable:false,
             insert_before:'outliner',
             condition:()=>!!getSelectedCameraElement()&&['edit','animate','render'].includes(Project?.mode),
-            default_position:{slot:'right_bar',height:160,sidebar_index:1,folded:false},
+            default_position:{slot:'right_bar',height:88,sidebar_index:1,folded:false},
             form:(window.LightManagerUI?.prepareForm || (form => form))({
                 camera_name:hasLightflowFormType('bar_display')?{type:'bar_display',value:'',icon:'videocam',expand:true,color:'var(--lf-cinematic-camera)'}:{type:'info',text:''},
-                focal_length_mm:cameraField({label:cinematicUI('Lens (mm)','Lente (mm)'),icon:'camera',value:50,min:8,max:200,allow_higher:true,step:.1,condition:()=>!orthographic()},50),
-                ortho_world_height:cameraField({label:cinematicUI('Frame height','Altura de encuadre'),icon:'height',value:16,min:.001,max:64,allow_higher:true,step:.1,condition:orthographic},16),
-                focus_distance:cameraField({label:cinematicUI('Focus','Foco'),description:cinematicUI('Focus distance in scene units','Distancia de foco en unidades de escena'),icon:'center_focus_weak',value:10,min:.001,max:100,allow_higher:true,step:.1},10)
+                focal_length_mm:cameraField({label:cinematicUI("lens_mm"),icon:'camera',value:50,min:8,max:200,allow_higher:true,step:.1,condition:()=>!orthographic()},50),
+                ortho_world_height:cameraField({label:cinematicUI("frame_height"),icon:'height',value:16,min:.001,max:64,allow_higher:true,step:.1,condition:orthographic},16),
+                focus_distance:cameraField({label:cinematicUI("focus_guide"),description:cinematicUI("guide_distance_in_scene_units_does_not_add_depth_of_field_blur"),icon:'center_focus_weak',value:10,min:.001,max:100,allow_higher:true,step:.1},10)
             }),
             component:{
                 data(){return {name:'',lens:50,focus:10,ortho:false,path:true,frame:false,busy:false,keyCount:0,animating:false,looking:false,monitorVisible:true};},
                 methods:{
                     sync(){
                         if(cameraEdit||cinematicCameraPanel?.form?.node?.contains(window.document.activeElement))return;
-                        const element=getSelectedCameraElement(),doc=readDocumentView(),seq=resolveCameraSequence(doc,element?.cinematic_camera_id),camera=doc.cameras.find(item=>item.id===element?.cinematic_camera_id);
+                        const element=(getCameraElementById(cinematicCameraView?.cameraId)||getSelectedCameraElement()),doc=readDocumentView(),seq=resolveCameraSequence(doc,element?.cinematic_camera_id),camera=doc.cameras.find(item=>item.id===element?.cinematic_camera_id);
                         if(!camera||!seq)return;const state=sampleCamera(camera,currentCinematicFrame(seq));
                         this.animating=Project.mode==='animate';this.name=camera.name;this.ortho=state.projection==='orthographic';this.lens=this.ortho?state.ortho_world_height:state.focal_length_mm;this.focus=state.focus_distance;this.path=cinematicCameraPathVisible;this.busy=!!activeRenderJob;this.keyCount=camera.keyframes.length;
                         this.frame=window.StudioRender?.frameOwner==='lightflow_cinematic';this.looking=cinematicCameraView?.cameraId===camera.id;this.monitorVisible=cinematicCameraMonitorEnabled;
@@ -3160,38 +3191,36 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                             form.updateValues({cause:'update_value'});
                         }
                     },
-                    settings(){if(!activeRenderJob)openPhysicalCameraDialog(getSelectedCameraElement()?.cinematic_camera_id);},
+                    settings(){if(!activeRenderJob)openPhysicalCameraDialog((getCameraElementById(cinematicCameraView?.cameraId)||getSelectedCameraElement())?.cinematic_camera_id);},
                     view(){if(!activeRenderJob)viewThroughCameraAction?.trigger();},
                     capture(){if(!activeRenderJob)updateCameraFromViewAction?.trigger();},
                     recordFrame(){if(!activeRenderJob)cinematicRecordFrameAction?.trigger();},
-                    record(){const el=getSelectedCameraElement(),seq=resolveCameraSequence(readDocumentView(),el?.cinematic_camera_id);if(seq&&!activeRenderJob)renderConfiguredSequence(seq.id).then(reportRenderResult).catch(showCinematicError);},
-                    more(event){new Menu([{name:cinematicUI('Camera settings','Ajustes de cámara'),icon:'tune',click:()=>this.settings()},{name:cinematicUI('Animate in Blockbench','Animar en Blockbench'),icon:'movie',click:()=>this.animate()},{name:cinematicUI('Recording frame','Encuadre de grabación'),icon:'crop_free',click:()=>this.recordFrame()}]).open(event);},
+                    record(){const el=(getCameraElementById(cinematicCameraView?.cameraId)||getSelectedCameraElement()),seq=resolveCameraSequence(readDocumentView(),el?.cinematic_camera_id);if(seq&&!activeRenderJob)renderConfiguredSequence(seq.id).then(reportRenderResult).catch(showCinematicError);},
+                    more(event){new Menu([{name:cinematicUI("camera_settings"),icon:'tune',click:()=>this.settings()},{name:cinematicUI("animate_in_blockbench"),icon:'movie',click:()=>this.animate()},{name:cinematicUI("recording_frame"),icon:'crop_free',click:()=>this.recordFrame()}]).open(event);},
                     key(){
-                        if(activeRenderJob)return;const el=getSelectedCameraElement();if(!el)return;
+                        if(activeRenderJob)return;const el=(getCameraElementById(cinematicCameraView?.cameraId)||getSelectedCameraElement());if(!el)return;
                         keyCameraPose(el.cinematic_camera_id,resolveCameraSequence(readDocumentView(),el.cinematic_camera_id)?.id);
                     },
-                    keys(){if(activeRenderJob)return;const el=getSelectedCameraElement();Modes.options.animate.select();if(el&&Animation.selected&&!cinematicSequencePreview)Animation.selected.getBoneAnimator(el).select();else showActiveCameraTimelineTrack({select:true});},
+                    keys(){if(activeRenderJob)return;const el=(getCameraElementById(cinematicCameraView?.cameraId)||getSelectedCameraElement());Modes.options.animate.select();if(el&&Animation.selected&&!cinematicSequencePreview)Animation.selected.getBoneAnimator(el).select();else showActiveCameraTimelineTrack({select:true});},
                     trail(){toggleCinematicCameraPath();this.path=cinematicCameraPathVisible;},
                     fly(){startCinematicFly();},
                     monitor(){toggleCinematicCameraMonitor();},
                     animate(){
                         if(activeRenderJob)return;setCinematicSequencePreview(false);
-                        if(!Animation.selected){const camera=getSelectedCameraElement();const animation=new Animation({name:(camera?.name||'Camera')+' · '+cinematicUI('motion','movimiento'),length:sequenceDurationSeconds(getSequence(readDocumentView()))});Undo.initEdit({animations:[animation]});animation.add();Undo.finishEdit('Create camera animation');animation.select();}
-                        Modes.options.animate.select();const el=getSelectedCameraElement()||getCameraElementById(readDocumentView().active_camera_id);el?.select();
+                        if(!Animation.selected){const camera=(getCameraElementById(cinematicCameraView?.cameraId)||getSelectedCameraElement());const animation=new Animation({name:(camera?.name||'Camera')+' · '+cinematicUI("motion"),length:sequenceDurationSeconds(getSequence(readDocumentView()))});Undo.initEdit({animations:[animation]});animation.add();Undo.finishEdit('Create camera animation');animation.select();}
+                        Modes.options.animate.select();const el=(getCameraElementById(cinematicCameraView?.cameraId)||getSelectedCameraElement())||getCameraElementById(readDocumentView().active_camera_id);el?.select();
                     }
                 },
                 template:`<div class="lf-camera-panel">
                     <div class="lf-camera-footer">
-                        <button :disabled="busy" class="lf-camera-monitor-toggle" @click="monitor" :aria-pressed="monitorVisible" title="${cinematicUI('Show / hide camera monitor','Mostrar / ocultar monitor de cámara')}" aria-label="${cinematicUI('Show / hide camera monitor','Mostrar / ocultar monitor de cámara')}"><i class="material-icons" aria-hidden="true">picture_in_picture_alt</i>${cinematicUI('Monitor','Monitor')}</button>
-                        <button :disabled="busy" class="lf-camera-settings" @click="view" :aria-pressed="looking" title="${cinematicUI('View through camera','Ver desde la cámara')}" aria-label="${cinematicUI('View through camera','Ver desde la cámara')}"><i class="material-icons" aria-hidden="true">visibility</i></button>
-                        <button :disabled="busy" class="lf-camera-settings" @click="more($event)" title="${cinematicUI('Camera actions','Acciones de cámara')}" aria-label="${cinematicUI('Camera actions','Acciones de cámara')}" aria-haspopup="menu"><i class="material-icons" aria-hidden="true">more_horiz</i></button>
+                        <button :disabled="busy" class="lf-camera-settings" @click="settings" title="${cinematicUI("camera_settings")}" aria-label="${cinematicUI("camera_settings")}"><i class="material-icons" aria-hidden="true">tune</i><span>${cinematicUI("camera_settings")}</span></button>
                     </div>
                 </div>`
             }
         });
         cinematicCameraPanel.form.on('input',({result,changed_keys})=>{
             if(activeRenderJob)return;
-            const doc=readDocumentView(),cameraId=cameraEdit?.cameraId||getSelectedCameraElement()?.cinematic_camera_id;
+            const doc=readDocumentView(),cameraId=cameraEdit?.cameraId||(getCameraElementById(cinematicCameraView?.cameraId)||getSelectedCameraElement())?.cinematic_camera_id;
             const camera=doc.cameras.find(item=>item.id===cameraId),sequence=resolveCameraSequence(doc,cameraId);
             if(!camera||!sequence)return;
             const frame=cameraEdit?.frame??currentCinematicFrame(sequence),state=sampleCamera(camera,frame);
@@ -3205,6 +3234,10 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
             if(!grouped)cinematicCameraFormFinish(false);
         });
         cinematicCameraPanel.updateSlot();
+        const nameRow=cinematicCameraPanel.form.form_data.camera_name.bar;
+        const settings=cinematicCameraPanel.inside_vue?.$el?.querySelector('.lf-camera-settings');
+        if(settings&&nameRow){nameRow.classList.add('lf-camera-name-row');nameRow.append(settings);}
+
         cinematicPathPointerDown=event=>{
             if(event.button!==0||activeRenderJob||!cinematicCameraPath?.visible||!cinematicCameraPath.keyPoints)return;
             const preview=window.Preview?.all?.find(item=>item.canvas===event.target);if(!preview)return;
@@ -3213,6 +3246,15 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
             if(nearest){pauseCinematicPlayback();Timeline.setTime(nearest.time);Animator.preview();event.preventDefault();event.stopImmediatePropagation();}
         };
         window.document.addEventListener('pointerdown',cinematicPathPointerDown,true);
+    }
+
+    function getViewportCameraControl(key) {
+        const element=getCameraElementById(cinematicCameraView?.cameraId)||getSelectedCameraElement();
+        if(!element||activeRenderJob)return null;
+        const doc=readDocumentView(),sequence=resolveCameraSequence(doc,element.cinematic_camera_id),camera=getCamera(doc,element.cinematic_camera_id,sequence);
+        if(!camera||!sequence)return null;
+        const projection=sampleCamera(camera,currentCinematicFrame(sequence)).projection;
+        return cinematicCameraPanel?.form?.form_data?.[key==='lens'?(projection==='orthographic'?'ortho_world_height':'focal_length_mm'):key];
     }
 
     function toggleCinematicCameraMonitor() {
@@ -3227,6 +3269,14 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         dispatchCinematicEvent('lightflow_cinematic_ui_changed',{});
     }
 
+    function sequenceLibraryMenuItems(shot) {
+        return [{name:cinematicUI("edit_sequence"),icon:'tune',click:()=>{cinematicLibraryVue?.select(shot.id);openManagerDialog();}},
+                        {name:cinematicUI("show_camera_track"),icon:'videocam',click:()=>{cinematicLibraryVue?.select(shot.id);showActiveCameraTimelineTrack({select:true});}},
+                        '_',
+                        {name:cinematicUI("duplicate_sequence"),icon:'content_copy',click:()=>{const source=getSequence(readDocument(),shot.id);const copy=createSequence({...deepClone(source),id:createId('sequence'),name:source.name+' · '+cinematicUI("copy")});cinematicLibraryVue?.select(copy.id);}},
+                        '_',{name:cinematicUI("delete_sequence"),icon:'delete',condition:()=>readDocument().sequences.length>1,click:()=>Blockbench.showMessageBox({title:cinematicUI("delete_sequence"),message:shot.name,buttons:['dialog.confirm','dialog.cancel'],confirm:0,cancel:1},result=>{if(result===0){deleteSequence(shot.id);cinematicLibraryVue?.sync();}})}];
+    }
+
     function openViewportSequenceMenu(event) {
         if(!getActiveProject()||Project.mode!=='animate'||activeRenderJob)return;
         const doc=readDocumentView(),active=getSequence(doc),anchor=event?.currentTarget||event;
@@ -3237,11 +3287,11 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         new Menu([
             ...doc.sequences.map(sequence=>({name:sequence.name,icon:sequence.id===active?.id?'radio_button_checked':'theaters',click:()=>select(sequence.id)})),
             '_',
-            {name:cinematicUI('Create sequence','Crear secuencia'),icon:'add',click:()=>{if(cinematicFlySession)finishCinematicFly(false);cinematicLibraryVue?.create?.();}},
-            {name:cinematicUI('Add animation or sequence','Añadir animación o secuencia'),icon:'playlist_add',click:()=>{setCinematicSequencePreview(true);sequenceAddClipMenu(0,anchor);}},
-            {name:cinematicUI('Sequence actions','Acciones de secuencia'),icon:'more_horiz',condition:()=>!!active,click:()=>cinematicLibraryVue?.menu?.(active,anchor)},
+            {name:cinematicUI("create_sequence"),icon:'add',click:()=>{if(cinematicFlySession)finishCinematicFly(false);cinematicLibraryVue?.create?.();}},
+            {name:cinematicUI("add_animation_or_sequence"),icon:'playlist_add',click:()=>{setCinematicSequencePreview(true);sequenceAddClipMenu(0,anchor);}},
+            {name:cinematicUI("sequence_actions"),icon:'more_horiz',condition:()=>!!active,children:()=>sequenceLibraryMenuItems(active)},
             '_',
-            {name:cinematicUI('Back to animation','Volver a animación'),icon:'movie',condition:()=>cinematicSequencePreview,click:()=>setCinematicSequencePreview(false)}
+            {name:cinematicUI("back_to_animation"),icon:'movie',condition:()=>cinematicSequencePreview,click:()=>setCinematicSequencePreview(false)}
         ]).open(anchor);
     }
 
@@ -3266,11 +3316,11 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
             ...(doc.cameras.length ? ['_'] : []),
             cameraAction,
             ...(selected ? [
-                {name: cinematicUI('Camera panel', 'Panel de cámara'), icon: 'tune', click: () => showPanel(selected.cinematic_camera_id)},
+                {name: cinematicUI("camera_panel"), icon: 'tune', click: () => showPanel(selected.cinematic_camera_id)},
                 viewThroughCameraAction,
                 updateCameraFromViewAction, keyframeAction,
-                {name: cinematicUI('Show camera keyframes', 'Mostrar keyframes de cámara'), icon: 'timeline', click: () => cinematicCameraPanel?.inside_vue?.keys?.()},
-                {name: cinematicUI('Camera motion path', 'Trayectoria de cámara'), icon: cinematicCameraPathVisible ? 'check_box' : 'check_box_outline_blank', click: () => cinematicCameraPanel?.inside_vue?.trail?.()},
+                {name: cinematicUI("show_camera_keyframes"), icon: 'timeline', click: () => cinematicCameraPanel?.inside_vue?.keys?.()},
+                {name: cinematicUI("camera_motion_path"), icon: cinematicCameraPathVisible ? 'check_box' : 'check_box_outline_blank', click: () => cinematicCameraPanel?.inside_vue?.trail?.()},
                 '_', cameraSettingsAction
             ] : [])
         ]).open(event?.currentTarget || event);
@@ -3278,7 +3328,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
 
     function syncCinematicCameraPath() {
         const element=getSelectedCameraElement(),doc=readDocumentView(),camera=doc.cameras.find(item=>item.id===element?.cinematic_camera_id),sequence=resolveCameraSequence(doc,camera?.id);
-        const visible=!!camera&&!!sequence&&cinematicCameraPathVisible&&Canvas.show_gizmos!==false&&!activeRenderJob;
+        const visible=Project?.mode==='animate'&&!!camera&&!!sequence&&cinematicCameraPathVisible&&Canvas.show_gizmos!==false&&!activeRenderJob;
         if(cinematicCameraPath)cinematicCameraPath.visible=visible;
         if(!visible)return;
         const color=getComputedStyle(window.document.body).getPropertyValue('--lf-cinematic-camera').trim()||'#E8A8B5';
@@ -3352,11 +3402,11 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         const finish=cancel=>{
             const drag=cameraHandleDrag;if(!drag)return;cameraHandleDrag=null;
             try{drag.canvas?.releasePointerCapture?.(drag.id);}catch(_){}
-            if(cancel)Undo.cancelEdit?.(true);else Undo.finishEdit(cinematicUI('Adjust camera lens / focus','Ajustar lente / foco de cámara'),{[CINEMATIC_UNDO_ASPECT]:true});
+            if(cancel)Undo.cancelEdit?.(true);else Undo.finishEdit(cinematicUI("adjust_camera_lens_focus"),{[CINEMATIC_UNDO_ASPECT]:true});
             syncCameraElementsFromDocument();Blockbench.setStatusBarText?.('');
         };
         cameraLensTool=new Tool('lightflow_cinematic_lens_tool',{
-            name:cinematicUI('Camera lens & focus','Lente y foco de cámara'),description:cinematicUI('Drag the gold diamond for framing or the mint cross for focus. Shift makes fine adjustments.','Arrastra el rombo dorado para encuadrar o la cruz verde para enfocar. Shift permite ajustes finos.'),
+            name:cinematicUI("camera_lens_focus"),description:cinematicUI("drag_the_gold_diamond_for_framing_or_the_mint_cross_for_focus_sh"),
             icon:'camera',modes:['edit','animate','render'],selectElements:false,transformerMode:'hidden',
             condition:()=>!!getSelectedCameraElement()&&!activeRenderJob,
             onSelect:syncCameraGizmoVisibility,onUnselect(){finish(true);for(const element of cameraElementType?.all||[])if(element.mesh?.cinematicHandles)element.mesh.cinematicHandles.group.visible=false;}
@@ -3396,7 +3446,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
             }
             addOrUpdateCameraKeyframe(drag.cameraId,drag.frame,{sequence_id:drag.sequenceId,state,undo:false});
             syncCameraElementsFromDocument();
-            Blockbench.setStatusBarText?.(drag.kind==='lens'?cinematicUI('Lens','Lente')+': '+(state.projection==='orthographic'?state.ortho_world_height.toFixed(2):state.focal_length_mm.toFixed(1)+' mm'):cinematicUI('Focus','Foco')+': '+state.focus_distance.toFixed(2));
+            Blockbench.setStatusBarText?.(drag.kind==='lens'?cinematicUI("lens")+': '+(state.projection==='orthographic'?state.ortho_world_height.toFixed(2):state.focal_length_mm.toFixed(1)+' mm'):cinematicUI("focus")+': '+state.focus_distance.toFixed(2));
             event.preventDefault();event.stopImmediatePropagation();
         };
         cameraHandlePointerUp=event=>{if(event.type==='keydown'){if(event.key==='Escape')finish(true);return;}if(cameraHandleDrag&&event.pointerId===cameraHandleDrag.id){finish(event.type==='pointercancel');event.stopImmediatePropagation();}};
@@ -3475,8 +3525,651 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         });
     }
 
-    function cinematicUI(en, es) {
+    function addTranslations() {
+        if (typeof Language === 'undefined' || typeof Language.addTranslations !== 'function') return;
+        Language.addTranslations('en', {
+            'lightflow_cinematic.montage.title': 'Montage',
+            'lightflow_cinematic.montage.shots': 'Shots',
+            'lightflow_cinematic.montage.shot': 'Shot',
+            'lightflow_cinematic.montage.in': 'In (inclusive)',
+            'lightflow_cinematic.montage.out': 'Out (exclusive)',
+            'lightflow_cinematic.montage.add': 'Add shot',
+            'lightflow_cinematic.montage.duplicate': 'Duplicate',
+            'lightflow_cinematic.montage.earlier': 'Earlier',
+            'lightflow_cinematic.montage.later': 'Later',
+            'lightflow_cinematic.montage.remove': 'Remove',
+            'lightflow_cinematic.montage.render': 'Render montage',
+
+            'lightflow_cinematic.field.source_animation': 'Source animation',
+            'lightflow_cinematic.option.current_animation_mix': 'Current animation mix',
+            'lightflow_cinematic.field.video_quality': 'Video quality',
+            'lightflow_cinematic.quality.low': 'Draft',
+            'lightflow_cinematic.quality.medium': 'Standard',
+            'lightflow_cinematic.quality.high': 'High',
+            'lightflow_cinematic.quality.very_high': 'Very High',
+            'lightflow_cinematic.quality.custom': 'Custom',
+
+            'lightflow_cinematic.workflow.hint': 'Set up the shot, choose a camera, then render from Output.',
+            'lightflow_cinematic.plugin.title': 'Lightflow Cinematic',
+            'lightflow_cinematic.action.open': 'Lightflow Cinematic...',
+            'lightflow_cinematic.action.open.desc': 'Manage deterministic sequences and cameras.',
+            'lightflow_cinematic.action.camera': 'Create Camera',
+            'lightflow_cinematic.action.keyframe': 'Set Camera Keyframe',
+            'lightflow_cinematic.action.preview': 'Preview Frame',
+            'lightflow_cinematic.action.play': 'Play Preview',
+            'lightflow_cinematic.action.pause': 'Pause Preview',
+            'lightflow_cinematic.action.view_camera': 'Look Through Camera',
+            'lightflow_cinematic.action.update_camera': 'Match Camera to View',
+            'lightflow_cinematic.action.camera_settings': 'Camera Settings...',
+            'lightflow_cinematic.action.delete_camera': 'Delete Camera',
+            'lightflow_cinematic.action.render_sequence': 'Render Sequence...',
+            'lightflow_cinematic.action.cancel_render': 'Cancel Render',
+            'lightflow_cinematic.group.sequence': 'Sequence',
+            'lightflow_cinematic.group.camera': 'Camera',
+            'lightflow_cinematic.group.timing': 'Timing & Playback',
+            'lightflow_cinematic.group.capture': 'Capture Region',
+            'lightflow_cinematic.group.output': 'Output',
+            'lightflow_cinematic.group.encoding': 'Advanced Encoding',
+            'lightflow_cinematic.field.sequence': 'Active Sequence',
+            'lightflow_cinematic.field.sequence_name': 'Name',
+            'lightflow_cinematic.field.frame_rate': 'Frame Rate',
+            'lightflow_cinematic.field.frame_range': 'In / Out',
+            'lightflow_cinematic.field.start_frame': 'Start Frame',
+            'lightflow_cinematic.field.duration_mode': 'Duration Mode',
+            'lightflow_cinematic.field.duration_frames': 'Duration (Frames)',
+            'lightflow_cinematic.field.duration_seconds': 'Duration (Seconds)',
+            'lightflow_cinematic.field.source_start': 'Animation Start (s)',
+            'lightflow_cinematic.field.playback_rate': 'Playback Speed',
+            'lightflow_cinematic.field.loop_preview': 'Loop Preview',
+            'lightflow_cinematic.field.preview_camera': 'Follow Camera When Scrubbing',
+            'lightflow_cinematic.field.capture_area': 'Capture Area',
+            'lightflow_cinematic.field.capture_full': 'Full Viewport',
+            'lightflow_cinematic.field.capture_frame': 'Studio Render Frame',
+            'lightflow_cinematic.field.match_frame_ratio': 'Match Frame Ratio',
+            'lightflow_cinematic.option.duration.frames': 'Frames',
+            'lightflow_cinematic.option.duration.seconds': 'Seconds',
+            'lightflow_cinematic.option.duration.active_animation': 'Active Animation',
+            'lightflow_cinematic.option.no_camera': 'No Camera',
+            'lightflow_cinematic.toolbar.time': 'Current Frame and Duration',
+            'lightflow_cinematic.field.camera': 'Camera',
+            'lightflow_cinematic.field.resolution': 'Resolution',
+            'lightflow_cinematic.field.samples': 'Studio SSAA Samples',
+            'lightflow_cinematic.field.codec': 'Codec',
+            'lightflow_cinematic.field.encoder_acceleration': 'Encoder acceleration',
+            'lightflow_cinematic.field.background': 'Background',
+            'lightflow_cinematic.field.video_bitrate': 'Video bitrate (bit/s)',
+            'lightflow_cinematic.field.bitrate_mode': 'Bitrate mode',
+            'lightflow_cinematic.field.keyframe_interval': 'Keyframe interval (seconds)',
+            'lightflow_cinematic.field.audio': 'Audio',
+            'lightflow_cinematic.field.audio_codec': 'Audio codec',
+            'lightflow_cinematic.field.audio_quality': 'Audio quality',
+            'lightflow_cinematic.field.audio_bitrate': 'Audio bitrate (bit/s)',
+            'lightflow_cinematic.field.audio_sample_rate': 'Audio sample rate',
+            'lightflow_cinematic.field.audio_channels': 'Audio channels',
+            'lightflow_cinematic.button.new_sequence': 'New Sequence',
+            'lightflow_cinematic.button.delete_sequence': 'Delete Sequence',
+            'lightflow_cinematic.button.capture_look': 'Capture Studio Look',
+            'lightflow_cinematic.button.use_active_animation': 'Fit to Active Animation',
+            'lightflow_cinematic.button.start_current': 'Start at Current Time',
+            'lightflow_cinematic.button.jump_start': 'Jump to Start',
+            'lightflow_cinematic.button.play_pause': 'Play / Pause',
+            'lightflow_cinematic.button.edit_region': 'Edit Region in Viewport',
+            'lightflow_cinematic.button.capture_region': 'Capture Current Region',
+            'lightflow_cinematic.button.new_camera': 'Camera from View',
+            'lightflow_cinematic.button.physical_settings': 'Physical Settings',
+            'lightflow_cinematic.button.keyframe': 'Keyframe Current View',
+            'lightflow_cinematic.button.preview': 'Preview Frame',
+            'lightflow_cinematic.button.render_png': 'Render PNG Sequence',
+            'lightflow_cinematic.button.render_output': 'Render Output',
+            'lightflow_cinematic.button.render_preview': 'Render & Preview',
+            'lightflow_cinematic.button.export_png': 'Export PNG Sequence...',
+            'lightflow_cinematic.button.render_export': 'Render / Export',
+            'lightflow_cinematic.button.save_as': 'Save As...',
+            'lightflow_cinematic.button.render_again': 'Render Again',
+            'lightflow_cinematic.button.play_last': 'Play Last Render',
+            'lightflow_cinematic.field.output_format': 'Output Format',
+            'lightflow_cinematic.option.png_sequence': 'PNG image sequence',
+            'lightflow_cinematic.option.integrated_encoder': 'Integrated',
+            'lightflow_cinematic.acceleration.auto': 'Auto',
+            'lightflow_cinematic.acceleration.hardware': 'Prefer hardware',
+            'lightflow_cinematic.acceleration.software': 'Prefer software',
+            'lightflow_cinematic.background.scene': 'Scene',
+            'lightflow_cinematic.background.transparent': 'Transparent',
+            'lightflow_cinematic.bitrate.variable': 'Variable',
+            'lightflow_cinematic.bitrate.constant': 'Constant',
+            'lightflow_cinematic.output.preview_note': 'Render & Preview keeps the finished clip in Blockbench first. Save it wherever you want after reviewing it; saving does not render again.',
+            'lightflow_cinematic.output.png_note': 'PNG sequence exports individual frames. Choose a dedicated folder to keep the images together.',
+            'lightflow_cinematic.output.camera_required': 'This sequence needs a camera before it can render. Create one from the current view or assign one in Camera.',
+            'lightflow_cinematic.output.gif_note': 'GIF uses up to 256 colors and binary transparency.',
+            'lightflow_cinematic.output.download_limit': 'Without direct file saving, downloads are limited to 128 MiB.',
+            'lightflow_cinematic.field.video_backend': 'Video encoder',
+            'lightflow_cinematic.field.ffmpeg_path': 'FFmpeg executable (optional backend)',
+            'lightflow_cinematic.output.backend_note': 'Video formats are checked on your device before rendering. MP4/WebM output is opaque; choose PNG to preserve transparency.',
+            'lightflow_cinematic.status.encoding': 'Encoding video',
+            'lightflow_cinematic.status.preparing': 'Preparing cinematic export',
+            'lightflow_cinematic.status.finalizing': 'Finalizing cinematic export',
+            'lightflow_cinematic.status.rendering_clip': 'Rendering clip',
+            'lightflow_cinematic.button.cancel': 'Cancel Render',
+            'lightflow_cinematic.dialog.delete_sequence': 'Delete sequence "{name}"?',
+            'lightflow_cinematic.dialog.output_directory': 'Choose PNG sequence directory',
+            'lightflow_cinematic.dialog.physical_camera': 'Camera Settings',
+            'lightflow_cinematic.field.projection': 'Projection',
+            'lightflow_cinematic.field.sensor_size': 'Sensor (Width / Height mm)',
+            'lightflow_cinematic.field.focal_length': 'Focal Length (mm)',
+            'lightflow_cinematic.field.aperture': 'Aperture (f-stop)',
+            'lightflow_cinematic.field.focus_distance': 'Focus Distance',
+            'lightflow_cinematic.field.shutter_angle': 'Shutter Angle',
+            'lightflow_cinematic.field.iso': 'ISO',
+            'lightflow_cinematic.field.exposure_compensation': 'Exposure Compensation (EV)',
+            'lightflow_cinematic.field.lens_shift': 'Lens Shift (X / Y)',
+            'lightflow_cinematic.field.anamorphic_squeeze': 'Anamorphic Squeeze',
+            'lightflow_cinematic.field.clipping': 'Clipping (Near / Far)',
+            'lightflow_cinematic.field.blade_count': 'Aperture Blades',
+            'lightflow_cinematic.field.interpolation': 'Interpolation to Next Keyframe',
+            'lightflow_cinematic.info.physical_pending': 'Pose, focal length, lens shift, focus and clipping already reach the render camera. Aperture, shutter, ISO and blades are persisted for the upcoming DOF, motion-blur and physical-exposure passes.',
+            'lightflow_cinematic.message.camera_created': 'Physical camera created',
+            'lightflow_cinematic.message.keyframe_saved': 'Camera keyframe saved at frame {frame}',
+            'lightflow_cinematic.message.sequence_complete': 'Cinematic sequence completed: {frames} frames',
+            'lightflow_cinematic.message.sequence_cancelled': 'Cinematic render cancelled after {frames} frames',
+            'lightflow_cinematic.message.no_render': 'Render a clip first.',
+            'lightflow_cinematic.message.saved': 'Cinematic clip saved.',
+            'lightflow_cinematic.export.clip': 'Cinematic Clip',
+            'lightflow_cinematic.result.title': 'Cinematic Preview',
+            'lightflow_cinematic.result.temporary': 'Preview is temporary. Save it when you want to keep it.',
+            'lightflow_cinematic.result.saved_to': 'Saved to {path}',
+            'lightflow_cinematic.action.reopen_last': 'Reopen Last Recording',
+            'lightflow_cinematic.result.last_render': 'Last render: {summary}',
+            'lightflow_cinematic.progress.clip': 'Rendering clip',
+            'lightflow_cinematic.progress.montage': 'Rendering montage',
+            'lightflow_cinematic.progress.preview_destination': 'This render stays in Blockbench first. Choose where to save it after it finishes.',
+            'lightflow_cinematic.progress.png_destination': 'Frames will be written to the folder you selected.',
+            'lightflow_cinematic.progress.eta': 'about {time} remaining',
+            'lightflow_cinematic.message.temporary': 'Cinematic data is temporary in this format. Save as .bbmodel to keep it.',
+            'lightflow_cinematic.message.no_active_animation': 'Select an animation with a non-zero duration first.',
+            'lightflow_cinematic.message.no_camera': 'Create or assign a camera first.',
+            'lightflow_cinematic.message.region_editing': 'Move or resize the Studio Render frame. Changes are saved to this sequence.',
+            'lightflow_cinematic.undo.create_sequence': 'Create Cinematic Sequence',
+            'lightflow_cinematic.undo.edit_sequence': 'Edit Cinematic Sequence',
+            'lightflow_cinematic.undo.delete_sequence': 'Delete Cinematic Sequence',
+            'lightflow_cinematic.undo.adapt_animation': 'Fit Sequence to Active Animation',
+            'lightflow_cinematic.undo.frame_rate': 'Change Cinematic Frame Rate',
+            'lightflow_cinematic.undo.capture_look': 'Capture Studio Look',
+            'lightflow_cinematic.undo.capture_region': 'Edit Cinematic Capture Region',
+            'lightflow_cinematic.undo.create_camera': 'Create Lightflow Camera',
+            'lightflow_cinematic.undo.delete_camera': 'Delete Lightflow Camera',
+            'lightflow_cinematic.undo.camera_keyframe': 'Edit Lightflow Camera Keyframe',
+            'lightflow_cinematic.undo.delete_camera_keyframe': 'Delete Lightflow Camera Keyframe',
+            'lightflow_cinematic.undo.camera_interpolation': 'Change Camera Keyframe Interpolation',
+            'lightflow_cinematic.undo.camera_settings': 'Edit Camera Settings',
+            'lightflow_cinematic.undo.assign_camera': 'Assign Cinematic Camera',
+            'lightflow_cinematic.timeline.pose': 'Pose',
+            'lightflow_cinematic.timeline.lens': 'Lens / Focus',
+            'lightflow_cinematic.timeline.exposure': 'Exposure',
+            'lightflow_cinematic.unit.frames': 'frames',
+            'lightflow_cinematic.unit.source': 'source',
+            'lightflow_cinematic.status.rendering': 'Rendering cinematic frame'
+        });
+        Language.addTranslations('es', {
+            'lightflow_cinematic.montage.title': 'Montaje',
+            'lightflow_cinematic.montage.shots': 'Planos',
+            'lightflow_cinematic.montage.shot': 'Plano',
+            'lightflow_cinematic.montage.in': 'Entrada (incluida)',
+            'lightflow_cinematic.montage.out': 'Salida (excluida)',
+            'lightflow_cinematic.montage.add': 'Añadir plano',
+            'lightflow_cinematic.montage.duplicate': 'Duplicar',
+            'lightflow_cinematic.montage.earlier': 'Antes',
+            'lightflow_cinematic.montage.later': 'Después',
+            'lightflow_cinematic.montage.remove': 'Quitar',
+            'lightflow_cinematic.montage.render': 'Renderizar montaje',
+
+            'lightflow_cinematic.field.source_animation': 'Animación fuente',
+            'lightflow_cinematic.option.current_animation_mix': 'Mezcla de animaciones actual',
+            'lightflow_cinematic.field.video_quality': 'Calidad de vídeo',
+            'lightflow_cinematic.quality.low': 'Borrador',
+            'lightflow_cinematic.quality.medium': 'Estándar',
+            'lightflow_cinematic.quality.high': 'Alta',
+            'lightflow_cinematic.quality.very_high': 'Muy alta',
+            'lightflow_cinematic.quality.custom': 'Personalizada',
+
+            'lightflow_cinematic.workflow.hint': 'Prepara el plano, elige una cámara y renderiza desde Salida.',
+            'lightflow_cinematic.plugin.title': 'Lightflow Cinematic',
+            'lightflow_cinematic.action.open': 'Lightflow Cinematic...',
+            'lightflow_cinematic.action.open.desc': 'Gestiona secuencias y cámaras.',
+            'lightflow_cinematic.action.camera': 'Crear cámara',
+            'lightflow_cinematic.action.keyframe': 'Guardar clave de cámara',
+            'lightflow_cinematic.action.preview': 'Previsualizar fotograma',
+            'lightflow_cinematic.action.play': 'Reproducir vista previa',
+            'lightflow_cinematic.action.pause': 'Pausar vista previa',
+            'lightflow_cinematic.action.view_camera': 'Mirar por la cámara',
+            'lightflow_cinematic.action.update_camera': 'Ajustar cámara a la vista',
+            'lightflow_cinematic.action.camera_settings': 'Ajustes de cámara...',
+            'lightflow_cinematic.action.delete_camera': 'Eliminar cámara',
+            'lightflow_cinematic.action.render_sequence': 'Renderizar secuencia...',
+            'lightflow_cinematic.action.cancel_render': 'Cancelar render',
+            'lightflow_cinematic.group.sequence': 'Secuencia',
+            'lightflow_cinematic.group.camera': 'Cámara',
+            'lightflow_cinematic.group.timing': 'Tiempo y reproducción',
+            'lightflow_cinematic.group.capture': 'Región de captura',
+            'lightflow_cinematic.group.output': 'Salida',
+            'lightflow_cinematic.group.encoding': 'Codificación avanzada',
+            'lightflow_cinematic.field.sequence': 'Secuencia activa',
+            'lightflow_cinematic.field.sequence_name': 'Nombre',
+            'lightflow_cinematic.field.frame_rate': 'FPS',
+            'lightflow_cinematic.field.frame_range': 'Entrada / Salida',
+            'lightflow_cinematic.field.start_frame': 'Fotograma inicial',
+            'lightflow_cinematic.field.duration_mode': 'Modo de duración',
+            'lightflow_cinematic.field.duration_frames': 'Duración (fotogramas)',
+            'lightflow_cinematic.field.duration_seconds': 'Duración (segundos)',
+            'lightflow_cinematic.field.source_start': 'Inicio de animación (s)',
+            'lightflow_cinematic.field.playback_rate': 'Velocidad de reproducción',
+            'lightflow_cinematic.field.loop_preview': 'Repetir vista previa',
+            'lightflow_cinematic.field.preview_camera': 'Seguir cámara al desplazarse',
+            'lightflow_cinematic.field.capture_area': 'Área de captura',
+            'lightflow_cinematic.field.capture_full': 'Vista completa',
+            'lightflow_cinematic.field.capture_frame': 'Marco de Studio Render',
+            'lightflow_cinematic.field.match_frame_ratio': 'Igualar proporción del marco',
+            'lightflow_cinematic.option.duration.frames': 'Fotogramas',
+            'lightflow_cinematic.option.duration.seconds': 'Segundos',
+            'lightflow_cinematic.option.duration.active_animation': 'Animacion Activa',
+            'lightflow_cinematic.option.no_camera': 'Sin Camara',
+            'lightflow_cinematic.toolbar.time': 'Fotograma Actual y Duracion',
+            'lightflow_cinematic.field.camera': 'Camara',
+            'lightflow_cinematic.field.resolution': 'Resolucion',
+            'lightflow_cinematic.field.samples': 'Muestras SSAA',
+            'lightflow_cinematic.field.codec': 'Códec',
+            'lightflow_cinematic.field.encoder_acceleration': 'Aceleración',
+            'lightflow_cinematic.field.background': 'Fondo',
+            'lightflow_cinematic.field.video_bitrate': 'Bitrate de vídeo (bit/s)',
+            'lightflow_cinematic.field.bitrate_mode': 'Modo de bitrate',
+            'lightflow_cinematic.field.keyframe_interval': 'Intervalo de claves (s)',
+            'lightflow_cinematic.field.audio': 'Audio',
+            'lightflow_cinematic.field.audio_codec': 'Códec de audio',
+            'lightflow_cinematic.field.audio_quality': 'Calidad de audio',
+            'lightflow_cinematic.field.audio_bitrate': 'Bitrate de audio (bit/s)',
+            'lightflow_cinematic.field.audio_sample_rate': 'Muestreo de audio',
+            'lightflow_cinematic.field.audio_channels': 'Canales de audio',
+            'lightflow_cinematic.button.new_sequence': 'Nueva secuencia',
+            'lightflow_cinematic.button.delete_sequence': 'Eliminar secuencia',
+            'lightflow_cinematic.button.capture_look': 'Capturar estilo',
+            'lightflow_cinematic.button.use_active_animation': 'Ajustar a animación activa',
+            'lightflow_cinematic.button.start_current': 'Iniciar aquí',
+            'lightflow_cinematic.button.jump_start': 'Ir al inicio',
+            'lightflow_cinematic.button.play_pause': 'Reproducir / Pausar',
+            'lightflow_cinematic.button.edit_region': 'Editar región en la vista',
+            'lightflow_cinematic.button.capture_region': 'Capturar región',
+            'lightflow_cinematic.button.new_camera': 'Cámara desde la vista',
+            'lightflow_cinematic.button.physical_settings': 'Ajustes físicos',
+            'lightflow_cinematic.button.keyframe': 'Guardar clave de cámara',
+            'lightflow_cinematic.button.preview': 'Previsualizar fotograma',
+            'lightflow_cinematic.button.render_png': 'Renderizar PNG',
+            'lightflow_cinematic.button.render_output': 'Renderizar salida',
+            'lightflow_cinematic.button.render_preview': 'Renderizar y previsualizar',
+            'lightflow_cinematic.button.export_png': 'Exportar secuencia PNG...',
+            'lightflow_cinematic.button.render_export': 'Renderizar / exportar',
+            'lightflow_cinematic.button.save_as': 'Guardar como...',
+            'lightflow_cinematic.button.render_again': 'Renderizar de nuevo',
+            'lightflow_cinematic.button.play_last': 'Reproducir último render',
+            'lightflow_cinematic.field.output_format': 'Formato de salida',
+            'lightflow_cinematic.option.png_sequence': 'Secuencia PNG',
+            'lightflow_cinematic.option.integrated_encoder': 'Integrado',
+            'lightflow_cinematic.acceleration.auto': 'Automática',
+            'lightflow_cinematic.acceleration.hardware': 'Preferir hardware',
+            'lightflow_cinematic.acceleration.software': 'Preferir software',
+            'lightflow_cinematic.background.scene': 'Escena',
+            'lightflow_cinematic.background.transparent': 'Transparente',
+            'lightflow_cinematic.bitrate.variable': 'Variable',
+            'lightflow_cinematic.bitrate.constant': 'Constante',
+            'lightflow_cinematic.output.preview_note': 'Revisa el clip en Blockbench y después guárdalo. Guardarlo no requiere otro render.',
+            'lightflow_cinematic.output.png_note': 'Exporta cada fotograma como PNG en una carpeta.',
+            'lightflow_cinematic.output.camera_required': 'Asigna una cámara o créala desde la vista actual.',
+            'lightflow_cinematic.output.gif_note': 'GIF usa hasta 256 colores y transparencia binaria.',
+            'lightflow_cinematic.output.download_limit': 'Sin guardado directo, las descargas se limitan a 128 MiB.',
+            'lightflow_cinematic.field.video_backend': 'Codificador de vídeo',
+            'lightflow_cinematic.field.ffmpeg_path': 'Ruta de FFmpeg (opcional)',
+            'lightflow_cinematic.output.backend_note': 'Los formatos de vídeo se comprueban en tu dispositivo antes de renderizar. MP4/WebM son opacos; elige PNG para conservar transparencia.',
+            'lightflow_cinematic.status.encoding': 'Codificando vídeo',
+            'lightflow_cinematic.status.preparing': 'Preparando exportación',
+            'lightflow_cinematic.status.finalizing': 'Finalizando exportación',
+            'lightflow_cinematic.status.rendering_clip': 'Renderizando clip',
+            'lightflow_cinematic.button.cancel': 'Cancelar render',
+            'lightflow_cinematic.dialog.delete_sequence': 'Eliminar la secuencia "{name}"?',
+            'lightflow_cinematic.dialog.output_directory': 'Carpeta de secuencia PNG',
+            'lightflow_cinematic.dialog.physical_camera': 'Ajustes de cámara',
+            'lightflow_cinematic.field.projection': 'Proyección',
+            'lightflow_cinematic.field.sensor_size': 'Sensor (ancho / alto, mm)',
+            'lightflow_cinematic.field.focal_length': 'Distancia focal (mm)',
+            'lightflow_cinematic.field.aperture': 'Apertura (f-stop)',
+            'lightflow_cinematic.field.focus_distance': 'Distancia de enfoque',
+            'lightflow_cinematic.field.shutter_angle': 'Ángulo de obturador',
+            'lightflow_cinematic.field.iso': 'ISO',
+            'lightflow_cinematic.field.exposure_compensation': 'Compensación (EV)',
+            'lightflow_cinematic.field.lens_shift': 'Desplazamiento de lente (X / Y)',
+            'lightflow_cinematic.field.anamorphic_squeeze': 'Compresión anamórfica',
+            'lightflow_cinematic.field.clipping': 'Recorte (cerca / lejos)',
+            'lightflow_cinematic.field.blade_count': 'Láminas de apertura',
+            'lightflow_cinematic.field.interpolation': 'Interpolación hasta la siguiente clave',
+            'lightflow_cinematic.info.physical_pending': 'Posición, focal, lente, enfoque y recorte afectan al render. Apertura, obturador, ISO y láminas se guardan para futuros efectos físicos.',
+            'lightflow_cinematic.message.camera_created': 'Cámara creada',
+            'lightflow_cinematic.message.keyframe_saved': 'Clave de cámara guardada en {frame}',
+            'lightflow_cinematic.message.sequence_complete': 'Secuencia terminada: {frames} fotogramas',
+            'lightflow_cinematic.message.sequence_cancelled': 'Render cancelado tras {frames} fotogramas',
+            'lightflow_cinematic.message.no_render': 'Renderiza primero un clip.',
+            'lightflow_cinematic.message.saved': 'Clip cinematográfico guardado.',
+            'lightflow_cinematic.export.clip': 'Clip cinematográfico',
+            'lightflow_cinematic.result.title': 'Previsualización cinematográfica',
+            'lightflow_cinematic.result.temporary': 'La previsualización es temporal. Guárdala cuando quieras conservarla.',
+            'lightflow_cinematic.result.saved_to': 'Guardado en {path}',
+            'lightflow_cinematic.action.reopen_last': 'Reabrir última grabación',
+            'lightflow_cinematic.result.last_render': 'Último render: {summary}',
+            'lightflow_cinematic.progress.clip': 'Renderizando clip',
+            'lightflow_cinematic.progress.montage': 'Renderizando montaje',
+            'lightflow_cinematic.progress.preview_destination': 'Este render permanece primero en Blockbench. Elige dónde guardarlo cuando termine.',
+            'lightflow_cinematic.progress.png_destination': 'Los fotogramas se escribirán en la carpeta seleccionada.',
+            'lightflow_cinematic.progress.eta': 'aprox. {time} restantes',
+            'lightflow_cinematic.message.temporary': 'Los datos de Cinematic son temporales aquí. Guarda como .bbmodel para conservarlos.',
+            'lightflow_cinematic.message.no_active_animation': 'Selecciona una animación con duración mayor que cero.',
+            'lightflow_cinematic.message.no_camera': 'Crea o asigna una cámara.',
+            'lightflow_cinematic.message.region_editing': 'Mueve o redimensiona el marco de Studio Render. Los cambios se guardan en esta secuencia.',
+            'lightflow_cinematic.undo.create_sequence': 'Crear Secuencia Cinematografica',
+            'lightflow_cinematic.undo.edit_sequence': 'Editar Secuencia Cinematografica',
+            'lightflow_cinematic.undo.delete_sequence': 'Eliminar Secuencia Cinematografica',
+            'lightflow_cinematic.undo.adapt_animation': 'Adaptar Secuencia a la Animacion Activa',
+            'lightflow_cinematic.undo.frame_rate': 'Cambiar Fotogramas por Segundo',
+            'lightflow_cinematic.undo.capture_look': 'Capturar Look de Studio',
+            'lightflow_cinematic.undo.capture_region': 'Editar Region de Captura Cinematografica',
+            'lightflow_cinematic.undo.create_camera': 'Crear Camara Lightflow',
+            'lightflow_cinematic.undo.delete_camera': 'Eliminar Camara Lightflow',
+            'lightflow_cinematic.undo.camera_keyframe': 'Editar Fotograma Clave de Camara Lightflow',
+            'lightflow_cinematic.undo.delete_camera_keyframe': 'Eliminar Fotograma Clave de Camara Lightflow',
+            'lightflow_cinematic.undo.camera_interpolation': 'Cambiar Interpolacion del Fotograma de Camara',
+            'lightflow_cinematic.undo.camera_settings': 'Editar Ajustes de Cámara',
+            'lightflow_cinematic.undo.assign_camera': 'Asignar Camara Cinematografica',
+            'lightflow_cinematic.timeline.pose': 'Pose',
+            'lightflow_cinematic.timeline.lens': 'Lente / Enfoque',
+            'lightflow_cinematic.timeline.exposure': 'Exposicion',
+            'lightflow_cinematic.unit.frames': 'fotogramas',
+            'lightflow_cinematic.unit.source': 'fuente',
+            'lightflow_cinematic.status.rendering': 'Renderizando fotograma'
+        });
+    }
+
+    // Direct UI copy; host translation keys are registered alongside this catalog.
+    const CINEMATIC_UI_TEXT = {
+        "theme_accent": ["Theme accent","Acento del tema"],
+        "sequences_cannot_reference_themselves_directly_or_indirectly": ["Sequences cannot reference themselves, directly or indirectly.","Las secuencias no pueden referenciarse a sí mismas, directa o indirectamente."],
+        "sequence_nesting_exceeds_16_levels": ["Sequence nesting exceeds 16 levels.","La anidación supera 16 niveles."],
+        "edit_sequence_track": ["Edit sequence track","Editar pista de secuencia"],
+        "split_sequence_clips": ["Split sequence clips","Cortar clips de secuencia"],
+        "slip_selected_clips": ["Slip selected clips","Desplazar origen de clips"],
+        "close_track_gap": ["Close track gap","Cerrar hueco de pista"],
+        "source_shift_sequence_frames": ["Source shift (sequence frames)","Desplazamiento del origen (frames de secuencia)"],
+        "positive_values_use_a_later_source_segment_clip_positions_length": ["Positive values use a later source segment. Clip positions, lengths and fades stay unchanged.","Los valores positivos usan un tramo posterior del origen. Se conservan posición, duración y fundidos."],
+        "not_enough_tracks_for_this_selection": ["Not enough tracks for this selection.","No hay suficientes pistas para esta selección."],
+        "a_copied_source_is_missing_relink_it_before_pasting": ["A copied source is missing. Relink it before pasting.","Falta un origen copiado. Vuelve a vincularlo antes de pegar."],
+        "paste_sequence_clips": ["Paste sequence clips","Pegar clips de secuencia"],
+        "delete_sequence_clips": ["Delete sequence clips","Eliminar clips de secuencia"],
+        "edit_camera_lens": ["Edit camera lens","Editar lente de cámara"],
+        "camera": ["Camera","Cámara"],
+        "lens_mm": ["Lens (mm)","Lente (mm)"],
+        "frame_height": ["Frame height","Altura de encuadre"],
+        "focus_guide": ["Focus guide","Guía de foco"],
+        "guide_distance_in_scene_units_does_not_add_depth_of_field_blur": ["Guide distance in scene units. Does not add depth-of-field blur.","Distancia de guía en unidades de escena. No añade desenfoque de profundidad de campo."],
+        "camera_settings": ["Camera settings","Ajustes de cámara"],
+        "animate_in_blockbench": ["Animate in Blockbench","Animar en Blockbench"],
+        "recording_frame": ["Recording frame","Encuadre de grabación"],
+        "motion": ["motion","movimiento"],
+        "edit_sequence": ["Edit sequence","Editar secuencia"],
+        "show_camera_track": ["Show camera track","Mostrar pista de cámara"],
+        "duplicate_sequence": ["Duplicate sequence","Duplicar secuencia"],
+        "copy": ["copy","copia"],
+        "delete_sequence": ["Delete sequence","Eliminar secuencia"],
+        "create_sequence": ["Create sequence","Crear secuencia"],
+        "add_animation_or_sequence": ["Add animation or sequence","Añadir animación o secuencia"],
+        "sequence_actions": ["Sequence actions","Acciones de secuencia"],
+        "back_to_animation": ["Back to animation","Volver a animación"],
+        "camera_panel": ["Camera panel","Panel de cámara"],
+        "show_camera_keyframes": ["Show camera keyframes","Mostrar keyframes de cámara"],
+        "camera_motion_path": ["Camera motion path","Trayectoria de cámara"],
+        "adjust_camera_lens_focus": ["Adjust camera lens / focus","Ajustar lente / foco de cámara"],
+        "camera_lens_focus": ["Camera lens & focus","Lente y foco de cámara"],
+        "drag_the_gold_diamond_for_framing_or_the_mint_cross_for_focus_sh": ["Drag the gold diamond for framing or the mint cross for focus. Shift makes fine adjustments.","Arrastra el rombo dorado para encuadrar o la cruz verde para enfocar. Shift permite ajustes finos."],
+        "lens": ["Lens","Lente"],
+        "focus": ["Focus","Foco"],
+        "custom": ["Custom","Personalizado"],
+        "scale_factor": ["Scale factor","Factor de escala"],
+        "shot_actions": ["Shot actions","Acciones de toma"],
+        "size_preset": ["Size preset","Preset de tamaño"],
+        "viewport_actual_size": ["Viewport real size (1x)","Tamaño real del viewport (1x)"],
+        "animation_clip": ["Animation clip","Clip de animación"],
+        "start_frame": ["Start frame","Frame inicial"],
+        "duration_frames": ["Duration (frames)","Duración (frames)"],
+        "source_in_s": ["Source in (s)","Entrada del origen (s)"],
+        "speed": ["Speed","Velocidad"],
+        "loop_source": ["Loop source","Repetir origen"],
+        "weight": ["Weight","Peso"],
+        "fade_in_frames": ["Fade in (frames)","Entrada gradual (frames)"],
+        "fade_out_frames": ["Fade out (frames)","Salida gradual (frames)"],
+        "track": ["Track","Pista"],
+        "timing_source": ["Timing & source","Tiempo y origen"],
+        "blend": ["Blend","Mezcla"],
+        "edit_source_keyframes": ["Edit source keyframes","Editar keyframes originales"],
+        "clip_timing_and_blend": ["Clip timing and blend","Tiempo y mezcla del clip"],
+        "slip_source": ["Slip source…","Desplazar origen…"],
+        "marker_color": ["Marker color","Color de marker"],
+        "copy_selected_clips": ["Copy selected clips","Copiar clips seleccionados"],
+        "paste_at_playhead": ["Paste at playhead","Pegar en el cursor"],
+        "split_at_playhead": ["Split at playhead","Cortar en el cursor"],
+        "duplicate_selected_clips": ["Duplicate selected clips","Duplicar clips seleccionados"],
+        "frame_selection": ["Frame selection","Encuadrar selección"],
+        "start_at_playhead": ["Start at playhead","Empezar en el cursor"],
+        "mute_clip": ["Mute clip","Silenciar clip"],
+        "blockbench_animation": ["Blockbench animation","Animación de Blockbench"],
+        "existing_sequence": ["Existing sequence","Secuencia existente"],
+        "create_animation_in_blockbench": ["Create animation in Blockbench","Crear animación en Blockbench"],
+        "move_selected_clips": ["Move selected clips","Mover clips seleccionados"],
+        "rename_track": ["Rename track","Renombrar pista"],
+        "track_name": ["Track name","Nombre de pista"],
+        "name": ["Name","Nombre"],
+        "mute_track": ["Mute track","Silenciar pista"],
+        "solo_track": ["Solo track","Aislar pista"],
+        "lock_track": ["Lock track","Bloquear pista"],
+        "close_gap_at_playhead": ["Close gap at playhead","Cerrar hueco en el cursor"],
+        "sequence_range_and_output": ["Sequence range and output","Rango y salida de secuencia"],
+        "frame_sequence": ["Frame sequence","Encuadrar secuencia"],
+        "sequence_clips": ["Sequence clips","Clips de secuencia"],
+        "expand_or_collapse_sequence_tracks": ["Expand or collapse sequence tracks","Expandir o contraer pistas de secuencia"],
+        "sequence_settings": ["Sequence settings","Ajustes de secuencia"],
+        "track_locked_right_click_to_unlock": ["Track locked: right-click to unlock","Pista bloqueada: clic derecho para desbloquear"],
+        "fade_in": ["Fade in","Entrada gradual"],
+        "fade_out": ["Fade out","Salida gradual"],
+        "trim_source_in": ["Trim source in","Recortar entrada del origen"],
+        "trim_end": ["Trim end","Recortar final"],
+        "double_click_to_add_an_animation_shift_click_selects_several_cli": ["Double-click to add an animation. Shift-click selects several clips; S splits at the playhead.","Doble clic para añadir animación. Shift+clic selecciona varios clips; S corta en el cursor."],
+        "timeline_editor": ["Timeline editor","Editor del Timeline"],
+        "animation": ["Animation","Animación"],
+        "sequence": ["Sequence","Secuencia"],
+        "no_sequence": ["No sequence","Sin secuencia"],
+        "add_clip": ["Add clip","Añadir clip"],
+        "cinematic_workspace": ["Cinematic workspace","Espacio de trabajo cinematográfico"],
+        "compose_sources_and_camera": ["Compose: sources and camera","Componer: fuentes y cámara"],
+        "focus_viewport": ["Focus viewport","Priorizar viewport"],
+        "focus_timeline": ["Focus timeline","Priorizar Timeline"],
+        "left_sidebar": ["Left sidebar","Paneles izquierdos"],
+        "right_sidebar": ["Right sidebar","Paneles derechos"],
+        "restore_workspace": ["Restore workspace","Restaurar distribución"],
+        "snap_clips_alt_bypass": ["Snap clips · Alt bypass","Ajustar clips · Alt omite"],
+        "move_trim_sequence_clip": ["Move / trim sequence clip","Mover / recortar clip de secuencia"],
+        "recording": ["Recording","Grabación"],
+        "edit_recording_frame": ["Edit recording frame","Editar encuadre de grabación"],
+        "stop": ["Stop","Detener"],
+        "record": ["Record","Grabar"],
+        "cancel_sequence_recording": ["Cancel sequence recording","Cancelar grabación de secuencia"],
+        "render_the_sequence_to_video_or_frames": ["Render the sequence to video or frames","Renderizar la secuencia a vídeo o frames"],
+        "no_camera": ["No camera","Sin cámara"],
+        "assign_a_camera_first": ["Assign a camera first.","Asigna primero una cámara."],
+        "no_matching_sequences": ["No matching sequences.","No hay secuencias que coincidan."],
+        "first_frame": ["First frame","Primer frame"],
+        "previous_frame": ["Previous frame","Frame anterior"],
+        "play_pause": ["Play / pause","Reproducir / pausar"],
+        "next_frame": ["Next frame","Frame siguiente"],
+        "loop_preview": ["Loop preview","Repetir preview"],
+        "current_frame": ["Current frame","Frame actual"],
+        "arrange_shots": ["Arrange shots","Ordenar tomas"],
+        "render_active_shot": ["Render active shot","Renderizar toma activa"],
+        "sequence_duration_seconds": ["Sequence duration (seconds)","Duración de secuencia (segundos)"],
+        "change_sequence_duration": ["Change sequence duration","Cambiar duración de secuencia"],
+        "animation_library": ["Animation library","Biblioteca de animación"],
+        "animations": ["Animations","Animaciones"],
+        "sequences": ["Sequences","Secuencias"],
+        "key_camera_pose": ["Key camera pose","Guardar pose de cámara"],
+        "fly_wasd_q_e_rmb_look_shift_fast_ctrl_slow": ["Fly · WASD / Q E · RMB look · Shift fast · Ctrl slow","Vuelo · WASD / Q E · botón derecho: mirar · Shift rápido · Ctrl lento"],
+        "apply_enter": ["Apply · Enter","Aplicar · Enter"],
+        "cancel_esc": ["Cancel · Esc","Cancelar · Esc"],
+        "speed_2": ["Speed: ","Velocidad: "],
+        "show_camera_monitor": ["Show camera monitor","Mostrar monitor de cámara"],
+        "resize_from_the_lower_right_corner_right_click_the_header_for_si": ["Resize from the lower-right corner. Right-click the header for sizes.","Ajusta desde la esquina inferior derecha. Clic derecho en la cabecera para tamaños."],
+        "hide_camera_monitor": ["Hide camera monitor","Ocultar monitor de cámara"],
+        "camera_monitor_sizes": ["Camera monitor sizes","Tamaños del monitor de cámara"],
+        "small": ["Small","Pequeño"],
+        "medium": ["Medium","Mediano"],
+        "large": ["Large","Grande"],
+        "view_through_camera": ["View through camera","Ver desde la cámara"],
+        "resize_camera_monitor": ["Resize camera monitor","Redimensionar monitor de cámara"],
+        "orthographic": ["Orthographic","Ortográfica"],
+        "edit_camera_keyframe": ["Edit camera keyframe","Editar fotograma de cámara"],
+        "target": ["Target","Objetivo"],
+        "up": ["Up","Arriba"],
+        "layers": ["Layers","Capas"],
+        "projection": ["Projection","Proyección"],
+        "sensor": ["Sensor","Sensor"],
+        "shift": ["Shift","Desplazar"],
+        "clip": ["Clip","Recorte"],
+        "blades": ["Blades","Palas"],
+        "camera_properties": ["Camera properties","Propiedades de cámara"],
+        "reset_camera_keyframes": ["Reset camera keyframes","Restablecer fotogramas de cámara"],
+        "position": ["Position","Posición"],
+        "rotation": ["Rotation","Rotación"],
+        "orientation_visibility": ["Orientation / visibility","Orientación / visibilidad"],
+        "shots": [" shots · "," tomas · "],
+        "frames": [" frames · "," fotogramas · "],
+        "choose_a_source_shot_and_add_it_to_the_montage": ["Choose a source shot and add it to the montage.","Elige una toma de origen y añádela al montaje."],
+        "adaptive_aa_accumulates_static_scenes_scene_changes_use_current": ["Adaptive AA accumulates static scenes; scene changes use current-frame samples.","El AA adaptativo acumula escenas estáticas; si cambia la escena, usa muestras del fotograma actual."],
+        "adaptive_2x": ["Adaptive 2x","Adaptativo 2x"],
+        "adaptive_4x": ["Adaptive 4x","Adaptativo 4x"],
+        "no_audio_provider_is_connected_video_export_remains_available": ["No audio provider is connected. Video export remains available.","No hay un proveedor de audio conectado. La exportación de vídeo sigue disponible."],
+        "missing_shot": ["Missing shot","Toma ausente"],
+        "shots_2": ["Shots","Tomas"],
+        "output": ["Output","Salida"],
+        "audio": ["Audio","Audio"],
+        "apply": ["Apply","Aplicar"],
+        "apply_montage_settings": ["Apply montage settings","Aplicar ajustes de montaje"],
+        "saving_zip": ["Saving ZIP…","Guardando ZIP…"],
+        "generating": ["Generating","Generando"],
+        "remaining": ["remaining","restantes"],
+        "stopped": ["Stopped","Detenido"],
+        "complete": ["Complete","Completado"],
+        "frames_2": ["frames","fotogramas"],
+        "frame_generation": ["Frame generation","Generación de fotogramas"],
+        "stop_close": ["Stop & close","Detener y cerrar"],
+        "close": ["Close","Cerrar"],
+        "generation_progress": ["Generation progress","Progreso de generación"],
+        "temporary_preview_save_to_keep_it": ["Temporary preview · Save to keep it","Vista temporal · Guarda para conservarla"],
+        "save_zip": ["Save ZIP…","Guardar ZIP…"],
+        "saved": ["Saved · ","Guardado · "],
+        "lens_preset": ["Lens preset","Preset de lente"],
+        "wide": ["Wide","Amplio"],
+        "natural": ["Natural","Natural"],
+        "portrait": ["Portrait","Retrato"],
+        "telephoto": ["Telephoto","Teleobjetivo"],
+        "perspective": ["Perspective","Perspectiva"],
+        "sensor_proportions": ["Sensor proportions","Proporciones del sensor"],
+        "view_height_units": ["View height (units)","Altura de vista (unidades)"],
+        "focus_distance_units": ["Focus distance (units)","Distancia de foco (unidades)"],
+        "this_value_is_saved_for_physical_rendering_preview_and_current_r": ["This value is saved for physical rendering. Preview and current render do not apply anamorphic squeeze yet.","Este valor se guarda para el render físico. La vista y el render actual todavía no aplican la compresión anamórfica."],
+        "step": ["Step","Escalonada"],
+        "linear": ["Linear","Lineal"],
+        "smooth": ["Smooth","Suave"],
+        "ease_in": ["Ease in","Entrada suave"],
+        "ease_out": ["Ease out","Salida suave"],
+        "lens_focus": ["Lens & focus","Lente y foco"],
+        "exposure": ["Exposure","Exposición"],
+        "sensor_framing": ["Sensor & framing","Sensor y encuadre"],
+        "checking_compatible_encoders": ["Checking compatible encoders…","Comprobando codificadores compatibles…"],
+        "available_video": ["Available video: ","Vídeo disponible: "],
+        "no_video_encoder_supports_this_configuration_try_another_size_or": ["No video encoder supports this configuration. Try another size or format.","Ningún codificador admite esta configuración. Prueba otro tamaño o formato."],
+        "checking_compatibility_for_the_chosen_size_and_frame_rate": ["Checking compatibility for the chosen size and frame rate.","Comprobando compatibilidad con el tamaño y FPS elegidos."],
+        "new_camera": ["New camera","Nueva cámara"],
+        "physical_settings": ["Physical settings","Ajustes físicos"],
+        "set_view_keyframe": ["Set view keyframe","Keyframe de vista"],
+        "view_shot": ["View shot","Ver toma"],
+        "viewport_recording": ["Viewport recording","Grabación del viewport"],
+        "records_the_viewport_and_its_active_render_frame_no_sequence_or": ["Records the viewport and its active Render Frame. No sequence or camera objects are created.","Graba el viewport y su Render Frame activo. No crea secuencias ni objetos de cámara."],
+        "advanced_settings": ["Advanced settings…","Ajustes avanzados…"],
+        "record_viewport": ["Record viewport","Grabar viewport"],
+        "record_shot": ["Record shot","Grabar toma"],
+        "shot": ["Shot","Toma"],
+        "scene": ["Scene","Escena"],
+        "capture_current_studio_look": ["Capture current Studio look","Capturar look actual de Studio"],
+        "applies_the_current_shot_settings_before_saving_the_studio_look": ["Applies the current shot settings before saving the Studio look.","Aplica los ajustes de la toma antes de guardar el look de Studio."],
+        "render_review_then_save_as_saving_does_not_render_again": ["Render, review, then Save as. Saving does not render again.","Renderiza, revisa y usa Guardar como. Guardar no vuelve a renderizar."],
+        "assign_a_camera_in_camera_or_create_one_from_this_view": ["Assign a camera in Camera or create one from this view.","Asigna una cámara en Cámara o créala desde esta vista."],
+        "duration": ["Duration","Duración"],
+        "frames_3": ["Frames","Fotogramas"],
+        "seconds": ["Seconds","Segundos"],
+        "fast_1": ["Fast · 1","Rápido · 1"],
+        "adaptive_2": ["Adaptive · 2","Adaptativo · 2"],
+        "adaptive_4": ["Adaptive · 4","Adaptativo · 4"],
+        "encoding_details": ["Encoding details","Detalles de codificación"],
+        "no_camera_assigned_record_uses_the_current_view": ["No camera assigned — Record uses the current view.","Sin cámara asignada: Grabar usará la vista actual."],
+        "shot_details": ["Shot details","Detalles de la toma"],
+        "apply_shot_settings": ["Apply shot settings","Aplicar ajustes de tomas"],
+        "key_camera_from_current_view": ["Key camera from current view","Guardar cámara desde la vista actual"],
+        "fly_camera": ["Fly camera","Volar cámara"],
+        "camera_monitor": ["Camera monitor","Monitor de cámara"],
+        "create_camera_from_view": ["Create camera from view","Crear cámara desde la vista"],
+        "slip_source_count_clips": ["Slip source · {count} clips","Desplazar origen · {count} clips"],
+        "light_blue": ["Light blue","Azul claro"],
+        "yellow": ["Yellow","Amarillo"],
+        "orange": ["Orange","Naranja"],
+        "red": ["Red","Rojo"],
+        "purple": ["Purple","Morado"],
+        "blue": ["Blue","Azul"],
+        "green": ["Green","Verde"],
+        "lime": ["Lime","Lima"],
+        "pink": ["Pink","Rosa"],
+        "silver": ["Silver","Plata"],
+        "focus_distance": ["Focus distance","Distancia de foco"],
+        "aperture_f": ["Aperture (f/)","Apertura (f/)"],
+        "sensor_width_mm": ["Sensor width (mm)","Ancho de sensor (mm)"],
+        "sensor_height_mm": ["Sensor height (mm)","Alto de sensor (mm)"],
+        "lens_shift_x": ["Lens shift X","Desplazamiento X"],
+        "lens_shift_y": ["Lens shift Y","Desplazamiento Y"],
+        "anamorphic_squeeze": ["Anamorphic squeeze","Factor anamórfico"],
+        "aperture_blades": ["Aperture blades","Palas de apertura"],
+        "near_clip": ["Near clip","Recorte cercano"],
+        "far_clip": ["Far clip","Recorte lejano"],
+        "shutter": ["Shutter (°)","Obturador (°)"],
+        "iso": ["ISO","ISO"],
+        "exposure_ev": ["Exposure (EV)","Exposición (EV)"],
+        "layers_mask": ["Layers mask","Máscara de capas"]
+    };
+
+    function cinematicUI(key) {
+        const [en, es] = CINEMATIC_UI_TEXT[key];
         return String(typeof Language !== 'undefined' ? Language.code : '').startsWith('es') ? es : en;
+    }
+
+    function cinematicResolutionPresets() {
+        return resolutionScaleOptions();
+    }
+
+    function cinematicResolutionPresetOptions() {
+        return cinematicResolutionPresets();
+    }
+
+    function cinematicResolutionFactorField(presetKey = '_resolution_preset') {
+        return {type: 'number', label: cinematicUI("scale_factor"),
+            value: 1, min: .1, max: 8, step: .25, condition: result => result[presetKey] === 'factor'};
     }
 
     function cinematicTabbedForm(fields, tabs, tabKey, activeTab, tabForField) {
@@ -3488,7 +4181,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
             const tab = tabForField(key);
             if(key==='shot_tools'){
                 form._add_shot={type:'action_button',semantic_button:true,text:translate('lightflow_cinematic.montage.add','Add shot'),icon:'add',condition:result=>(result[tabKey]||activeTab)===tab,click:()=>field.click(0)};
-                form[key]={type:'action_button',semantic_button:true,text:cinematicUI('Shot actions','Acciones de toma'),icon:'more_horiz',condition:result=>(result[tabKey]||activeTab)===tab&&result.clip_id!=='__empty__',click:event=>{
+                form[key]={type:'action_button',semantic_button:true,text:cinematicUI("shot_actions"),icon:'more_horiz',condition:result=>(result[tabKey]||activeTab)===tab&&result.clip_id!=='__empty__',click:event=>{
                     const id=montageDialog?.getFormResult?.().clip_id,clips=readDocument().montage.clips,index=clips.findIndex(clip=>clip.id===id);
                     if(index<0)return;
                     new Menu([{name:translate('lightflow_cinematic.montage.duplicate','Duplicate'),icon:'content_copy',click:()=>field.click(1)},
@@ -3498,18 +4191,57 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                 }};
                 return;
             }
-            if(key==='resolution')form._resolution_preset=cinematicSelect({label:cinematicUI('Size preset','Preset de tamaño'),value:'custom',options:{custom:cinematicUI('Custom','Personalizado'),hd:'1280 × 720',fullhd:'1920 × 1080',uhd:'3840 × 2160',portrait:'1080 × 1920',square:'1080 × 1080'},condition:result=>(result[tabKey]||activeTab)===tab});
+            if(key==='resolution')form._resolution_preset=cinematicSelect({label:cinematicUI("size_preset"),value:'custom',options:cinematicResolutionPresetOptions(true),condition:result=>(result[tabKey]||activeTab)===tab});
+            if(key==='resolution')form._resolution_factor={...cinematicResolutionFactorField(),condition:result=>(result[tabKey]||activeTab)===tab&&result._resolution_preset==='factor'};
             const condition = field.condition;
             form[key] = {...field,condition:result => (!tab || (result[tabKey] || activeTab) === tab) && (!condition || Condition(condition,result))};
         });
         return form;
     }
 
-    function applyCinematicResolutionPreset(form,dialog) {
-        const value=({hd:[1280,720],fullhd:[1920,1080],uhd:[3840,2160],portrait:[1080,1920],square:[1080,1080]})[form._resolution_preset];
-        if(!value)return;
-        form.resolution=value.slice();form._resolution_preset='custom';
-        dialog?.setFormValues?.({resolution:form.resolution,_resolution_preset:'custom'},false);
+    const resolutionScaleDialogs = new WeakMap();
+    function resolutionScaleOptions() {
+        const es = String(typeof Language !== 'undefined' ? Language.code : '').startsWith('es');
+        return {
+            custom: es ? 'Personalizado' : 'Custom', double: '2\u00d7', quadruple: '4\u00d7',
+            uhd: es ? '4K \u00b7 lado mayor 3840 px' : '4K \u00b7 long edge 3840 px',
+            eight_k: es ? '8K \u00b7 lado mayor 7680 px' : '8K \u00b7 long edge 7680 px',
+            factor: es ? 'Factor de escala\u2026' : 'Scale factor\u2026'
+        };
+    }
+
+    function scaleOutputResolution(resolution, preset, factor = 1) {
+        const size = [0, 1].map(i => Math.max(1, Math.round(finite(resolution?.[i], 1))));
+        const edge = Math.max(...size);
+        const scale = preset === 'double' ? 2 : preset === 'quadruple' ? 4
+            : preset === 'uhd' ? 3840 / edge : preset === 'eight_k' ? 7680 / edge
+            : preset === 'factor' ? clamp(finite(factor, 1), .1, 8) : 1;
+        const bounded = Math.min(scale, 16384 / edge);
+        return size.map(value => Math.max(1, Math.round(value * bounded)));
+    }
+
+    function applyResolutionScalePreset(form, dialog, options = {}) {
+        const presetKey = options.presetKey || 'resolution_preset';
+        const factorKey = options.factorKey || '_resolution_factor';
+        const preset = form[presetKey];
+        if (!dialog || !form.resolution) return;
+        let state = resolutionScaleDialogs.get(dialog);
+        if (!preset || preset === 'custom') { resolutionScaleDialogs.delete(dialog); return; }
+        if (!['double', 'quadruple', 'uhd', 'eight_k', 'factor'].includes(preset)) return;
+        if (!state) state = {base: form.resolution.slice(), result: form.resolution.slice()};
+        else if (form.resolution.some((value, i) => value !== state.result[i])) {
+            form[presetKey] = 'custom'; resolutionScaleDialogs.delete(dialog);
+            dialog.setFormValues?.({[presetKey]: 'custom'}, false); return;
+        }
+        const scaled = scaleOutputResolution(state.base, preset, form[factorKey]);
+        const changed = form.resolution.some((value, i) => value !== scaled[i]);
+        form.resolution = scaled;
+        state.result = scaled.slice(); resolutionScaleDialogs.set(dialog, state);
+        if (changed) dialog.setFormValues?.({resolution: scaled}, false);
+    }
+
+    function applyCinematicResolutionPreset(form, dialog) {
+        applyResolutionScalePreset(form, dialog, {presetKey: '_resolution_preset'});
     }
 
     function setCinematicSequencePreview(value) {
@@ -3522,7 +4254,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         const sequence = getSequence(readDocumentView());
         if (cinematicSequencePreview && cinematicCompositionFrame != null) Timeline.setTime(cinematicCompositionFrame);
         if (Timeline.vue) {
-            Timeline.vue.animation_length = cinematicSequencePreview ? sequence.source_start_seconds + sequenceSourceDurationSeconds(sequence) : Animation.selected?.length || 0;
+            Timeline.vue.animation_length = cinematicSequencePreview && sequence ? sequence.source_start_seconds + sequenceSourceDurationSeconds(sequence) : Animation.selected?.length || 0;
             Timeline.vue.updateTimecodes?.();
         }
         if(!cinematicSequencePreview){
@@ -3552,37 +4284,37 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
 
     function openSequenceClipProperties(sequenceId, clipId) {
         const seq=getSequence(readDocumentView(),sequenceId),clip=seq?.clips.find(item=>item.id===clipId);if(!clip)return;
-        new Dialog({id:'lightflow_cinematic_clip',title:cinematicUI('Animation clip','Clip de animación'),width:520,
+        new Dialog({id:'lightflow_cinematic_clip',title:cinematicUI("animation_clip"),width:520,
             form:(window.LightManagerUI?.prepareForm || (form => form))(cinematicTabbedForm({
                 source:hasLightflowFormType('bar_display')?{type:'bar_display',value:clip.name,icon:clip.type==='sequence'?'theaters':'movie',expand:true}:{type:'info',text:clip.name},
-                start_frame:cinematicSlider({density:'compact',full_track:false,compact:false,label:cinematicUI('Start frame','Frame inicial'),icon:'first_page',value:clip.start_frame,min:0,max:Math.max(240,seq.end_frame),allow_higher:true,step:1},0),
-                duration_frames:cinematicSlider({density:'compact',full_track:false,compact:false,label:cinematicUI('Duration (frames)','Duración (frames)'),icon:'timelapse',value:clip.duration_frames,min:1,max:Math.max(240,seq.end_frame),allow_higher:true,step:1},24),
-                source_start_seconds:cinematicSlider({density:'compact',full_track:false,compact:false,label:cinematicUI('Source in (s)','Entrada del origen (s)'),icon:'start',value:clip.source_start_seconds,min:0,max:Math.max(10,clip.source_start_seconds),allow_higher:true,step:.01},0),
-                speed:cinematicSlider({density:'compact',full_track:false,compact:false,label:cinematicUI('Speed','Velocidad'),icon:'speed',value:clip.speed,min:.01,max:4,allow_higher:true,step:.01},1),
-                loop:{type:hasLightflowFormType('custom_checkbox')?'custom_checkbox':'checkbox',label:cinematicUI('Loop source','Repetir origen'),icon_on:'repeat_on',icon_off:'repeat',layout:'space_between',value:clip.loop},
-                weight:cinematicSlider({density:'compact',full_track:false,compact:false,label:cinematicUI('Weight','Peso'),icon:'opacity',value:clip.weight,min:0,max:1,step:.01},1),
-                fade_in_frames:cinematicSlider({density:'compact',full_track:false,compact:false,label:cinematicUI('Fade in (frames)','Entrada gradual (frames)'),icon:'trending_up',value:clip.fade_in_frames,min:0,max:clip.duration_frames,step:1},0),
-                fade_out_frames:cinematicSlider({density:'compact',full_track:false,compact:false,label:cinematicUI('Fade out (frames)','Salida gradual (frames)'),icon:'trending_down',value:clip.fade_out_frames,min:0,max:clip.duration_frames,step:1},0),
-                track:cinematicSelect({label:cinematicUI('Track','Pista'),value:String(clip.track),options:Object.fromEntries(Array.from({length:Math.min(64,Math.max(clip.track+2,...seq.clips.map(item=>item.track+2)))},(_,index)=>[String(index),cinematicUI('Track','Pista')+' '+(index+1)]))})
-            },[['timing',cinematicUI('Timing & source','Tiempo y origen'),'schedule'],['blend',cinematicUI('Blend','Mezcla'),'blender']], '_clip_tab','timing',key=>key==='source'?null:['weight','fade_in_frames','fade_out_frames'].includes(key)?'blend':'timing')),onConfirm(form){updateSequenceClips(seq.id,[{...form,id:clip.id,track:Number(form.track),blend_window:form.fade_in_frames!==clip.fade_in_frames||form.fade_out_frames!==clip.fade_out_frames?null:clip.blend_window}]);Animator.preview();}
+                start_frame:cinematicSlider({density:'compact',full_track:false,compact:false,label:cinematicUI("start_frame"),icon:'first_page',value:clip.start_frame,min:0,max:Math.max(240,seq.end_frame),allow_higher:true,step:1},0),
+                duration_frames:cinematicSlider({density:'compact',full_track:false,compact:false,label:cinematicUI("duration_frames"),icon:'timelapse',value:clip.duration_frames,min:1,max:Math.max(240,seq.end_frame),allow_higher:true,step:1},24),
+                source_start_seconds:cinematicSlider({density:'compact',full_track:false,compact:false,label:cinematicUI("source_in_s"),icon:'start',value:clip.source_start_seconds,min:0,max:Math.max(10,clip.source_start_seconds),allow_higher:true,step:.01},0),
+                speed:cinematicSlider({density:'compact',full_track:false,compact:false,label:cinematicUI("speed"),icon:'speed',value:clip.speed,min:.01,max:4,allow_higher:true,step:.01},1),
+                loop:{type:hasLightflowFormType('custom_checkbox')?'custom_checkbox':'checkbox',label:cinematicUI("loop_source"),icon_on:'repeat_on',icon_off:'repeat',layout:'space_between',value:clip.loop},
+                weight:cinematicSlider({density:'compact',full_track:false,compact:false,label:cinematicUI("weight"),icon:'opacity',value:clip.weight,min:0,max:1,step:.01},1),
+                fade_in_frames:cinematicSlider({density:'compact',full_track:false,compact:false,label:cinematicUI("fade_in_frames"),icon:'trending_up',value:clip.fade_in_frames,min:0,max:clip.duration_frames,step:1},0),
+                fade_out_frames:cinematicSlider({density:'compact',full_track:false,compact:false,label:cinematicUI("fade_out_frames"),icon:'trending_down',value:clip.fade_out_frames,min:0,max:clip.duration_frames,step:1},0),
+                track:cinematicSelect({label:cinematicUI("track"),value:String(clip.track),options:Object.fromEntries(Array.from({length:Math.min(64,Math.max(clip.track+2,...seq.clips.map(item=>item.track+2)))},(_,index)=>[String(index),cinematicUI("track")+' '+(index+1)]))})
+            },[['timing',cinematicUI("timing_source"),'schedule'],['blend',cinematicUI("blend"),'blender']], '_clip_tab','timing',key=>key==='source'?null:['weight','fade_in_frames','fade_out_frames'].includes(key)?'blend':'timing')),onConfirm(form){updateSequenceClips(seq.id,[{...form,id:clip.id,track:Number(form.track),blend_window:form.fade_in_frames!==clip.fade_in_frames||form.fade_out_frames!==clip.fade_out_frames?null:clip.blend_window}]);Animator.preview();}
         }).show();
     }
 
     function sequenceClipMenu(sequenceId, clip, event) {
         const selection=()=>selectedSequenceClips(sequenceId,clip.id),editable=()=>selection().filter(item=>!sequenceTrackState(getSequence(readDocumentView(),sequenceId),item.track).locked);
         new Menu([
-            {name:cinematicUI('Edit source keyframes','Editar keyframes originales'),icon:'movie',click:()=>openSequenceClipSource(sequenceId,clip.id)},
-            {name:cinematicUI('Clip timing and blend','Tiempo y mezcla del clip'),icon:'tune',condition:()=>editable().length>0,click:()=>openSequenceClipProperties(sequenceId,clip.id)},
-            {name:cinematicUI('Slip source…','Desplazar origen…'),icon:'swap_horiz',condition:()=>editable().length===selection().length,click:()=>openSequenceSlipDialog(sequenceId,selection().map(item=>item.id))},
-            {name:cinematicUI('Marker color','Color de marker'),icon:'palette',children:cinematicClipColorItems(sequenceId,clip)},
-            '_',{name:cinematicUI('Copy selected clips','Copiar clips seleccionados'),icon:'content_copy',click:()=>copySequenceClips(sequenceId,selection().map(item=>item.id))},
-            {name:cinematicUI('Paste at playhead','Pegar en el cursor'),icon:'content_paste',condition:()=>cinematicClipClipboard?.project===getActiveProject(),click:()=>cinematicSequencerVue?.paste(clip.track)},
-            {name:cinematicUI('Split at playhead','Cortar en el cursor'),icon:'content_cut',condition:()=>{const seq=getSequence(readDocumentView(),sequenceId),frame=currentCinematicFrame(seq)-seq.start_frame;return editable().some(item=>frame>item.start_frame&&frame<item.start_frame+item.duration_frames);},click:()=>cinematicSequencerVue?.split()},
-            {name:cinematicUI('Duplicate selected clips','Duplicar clips seleccionados'),icon:'queue',condition:()=>editable().length>0,click:()=>cinematicSequencerVue?.duplicate()},
-            {name:cinematicUI('Frame selection','Encuadrar selección'),icon:'filter_center_focus',click:()=>fitSequenceTimeline(sequenceId,true)},
-            '_',{name:cinematicUI('Start at playhead','Empezar en el cursor'),icon:'vertical_align_center',condition:()=>editable().length>0,click:()=>{const seq=getSequence(readDocumentView(),sequenceId),clips=editable(),delta=Math.max(0,currentCinematicFrame(seq)-seq.start_frame)-Math.min(...clips.map(item=>item.start_frame));updateSequenceClips(sequenceId,clips.map(item=>({id:item.id,start_frame:item.start_frame+delta})));}},
-            {name:cinematicUI('Loop source','Repetir origen'),icon:clip.loop?'check_box':'check_box_outline_blank',condition:()=>editable().length>0,click:()=>updateSequenceClips(sequenceId,selection().map(item=>({id:item.id,loop:!clip.loop})))},
-            {name:cinematicUI('Mute clip','Silenciar clip'),icon:clip.enabled?'volume_up':'volume_off',condition:()=>editable().length>0,click:()=>updateSequenceClips(sequenceId,selection().map(item=>({id:item.id,enabled:!clip.enabled})))},
+            {name:cinematicUI("edit_source_keyframes"),icon:'movie',click:()=>openSequenceClipSource(sequenceId,clip.id)},
+            {name:cinematicUI("clip_timing_and_blend"),icon:'tune',condition:()=>editable().length>0,click:()=>openSequenceClipProperties(sequenceId,clip.id)},
+            {name:cinematicUI("slip_source"),icon:'swap_horiz',condition:()=>editable().length===selection().length,click:()=>openSequenceSlipDialog(sequenceId,selection().map(item=>item.id))},
+            {name:cinematicUI("marker_color"),icon:'palette',children:cinematicClipColorItems(sequenceId,clip)},
+            '_',{name:cinematicUI("copy_selected_clips"),icon:'content_copy',click:()=>copySequenceClips(sequenceId,selection().map(item=>item.id))},
+            {name:cinematicUI("paste_at_playhead"),icon:'content_paste',condition:()=>cinematicClipClipboard?.project===getActiveProject(),click:()=>cinematicSequencerVue?.paste(clip.track)},
+            {name:cinematicUI("split_at_playhead"),icon:'content_cut',condition:()=>{const seq=getSequence(readDocumentView(),sequenceId),frame=currentCinematicFrame(seq)-seq.start_frame;return editable().some(item=>frame>item.start_frame&&frame<item.start_frame+item.duration_frames);},click:()=>cinematicSequencerVue?.split()},
+            {name:cinematicUI("duplicate_selected_clips"),icon:'queue',condition:()=>editable().length>0,click:()=>cinematicSequencerVue?.duplicate()},
+            {name:cinematicUI("frame_selection"),icon:'filter_center_focus',click:()=>fitSequenceTimeline(sequenceId,true)},
+            '_',{name:cinematicUI("start_at_playhead"),icon:'vertical_align_center',condition:()=>editable().length>0,click:()=>{const seq=getSequence(readDocumentView(),sequenceId),clips=editable(),delta=Math.max(0,currentCinematicFrame(seq)-seq.start_frame)-Math.min(...clips.map(item=>item.start_frame));updateSequenceClips(sequenceId,clips.map(item=>({id:item.id,start_frame:item.start_frame+delta})));}},
+            {name:cinematicUI("loop_source"),icon:clip.loop?'check_box':'check_box_outline_blank',condition:()=>editable().length>0,click:()=>updateSequenceClips(sequenceId,selection().map(item=>({id:item.id,loop:!clip.loop})))},
+            {name:cinematicUI("mute_clip"),icon:clip.enabled?'volume_up':'volume_off',condition:()=>editable().length>0,click:()=>updateSequenceClips(sequenceId,selection().map(item=>({id:item.id,enabled:!clip.enabled})))},
             '_',{name:'generic.delete',icon:'delete',condition:()=>editable().length>0,click:()=>deleteSequenceClips(sequenceId,selection().map(item=>item.id))}
         ]).open(event);
     }
@@ -3592,9 +4324,9 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         const choose=(id,type)=>{try{addSequenceClip(seq.id,id,type,{track});setCinematicSequencePreview(true);}catch(error){showCinematicError(error);}};
         const canNest=id=>{try{const copy=deepClone(doc);getSequence(copy,seq.id).clips.push(normalizeSequenceClip({type:'sequence',source_id:id}));validateSequenceReferences(copy);return true;}catch(_){return false;}};
         new Menu([
-            {name:cinematicUI('Blockbench animation','Animación de Blockbench'),icon:'movie',children:getCinematicAnimations().map(animation=>({name:animation.name,icon:'movie',click:()=>choose(animation.uuid,'animation')}))},
-            {name:cinematicUI('Existing sequence','Secuencia existente'),icon:'theaters',children:doc.sequences.filter(item=>canNest(item.id)).map(item=>({name:item.name,icon:'theaters',click:()=>choose(item.id,'sequence')}))},
-            '_',{name:cinematicUI('Create animation in Blockbench','Crear animación en Blockbench'),icon:'add',click(){setCinematicSequencePreview(false);BarItems.add_animation?.trigger();}}
+            {name:cinematicUI("blockbench_animation"),icon:'movie',children:getCinematicAnimations().map(animation=>({name:animation.name,icon:'movie',click:()=>choose(animation.uuid,'animation')}))},
+            {name:cinematicUI("existing_sequence"),icon:'theaters',children:doc.sequences.filter(item=>canNest(item.id)).map(item=>({name:item.name,icon:'theaters',click:()=>choose(item.id,'sequence')}))},
+            '_',{name:cinematicUI("create_animation_in_blockbench"),icon:'add',click(){setCinematicSequencePreview(false);BarItems.add_animation?.trigger();}}
         ]).open(event);
     }
 
@@ -3651,7 +4383,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                     if(this.busy)return;const clips=selectedSequenceClips(this.sequenceId,clip.id).filter(item=>!sequenceTrackState(getSequence(readDocumentView()),item.track).locked);if(!clips.length)return;
                     const vertical=event.key==='ArrowUp'||event.key==='ArrowDown',step=event.shiftKey&&!vertical?10:1;
                     const change=vertical?clamp(event.key==='ArrowUp'?-step:step,-Math.min(...clips.map(item=>item.track)),63-Math.max(...clips.map(item=>item.track))):Math.max(event.key==='ArrowLeft'?-step:step,-Math.min(...clips.map(item=>item.start_frame)));
-                    updateSequenceClips(this.sequenceId,clips.map(item=>({id:item.id,...vertical?{track:item.track+change}:{start_frame:item.start_frame+change}})),{undo_label:cinematicUI('Move selected clips','Mover clips seleccionados')});this.sync();Animator.preview();
+                    updateSequenceClips(this.sequenceId,clips.map(item=>({id:item.id,...vertical?{track:item.track+change}:{start_frame:item.start_frame+change}})),{undo_label:cinematicUI("move_selected_clips")});this.sync();Animator.preview();
                 },
                 paste(track){const seq=getSequence(readDocumentView(),this.sequenceId),ids=pasteSequenceClips(seq.id,currentCinematicFrame(seq),track);if(ids.length){this.selectedIds=ids;this.selected=ids[0];}this.sync();Animator.preview();},
                 split(){const seq=getSequence(readDocumentView(),this.sequenceId),ids=splitSequenceClips(seq.id,this.selectedIds,currentCinematicFrame(seq));this.selectedIds=[...this.selectedIds,...ids];this.sync();Animator.preview();},
@@ -3668,18 +4400,18 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                 editorShortcut(event){if(event.target.isContentEditable||['INPUT','TEXTAREA'].includes(event.target.tagName))return;if(event.target.tagName==='BUTTON'&&!event.ctrlKey&&!event.metaKey){if(['Enter',' '].includes(event.key))event.stopPropagation();return;}const clip=this.tracks.flatMap(track=>track.clips).find(item=>item.id===this.selectedIds[0]);this.shortcut(clip,event);},
                 trackToggle(track,key){if(!this.busy){updateSequenceTrack(this.sequenceId,track.id,{[key]:!track[key]});this.sync();Animator.preview();}},
                 trackMenu(track,event){new Menu([
-                    {name:cinematicUI('Rename track','Renombrar pista'),icon:'edit',click:()=>new Dialog({id:'lightflow_cinematic_track',title:cinematicUI('Track name','Nombre de pista'),form:(window.LightManagerUI?.prepareForm || (form => form))({name:{label:cinematicUI('Name','Nombre'),value:track.name,type:'text'}}),onConfirm:form=>{updateSequenceTrack(this.sequenceId,track.id,{name:form.name});this.sync();}}).show()},
-                    {name:cinematicUI('Mute track','Silenciar pista'),icon:track.muted?'check_box':'check_box_outline_blank',click:()=>this.trackToggle(track,'muted')},
-                    {name:cinematicUI('Solo track','Aislar pista'),icon:track.solo?'check_box':'check_box_outline_blank',click:()=>this.trackToggle(track,'solo')},
-                    {name:cinematicUI('Lock track','Bloquear pista'),icon:track.locked?'lock':'lock_open',click:()=>this.trackToggle(track,'locked')},
-                    {name:cinematicUI('Close gap at playhead','Cerrar hueco en el cursor'),icon:'compress',condition:()=>{const seq=getSequence(readDocumentView(),this.sequenceId);return !!sequenceTrackGap(seq,track.id,currentCinematicFrame(seq));},click:()=>{const seq=getSequence(readDocumentView(),this.sequenceId);closeSequenceTrackGap(seq.id,track.id,currentCinematicFrame(seq));this.sync();Animator.preview();}},
-                    '_',{name:cinematicUI('Paste at playhead','Pegar en el cursor'),icon:'content_paste',condition:()=>cinematicClipClipboard?.project===getActiveProject()&&!track.locked,click:()=>this.paste(track.id)}
+                    {name:cinematicUI("rename_track"),icon:'edit',click:()=>new Dialog({id:'lightflow_cinematic_track',title:cinematicUI("track_name"),form:(window.LightManagerUI?.prepareForm || (form => form))({name:{label:cinematicUI("name"),value:track.name,type:'text'}}),onConfirm:form=>{updateSequenceTrack(this.sequenceId,track.id,{name:form.name});this.sync();}}).show()},
+                    {name:cinematicUI("mute_track"),icon:track.muted?'check_box':'check_box_outline_blank',click:()=>this.trackToggle(track,'muted')},
+                    {name:cinematicUI("solo_track"),icon:track.solo?'check_box':'check_box_outline_blank',click:()=>this.trackToggle(track,'solo')},
+                    {name:cinematicUI("lock_track"),icon:track.locked?'lock':'lock_open',click:()=>this.trackToggle(track,'locked')},
+                    {name:cinematicUI("close_gap_at_playhead"),icon:'compress',condition:()=>{const seq=getSequence(readDocumentView(),this.sequenceId);return !!sequenceTrackGap(seq,track.id,currentCinematicFrame(seq));},click:()=>{const seq=getSequence(readDocumentView(),this.sequenceId);closeSequenceTrackGap(seq.id,track.id,currentCinematicFrame(seq));this.sync();Animator.preview();}},
+                    '_',{name:cinematicUI("paste_at_playhead"),icon:'content_paste',condition:()=>cinematicClipClipboard?.project===getActiveProject()&&!track.locked,click:()=>this.paste(track.id)}
                 ]).open(event);},
-                sequenceMenu(event){new Menu([{name:cinematicUI('Add animation or sequence','Añadir animación o secuencia'),icon:'add',click:()=>this.add(this.tracks.length,event)},
-                    {name:cinematicUI('Sequence range and output','Rango y salida de secuencia'),icon:'tune',click:()=>this.settings()},
-                    '_',{name:cinematicUI('Frame sequence','Encuadrar secuencia'),icon:'fit_screen',click:()=>fitSequenceTimeline(this.sequenceId)},
-                    {name:cinematicUI('Frame selection','Encuadrar selección'),icon:'filter_center_focus',condition:()=>this.selectedIds.length>0,click:()=>fitSequenceTimeline(this.sequenceId,true)},
-                    {name:cinematicUI('Paste at playhead','Pegar en el cursor'),icon:'content_paste',condition:()=>cinematicClipClipboard?.project===getActiveProject(),click:()=>this.paste()}
+                sequenceMenu(event){new Menu([{name:cinematicUI("add_animation_or_sequence"),icon:'add',click:()=>this.add(this.tracks.length,event)},
+                    {name:cinematicUI("sequence_range_and_output"),icon:'tune',click:()=>this.settings()},
+                    '_',{name:cinematicUI("frame_sequence"),icon:'fit_screen',click:()=>fitSequenceTimeline(this.sequenceId)},
+                    {name:cinematicUI("frame_selection"),icon:'filter_center_focus',condition:()=>this.selectedIds.length>0,click:()=>fitSequenceTimeline(this.sequenceId,true)},
+                    {name:cinematicUI("paste_at_playhead"),icon:'content_paste',condition:()=>cinematicClipClipboard?.project===getActiveProject(),click:()=>this.paste()}
                 ]).open(event);},
                 seek(event){if(this.busy)return;if(!event.shiftKey){this.selectedIds=[];this.selected='';}this.$el.focus();const rect=window.document.getElementById('timeline_body_inner').getBoundingClientRect(),time=Math.max(this.start,(event.clientX-rect.left-this.head-8)/this.size);pauseCinematicPlayback();Timeline.setTime(Math.min(time,this.end));Animator.preview();},
                 drag(clip,event,edge){
@@ -3694,15 +4426,15 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                     try{event.currentTarget.setPointerCapture(event.pointerId);}catch(_){}
                 }
             },
-            template:`<li v-show="preview" class="animator lf-cine-sequencer" tabindex="0" role="region" aria-label="${cinematicUI('Sequence clips','Clips de secuencia')}" @keydown="editorShortcut($event)" @mousedown.stop @contextmenu.prevent.stop="sequenceMenu($event)"><div class="animator_head_bar"><div class="channel_head" :style="{width:head+'px',left:'0px'}" @dblclick.stop="expanded=!expanded"><button type="button" class="text_button" :aria-expanded="String(expanded)" aria-label="${cinematicUI('Expand or collapse sequence tracks','Expandir o contraer pistas de secuencia')}" @click.stop="expanded=!expanded" @keydown.enter.prevent.stop="expanded=!expanded" @keydown.space.prevent.stop="expanded=!expanded"><i aria-hidden="true" class="icon-open-state fa" :class="expanded?'fa-angle-down':'fa-angle-right'"></i></button><dynamic-icon icon="theaters" /><span class="timeline_animator_name" :title="name">{{name}}</span><button type="button" class="text_button" @click.stop="settings" @keydown.enter.prevent.stop="settings" @keydown.space.prevent.stop="settings" title="${cinematicUI('Sequence settings','Ajustes de secuencia')}" aria-label="${cinematicUI('Sequence settings','Ajustes de secuencia')}"><i class="material-icons" aria-hidden="true">more_horiz</i></button></div><div class="keyframe_section" @click.self="seek($event)"></div></div>
+            template:`<li v-show="preview" class="animator lf-cine-sequencer" tabindex="0" role="region" aria-label="${cinematicUI("sequence_clips")}" @keydown="editorShortcut($event)" @mousedown.stop @contextmenu.prevent.stop="sequenceMenu($event)"><div class="animator_head_bar"><div class="channel_head" :style="{width:head+'px',left:'0px'}" @dblclick.stop="expanded=!expanded"><button type="button" class="text_button" :aria-expanded="String(expanded)" aria-label="${cinematicUI("expand_or_collapse_sequence_tracks")}" @click.stop="expanded=!expanded" @keydown.enter.prevent.stop="expanded=!expanded" @keydown.space.prevent.stop="expanded=!expanded"><i aria-hidden="true" class="icon-open-state fa" :class="expanded?'fa-angle-down':'fa-angle-right'"></i></button><dynamic-icon icon="theaters" /><span class="timeline_animator_name" :title="name">{{name}}</span><button type="button" class="text_button" @click.stop="settings" @keydown.enter.prevent.stop="settings" @keydown.space.prevent.stop="settings" title="${cinematicUI("sequence_settings")}" aria-label="${cinematicUI("sequence_settings")}"><i class="material-icons" aria-hidden="true">more_horiz</i></button></div><div class="keyframe_section" @click.self="seek($event)"></div></div>
                 <template v-if="expanded"><div v-for="track in tracks" :key="track.id" class="animator_channel_bar lf-cine-track"><div class="channel_head" :style="{width:head+'px',left:'0px'}" @contextmenu.prevent.stop="trackMenu(track,$event)">
-                    <button class="text_button" :class="{enabled:track.muted}" :aria-pressed="String(track.muted)" @click.stop="trackToggle(track,'muted')" title="${cinematicUI('Mute track','Silenciar pista')}"><i class="material-icons">{{track.muted?'volume_off':'volume_up'}}</i></button>
-                    <button class="text_button" :class="{enabled:track.solo}" :aria-pressed="String(track.solo)" @click.stop="trackToggle(track,'solo')" title="${cinematicUI('Solo track','Aislar pista')}"><i class="material-icons">{{track.solo?'filter_center_focus':'layers'}}</i></button>
-                    <span class="lf-cine-track-name" :title="track.name||'${cinematicUI('Track','Pista')} '+(track.id+1)" @dblclick.stop="trackMenu(track,$event)">{{track.name||'${cinematicUI('Track','Pista')} '+(track.id+1)}}</span><i v-if="track.locked" class="material-icons lf-cine-track-lock" title="${cinematicUI('Track locked: right-click to unlock','Pista bloqueada: clic derecho para desbloquear')}">lock</i><button type="button" class="text_button" v-if="!track.locked" @click.stop="add(track.id,$event)" @keydown.enter.prevent.stop="add(track.id,$event)" @keydown.space.prevent.stop="add(track.id,$event)" title="${cinematicUI('Add animation or sequence','Añadir animación o secuencia')}" aria-label="${cinematicUI('Add animation or sequence','Añadir animación o secuencia')}"><i class="material-icons" aria-hidden="true">add</i></button></div><div class="keyframe_section" @dblclick.self="add(track.id,$event)" @click.self="seek($event)">
-                    <div v-for="clip in track.clips" :key="clip.id" class="lf-cine-clip" :class="{selected:selectedIds.includes(clip.id),muted:!clip.enabled||clip.inactive,locked:clip.locked,missing:clip.missing}" :style="{left:(8+clip.left*size)+'px',width:Math.max(8,clip.width*size)+'px','--lf-clip-color':clip.ink}" :title="clip.name+' · '+clip.start_frame+'–'+(clip.start_frame+clip.duration_frames-1)+' · '+clip.duration_frames+' f'+(clip.fade_in_frames?' · ${cinematicUI('Fade in','Entrada gradual')}: '+clip.fade_in_frames+' f':'')+(clip.fade_out_frames?' · ${cinematicUI('Fade out','Salida gradual')}: '+clip.fade_out_frames+' f':'')" tabindex="0" role="button" :aria-pressed="selectedIds.includes(clip.id)" @focus="focusClip(clip)" @pointerdown.prevent.stop="drag(clip,$event,'move')" @dblclick.stop="source(clip)" @contextmenu.prevent.stop="menu(clip,$event)" @keydown="shortcut(clip,$event)">
+                    <button class="text_button" :class="{enabled:track.muted}" :aria-pressed="String(track.muted)" @click.stop="trackToggle(track,'muted')" title="${cinematicUI("mute_track")}"><i class="material-icons">{{track.muted?'volume_off':'volume_up'}}</i></button>
+                    <button class="text_button" :class="{enabled:track.solo}" :aria-pressed="String(track.solo)" @click.stop="trackToggle(track,'solo')" title="${cinematicUI("solo_track")}"><i class="material-icons">{{track.solo?'filter_center_focus':'layers'}}</i></button>
+                    <span class="lf-cine-track-name" :title="track.name||'${cinematicUI("track")} '+(track.id+1)" @dblclick.stop="trackMenu(track,$event)">{{track.name||'${cinematicUI("track")} '+(track.id+1)}}</span><i v-if="track.locked" class="material-icons lf-cine-track-lock" title="${cinematicUI("track_locked_right_click_to_unlock")}">lock</i><button type="button" class="text_button" v-if="!track.locked" @click.stop="add(track.id,$event)" @keydown.enter.prevent.stop="add(track.id,$event)" @keydown.space.prevent.stop="add(track.id,$event)" title="${cinematicUI("add_animation_or_sequence")}" aria-label="${cinematicUI("add_animation_or_sequence")}"><i class="material-icons" aria-hidden="true">add</i></button></div><div class="keyframe_section" @dblclick.self="add(track.id,$event)" @click.self="seek($event)">
+                    <div v-for="clip in track.clips" :key="clip.id" class="lf-cine-clip" :class="{selected:selectedIds.includes(clip.id),muted:!clip.enabled||clip.inactive,locked:clip.locked,missing:clip.missing}" :style="{left:(8+clip.left*size)+'px',width:Math.max(8,clip.width*size)+'px','--lf-clip-color':clip.ink}" :title="clip.name+' · '+clip.start_frame+'–'+(clip.start_frame+clip.duration_frames-1)+' · '+clip.duration_frames+' f'+(clip.fade_in_frames?' · ${cinematicUI("fade_in")}: '+clip.fade_in_frames+' f':'')+(clip.fade_out_frames?' · ${cinematicUI("fade_out")}: '+clip.fade_out_frames+' f':'')" tabindex="0" role="button" :aria-pressed="selectedIds.includes(clip.id)" @focus="focusClip(clip)" @pointerdown.prevent.stop="drag(clip,$event,'move')" @dblclick.stop="source(clip)" @contextmenu.prevent.stop="menu(clip,$event)" @keydown="shortcut(clip,$event)">
                         <svg v-if="clip.fade_in_frames||clip.fade_out_frames" class="lf-cine-blend" viewBox="0 0 100 20" preserveAspectRatio="none" aria-hidden="true"><polygon :points="clip.blendShape.area"/><polyline :points="clip.blendShape.line" vector-effect="non-scaling-stroke"/></svg><div class="lf-cine-clip-label"><i class="material-icons">{{clip.type==='sequence'?'theaters':'movie'}}</i><span>{{clip.name}}</span><i v-if="clip.loop" class="material-icons">repeat</i></div><i v-for="(key,index) in clip.keys" :key="index" class="lf-cine-source-key" :style="{left:(key*size)+'px'}"></i>
-                        <div class="lf-cine-trim left" title="${cinematicUI('Trim source in','Recortar entrada del origen')}" @pointerdown.prevent.stop="drag(clip,$event,'left')"></div><div class="lf-cine-trim right" title="${cinematicUI('Trim end','Recortar final')}" @pointerdown.prevent.stop="drag(clip,$event,'right')"></div></div></div></div>
-                    <div v-if="!tracks.some(track=>track.clips.length)" class="lf-cine-sequence-empty" :style="{paddingLeft:(head+12)+'px'}">${cinematicUI('Double-click to add an animation. Shift-click selects several clips; S splits at the playhead.','Doble clic para añadir animación. Shift+clic selecciona varios clips; S corta en el cursor.')}</div></template><div v-if="snapFrame!==null" class="lf-cine-snap-guide" :style="{left:(head+8+(start+snapFrame*frameSeconds)*size)+'px'}"><span>{{snapFrame}} f</span></div></li>`
+                        <div class="lf-cine-trim left" title="${cinematicUI("trim_source_in")}" @pointerdown.prevent.stop="drag(clip,$event,'left')"></div><div class="lf-cine-trim right" title="${cinematicUI("trim_end")}" @pointerdown.prevent.stop="drag(clip,$event,'right')"></div></div></div></div>
+                    <div v-if="!tracks.some(track=>track.clips.length)" class="lf-cine-sequence-empty" :style="{paddingLeft:(head+12)+'px'}">${cinematicUI("double_click_to_add_an_animation_shift_click_selects_several_cli")}</div></template><div v-if="snapFrame!==null" class="lf-cine-snap-guide" :style="{left:(head+8+(start+snapFrame*frameSeconds)*size)+'px'}"><span>{{snapFrame}} f</span></div></li>`
         };
         // Extend the native Vue render tree. Vue owns the rows and their lifecycle;
         // no independently mounted overlay is inserted into Blockbench's DOM.
@@ -3728,27 +4460,27 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         if (!window.document?.addEventListener) return;
         const enabled=()=>!!getActiveProject()&&Project.mode==='animate'&&!activeRenderJob&&!AnimationController.selected;
         cinematicSequenceModeSelect=new BarSelect('lightflow_cinematic_timeline_mode',{
-            name:cinematicUI('Timeline editor','Editor del Timeline'),width:112,condition:enabled,value:'animation',
-            options:{animation:{name:cinematicUI('Animation','Animación'),icon:'movie'},sequence:{name:cinematicUI('Sequence','Secuencia'),icon:'theaters'}},
+            name:cinematicUI("timeline_editor"),width:112,condition:enabled,value:'animation',
+            options:{animation:{name:cinematicUI("animation"),icon:'movie'},sequence:{name:cinematicUI("sequence"),icon:'theaters'}},
             onChange(select){setCinematicSequencePreview(select.get()==='sequence');}
         });
-        cinematicSequenceAddAction=new Action('lightflow_cinematic_add_clip',{name:cinematicUI('Add clip','Añadir clip'),icon:'playlist_add',condition:()=>enabled()&&cinematicSequencePreview,
+        cinematicSequenceAddAction=new Action('lightflow_cinematic_add_clip',{name:cinematicUI("add_clip"),icon:'playlist_add',condition:()=>enabled()&&cinematicSequencePreview&&!!getSequence(readDocumentView()),
             click(event){const seq=getSequence(readDocumentView()),firstEmpty=Array.from({length:64},(_,index)=>index).find(index=>!seq.clips.some(clip=>clip.track===index));sequenceAddClipMenu(firstEmpty??0,event);}});
-        cinematicWorkspaceAction=new Action('lightflow_cinematic_workspace',{name:cinematicUI('Cinematic workspace','Espacio de trabajo cinematográfico'),icon:'view_quilt',condition:enabled,click:event=>new Menu([
-            {name:cinematicUI('Compose: sources and camera','Componer: fuentes y cámara'),icon:'view_quilt',click:()=>setCinematicWorkspace('compose')},
-            {name:cinematicUI('Focus viewport','Priorizar viewport'),icon:'panorama',click:()=>setCinematicWorkspace('viewport')},
-            {name:cinematicUI('Focus timeline','Priorizar Timeline'),icon:'theaters',click:()=>setCinematicWorkspace('timeline')},
-            '_',{name:cinematicUI('Left sidebar','Paneles izquierdos'),icon:Prop.show_left_bar?'check_box':'check_box_outline_blank',click:()=>Interface.toggleSidebar('left')},
-            {name:cinematicUI('Right sidebar','Paneles derechos'),icon:Prop.show_right_bar?'check_box':'check_box_outline_blank',click:()=>Interface.toggleSidebar('right')},
-            '_',{name:cinematicUI('Restore workspace','Restaurar distribución'),icon:'restore',condition:()=>!!cinematicWorkspaceSnapshot,click:restoreCinematicWorkspace}
+        cinematicWorkspaceAction=new Action('lightflow_cinematic_workspace',{name:cinematicUI("cinematic_workspace"),icon:'view_quilt',condition:enabled,click:event=>new Menu([
+            {name:cinematicUI("compose_sources_and_camera"),icon:'view_quilt',click:()=>setCinematicWorkspace('compose')},
+            {name:cinematicUI("focus_viewport"),icon:'panorama',click:()=>setCinematicWorkspace('viewport')},
+            {name:cinematicUI("focus_timeline"),icon:'theaters',click:()=>setCinematicWorkspace('timeline')},
+            '_',{name:cinematicUI("left_sidebar"),icon:Prop.show_left_bar?'check_box':'check_box_outline_blank',click:()=>Interface.toggleSidebar('left')},
+            {name:cinematicUI("right_sidebar"),icon:Prop.show_right_bar?'check_box':'check_box_outline_blank',click:()=>Interface.toggleSidebar('right')},
+            '_',{name:cinematicUI("restore_workspace"),icon:'restore',condition:()=>!!cinematicWorkspaceSnapshot,click:restoreCinematicWorkspace}
         ]).open(event?.currentTarget || event)});
-        cinematicRecordFrameAction=new Action('lightflow_cinematic_record_frame',{name:cinematicUI('Recording frame','Encuadre de grabación'),icon:'crop_free',condition:()=>!!getActiveProject()&&!activeRenderJob&&['edit','animate','render'].includes(Project.mode),click:()=>{
+        cinematicRecordFrameAction=new Action('lightflow_cinematic_record_frame',{name:cinematicUI("recording_frame"),icon:'crop_free',condition:()=>!!getActiveProject()&&!activeRenderJob&&['edit','animate','render'].includes(Project.mode),click:()=>{
             if(window.StudioRender?.frameOwner==='lightflow_cinematic'){window.StudioRender.hideFrame({owner:'lightflow_cinematic'});cinematicFrameEditSequenceId='';}
             else showCinematicRecordingFrame();
         }});
         removeCinematicTimelineActions();
         Toolbars.timeline.add(cinematicSequenceModeSelect,6).add(cinematicSequenceAddAction,7).add(cinematicWorkspaceAction,8).add(cinematicRecordFrameAction,9);
-        cinematicSnapAction=new Toggle('lightflow_cinematic_snap',{name:cinematicUI('Snap clips · Alt bypass','Ajustar clips · Alt omite'),icon:'fa-magnet',default:true,save_on_restart:true,condition:()=>enabled()&&cinematicSequencePreview,onChange:value=>{cinematicSnapEnabled=value;}});
+        cinematicSnapAction=new Toggle('lightflow_cinematic_snap',{name:cinematicUI("snap_clips_alt_bypass"),icon:'fa-magnet',default:true,save_on_restart:true,condition:()=>enabled()&&cinematicSequencePreview,onChange:value=>{cinematicSnapEnabled=value;}});
         cinematicSnapEnabled=cinematicSnapAction.value;Toolbars.timeline.add(cinematicSnapAction,11);
         MenuBar.addAction(cinematicWorkspaceAction,'view');MenuBar.addAction(cinematicRecordFrameAction,'animation');
         const animationModule=window.TransformerModule?.modules?.animation;
@@ -3804,7 +4536,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
             const drag=cinematicSequencerDrag;if(!drag)return;cinematicSequencerDrag=null;
             if(drag.scrollRAF!==null)cancelAnimationFrame(drag.scrollRAF);
             try{drag.target.releasePointerCapture(drag.pointerId);}catch(_){}
-            if(cancel||!drag.changed)Undo.cancelEdit(true);else Undo.finishEdit(cinematicUI('Move / trim sequence clip','Mover / recortar clip de secuencia'),{[CINEMATIC_UNDO_ASPECT]:true});
+            if(cancel||!drag.changed)Undo.cancelEdit(true);else Undo.finishEdit(cinematicUI("move_trim_sequence_clip"),{[CINEMATIC_UNDO_ASPECT]:true});
             if(cinematicSequencerVue)cinematicSequencerVue.snapFrame=null;
             cinematicSequencerVue?.sync();Animator.preview();
         };
@@ -3929,29 +4661,59 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
     function installCinematicRecordingWorkflow() {
         const api=window.StudioRender;if(!api?.registerFrameWorkflow||cinematicFrameWorkflowAPI===api)return;
         cinematicFrameWorkflow?.delete();cinematicFrameWorkflowAPI=api;
-        const sequence=()=>getSequence(readDocumentView(),cinematicFrameEditSequenceId);
+        const sequence=()=>cinematicFrameEditSequenceId?getSequence(readDocumentView(),cinematicFrameEditSequenceId):null;
         cinematicFrameWorkflow=api.registerFrameWorkflow('lightflow_cinematic',{
-            get label(){return sequence()?.name || cinematicUI('Recording','Grabación');},
+            get label(){return sequence()?.name || cinematicUI("recording");},
             get accent(){return 'var(--lf-cinematic-record)';},
-            getSettings(){const seq=sequence();return seq?buildStudioRenderSettings(seq):{};},
-            setResolution(resolution){const seq=sequence();if(seq&&!activeRenderJob)updateSequence(seq.id,{resolution,match_frame_ratio:true});},
-            settings(){const seq=sequence();if(seq)setActiveSequence(seq.id);openManagerDialog();},
+            getSettings(){return buildStudioRenderSettings(sequence()||viewportCaptureSequence());},
+            setResolution(resolution,options={}){
+                const seq=sequence();if(activeRenderJob)return;
+                if(!seq){viewportCapturePreferences.set(getActiveProject(),{...viewportCapturePreferences.get(getActiveProject()),resolution});return;}
+                runCinematicUndo(cinematicUI("edit_recording_frame"),()=>{
+                    let opticalState;
+                    if(options.aspect&&cinematicCameraView?.cameraId===seq.camera_id){
+                        const camera=getCamera(readDocumentView(),seq.camera_id,seq),frame=currentCinematicFrame(seq),state=sampleCamera(camera,frame);
+                        opticalState={...state,sensor_width_mm:state.sensor_height_mm*options.aspect};
+                        addOrUpdateCameraKeyframe(camera.id,frame,{sequence_id:seq.id,state:opticalState});
+                    }
+                    const updated=updateSequence(seq.id,{resolution,match_frame_ratio:true});
+                    if(opticalState)applyPhysicalState(opticalState,updated);
+                });
+            },
+            get sensorSettings(){const seq=sequence();return seq?.camera_id&&cinematicCameraView?.cameraId===seq.camera_id?()=>openPhysicalCameraDialog(seq.camera_id,seq.id,'sensor'):null;},
+            settings(){const seq=sequence();if(seq){setActiveSequence(seq.id);openManagerDialog();}else openViewportCaptureDialog();},
             cameraSettings(){const seq=sequence();if(seq?.camera_id)openPhysicalCameraDialog(seq.camera_id,seq.id);},
+            cameraViewChanged(shot) {
+                const seq=sequence();if(!seq?.camera_id || activeRenderJob)return;
+                const camera=getCamera(readDocumentView(),seq.camera_id,seq);
+                if(camera)addOrUpdateCameraKeyframe(camera.id,currentCinematicFrame(seq),{sequence_id:seq.id,state:physicalStateFromShot(shot,camera.base)});
+            },
+            reopen:{name:'lightflow_cinematic.action.reopen_last',condition:()=>!!lastCompletedArtifact&&!activeRenderJob,click:reopenLastRecording},
             primary:{
                 get icon(){return activeRenderJob?'stop':'fiber_manual_record';},
-                get label(){return activeRenderJob?cinematicUI('Stop','Detener'):cinematicUI('Record','Grabar');},
-                get enabled(){return !!sequence()?.camera_id;},
-                get description(){const seq=sequence();return activeRenderJob?cinematicUI('Cancel sequence recording','Cancelar grabación de secuencia'):cinematicUI('Render the sequence to video or frames','Renderizar la secuencia a vídeo o frames')+(seq?' · '+sequenceTimingSummary(seq):'');},
-                click(){if(activeRenderJob){cancelActiveRender();return;}const seq=sequence();if(seq)renderConfiguredSequence(seq.id).then(reportRenderResult).catch(showCinematicError);}
+                get label(){return activeRenderJob?cinematicUI("stop"):cinematicUI("record");},
+                get enabled(){return !!getPreview();},
+                get description(){const seq=sequence();return activeRenderJob?cinematicUI("cancel_sequence_recording"):cinematicUI("render_the_sequence_to_video_or_frames")+(seq?' · '+sequenceTimingSummary(seq):'');},
+                click(){if(activeRenderJob){cancelActiveRender();return;}const seq=sequence();if(seq?.camera_id)renderConfiguredSequence(seq.id).then(reportRenderResult).catch(showCinematicError);else openViewportCaptureDialog();}
             }
         });
     }
 
+    function setCinematicCameraView(view) {
+        const previous=cinematicCameraView;
+        cinematicCameraView=view ? {...view,projectId:getActiveProject()?.uuid} : null;
+        if(previous?.cameraId!==cinematicCameraView?.cameraId || previous?.preview!==cinematicCameraView?.preview){
+            if(!cinematicCameraView)deleteCinematicLookFrame();
+            dispatchCinematicEvent('lightflow_cinematic_ui_changed',{});
+        }
+    }
     function deleteCinematicLookFrame(){cinematicLookFrame?.remove();cinematicLookFrame=null;}
     function syncCinematicLookFrame(){
         const view=cinematicCameraView,preview=getPreview();
-        if(!view||view.preview!==preview||unloading||activeRenderJob||window.StudioRender?.frameOwner||!['edit','animate','render'].includes(Project?.mode)){deleteCinematicLookFrame();return;}
-        if(preview.camera.position.distanceTo(view.position)>.001||Math.abs(preview.camera.quaternion.dot(view.quaternion))<.999999){cinematicCameraView=null;deleteCinematicLookFrame();return;}
+        if(view&&(view.projectId!==getActiveProject()?.uuid||!getCameraElementById(view.cameraId)||!['edit','animate','render'].includes(Project?.mode)))setCinematicCameraView(null);
+        if(!cinematicCameraView||view.preview!==preview||unloading||activeRenderJob){deleteCinematicLookFrame();return;}
+        if(preview.camera.position.distanceTo(view.position)>.001||Math.abs(preview.camera.quaternion.dot(view.quaternion))<.999999){setCinematicCameraView(null);return;}
+        if(window.document.getElementById('studio_render_frame')){deleteCinematicLookFrame();return;}
         const doc=readDocumentView(),sequence=resolveCameraSequence(doc,view.cameraId),camera=getCamera(doc,view.cameraId,sequence);
         if(!sequence||!camera){deleteCinematicLookFrame();return;}
         const rect=window.StudioRender?.getShotFrameRect?.(shotFromPhysicalState(sampleCamera(camera,currentCinematicFrame(sequence)),sequence),{preview});
@@ -3964,9 +4726,9 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
 
     function showCinematicRecordingFrame(sequenceId) {
         if(activeRenderJob)return false;
-        const sequence=getSequence(readDocumentView(),sequenceId);if(!sequence)return false;
+        const sequence=(sequenceId?getSequence(readDocumentView(),sequenceId):null)||viewportCaptureSequence();
         installCinematicRecordingWorkflow();
-        cinematicFrameEditSequenceId=sequence.id;
+        cinematicFrameEditSequenceId=sequenceId?sequence.id:'';
         let frameState=sequence.render_frame;
         if(sequence.capture_area!=='frame'){
             const preview=getPreview(),aspect=sequence.resolution[0]/sequence.resolution[1],reference=(preview?.width||16)/(preview?.height||9);
@@ -3974,7 +4736,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
             frameState={x:(1-width)/2,y:(1-height)/2,width,height,reference_aspect:reference};
         }
         const frame=window.StudioRender?.showFrame?.({persistProjectState:false,owner:'lightflow_cinematic',settings:buildStudioRenderSettings(sequence)},frameState);
-        if(frame&&(sequence.capture_area!=='frame'||JSON.stringify(sequence.render_frame)!==JSON.stringify(normalizeCaptureFrame(frame))))updateSequence(sequence.id,{capture_area:'frame',render_frame:normalizeCaptureFrame(frame)});
+        if(sequenceId&&frame&&(sequence.capture_area!=='frame'||JSON.stringify(sequence.render_frame)!==JSON.stringify(normalizeCaptureFrame(frame))))updateSequence(sequence.id,{capture_area:'frame',render_frame:normalizeCaptureFrame(frame)});
         return true;
     }
 
@@ -3984,7 +4746,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         cinematicUXStyles = Blockbench.addCSS(`
             #studio_render_frame[data-workflow-owner="lightflow_cinematic"] {border-color:var(--studio-frame-accent,var(--lf-cinematic-record,var(--color-accent)))!important;border-style:dashed!important;border-radius:0!important;}
             #studio_render_frame[data-workflow-owner="lightflow_cinematic"] .studio_render_frame_handle {border-color:rgba(230,236,248,0.96)!important;}
-            #studio_render_frame[data-workflow-owner="lightflow_cinematic"] .studio_render_frame_label {border-radius:3px!important;background:rgba(18,22,29,0.86)!important;color:var(--color-light)!important;}
+            #studio_render_frame[data-workflow-owner="lightflow_cinematic"] .studio_render_frame_label {border-radius:3px!important;background:rgba(18,22,29,0.86)!important;color:#f1f3f5!important;}
             #studio_render_frame[data-workflow-owner="lightflow_cinematic"] .studio_render_frame_button.studio_render_capture_button {background:var(--studio-frame-accent,var(--lf-cinematic-record,var(--color-accent)))!important;color:var(--color-light)!important;}
             .lf-camera-fly-hud {position:absolute;left:8px;right:8px;bottom:8px;display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:6px 8px;background:var(--color-ui);border:1px solid var(--color-border);border-radius:8px;z-index:8;}
             .lf-camera-fly-hud span {flex:1 1 300px;font-size:12px;min-width:0;}.lf-camera-fly-hud button {display:inline-flex;align-items:center;gap:4px;flex-shrink:0;padding:0 6px!important;color:var(--color-text);background:var(--color-button);border-radius:6px;}.lf-camera-fly-hud button,.lf-camera-monitor-header button {min-width:28px;height:28px;padding:2px;border:0;box-shadow:none;}
@@ -3996,22 +4758,6 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
             .lf-camera-monitor-launcher{position:absolute;left:12px;bottom:12px;width:32px!important;min-width:32px!important;height:32px!important;min-height:32px;padding:0!important;box-sizing:border-box;display:flex;align-items:center;justify-content:center;border:1px solid var(--color-border);border-radius:8px;background:var(--color-ui);color:var(--lf-cinematic-camera);z-index:5;}
             .lf-camera-monitor-launcher>.icon{display:flex;align-items:center;justify-content:center;width:20px;height:20px;font-size:20px;line-height:1;}
             #panel_lightflow_cinematic_camera {container-type:inline-size;}
-            @container (max-width:260px) {
-                #panel_lightflow_cinematic_camera .lf-camera-primary {display:grid!important;grid-template-columns:1fr;gap:5px;}
-                #panel_lightflow_cinematic_camera .lf-camera-primary button,#panel_lightflow_cinematic_camera .lf-camera-movement button {justify-content:flex-start!important;padding:5px 9px!important;gap:8px!important;min-height:30px;white-space:nowrap!important;line-height:1.3!important;}
-                #panel_lightflow_cinematic_camera .lf-camera-movement {grid-template-columns:1fr!important;gap:3px;}
-                #panel_lightflow_cinematic_camera .lf-camera-record {padding:5px 8px;line-height:1.3;gap:8px;}
-                #panel_lightflow_cinematic_camera .dialog_bar:has(.combo_slider_label) > .tool.widget {position:relative;display:grid!important;grid-template-columns:minmax(0,1fr) auto;height:auto!important;gap:3px 4px;}
-                #panel_lightflow_cinematic_camera .combo_slider_label {grid-column:1/-1;min-width:0!important;width:auto!important;text-align:left;white-space:normal;}
-                #panel_lightflow_cinematic_camera .combo_slider_label {padding-left:22px;box-sizing:border-box;}
-                #panel_lightflow_cinematic_camera .tool.widget > .material-icons:first-child {position:absolute;top:0;left:4px;height:20px;width:18px;margin:0!important;}
-                #panel_lightflow_cinematic_camera .tool.widget > .material-icons:last-child {grid-column:2;grid-row:2;width:18px;margin:0!important;}
-                #panel_lightflow_cinematic_camera .slider_input_combo {grid-column:1;grid-row:2;min-width:0!important;width:100%!important;height:28px!important;margin:0!important;}
-                #panel_lightflow_cinematic_camera .numeric_input input {min-width:0!important;}
-                #panel_lightflow_cinematic_camera input[type=range] {min-width:0!important;flex:1 1 0!important;width:0;}
-                #panel_lightflow_cinematic_camera .numeric_input {flex:0 0 58px!important;min-width:58px!important;width:58px!important;}
-                #panel_keyframe .lf-camera-key-slider .combo_slider_label {min-width:0;}
-            }
             #panel_keyframe {container-type:inline-size;}
             #panel_keyframe:has([id^="keyframe_bar_camera_"]) #keyframe_type_label {height:auto;min-height:24px;white-space:normal;}
             @container (max-width:260px) {
@@ -4107,7 +4853,6 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
             #lightflow-cinematic-render-progress progress {accent-color:var(--color-accent);}
             .lf-camera-look-frame{position:absolute;box-sizing:border-box;pointer-events:none;z-index:3;border:1px solid var(--lf-cinematic-record);outline:1px solid var(--color-dark);outline-offset:-2px;overflow:hidden;}
             .lf-camera-look-frame>span{position:absolute;top:6px;left:50%;transform:translateX(-50%);max-width:calc(100% - 20px);padding:3px 8px;border-radius:8px;background:var(--color-ui);color:var(--color-text);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-            #lightflow_cinematic_render_result :is(video,img) {max-height:calc(100vh - 300px)!important;object-fit:contain;}
             @media(max-width:760px) {:is(#lightflow_cinematic_manager,#lightflow_cinematic_physical_camera,#lightflow_cinematic_montage) {max-width:calc(100vw - 24px)!important;}}
         `);
         cinematicLibraryComponent = {
@@ -4116,13 +4861,13 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                 mounted(){cinematicLibraryVue=this;this.sync();},
                 beforeDestroy(){if(cinematicLibraryVue===this)cinematicLibraryVue=null;},
                 methods:{
-                    sync(){this.renderMode=Project.mode==='render';const doc=readDocumentView(),seq=getSequence(doc);this.active=seq?.id||'';this.shots=doc.sequences.map(shot=>({id:shot.id,name:shot.name,camera:doc.cameras.find(camera=>camera.id===shot.camera_id)?.name||cinematicUI('No camera','Sin cámara'),duration:formatDurationSeconds(sequenceDurationSeconds(shot))}));this.frame=seq?clamp(timelineSecondsToFrame(seq,typeof Timeline!=='undefined'?Timeline.time:0),seq.start_frame,seq.end_frame-1):0;this.last=(seq?.end_frame||1)-1;this.playing=playbackState.running||!!window.Timeline?.playing;this.loop=seq?.loop_preview!==false;this.busy=!!activeRenderJob;},
+                    sync(){this.renderMode=Project.mode==='render';const doc=readDocumentView(),seq=getSequence(doc);this.active=seq?.id||'';this.shots=doc.sequences.map(shot=>({id:shot.id,name:shot.name,camera:doc.cameras.find(camera=>camera.id===shot.camera_id)?.name||cinematicUI("no_camera"),duration:formatDurationSeconds(sequenceDurationSeconds(shot))}));this.frame=seq?clamp(timelineSecondsToFrame(seq,typeof Timeline!=='undefined'?Timeline.time:0),seq.start_frame,seq.end_frame-1):0;this.last=(seq?.end_frame||1)-1;this.playing=playbackState.running||!!window.Timeline?.playing;this.loop=seq?.loop_preview!==false;this.busy=!!activeRenderJob;},
                     select(id){if(this.busy||activeRenderJob)return;pauseCinematicPlayback();setActiveSequence(id);const seq=getSequence(readDocument());if(seq?.camera_id)selectCameraElement(seq.camera_id);showActiveCameraTimelineTrack({select:false});jumpToSequenceStart(id);setCinematicSequencePreview(true);syncFpsToolbar();this.sync();},
                     create(){
                         if(this.busy||activeRenderJob)return;
-                        runCinematicUndo(cinematicUI('Create sequence','Crear secuencia'),()=>{
+                        runCinematicUndo(cinematicUI("create_sequence"),()=>{
                             const doc=readDocument(),current=getSequence(doc),animation=window.Animation?.selected;
-                            const shot=createSequence({name:cinematicUI('Sequence','Secuencia')+' '+(doc.sequences.length+1),camera_id:current?.camera_id||'',
+                            const shot=createSequence({name:cinematicUI("sequence")+' '+(doc.sequences.length+1),camera_id:current?.camera_id||'',
                                 end_frame:Math.max(1,Math.round((animation?.length||5)*frameRateValue(current?.frame_rate))),frame_rate:current?.frame_rate});
                             if(!shot.camera_id)createCameraFromView(null,shot.id);
                             if(animation)addSequenceClip(shot.id,animation.uuid,'animation',{start_frame:0});this.select(shot.id);setCinematicSequencePreview(true);
@@ -4133,22 +4878,18 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                     render(){
                         if(this.busy||activeRenderJob)return;
                         const seq=getSequence(readDocument());
-                        if(!seq?.camera_id){Blockbench.showQuickMessage(cinematicUI('Assign a camera first.','Asigna primero una cámara.'));openManagerDialog();return;}
+                        if(!seq?.camera_id){Blockbench.showQuickMessage(cinematicUI("assign_a_camera_first"));openManagerDialog();return;}
                         pauseCinematicPlayback();
                         renderConfiguredSequence(seq.id).then(reportRenderResult).catch(showCinematicError);
                     },
-                    menu(shot,event){if(this.busy||activeRenderJob)return;new Menu([{name:cinematicUI('Edit sequence','Editar secuencia'),icon:'tune',click:()=>{this.select(shot.id);openManagerDialog();}},
-                        {name:cinematicUI('Show camera track','Mostrar pista de cámara'),icon:'videocam',click:()=>{this.select(shot.id);showActiveCameraTimelineTrack({select:true});}},
-                        '_',
-                        {name:cinematicUI('Duplicate sequence','Duplicar secuencia'),icon:'content_copy',click:()=>{const source=getSequence(readDocument(),shot.id);const copy=createSequence({...deepClone(source),id:createId('sequence'),name:source.name+' · '+cinematicUI('copy','copia')});this.select(copy.id);}},
-                        '_',{name:cinematicUI('Delete sequence','Eliminar secuencia'),icon:'delete',condition:()=>readDocument().sequences.length>1,click:()=>Blockbench.showMessageBox({title:cinematicUI('Delete sequence','Eliminar secuencia'),message:shot.name,buttons:['dialog.confirm','dialog.cancel'],confirm:0,cancel:1},result=>{if(result===0){deleteSequence(shot.id);this.sync();}})}]).open(event);},
+                    menu(shot,event){if(this.busy||activeRenderJob)return;new Menu(sequenceLibraryMenuItems(shot)).open(event?.currentTarget || event?.target || event);},
                     seek(frame){if(this.busy||activeRenderJob)return;pauseCinematicPlayback();const seq=getSequence(readDocument());if(seq)evaluateFrame(seq.id,clamp(Math.round(Number(frame)||0),seq.start_frame,seq.end_frame-1)).catch(showCinematicError);this.sync();},
                     step(delta){this.seek(this.frame+delta);},
                     play(){if(activeRenderJob)return;toggleCinematicPlayback();this.sync();},
                     toggleLoop(){if(activeRenderJob)return;const seq=getSequence(readDocument());if(seq)updateSequence(seq.id,{loop_preview:!seq.loop_preview});this.sync();}
                 },
                 computed:{filtered(){const query=(this.searchTerm||'').toLowerCase().trim();return this.shots.filter(shot=>shot.name.toLowerCase().includes(query));}},
-                template:`<div class="lf-cine-library"><div class="lf-cine-list list mobile_scrollbar"><div v-for="shot in filtered" :key="shot.id" class="lf-cine-shot" :class="{selected:active===shot.id}" role="button" tabindex="0" @click="select(shot.id)" @keydown.enter.prevent="select(shot.id)" @keydown.space.prevent="select(shot.id)" @contextmenu.prevent="menu(shot,$event)"><i class="material-icons">theaters</i><div><strong>{{shot.name}}</strong><small>{{shot.camera}} · {{shot.duration}}</small></div><button :disabled="busy" @click.stop="menu(shot,$event)" aria-label="${cinematicUI('Sequence actions','Acciones de secuencia')}" title="${cinematicUI('Sequence actions','Acciones de secuencia')}"><i class="material-icons">more_horiz</i></button></div><div v-if="!filtered.length" class="lf-cine-empty">${cinematicUI('No matching sequences.','No hay secuencias que coincidan.')}</div></div><div v-if="renderMode" class="lf-cine-transport"><button :disabled="busy" @click="seek(0)" title="${cinematicUI('First frame','Primer frame')}" aria-label="${cinematicUI('First frame','Primer frame')}"><i class="material-icons">first_page</i></button><button :disabled="busy" @click="step(-1)" title="${cinematicUI('Previous frame','Frame anterior')}" aria-label="${cinematicUI('Previous frame','Frame anterior')}"><i class="material-icons">navigate_before</i></button><button :disabled="busy" @click="play" title="${cinematicUI('Play / pause','Reproducir / pausar')}" aria-label="${cinematicUI('Play / pause','Reproducir / pausar')}"><i class="material-icons">{{playing?'pause':'play_arrow'}}</i></button><button :disabled="busy" @click="step(1)" title="${cinematicUI('Next frame','Frame siguiente')}" aria-label="${cinematicUI('Next frame','Frame siguiente')}"><i class="material-icons">navigate_next</i></button><button :disabled="busy" :class="{active:loop}" :aria-pressed="loop" @click="toggleLoop" title="${cinematicUI('Loop preview','Repetir preview')}" aria-label="${cinematicUI('Loop preview','Repetir preview')}"><i class="material-icons">repeat</i></button><input type="number" :value="frame" :disabled="busy" @change="seek($event.target.value)" aria-label="${cinematicUI('Current frame','Frame actual')}"><span class="lf-cine-frame">/ {{last}}</span></div></div>`
+                template:`<div class="lf-cine-library"><div class="lf-cine-list list mobile_scrollbar"><div v-for="shot in filtered" :key="shot.id" class="lf-cine-shot" :class="{selected:active===shot.id}" role="button" tabindex="0" @click="select(shot.id)" @keydown.enter.prevent="select(shot.id)" @keydown.space.prevent="select(shot.id)" @contextmenu.prevent="menu(shot,$event)"><i class="material-icons">theaters</i><div><strong>{{shot.name}}</strong><small>{{shot.camera}} · {{shot.duration}}</small></div><button :disabled="busy" @click.stop="menu(shot,$event)" aria-label="${cinematicUI("sequence_actions")}" title="${cinematicUI("sequence_actions")}"><i class="material-icons">more_horiz</i></button></div><div v-if="!filtered.length" class="lf-cine-empty">${cinematicUI("no_matching_sequences")}</div></div><div v-if="renderMode" class="lf-cine-transport"><button :disabled="busy" @click="seek(0)" title="${cinematicUI("first_frame")}" aria-label="${cinematicUI("first_frame")}"><i class="material-icons">first_page</i></button><button :disabled="busy" @click="step(-1)" title="${cinematicUI("previous_frame")}" aria-label="${cinematicUI("previous_frame")}"><i class="material-icons">navigate_before</i></button><button :disabled="busy" @click="play" title="${cinematicUI("play_pause")}" aria-label="${cinematicUI("play_pause")}"><i class="material-icons">{{playing?'pause':'play_arrow'}}</i></button><button :disabled="busy" @click="step(1)" title="${cinematicUI("next_frame")}" aria-label="${cinematicUI("next_frame")}"><i class="material-icons">navigate_next</i></button><button :disabled="busy" :class="{active:loop}" :aria-pressed="loop" @click="toggleLoop" title="${cinematicUI("loop_preview")}" aria-label="${cinematicUI("loop_preview")}"><i class="material-icons">repeat</i></button><input type="number" :value="frame" :disabled="busy" @change="seek($event.target.value)" aria-label="${cinematicUI("current_frame")}"><span class="lf-cine-frame">/ {{last}}</span></div></div>`
             };
         mountCinematicAnimationLibrary();
         cinematicUXTimer=setInterval(()=>{
@@ -4169,11 +4910,11 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
             if(key!==cinematicGizmoThemeKey){cinematicGizmoThemeKey=key;syncCameraGizmoVisibility();}
         },200);
         cinematicLibraryVue?.sync?.();
-        cinematicWorkspaceListeners.push(Blockbench.on('select_mode',()=>{if(Project?.mode!=='animate')restoreCinematicWorkspace();ensureCameraInspectorOrder();}),Blockbench.on('reset_layout',()=>{
+        cinematicWorkspaceListeners.push(Blockbench.on('select_mode',()=>{if(Project?.mode!=='animate')restoreCinematicWorkspace();queueMicrotask(()=>{if(unloading)return;syncCinematicCameraPath();syncCinematicLookFrame();ensureCameraInspectorOrder();});}),Blockbench.on('reset_layout',()=>{
             // Native reset owns the positions; only retire our temporary flex flags.
             for(const [panel,state] of cinematicWorkspaceSnapshot?.sourcePanels||[])if(Panels[panel.id]===panel&&panel.growable===state.appliedGrowable){panel.growable=state.growable;panel.container.classList.toggle('grow',state.growable);}
             cinematicWorkspaceSnapshot=null;ensureCameraInspectorOrder();
-        }),Blockbench.on('select_project',restoreCinematicWorkspace));
+        }),Blockbench.on('select_project',()=>{setCinematicCameraView(null);syncCinematicCameraPath();restoreCinematicWorkspace();}));
     }
 
     // Compose the current native render function, including other plugins' animation libraries.
@@ -4185,16 +4926,16 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         const original=native.$options.render;
         if(!cinematicLibraryActions.length&&window.Action&&window.Toolbars?.animations){
             for(const [id,name,icon,method] of [
-                ['create',cinematicUI('Create sequence','Crear secuencia'),'add','create'],
-                ['montage',cinematicUI('Arrange shots','Ordenar tomas'),'view_list','montage'],
-                ['render',cinematicUI('Render active shot','Renderizar toma activa'),'video_file','render']]){
+                ['create',cinematicUI("create_sequence"),'add','create'],
+                ['montage',cinematicUI("arrange_shots"),'view_list','montage'],
+                ['render',cinematicUI("render_active_shot"),'video_file','render']]){
                 const action=new Action('lightflow_cinematic_library_'+id,{name,icon,condition:()=>Project?.mode==='animate'&&cinematicSequencePreview&&!activeRenderJob,click:()=>cinematicLibraryVue?.[method]?.()});
                 cinematicLibraryActions.push(action);Toolbars.animations.add(action,cinematicLibraryActions.length-1);
             }
         }
         if(!cinematicLibraryActions.some(action=>action.id==='lightflow_cinematic_library_length')&&window.NumSlider){
             const duration=new NumSlider('lightflow_cinematic_library_length',{
-                name:cinematicUI('Sequence duration (seconds)','Duración de secuencia (segundos)'),category:'animation',
+                name:cinematicUI("sequence_duration_seconds"),category:'animation',
                 condition:()=>Project?.mode==='animate'&&cinematicSequencePreview&&!activeRenderJob,
                 getInterval(event){return event?.shiftKey?1:1/frameRateValue(getSequence(readDocumentView())?.frame_rate);},
                 get(){return sequenceDurationSeconds(getSequence(readDocumentView()));},
@@ -4207,7 +4948,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                     updateSequence(seq.id,{end_frame:seq.start_frame+frames,duration_mode:'frames'},{undo:false});
                     cinematicSequencerVue?.sync();cinematicLibraryVue?.sync();duration.update();
                 },
-                onAfter(){if(!cinematicSequenceLengthEdit)return;const edit=cinematicSequenceLengthEdit;cinematicSequenceLengthEdit=null;const seq=getSequence(readDocumentView(),edit.id);if(seq&&sequenceDurationFrames(seq)!==edit.frames)Undo.finishEdit(cinematicUI('Change sequence duration','Cambiar duración de secuencia'));else Undo.cancelEdit(true);}
+                onAfter(){if(!cinematicSequenceLengthEdit)return;const edit=cinematicSequenceLengthEdit;cinematicSequenceLengthEdit=null;const seq=getSequence(readDocumentView(),edit.id);if(seq&&sequenceDurationFrames(seq)!==edit.frames)Undo.finishEdit(cinematicUI("change_sequence_duration"));else Undo.cancelEdit(true);}
             });
             cinematicLibraryActions.push(duration);Toolbars.animations.add(duration,3);
         }
@@ -4234,8 +4975,8 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                 }}
             },label);
             return h('div',{class:'lf-cine-animation-library'},[
-                h('div',{class:'lf-cine-library-tabs',attrs:{role:'tablist','aria-label':cinematicUI('Animation library','Biblioteca de animación')}},[
-                    tab(cinematicUI('Animations','Animaciones'),false),tab(cinematicUI('Sequences','Secuencias'),true)]),
+                h('div',{class:'lf-cine-library-tabs',attrs:{role:'tablist','aria-label':cinematicUI("animation_library")}},[
+                    tab(cinematicUI("animations"),false),tab(cinematicUI("sequences"),true)]),
                 search,
                 h('div',{class:'lf-cine-native-library',attrs:{id:'lf-cine-native-library',role:'tabpanel'},style:{display:sequence?'none':''}},[content]),
                 h(cinematicLibraryComponent,{key:'lightflow-sequence-library',props:{searchTerm:this.search_enabled?this.search_term:''},attrs:{id:'lf-cine-sequence-library',role:'tabpanel'},style:{display:sequence?'':'none'}})
@@ -4641,7 +5382,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
     }
 
     function createCameraFromView(name, sequenceId, options = {}) {
-        const shot = captureCurrentShot(name || 'Camera');
+        const shot = options.shot || captureCurrentShot(name || 'Camera');
         if (!shot) return null;
         const create = () => mutateDocument(document => {
             const sequence = getSequence(document, sequenceId);
@@ -4651,6 +5392,11 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                 sequence.start_frame,
                 sequence.end_frame - 1
             );
+            if (options.shot) {
+                sequence.capture_area = shot.output?.capture_area || 'full';
+                sequence.render_frame = normalizeCaptureFrame(shot.frame);
+                sequence.resolution = shot.output?.resolution?.slice() || sequence.resolution;
+            }
             const state = physicalStateFromShot(shot, defaultPhysicalCameraState());
             const camera = normalizeCamera({
                 name: name || 'Camera ' + (document.cameras.length + 1),
@@ -4719,9 +5465,9 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
             const rotation=[euler.x-initialEuler.x,euler.y-initialEuler.y,euler.z-initialEuler.z].map((value,index)=>Math.atan2(Math.sin(value),Math.cos(value))*180/Math.PI+values.rotation[index]);
             const keys=[];Undo.initEdit({keyframes:keys});
             for(const channel of channels){const value=channel==='position'?position:rotation;keys.push(animator.createKeyframe({x:value[0],y:value[1],z:value[2]},options.time??Timeline.time,channel,false,false));}
-            Undo.finishEdit(cinematicUI('Key camera pose','Guardar pose de cámara'),{keyframes:keys});Animator.preview();return keys;
+            Undo.finishEdit(cinematicUI("key_camera_pose"),{keyframes:keys});Animator.preview();return keys;
         }
-        return runCinematicUndo(cinematicUI('Key camera pose','Guardar pose de cámara'),()=>channels.map(channel=>addOrUpdateCameraKeyframe(camera.id,frame,{sequence_id:sequence.id,state,channel,undo:false})));
+        return runCinematicUndo(cinematicUI("key_camera_pose"),()=>channels.map(channel=>addOrUpdateCameraKeyframe(camera.id,frame,{sequence_id:sequence.id,state,channel,undo:false})));
     }
 
     function addOrUpdateCameraKeyframe(cameraId, frame, options = {}) {
@@ -4860,7 +5606,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         if(fly.before.tabindex===null)preview.canvas.removeAttribute('tabindex');else preview.canvas.setAttribute('tabindex',fly.before.tabindex);
         if(fly.before.lookThrough){
             if(!cancel)applyPhysicalStateFallback(fly.state,preview);
-            cinematicCameraView={preview,cameraId:fly.cameraId,position:preview.camera.position.clone(),quaternion:preview.camera.quaternion.clone()};
+            setCinematicCameraView({preview,cameraId:fly.cameraId,position:preview.camera.position.clone(),quaternion:preview.camera.quaternion.clone()});
         }
         preview.render();cinematicCameraPanel?.inside_vue?.sync();syncCinematicCameraMonitor();
         dispatchCinematicEvent('lightflow_cinematic_ui_changed',{});
@@ -4879,8 +5625,8 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         const animator=animation?.animators[element.uuid];fly.initialValues={position:animator?.interpolate('position')||[0,0,0],rotation:animator?.interpolate('rotation')||[0,0,0]};
         cinematicFlySession=fly;preview.controls.enabled=false;preview.controls.unlinked=true;
         const hud=window.document.createElement('div');hud.className='lf-camera-fly-hud';fly.hud=hud;
-        const instructions=window.document.createElement('span');instructions.textContent=cinematicUI('Fly · WASD / Q E · RMB look · Shift fast · Ctrl slow','Vuelo · WASD / Q E · botón derecho: mirar · Shift rápido · Ctrl lento');hud.append(instructions);
-        for(const [label,icon,cancel] of [[cinematicUI('Apply · Enter','Aplicar · Enter'),'check',false],[cinematicUI('Cancel · Esc','Cancelar · Esc'),'close',true]]){
+        const instructions=window.document.createElement('span');instructions.textContent=cinematicUI("fly_wasd_q_e_rmb_look_shift_fast_ctrl_slow");hud.append(instructions);
+        for(const [label,icon,cancel] of [[cinematicUI("apply_enter"),'check',false],[cinematicUI("cancel_esc"),'close',true]]){
             const button=window.document.createElement('button');button.className='text_button';button.title=label;button.setAttribute('aria-label',label);button.append(Blockbench.getIconNode(icon),window.document.createTextNode(label));button.onclick=()=>finishCinematicFly(cancel);hud.append(button);
         }
         preview.node.append(hud);preview.canvas.setAttribute('tabindex','0');preview.canvas.focus();
@@ -4912,7 +5658,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         listen(window.document,'pointermove',event=>{if(window.document.pointerLockElement!==preview.canvas)lookMove(event);});
         listen(window.document,'mousemove',event=>{if(window.document.pointerLockElement===preview.canvas)lookMove(event);});
         listen(preview.canvas,'contextmenu',event=>{event.preventDefault();event.stopImmediatePropagation();});
-        listen(preview.canvas,'wheel',event=>{event.preventDefault();event.stopImmediatePropagation();fly.speed=clamp(fly.speed*Math.pow(1.2,-Math.sign(event.deltaY)),1,512);instructions.title=cinematicUI('Speed: ','Velocidad: ')+Math.round(fly.speed);});
+        listen(preview.canvas,'wheel',event=>{event.preventDefault();event.stopImmediatePropagation();fly.speed=clamp(fly.speed*Math.pow(1.2,-Math.sign(event.deltaY)),1,512);instructions.title=cinematicUI("speed_2")+Math.round(fly.speed);});
         listen(window,'blur',event=>{if(event.target===window)finishCinematicFly(true);});
         let last=performance.now();
         const tick=now=>{
@@ -4954,10 +5700,11 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         const looking=main.camera.position.distanceTo(new THREE.Vector3().fromArray(state.position))<.001&&Math.abs(main.camera.quaternion.dot(new THREE.Quaternion().fromArray(state.quaternion)))>.999999;
         if(looking){deleteCinematicCameraMonitor();return;}
         if(!cinematicCameraMonitorEnabled){
+            if(main.node.querySelector('[data-lightflow-action="camera_monitor"]:not([hidden])')){deleteCinematicCameraMonitor();return;}
             if(cinematicCameraMonitorLauncher?.parentElement===main.node){positionCinematicCameraMonitor(cinematicCameraMonitorLauncher,main);return;}
             deleteCinematicCameraMonitor();
             const button=window.document.createElement('button');button.className='lf-camera-monitor-launcher';button.type='button';
-            button.title=cinematicUI('Show camera monitor','Mostrar monitor de cámara');button.setAttribute('aria-label',button.title);
+            button.title=cinematicUI("show_camera_monitor");button.setAttribute('aria-label',button.title);
             button.append(Blockbench.getIconNode('picture_in_picture_alt'));button.onpointerdown=event=>event.stopPropagation();
             button.onclick=event=>{event.stopPropagation();toggleCinematicCameraMonitor();cinematicCameraMonitor?.node.querySelector('button')?.focus();};
             button.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();button.click();}};
@@ -4965,18 +5712,18 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         }
         cinematicCameraMonitorLauncher?.remove();cinematicCameraMonitorLauncher=null;
         if(!cinematicCameraMonitor){
-            const node=window.document.createElement('div');node.className='lf-camera-monitor';node.title=cinematicUI('Resize from the lower-right corner. Right-click the header for sizes.','Ajusta desde la esquina inferior derecha. Clic derecho en la cabecera para tamaños.');
+            const node=window.document.createElement('div');node.className='lf-camera-monitor';node.title=cinematicUI("resize_from_the_lower_right_corner_right_click_the_header_for_si");
             node.style.width=cinematicCameraMonitorSize.width+'px';node.style.height=cinematicCameraMonitorSize.height+'px';
             const header=window.document.createElement('div');header.className='lf-camera-monitor-header';const title=window.document.createElement('span');header.append(Blockbench.getIconNode('videocam'),title);
-            const close=window.document.createElement('button');close.className='text_button';close.title=cinematicUI('Hide camera monitor','Ocultar monitor de cámara');close.setAttribute('aria-label',close.title);close.append(Blockbench.getIconNode('close'));close.onclick=event=>{event.stopPropagation();toggleCinematicCameraMonitor();cinematicCameraMonitorLauncher?.focus();};close.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();close.click();}};header.append(close);node.append(header);
-            header.tabIndex=0;header.setAttribute('aria-label',cinematicUI('Camera monitor sizes','Tamaños del monitor de cámara'));
-            const sizeMenu=event=>{event.preventDefault();event.stopPropagation();new Menu([[cinematicUI('Small','Pequeño'),176],[cinematicUI('Medium','Mediano'),240],[cinematicUI('Large','Grande'),320]].map(([name,width])=>({name,icon:'picture_in_picture_alt',click(){cinematicCameraMonitorSize.width=width;cinematicCameraMonitor?.layout();cinematicCameraMonitor?.save();}}))).open(event instanceof KeyboardEvent?header:event);};
+            const close=window.document.createElement('button');close.className='text_button';close.title=cinematicUI("hide_camera_monitor");close.setAttribute('aria-label',close.title);close.append(Blockbench.getIconNode('close'));close.onclick=event=>{event.stopPropagation();toggleCinematicCameraMonitor();cinematicCameraMonitorLauncher?.focus();};close.onkeydown=event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();event.stopPropagation();close.click();}};header.append(close);node.append(header);
+            header.tabIndex=0;header.setAttribute('aria-label',cinematicUI("camera_monitor_sizes"));
+            const sizeMenu=event=>{event.preventDefault();event.stopPropagation();new Menu([[cinematicUI("small"),176],[cinematicUI("medium"),240],[cinematicUI("large"),320]].map(([name,width])=>({name,icon:'picture_in_picture_alt',click(){cinematicCameraMonitorSize.width=width;cinematicCameraMonitor?.layout();cinematicCameraMonitor?.save();}}))).open(event instanceof KeyboardEvent?header:event);};
             header.oncontextmenu=sizeMenu;header.onkeydown=event=>{if(event.target!==header)return;if(event.key==='Enter'||event.key===' '||(event.shiftKey&&event.key==='F10'))sizeMenu(event);};
             const viewport=window.document.createElement('div');viewport.className='lf-camera-monitor-viewport';node.append(viewport);main.node.append(node);
-            viewport.tabIndex=0;viewport.setAttribute('role','button');viewport.setAttribute('aria-label',cinematicUI('View through camera','Ver desde la cámara'));
+            viewport.tabIndex=0;viewport.setAttribute('role','button');viewport.setAttribute('aria-label',cinematicUI("view_through_camera"));
             const enterCamera=event=>{event.preventDefault();event.stopPropagation();const selected=getSelectedCameraElement(),selectedSequence=resolveCameraSequence(readDocumentView(),selected?.cinematic_camera_id);if(!selected||!selectedSequence)return;viewThroughCameraAction?.trigger();syncCinematicCameraMonitor();showCinematicRecordingFrame(selectedSequence.id);};
             viewport.ondblclick=enterCamera;viewport.onkeydown=event=>{if(event.key==='Enter'||event.key===' ')enterCamera(event);};
-            const grip=window.document.createElement('button');grip.type='button';grip.className='lf-camera-monitor-size-grip';grip.setAttribute('aria-label',cinematicUI('Resize camera monitor','Redimensionar monitor de cámara'));grip.append(Blockbench.getIconNode('drag_handle'));node.append(grip);
+            const grip=window.document.createElement('button');grip.type='button';grip.className='lf-camera-monitor-size-grip';grip.setAttribute('aria-label',cinematicUI("resize_camera_monitor"));grip.append(Blockbench.getIconNode('drag_handle'));node.append(grip);
             // Native OrbitControls.dispose references a missing onContextMenu in
             // this Blockbench build. Own the global listeners at construction so
             // teardown can release them without modifying native controls.
@@ -5030,20 +5777,20 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
 
     function cameraKeyframeInspectorFields() {
         const fields = [];
-        for (const [group, en, es] of [['position','Position','Posición'], ['rotation','Rotation','Rotación'], ['target','Target','Objetivo'], ['up','Up','Arriba']]) {
-            for (const axis of ['x','y','z']) fields.push({key: group+'_'+axis, channel:['position','rotation'].includes(group)?group:'aim', label:cinematicUI(en,es)+' '+axis.toUpperCase()+(group==='rotation'?' (°)':''), group, axis:['x','y','z'].indexOf(axis)});
+        for (const [group, labelKey] of [['position', "position"], ['rotation', "rotation"], ['target', "target"], ['up', "up"]]) {
+            for (const axis of ['x','y','z']) fields.push({key: group+'_'+axis, channel:['position','rotation'].includes(group)?group:'aim', label:cinematicUI(labelKey)+' '+axis.toUpperCase()+(group==='rotation'?' (°)':''), group, axis:['x','y','z'].indexOf(axis)});
         }
-        fields.push({key:'orthographic',channel:'lens',label:cinematicUI('Orthographic','Ortográfica'),type:'boolean'});
-        for (const [key,channel,en,es] of [
-            ['focal_length_mm','lens','Lens (mm)','Lente (mm)'], ['focus_distance','lens','Focus distance','Distancia de foco'],
-            ['aperture_f_stop','lens','Aperture (f/)','Apertura (f/)'], ['ortho_world_height','lens','Frame height','Altura de encuadre'],
-            ['sensor_width_mm','lens','Sensor width (mm)','Ancho de sensor (mm)'], ['sensor_height_mm','lens','Sensor height (mm)','Alto de sensor (mm)'],
-            ['lens_shift_x','lens','Lens shift X','Desplazamiento X'], ['lens_shift_y','lens','Lens shift Y','Desplazamiento Y'],
-            ['anamorphic_squeeze','lens','Anamorphic squeeze','Factor anamórfico'], ['blade_count','lens','Aperture blades','Palas de apertura'],
-            ['near_clip','lens','Near clip','Recorte cercano'], ['far_clip','lens','Far clip','Recorte lejano'],
-            ['shutter_angle','exposure','Shutter (°)','Obturador (°)'], ['iso','exposure','ISO','ISO'],
-            ['exposure_compensation_ev','exposure','Exposure (EV)','Exposición (EV)'], ['layers_mask','aim','Layers mask','Máscara de capas']
-        ]) fields.push({key,channel,label:cinematicUI(en,es)});
+        fields.push({key:'orthographic',channel:'lens',label:cinematicUI("orthographic"),type:'boolean'});
+        for (const [key, channel, labelKey] of [
+            ['focal_length_mm', 'lens', "lens_mm"], ['focus_distance', 'lens', "focus_distance"],
+            ['aperture_f_stop', 'lens', "aperture_f"], ['ortho_world_height', 'lens', "frame_height"],
+            ['sensor_width_mm', 'lens', "sensor_width_mm"], ['sensor_height_mm', 'lens', "sensor_height_mm"],
+            ['lens_shift_x', 'lens', "lens_shift_x"], ['lens_shift_y', 'lens', "lens_shift_y"],
+            ['anamorphic_squeeze', 'lens', "anamorphic_squeeze"], ['blade_count', 'lens', "aperture_blades"],
+            ['near_clip', 'lens', "near_clip"], ['far_clip', 'lens', "far_clip"],
+            ['shutter_angle', 'exposure', "shutter"], ['iso', 'exposure', "iso"],
+            ['exposure_compensation_ev', 'exposure', "exposure_ev"], ['layers_mask', 'aim', "layers_mask"]
+        ]) fields.push({key,channel,label:cinematicUI(labelKey)});
         return fields;
     }
 
@@ -5115,7 +5862,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                 return keyframe && JSON.stringify(cameraStateFromTimelineMarker(marker,keyframe.state))!==JSON.stringify(keyframe.state);
             });
             if (cancel || !changed) Undo.cancelEdit(true);
-            else Undo.finishEdit(cinematicUI('Edit camera keyframe','Editar fotograma de cámara'),{keyframes:edit.keyframes,[CINEMATIC_UNDO_ASPECT]:true});
+            else Undo.finishEdit(cinematicUI("edit_camera_keyframe"),{keyframes:edit.keyframes,[CINEMATIC_UNDO_ASPECT]:true});
             scheduleCinematicTimelineSync();
             Animator.preview();
         };
@@ -5175,20 +5922,20 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
             const fields=cameraKeyframeInspectorFields();
             const channel=this.channel;
             const groups=channel==='aim' ? [
-                {id:'target',name:cinematicUI('Target','Objetivo'),keys:['target_x','target_y','target_z']},
-                {id:'up',name:cinematicUI('Up','Arriba'),keys:['up_x','up_y','up_z']},
-                {id:'layers',name:cinematicUI('Layers','Capas'),keys:['layers_mask']}
+                {id:'target',name:cinematicUI("target"),keys:['target_x','target_y','target_z']},
+                {id:'up',name:cinematicUI("up"),keys:['up_x','up_y','up_z']},
+                {id:'layers',name:cinematicUI("layers"),keys:['layers_mask']}
             ] : channel==='lens' ? [
-                {id:'lens',name:cinematicUI('Lens','Lente'),keys:['focal_length_mm','focus_distance','aperture_f_stop']},
-                {id:'projection',name:cinematicUI('Projection','Proyección'),keys:['orthographic','ortho_world_height']},
-                {id:'sensor',name:cinematicUI('Sensor','Sensor'),keys:['sensor_width_mm','sensor_height_mm']},
-                {id:'shift',name:cinematicUI('Shift','Desplazar'),keys:['lens_shift_x','lens_shift_y','anamorphic_squeeze']},
-                {id:'clip',name:cinematicUI('Clip','Recorte'),keys:['near_clip','far_clip']},
-                {id:'blades',name:cinematicUI('Blades','Palas'),keys:['blade_count']}
+                {id:'lens',name:cinematicUI("lens"),keys:['focal_length_mm','focus_distance','aperture_f_stop']},
+                {id:'projection',name:cinematicUI("projection"),keys:['orthographic','ortho_world_height']},
+                {id:'sensor',name:cinematicUI("sensor"),keys:['sensor_width_mm','sensor_height_mm']},
+                {id:'shift',name:cinematicUI("shift"),keys:['lens_shift_x','lens_shift_y','anamorphic_squeeze']},
+                {id:'clip',name:cinematicUI("clip"),keys:['near_clip','far_clip']},
+                {id:'blades',name:cinematicUI("blades"),keys:['blade_count']}
             ] : [];
             const active=groups.find(group=>group.id===inspectorTabs[channel])||groups[0];let inserted=false;
             const sliderKeys=new Set(['aperture_f_stop','lens_shift_x','lens_shift_y','shutter_angle','exposure_compensation_ev']);
-            const tabs=()=>this.$createElement('div',{class:'lf-camera-inspector-tabs',attrs:{role:'tablist','aria-label':cinematicUI('Camera properties','Propiedades de cámara')}},groups.map((group,index)=>this.$createElement('button',{
+            const tabs=()=>this.$createElement('div',{class:'lf-camera-inspector-tabs',attrs:{role:'tablist','aria-label':cinematicUI("camera_properties")}},groups.map((group,index)=>this.$createElement('button',{
                 class:{selected:group===active},attrs:{type:'button',role:'tab','aria-selected':group===active,tabindex:group===active?0:-1},
                 on:{click:()=>{finish(false);inspectorTabs[channel]=group.id;this.$forceUpdate();},keydown:event=>{
                     if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;
@@ -5231,7 +5978,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                 marker.data_points.splice(0,marker.data_points.length,createCameraKeyframePoint(marker,camera.base,true));
                 marker.cinematic_state_values = baseline;
             }
-            Undo.finishEdit(cinematicUI('Reset camera keyframes','Restablecer fotogramas de cámara'),{keyframes:markers,[CINEMATIC_UNDO_ASPECT]:true});
+            Undo.finishEdit(cinematicUI("reset_camera_keyframes"),{keyframes:markers,[CINEMATIC_UNDO_ASPECT]:true});
             updateKeyframeSelection();Animator.preview();
         };
         if (typeof originalReset==='function') resetAction.click=reset;
@@ -5304,9 +6051,9 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         }
         LightflowCameraTimelineAnimator.prototype.type = 'lightflow_camera_timeline';
         LightflowCameraTimelineAnimator.prototype.channels = {
-            position: {name:cinematicUI('Position','Posición'),mutable:false,transform:false,max_data_points:1},
-            rotation: {name:cinematicUI('Rotation','Rotación'),mutable:false,transform:false,max_data_points:1},
-            aim: {name:cinematicUI('Orientation / visibility','Orientación / visibilidad'),mutable:false,transform:false,max_data_points:1},
+            position: {name:cinematicUI("position"),mutable:false,transform:false,max_data_points:1},
+            rotation: {name:cinematicUI("rotation"),mutable:false,transform:false,max_data_points:1},
+            aim: {name:cinematicUI("orientation_visibility"),mutable:false,transform:false,max_data_points:1},
             lens: {
                 name: translate('lightflow_cinematic.timeline.lens', 'Lens / Focus'),
                 mutable: false,
@@ -5829,13 +6576,107 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         return deepClone(serializable);
     }
 
+    function beginCinematicParticleSession() {
+        const prototype = window.Wintersky?.Emitter?.prototype;
+        if (!prototype?.playLoop) return null;
+        const running = new Set();
+        const remember = emitter => {
+            if (emitter.tick_interval !== undefined) {running.add(emitter); clearInterval(emitter.tick_interval);}
+        };
+        for (const scene of [window.WinterskyScene,window.LightflowParticleScene]) for (const emitter of scene?.emitters || []) remember(emitter);
+        const previous = prototype.playLoop;
+        const play = function() {
+            if (!this.material) return this;
+            if (!this.initialized || this.age === 0) this.start();
+            clearInterval(this.tick_interval);
+            this.tick_interval = -1;
+            this.paused = false;
+            running.add(this);
+            return this;
+        };
+        prototype.playLoop = play;
+        return {
+            evaluate(time) {
+                if (!window.AnimationController?.selected?.selected_state) return;
+                for (const emitter of window.WinterskyScene?.emitters || []) {
+                    if (emitter.material && !emitter.parent_emitter && running.has(emitter)) emitter.jumpTo(Math.max(0,time));
+                }
+            },
+            dispose() {
+                if (prototype.playLoop === play) prototype.playLoop = previous;
+                for (const emitter of running) {
+                    if (!emitter.material || emitter.tick_interval === undefined) continue;
+                    delete emitter.tick_interval;
+                    previous.call(emitter);
+                }
+            }
+        };
+    }
+
+    function beginCinematicControllerClock(sequence) {
+        const controller = window.AnimationController?.selected;
+        if (!controller?.selected_state) return null;
+        const started = performance.now(), firstTime = frameToTimelineSeconds(sequence, sequence.start_frame);
+        const speed = Math.max(0, finite(window.AnimationController.playback_speed, 100) / 100);
+        let time = firstTime, delta = 0;
+        const savedController = ['selected_state', 'last_state', 'transition_timestamp', 'updatePreview'].map(key =>
+            [key, Object.getOwnPropertyDescriptor(controller, key)]);
+        const states = controller.states.map(state => ({state,
+            method: Object.getOwnPropertyDescriptor(state, 'getStateTime'),
+            timestamp: Object.getOwnPropertyDescriptor(state, 'start_timestamp'),
+            stamp: state.start_timestamp, base: state.getStateTime(), origin: firstTime}));
+        const globals = window.Animator?.MolangParser?.global_variables;
+        const deltaDescriptor = globals && Object.getOwnPropertyDescriptor(globals, 'query.delta_time');
+        const previousUpdate = controller.updatePreview;
+        const update = function() {}; // The host timer must not advance transitions between output frames.
+        const restore = (object, key, descriptor) => {
+            if (descriptor) Object.defineProperty(object, key, descriptor); else delete object[key];
+        };
+        states.forEach(record => {
+            record.state.getStateTime = function() {
+                if (this.start_timestamp !== record.stamp) {
+                    record.stamp = this.start_timestamp; record.base = 0; record.origin = time;
+                }
+                return record.base + Math.max(0, time - record.origin) * speed;
+            };
+        });
+        controller.updatePreview = update;
+        if (globals && deltaDescriptor?.configurable !== false) {
+            Object.defineProperty(globals, 'query.delta_time', {configurable: true, enumerable: true, get: () => delta});
+        }
+        return {
+            evaluate(nextTime) {
+                delta = Math.max(0, nextTime - time) * speed;
+                time = nextTime;
+                // Native evaluation still owns blends, conditions and state entry.
+                // It now runs once per output frame against the simulated clock.
+                previousUpdate?.call(controller);
+            },
+            dispose() {
+                const elapsed = performance.now() - started;
+                states.forEach(record => {
+                    restore(record.state, 'getStateTime', record.method);
+                    const descriptor = record.timestamp && {...record.timestamp};
+                    if (descriptor && Number.isFinite(descriptor.value)) descriptor.value += elapsed;
+                    restore(record.state, 'start_timestamp', descriptor);
+                });
+                savedController.forEach(([key, saved]) => {
+                    const descriptor = saved && {...saved};
+                    if (key === 'transition_timestamp' && descriptor && Number.isFinite(descriptor.value)) descriptor.value += elapsed;
+                    if (key !== 'updatePreview' || controller.updatePreview === update) restore(controller, key, descriptor);
+                });
+                if (globals && deltaDescriptor?.configurable !== false) restore(globals, 'query.delta_time', deltaDescriptor);
+            }
+        };
+    }
+
     async function renderSequence(options = {}) {
         if (activeRenderJob) throw new Error('A Lightflow Cinematic render is already active.');
         if (typeof window.StudioRender?.renderFrame !== 'function') {
             throw new Error('Studio Render 1.9.10 or newer is required for deterministic frame handoff.');
         }
         const project = getActiveProject();
-        let document = readDocument(project);
+        let document = options.render_document ? deepClone(options.render_document) : readDocument(project);
         const montagePlan = options.montage ? buildMontagePlan(document) : null;
         const montageOutputResolution = montagePlan ? montagePlan.sequence.resolution.slice() : null;
         if (montagePlan) montagePlan.shots.forEach(shot => {
@@ -5847,9 +6688,12 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         let sourceAnimation = sequence ? resolveCinematicSourceAnimation(montagePlan ? montagePlan.shots[0].sequence : sequence) : null;
         if (!montagePlan && sequence?.duration_mode === 'active_animation' && getActiveAnimationRange() &&
             (!sourceAnimation || sourceAnimation === Animation.selected)) {
-            adaptSequenceToActiveAnimation(sequence.id);
-            document = readDocument(project);
-            sequence = getSequence(document, options.sequence_id);
+            if (options.render_document) sequence = adaptSequenceValueToActiveAnimation(sequence);
+            else {
+                adaptSequenceToActiveAnimation(sequence.id);
+                document = readDocument(project);
+                sequence = getSequence(document, options.sequence_id);
+            }
         }
         const camera = getCamera(document, options.camera_id, sequence);
         const sink = options.sink;
@@ -5899,6 +6743,8 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         if (!temporalSession) montagePlan?.shots.forEach(shot => {
             if (/^temporal_[124]$/.test(shot.renderSequence.samples)) shot.settings.samples = '8';
         });
+        const cinematicSession = window.StudioRender.createCinematicRenderSession?.();
+        let particleSession = null, controllerClock = null;
         let failure = null;
         let sinkStarted = false;
         let lastProgressUpdate = 0;
@@ -5911,8 +6757,10 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         };
         try {
             pauseCinematicPlayback();
+            particleSession = beginCinematicParticleSession();
             if (typeof TextureAnimator !== 'undefined') TextureAnimator.stop?.();
             activateCinematicSourceAnimation(sourceAnimation);
+            if (!sourceAnimation && !montagePlan) controllerClock = beginCinematicControllerClock(sequence);
             let renderAnimationSelection = typeof Animation !== 'undefined' ? Animation.selected : null;
             let renderAnimationMix = getCinematicAnimations().map(animation => ({ animation, playing: animation.playing }));
             let previousShot = null;
@@ -5967,6 +6815,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                     shot.clip.in_frame + (frame - shot.start) / frameRateValue(sequence.frame_rate) *
                     frameRateValue(shot.sequence.frame_rate) * shot.clip.speed) : frame;
                 const evaluationStart = nowMs();
+                controllerClock?.evaluate(frameToTimelineSeconds(frameSequence, sourceFrame, !!shot));
                 const evaluated = await evaluateFrame(frameSequence.id, sourceFrame, {
                     render_document: document,
                     sequence_override: frameSequence,
@@ -5977,6 +6826,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                     // Studio owns GPU fences and the export's progress scheduler.
                     settle_frames: 0
                 });
+                particleSession?.evaluate(evaluated.timeSeconds);
                 job.timings.evaluationMs += nowMs() - evaluationStart;
                 if (job.cancelled) break;
                 const progressNow = nowMs();
@@ -6020,6 +6870,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                     {
                         silent: true,
                         cinematicOffline: true,
+                        cinematicSession,
                         yieldForProgress,
                         cinematicTemporal: temporalSession ? {
                             session: temporalSession,
@@ -6072,9 +6923,11 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                 try { await sink.abort({ job: snapshotRenderJob(job), reason: error?.message || String(error), error }); } catch (abortError) {}
             }
         } finally {
+            try { controllerClock?.dispose(); } catch (clockError) { failure = failure || clockError; }
             try {
                 temporalSession?.dispose();
             } catch (disposeError) { failure = failure || disposeError; }
+            try { cinematicSession?.dispose(); } catch (disposeError) { failure = failure || disposeError; }
             try {
                 restoreCinematicTextureAnimation(restoreState.textureAnimation, getActiveProject() === project);
                 if (getActiveProject() === project) restoreEvaluationState(restoreState);
@@ -6083,6 +6936,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                 failure = failure || restoreError;
                 setFrameContext(null);
             }
+            try {particleSession?.dispose();} catch (particleError) {failure = failure || particleError;}
             // Release ownership even when native restoration fails.
             if (activeRenderJob === job) activeRenderJob = null;
             activeSinkCancellation = null;
@@ -6265,14 +7119,19 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
     }
 
     async function renderPngSequence(sequenceId, options = {}) {
-        const document = readDocument();
+        const document = options.render_document || readDocument();
         const sequence = getSequence(document, sequenceId);
         if (!sequence) throw new Error('Cinematic sequence not found.');
         const target = options.target || await choosePngSequenceTarget();
         if (!target) return { ok: false, cancelled: true, pickerCancelled: true, completedFrames: 0, totalFrames: 0 };
         if (options.progress) openRenderProgressDialog(sequence, 'png');
         const sink = createPngSequenceSink(target, { sequence });
-        return renderSequence({ sequence_id: sequence.id, sink });
+        const ownedProgressDialog = options.progress ? renderProgressDialog : null;
+        try {
+            return await renderSequence({ ...options, sequence_id: sequence.id, sink });
+        } finally {
+            if (ownedProgressDialog && renderProgressDialog === ownedProgressDialog) closeRenderProgressDialog();
+        }
     }
 
     function renderMontage(options = {}) {
@@ -6314,9 +7173,9 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         let summary;
         try {
             const plan = buildMontagePlan(document);
-            summary = plan.shots.length + cinematicUI(' shots · ',' tomas · ') + sequenceDurationFrames(plan.sequence) + cinematicUI(' frames · ',' fotogramas · ') +
+            summary = plan.shots.length + cinematicUI("shots") + sequenceDurationFrames(plan.sequence) + cinematicUI("frames") +
                 formatDurationSeconds(sequenceDurationSeconds(plan.sequence));
-        } catch (error) { summary = montage.clips.length?error.message:cinematicUI('Choose a source shot and add it to the montage.','Elige una toma de origen y añádela al montaje.'); }
+        } catch (error) { summary = montage.clips.length?error.message:cinematicUI("choose_a_source_shot_and_add_it_to_the_montage"); }
         const remember = form => {
             montageClipDrafts.set(clipId,deepClone(form));
             // Output and audio belong to the whole montage; clip trims belong to one shot.
@@ -6350,8 +7209,9 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                 frame_rate: cinematicSelect({ label: 'lightflow_cinematic.field.frame_rate', value: frameRateKey(montage.frame_rate), options: frameRateOptions(montage.frame_rate) }),
                 resolution: cinematicVector({ label: 'lightflow_cinematic.field.resolution', dimensions: 2, value: montage.resolution, integer: true, min: 1 }, [1920, 1080]),
                 samples: cinematicSelect({ label: 'lightflow_cinematic.field.samples', value: montage.samples,
+                    description: cinematicUI("adaptive_aa_accumulates_static_scenes_scene_changes_use_current"),
                     options: { 1: '1x', 2: '2x', 3: '3x', 4: '4x', 6: '6x', 8: '8x · Reference',
-                        temporal_2: 'Temporal 2x · Experimental', temporal_4: 'Temporal 4x · Experimental' } }),
+                        temporal_2: cinematicUI("adaptive_2x"), temporal_4: cinematicUI("adaptive_4x") } }),
                 output_format: cinematicSelect({ label: 'lightflow_cinematic.field.output_format', value: montage.output_format,
                     options: { png: translate('lightflow_cinematic.option.png_sequence', 'PNG image sequence'), mp4: 'MP4', mov: 'MOV', webm: 'WebM', mkv: 'Matroska / MKV',
                         mpegts: 'MPEG-TS', gif: 'GIF' } }),
@@ -6378,7 +7238,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                     condition: form => CINEMATIC_VIDEO_FORMAT_IDS.includes(form.output_format) }, 2),
                 audio_enabled: { type: 'checkbox', label: 'lightflow_cinematic.field.audio', value: montage.audio_enabled,
                     condition: form => CINEMATIC_VIDEO_FORMAT_IDS.includes(form.output_format) && !!cinematicAudioProviderFactory },
-                audio_provider_note:{type:'info',text:cinematicUI('No audio provider is connected. Video export remains available.','No hay un proveedor de audio conectado. La exportación de vídeo sigue disponible.'),condition:()=>!cinematicAudioProviderFactory},
+                audio_provider_note:{type:'info',text:cinematicUI("no_audio_provider_is_connected_video_export_remains_available"),condition:()=>!cinematicAudioProviderFactory},
                 audio_codec: cinematicSelect({ label: 'lightflow_cinematic.field.audio_codec', value: montage.audio_codec || 'auto',
                     options: { auto: 'Auto · runtime compatible' },
                     condition: form => CINEMATIC_VIDEO_FORMAT_IDS.includes(form.output_format) && !!cinematicAudioProviderFactory && form.audio_enabled }),
@@ -6395,7 +7255,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                 _shots: cinematicSection('lightflow_cinematic.montage.shots', 'Shots', 'view_list'),
                 clip_id: cinematicSelect({ label: 'lightflow_cinematic.montage.shot', value: clipId || '__empty__',
                     options: montage.clips.length ? Object.fromEntries(montage.clips.map((item, index) => [item.id,
-                        (index + 1) + ' · ' + (document.sequences.find(sequence => sequence.id === item.sequence_id)?.name || cinematicUI('Missing shot','Toma ausente'))])) : { __empty__: '—' } }),
+                        (index + 1) + ' · ' + (document.sequences.find(sequence => sequence.id === item.sequence_id)?.name || cinematicUI("missing_shot"))])) : { __empty__: '—' } }),
                 in_frame: cinematicNumber({ label: 'lightflow_cinematic.montage.in', value: clip?.in_frame || 0, integer: true, condition: () => !!clip }, 0),
                 out_frame: cinematicNumber({ label: 'lightflow_cinematic.montage.out', value: clip?.out_frame || 1, integer: true, condition: () => !!clip }, 1),
                 speed: cinematicNumber({ label: 'lightflow_cinematic.field.playback_rate', value: clip?.speed || 1, min: 0.01, max: 100, condition: () => !!clip }, 1),
@@ -6430,7 +7290,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                         montageDialog.hide(); montageDialog = null;
                         renderConfiguredMontage().then(reportRenderResult).catch(showCinematicError);
                     } }
-            },[['shots',cinematicUI('Shots','Tomas'),'view_list'],['output',cinematicUI('Output','Salida'),'video_file'],['audio',cinematicUI('Audio','Audio'),'volume_up']], '_montage_tab', montageWorkflowTab,
+            },[['shots',cinematicUI("shots_2"),'view_list'],['output',cinematicUI("output"),'video_file'],['audio',cinematicUI("audio"),'volume_up']], '_montage_tab', montageWorkflowTab,
                 key=>['name','summary'].includes(key)?null:key.startsWith('audio_')?'audio':['_shots','clip_id','in_frame','out_frame','speed','source_sequence','shot_tools'].includes(key)?'shots':'output')),
             onFormChange(form) {
                 applyCinematicResolutionPreset(form,montageDialog);
@@ -6439,8 +7299,8 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                     remember({...form,clip_id:clipId});openMontageDialog(form.clip_id);
                 }else remember(form);
             },
-            buttons:[cinematicUI('Apply','Aplicar'),'dialog.cancel'],
-            onConfirm(form) { runCinematicUndo(cinematicUI('Apply montage settings','Aplicar ajustes de montaje'),()=>save(form));montageClipDrafts.clear();montageCommonDraft=null;montageDraftProject=null;montageDialog = null; },
+            buttons:[cinematicUI("apply"),'dialog.cancel'],
+            onConfirm(form) { runCinematicUndo(cinematicUI("apply_montage_settings"),()=>save(form));montageClipDrafts.clear();montageCommonDraft=null;montageDraftProject=null;montageDialog = null; },
             onCancel() { montageClipDrafts.clear();montageCommonDraft=null;montageDraftProject=null;montageDialog = null; }
         });
         montageDialog.show();
@@ -6664,7 +7524,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
     }
 
     function cinematicFileExtension(format) {
-        return ({ mp4: 'mp4', mov: 'mov', webm: 'webm', mkv: 'mkv', mpegts: 'ts', gif: 'gif' })[format] || '';
+        return ({ mp4: 'mp4', mov: 'mov', webm: 'webm', mkv: 'mkv', mpegts: 'ts', gif: 'gif', zip: 'zip' })[format] || '';
     }
 
     function cinematicMimeType(format) {
@@ -6713,7 +7573,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
             : translate('lightflow_cinematic.progress.preview_destination', 'This render stays in Blockbench first. Choose where to save it after it finishes.');
         renderProgressDialog = new Dialog({
             id: 'lightflow_cinematic_render_progress',
-            title:cinematicUI('Recording','Grabación')+' · '+sequence.name,
+            title:cinematicUI("recording")+' · '+sequence.name,
             width: 500,
             lines: [
                 '<div id="lightflow-cinematic-render-progress" style="padding:4px 2px 8px">' +
@@ -6826,17 +7686,191 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         };
     }
 
+    function createCinematicGifQuantizer() {
+        let exactColors = null, previousPalette = null;
+        return data => {
+            const indexed = new Uint8Array(data.length / 4);
+            // Reuse an exact palette only when every visible RGB still belongs
+            // to it. Never keep a first-frame palette for newly appearing colors.
+            if (exactColors) {
+                let matches = true;
+                for (let p = 0, i = 0; p < indexed.length; p++, i += 4) {
+                    if (data[i + 3] < 128) continue;
+                    const index = exactColors.get((data[i] << 16) | (data[i + 1] << 8) | data[i + 2]);
+                    if (index === undefined) { matches = false; break; }
+                    indexed[p] = index;
+                }
+                if (matches) return { indexed, palette: previousPalette };
+                indexed.fill(0);
+            }
+            const colors = new Map(), palette = [[0, 0, 0]];
+            let overflow = false, visible = 0;
+            for (let p = 0, i = 0; p < indexed.length; p++, i += 4) {
+                if (data[i + 3] < 128) continue;
+                visible++;
+                if (overflow) continue;
+                const key = (data[i] << 16) | (data[i + 1] << 8) | data[i + 2];
+                let index = colors.get(key);
+                if (index === undefined) {
+                    if (colors.size === 255) { overflow = true; continue; }
+                    index = palette.length; colors.set(key, index);
+                    palette.push([data[i], data[i + 1], data[i + 2]]);
+                }
+                indexed[p] = index;
+            }
+            if (!overflow) {
+                exactColors = colors; previousPalette = palette;
+                return { indexed, palette };
+            }
+            exactColors = null; previousPalette = null;
+            // Bound palette training independently of output resolution. Hidden
+            // RGB and partial alpha never compete with opaque colors in the palette.
+            const stride = Math.max(1, Math.ceil(visible / 65536));
+            const samples = new Uint8Array(Math.ceil(visible / stride) * 4);
+            // Jitter within each stratum deterministically: sampling every Nth
+            // visible pixel alone can miss an entire alternating texture color.
+            let nextSample = 0, sampleSeed = 0x6d2b79f5;
+            for (let i = 0, seen = 0, out = 0; i < data.length; i += 4) {
+                if (data[i + 3] < 128 || seen++ !== nextSample) continue;
+                samples[out++] = data[i]; samples[out++] = data[i + 1];
+                samples[out++] = data[i + 2]; samples[out++] = 255;
+                if (out < samples.length) {
+                    sampleSeed ^= sampleSeed << 13; sampleSeed ^= sampleSeed >>> 17; sampleSeed ^= sampleSeed << 5;
+                    const start = (out / 4) * stride, remaining = visible - start;
+                    nextSample = start + (sampleSeed >>> 0) % (remaining < stride ? remaining : stride);
+                }
+            }
+            const opaquePalette = cinematicGifCodec.quantize(samples, 255, { format: 'rgb444' });
+            // Deterministic RGB565 cell centers avoid making an entire color bin
+            // depend on whichever edge pixel was visited first in this frame.
+            const cache = new Int16Array(65536); cache.fill(-1);
+            for (let p = 0, i = 0; p < indexed.length; p++, i += 4) {
+                if (data[i + 3] < 128) { indexed[p] = 0; continue; }
+                const key = ((data[i] >> 3) << 11) | ((data[i + 1] >> 2) << 5) | (data[i + 2] >> 3);
+                let index = cache[key];
+                if (index < 0) {
+                    const r = ((key >> 11) << 3) + 4, g = (((key >> 5) & 63) << 2) + 2, b = ((key & 31) << 3) + 4;
+                    let distance = Infinity;
+                    for (let c = 0; c < opaquePalette.length; c++) {
+                        const color = opaquePalette[c];
+                        let delta = color[0] - r, error = delta * delta;
+                        if (error >= distance) continue;
+                        delta = color[1] - g; error += delta * delta;
+                        if (error >= distance) continue;
+                        delta = color[2] - b; error += delta * delta;
+                        if (error < distance) { distance = error; index = c; }
+                    }
+                    cache[key] = index;
+                }
+                indexed[p] = index + 1;
+            }
+            return { indexed, palette: [[0, 0, 0], ...opaquePalette] };
+        };
+    }
+
+    function createCinematicGifFrameEncoder(options = {}) {
+        const encoder = cinematicGifCodec.GIFEncoder({ auto: false });
+        const quantizeFrame = createCinematicGifQuantizer();
+        let count = 0, globalPalette = null, origin = null;
+        return ({ data, width, height, timestampMicroseconds, durationMicroseconds }) => {
+            const { indexed, palette } = quantizeFrame(data);
+            if (origin === null) origin = timestampMicroseconds;
+            const start = Math.round((timestampMicroseconds - origin) / 10000);
+            const end = Math.round((timestampMicroseconds - origin + durationMicroseconds) / 10000);
+            if (!count) encoder.writeHeader();
+            encoder.writeFrame(indexed, width, height, {
+                palette: count && palette === globalPalette ? null : palette, first: count === 0,
+                colorDepth: Math.max(2, Math.ceil(Math.log2(palette.length))),
+                delay: Math.max(1, end - start) * 10, repeat: options.loop === false ? -1 : 0,
+                transparent: true, transparentIndex: 0, dispose: 2
+            });
+            // The codec's view is recycled: each in-flight frame owns its bytes.
+            const bytes = encoder.bytesView().slice();
+            encoder.reset();
+            if (!count) globalPalette = palette;
+            count++;
+            return bytes;
+        };
+    }
+
+    async function createCinematicGifWorker(options) {
+        if (options.worker === false || typeof Worker !== 'function' || typeof Blob !== 'function' ||
+            typeof URL?.createObjectURL !== 'function') return null;
+        let worker = null, url = null, timer = null, serial = 0, closed = false;
+        const pending = new Map();
+        const fail = error => {
+            for (const task of pending.values()) task.reject(error);
+            pending.clear();
+        };
+        try {
+            // Use precisely the same codec, palette and timing implementation in
+            // both paths. No remote script, dependency, or quality trade-off.
+            const source = `const cinematicGifCodec=(${cinematicGifCodec.createCodec.toString()})();
+                ${createCinematicGifQuantizer.toString()}
+                ${createCinematicGifFrameEncoder.toString()}
+                const encode=createCinematicGifFrameEncoder(${JSON.stringify({ loop: options.loop })});
+                onmessage=({data:m})=>{try{const bytes=encode(m.frame);postMessage({id:m.id,bytes},[bytes.buffer]);}
+                    catch(error){postMessage({id:m.id,error:error.message||String(error)});}};
+                postMessage({ready:true});`;
+            url = URL.createObjectURL(new Blob([source], { type: 'application/javascript' }));
+            worker = new Worker(url);
+            await new Promise((resolve, reject) => {
+                timer = setTimeout(() => reject(new Error('GIF worker initialization timed out.')), 5000);
+                worker.onerror = event => { event.preventDefault?.(); reject(new Error(event.message || 'GIF worker failed.')); };
+                worker.onmessage = event => { if (event.data.ready) resolve(); };
+            });
+            clearTimeout(timer); timer = null;
+            URL.revokeObjectURL(url); url = null;
+            worker.onerror = event => { event.preventDefault?.(); fail(new Error(event.message || 'GIF worker failed.')); };
+            worker.onmessage = ({ data }) => {
+                const task = pending.get(data.id);
+                if (!task) return;
+                pending.delete(data.id);
+                if (data.error) task.reject(new Error(data.error)); else task.resolve(data.bytes);
+            };
+            return {
+                encode(frame) {
+                    if (closed) return Promise.reject(new Error('GIF encoder was closed.'));
+                    return new Promise((resolve, reject) => {
+                        const id = ++serial;
+                        pending.set(id, { resolve, reject });
+                        try { worker.postMessage({ id, frame }, [frame.data.buffer]); }
+                        catch (error) { pending.delete(id); reject(error); }
+                    });
+                },
+                dispose() {
+                    if (closed) return;
+                    closed = true; worker.terminate();
+                    fail(new Error('GIF encoder was closed.'));
+                }
+            };
+        } catch (_) {
+            // Fall back only before accepting frames; a mid-stream failure aborts
+            // the output rather than starting another GIF in the same file.
+            if (timer !== null) clearTimeout(timer);
+            worker?.terminate();
+            if (url) URL.revokeObjectURL(url);
+            return null;
+        }
+    }
+
     function createIntegratedGifSink(target, options = {}) {
-        let encoder, count = 0, expectedWidth, expectedHeight;
-        let scratch = null, scratchContext = null, origin = null;
+        let encoder = null, worker = null, count = 0, expectedWidth, expectedHeight;
+        let scratch = null, scratchContext = null, aborted = false, failure = null;
+        const pending = [];
+        let writes = Promise.resolve();
+        const release = () => { worker?.dispose(); worker = null; encoder = null; scratch = scratchContext = null; };
         return {
             kind: 'integrated_gif',
             async begin(context) {
                 const rate = frameRateValue(context.sequence.frame_rate);
                 if (rate > 100) throw new Error('GIF timing is limited to 100 frames per second.');
-                encoder = cinematicGifCodec.GIFEncoder({ auto: false });
+                worker = await createCinematicGifWorker(options);
+                if (!worker) encoder = createCinematicGifFrameEncoder(options);
             },
             async writeFrame(payload) {
+                if (aborted) throw new Error('GIF encoder was closed.');
+                if (failure) throw failure;
                 const canvas = payload.canvas;
                 const width = canvas.width || payload.width, height = canvas.height || payload.height;
                 if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || width > 65535 || height > 65535) {
@@ -6844,49 +7878,68 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                 }
                 if (count && (width !== expectedWidth || height !== expectedHeight)) throw new Error('GIF frame dimensions changed during export.');
                 expectedWidth = width; expectedHeight = height;
-                // WebGL canvases cannot also provide a 2D context. Copy only one frame.
-                if (!scratch) {
+                // At most two frames, reduced to one for images larger than 16MiB.
+                const capacity = Math.max(1, Math.min(2, Math.floor(32 * 1024 * 1024 / (width * height * 4))));
+                while (pending.length >= capacity) await pending.shift();
+                if (aborted) throw new Error('GIF encoder was closed.');
+                if (failure) throw failure;
+                const direct = canvas.getContext?.('2d', { willReadFrequently: true });
+                if (!direct && !scratch) {
                     scratch = typeof OffscreenCanvas === 'function'
                         ? new OffscreenCanvas(width, height) : document.createElement('canvas');
-                    if (scratch.width !== width) scratch.width = width;
-                    if (scratch.height !== height) scratch.height = height;
+                    scratch.width = width; scratch.height = height;
                     scratchContext = scratch.getContext('2d', { willReadFrequently: true });
                 }
-                const ctx = scratchContext;
+                const ctx = direct || scratchContext;
                 if (!ctx) throw new Error('A 2D canvas is required for GIF encoding.');
-                ctx.clearRect(0, 0, width, height);
-                ctx.drawImage(canvas, 0, 0);
+                if (!direct) { ctx.clearRect(0, 0, width, height); ctx.drawImage(canvas, 0, 0); }
                 const data = ctx.getImageData(0, 0, width, height).data;
-                const palette = cinematicGifCodec.quantize(data, 256, { format: 'rgba4444', oneBitAlpha: true });
-                const indexed = cinematicGifCodec.applyPalette(data, palette, 'rgba4444');
-                const transparentIndex = palette.findIndex(color => color[3] === 0);
-                // Round boundaries rather than each delay: 24/29.97 fps must not drift.
-                if (origin === null) origin = payload.timestampMicroseconds;
-                const start = Math.round((payload.timestampMicroseconds - origin) / 10000);
-                const end = Math.round((payload.timestampMicroseconds - origin + payload.durationMicroseconds) / 10000);
-                if (!count) encoder.writeHeader();
-                encoder.writeFrame(indexed, width, height, { palette, first: count === 0,
-                    delay: Math.max(1, end - start) * 10, repeat: options.loop === false ? -1 : 0,
-                    transparent: transparentIndex >= 0, transparentIndex: Math.max(0, transparentIndex), dispose: 2 });
-                await target.write(encoder.bytesView());
-                encoder.reset();
+                const frame = { data, width, height, timestampMicroseconds: payload.timestampMicroseconds,
+                    durationMicroseconds: payload.durationMicroseconds };
+                if (!worker) await target.write(encoder(frame));
+                else {
+                    const encoded = worker.encode(frame);
+                    const task = writes.then(async () => {
+                        const bytes = await encoded;
+                        if (!aborted) await target.write(bytes);
+                    });
+                    // Handle failures immediately, including a rejection while the
+                    // renderer is busy, then propagate at backpressure/end.
+                    encoded.catch(error => { failure ||= error; });
+                    task.catch(error => { failure ||= error; });
+                    writes = task;
+                    pending.push(task);
+                }
                 count++;
             },
-            async end() { await target.write(new Uint8Array([0x3b])); await target.close(); scratch = null; scratchContext = null; encoder = null; },
-            async abort() { scratch = null; scratchContext = null; encoder = null; await target.abort?.(); }
+            async end() {
+                try {
+                    await writes;
+                    if (failure) throw failure;
+                    if (aborted) throw new Error('GIF encoder was closed.');
+                    await target.write(new Uint8Array([0x3b])); await target.close();
+                } finally { release(); pending.length = 0; }
+            },
+            cancel() { aborted = true; release(); },
+            async abort() {
+                aborted = true; release();
+                try { await writes; } catch (_) {}
+                pending.length = 0;
+                await target.abort?.();
+            }
         };
     }
 
     async function renderGifSequence(sequenceId, options = {}) {
         if (activeRenderJob) throw new Error('A Lightflow Cinematic render is already active.');
         const project = getActiveProject();
-        const sequence = getSequence(readDocument(), sequenceId);
+        const sequence = getSequence(options.render_document || readDocument(), sequenceId);
         if (!sequence) throw new Error('Cinematic sequence not found.');
         const target = options.target || await chooseBinaryExportTarget('gif', sequence.name);
         if (!target) return { ok: false, cancelled: true, completedFrames: 0, totalFrames: 0 };
         try {
             if (getActiveProject() !== project) throw new Error('The active Blockbench project changed before export.');
-            const result = await renderSequence({ sequence_id: sequence.id, sink: createIntegratedGifSink(target, options) });
+            const result = await renderSequence({ ...options, sequence_id: sequence.id, sink: createIntegratedGifSink(target, options) });
             return { ...result, outputPath: result.ok ? target.outputPath : null };
         } catch (error) { try { await target.abort?.(); } catch (_) {} throw error; }
     }
@@ -7287,7 +8340,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
     async function renderIntegratedVideoSequence(sequenceId, options = {}) {
         if (activeRenderJob) throw new Error('A Lightflow Cinematic render is already active.');
         const project = getActiveProject();
-        const sequence = getSequence(readDocument(), sequenceId);
+        const sequence = getSequence(options.render_document || readDocument(), sequenceId);
         if (!sequence) throw new Error('Cinematic sequence not found.');
         const format = options.format || (CINEMATIC_VIDEO_FORMAT_IDS.includes(sequence.output_format) ? sequence.output_format : 'mp4');
         // Invoke picker within the original click's activation, before probing asynchronously.
@@ -7297,9 +8350,134 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
             if (getActiveProject() !== project) throw new Error('The active Blockbench project changed before export.');
             const audioProvider = await resolveCinematicAudioProvider(sequence, options);
             const sink = createIntegratedVideoSink(target, { ...options, format, audioProvider });
-            const result = await renderSequence({ sequence_id: sequence.id, sink });
+            const result = await renderSequence({ ...options, sequence_id: sequence.id, sink });
             return { ...result, outputPath: result.ok ? target.outputPath : null, mediaStats: sink.getStats() };
         } catch (error) { try { await target.abort?.(); } catch (_) {} throw error; }
+    }
+
+    async function prepareGifPlayback(artifact) {
+        if (typeof ImageDecoder !== 'function' || !artifact.managedTarget?.getFile) return;
+        let decoder;
+        try {
+            const file=await artifact.managedTarget.getFile();
+            decoder=new ImageDecoder({data:file.stream(),type:'image/gif',preferAnimation:true});
+            await decoder.tracks.ready;await decoder.completed;
+            const count=decoder.tracks.selectedTrack?.frameCount||0;
+            if(!count){decoder.close();return;}
+            const canvas=document.createElement('canvas');
+            artifact.timeline={count,fps:frameRateValue(artifact.frameRate),async getFrame(index){
+                const {image}=await decoder.decode({frameIndex:index,completeFramesOnly:true});
+                try {canvas.width=image.displayWidth;canvas.height=image.displayHeight;canvas.getContext('2d').drawImage(image,0,0);return await canvasToPngBlob(canvas);}
+                finally{image.close();}
+            },dispose(){decoder.close();canvas.width=canvas.height=0;}};
+        } catch(error){decoder?.close();console.warn('[Lightflow Cinematic] Using animated GIF playback without frame seeking.',error);}
+    }
+
+    function refreshSequenceReview(artifact) {
+        if(lastRenderedArtifact!==artifact||!renderedClipDialog)return;
+        const root=renderedClipDialog.object;
+        const bar=root?.querySelector('[data-sequence-progress]'),label=root?.querySelector('[data-sequence-status]');
+        if(bar){bar.max=Math.max(1,artifact.totalFrames);bar.value=artifact.completedFrames;bar.hidden=!artifact.generating;}
+        if(label)label.textContent=artifact.saving?cinematicUI("saving_zip"):artifact.generating
+            ? cinematicUI("generating")+' · '+artifact.completedFrames+' / '+artifact.totalFrames+' · '+Math.max(0,artifact.totalFrames-artifact.completedFrames)+' '+cinematicUI("remaining")
+            : (artifact.cancelled?cinematicUI("stopped"):cinematicUI("complete"))+' · '+artifact.completedFrames+' '+cinematicUI("frames_2");
+        if(label?.parentElement)label.parentElement.hidden=!artifact.generating&&!artifact.saving&&!artifact.cancelled;
+        const elapsed=Math.max(0,(performance.now()-(artifact.startedAt||performance.now()))/1000);
+        const eta=artifact.completedFrames>0?elapsed*(artifact.totalFrames-artifact.completedFrames)/artifact.completedFrames:0;
+        const detail=(label?.textContent || '')+(artifact.generating&&eta>0?' · '+translate('lightflow_cinematic.progress.eta','about {time} remaining').replace('{time}',formatCinematicClock(eta)):'');
+        renderedResultProgressControl?.update({label:artifact.saving?cinematicUI("saving_zip"):cinematicUI("frame_generation"),
+            value:artifact.saving?null:artifact.completedFrames/Math.max(1,artifact.totalFrames),detail,status:artifact.cancelled?'cancelled':undefined});
+        const statusHost=root?.querySelector('.lf-result-status');
+        if(statusHost)statusHost.hidden=!artifact.generating&&!artifact.saving&&!artifact.cancelled;
+        const actions=root?.querySelectorAll('.button_bar>button:not(:last-child)');
+        actions?.forEach(node=>{node.disabled=artifact.generating||!artifact.completedFrames||artifact.saving||(node===actions[1]&&artifact.project!==getActiveProject());});
+        const close=root?.querySelector('.button_bar>button:last-child');
+        if(close)close.textContent=artifact.generating?cinematicUI("stop_close"):cinematicUI("close");
+        renderedMediaViewerDispose?.refresh?.();
+    }
+
+    async function renderSequenceReview(sequence, options={}) {
+        if(activeRenderJob)throw new Error('A Lightflow Cinematic render is already active.');
+        if(!navigator.storage?.getDirectory) return renderPngSequence(sequence.id,{...options,progress:true});
+        const storage=await navigator.storage.getDirectory();
+        const parent=await storage.getDirectoryHandle('lightflow-cinematic-frames',{create:true});
+        const token=createId('sequence');const directory=await parent.getDirectoryHandle(token,{create:true});
+        let removed=false;
+        const target={kind:'web_directory',handle:directory,async remove(){if(removed)return;removed=true;await parent.removeEntry(token,{recursive:true});}};
+        const artifact=createRenderedArtifact(sequence,'png',target,{}, {temporary:true,montage:options.montage===true});
+        artifact.renderOptions=options.render_document?{render_document:deepClone(options.render_document)}:{};
+        artifact.generating=true;artifact.startedAt=performance.now();artifact.totalFrames=sequenceDurationFrames(sequence);artifact.files=[];
+        artifact.timeline={count:0,fps:frameRateValue(sequence.frame_rate),async getFrame(index){return (await directory.getFileHandle(artifact.files[index])).getFile();}};
+        const sink=createPngSequenceSink(target,{sequence});
+        const originalWrite=sink.writeFrame.bind(sink);
+        sink.writeFrame=async payload=>{
+            await originalWrite(payload);
+            const index=artifact.files.length;
+            const name=sink.prefix+'_'+formatFrameNumber(payload.frame,Math.max(4,String(Math.max(Math.abs(sequence.start_frame),Math.abs(sequence.end_frame-1))).length))+'.png';
+            artifact.files.push(name);artifact.completedFrames=index+1;artifact.timeline.count=index+1;
+            refreshSequenceReview(artifact);
+        };
+        await replaceLastRenderedArtifact(artifact);openRenderedClipDialog(artifact);
+        try {
+            const result=await renderSequence({...options,sequence_id:sequence.id,sink});
+            Object.assign(artifact,{generating:false,cancelled:!result.ok,elapsedMs:result.elapsedMs});
+            if(result.ok)await retainCompletedArtifact(artifact);
+            refreshSequenceReview(artifact);
+            return {...result,artifact,reviewOpen:!!renderedClipDialog};
+        } catch(error){artifact.generating=false;artifact.cancelled=true;refreshSequenceReview(artifact);throw error;}
+        finally{artifact.generating=false;if(artifact.discarded)await disposeRenderedArtifact(artifact);}
+    }
+
+    // ZIP STORE with data descriptors: one streamed frame in memory, not every PNG.
+    async function writeSequenceZip(directory, target) {
+        const entries=[];
+        for await(const [name,entry] of directory.entries())if(entry.kind==='file')entries.push({name,entry});
+        entries.sort((a,b)=>a.name.localeCompare(b.name));
+        if(entries.length>65535)throw new Error('This ZIP exceeds the supported entry count.');
+        const table=new Uint32Array(256);
+        for(let n=0;n<256;n++){let crc=n;for(let k=0;k<8;k++)crc=crc&1?0xedb88320^(crc>>>1):crc>>>1;table[n]=crc;}
+        let offset=0;
+        const write=async bytes=>{if(offset+bytes.length>0xffffffff)throw new Error('This sequence exceeds the 4 GiB ZIP limit. Export it directly to a folder instead.');await target.write(bytes);offset+=bytes.length;};
+        const header=(size,signature)=>{const bytes=new Uint8Array(size);new DataView(bytes.buffer).setUint32(0,signature,true);return bytes;};
+        const central=[];
+        for(const {name,entry} of entries){
+            const file=await entry.getFile(),encoded=new TextEncoder().encode(name),start=offset;
+            if(file.size>0xffffffff||encoded.length>65535)throw new Error('A sequence file exceeds the ZIP format limits.');
+            const local=header(30+encoded.length,0x04034b50),lv=new DataView(local.buffer);
+            lv.setUint16(4,20,true);lv.setUint16(6,0x808,true);lv.setUint16(12,0x21,true);lv.setUint16(26,encoded.length,true);local.set(encoded,30);await write(local);
+            let crc=0xffffffff;const reader=file.stream().getReader();
+            try{while(true){const {value,done}=await reader.read();if(done)break;for(const byte of value)crc=table[(crc^byte)&255]^(crc>>>8);await write(value);}}
+            finally{reader.releaseLock();}
+            crc=(crc^0xffffffff)>>>0;
+            const descriptor=header(16,0x08074b50),dv=new DataView(descriptor.buffer);
+            dv.setUint32(4,crc,true);dv.setUint32(8,file.size,true);dv.setUint32(12,file.size,true);await write(descriptor);
+            const record=header(46+encoded.length,0x02014b50),cv=new DataView(record.buffer);
+            cv.setUint16(4,20,true);cv.setUint16(6,20,true);cv.setUint16(8,0x808,true);cv.setUint16(14,0x21,true);cv.setUint32(16,crc,true);cv.setUint32(20,file.size,true);cv.setUint32(24,file.size,true);cv.setUint16(28,encoded.length,true);cv.setUint32(42,start,true);record.set(encoded,46);central.push(record);
+        }
+        const centralOffset=offset;
+        for(const record of central)await write(record);
+        const end=header(22,0x06054b50),ev=new DataView(end.buffer);
+        ev.setUint16(8,entries.length,true);ev.setUint16(10,entries.length,true);ev.setUint32(12,offset-centralOffset,true);ev.setUint32(16,centralOffset,true);await write(end);
+    }
+
+    async function saveSequenceArchive(artifact) {
+        if(artifact.generating||artifact.saving||!artifact.completedFrames)return null;
+        artifact.saving=true;refreshSequenceReview(artifact);
+        let target;
+        try {
+            let saveHandle;
+            if(typeof window.showSaveFilePicker==='function'){
+                try{saveHandle=await window.showSaveFilePicker({suggestedName:cleanFileComponent(artifact.sequenceName)+'.zip',types:[{description:'ZIP',accept:{'application/zip':['.zip']}}]});}
+                catch(error){if(error?.name==='AbortError')return null;throw error;}
+            }
+            if(artifact.discarded)return null;
+            target=await createPrivateStoragePreviewTarget('zip',artifact.sequenceName);
+            await writeSequenceZip(artifact.managedTarget.handle,target);
+            await target.close();
+            if(artifact.discarded)return null;
+            const saved=await saveRenderedArtifact({...artifact,format:'zip',extension:'zip',mimeType:'application/zip',managedTarget:target,saveHandle});
+            if(saved)artifact.savedPath=saved;return saved;
+        } finally{await target?.remove?.();artifact.saving=false;refreshSequenceReview(artifact);if(artifact.discarded)await disposeRenderedArtifact(artifact);}
     }
 
     async function deleteRenderedArtifactFile(artifact) {
@@ -7319,8 +8497,12 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
     }
 
     async function disposeRenderedArtifact(artifact = lastRenderedArtifact) {
-        if (lastRenderedArtifact === artifact) {renderedMediaViewerDispose?.(); renderedMediaViewerDispose = null;}
+        if (lastRenderedArtifact === artifact) {renderedMediaViewerDispose?.(); renderedMediaViewerDispose = null;
+        renderedResultProgressControl?.delete(); renderedResultProgressControl=null;}
         if (!artifact) return;
+        if(artifact.generating||artifact.saving){artifact.discarded=true;return;}
+        if(lastCompletedArtifact===artifact)lastCompletedArtifact=null;
+        artifact.timeline?.dispose?.();
         if (artifact.previewObjectUrl && typeof URL !== 'undefined') {
             try { URL.revokeObjectURL(artifact.previewObjectUrl); } catch (_) {}
             artifact.previewObjectUrl = '';
@@ -7329,15 +8511,33 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         if (lastRenderedArtifact === artifact) lastRenderedArtifact = null;
     }
 
+    async function retainCompletedArtifact(artifact) {
+        const previous=lastCompletedArtifact;lastCompletedArtifact=artifact;
+        if(previous&&previous!==artifact)await disposeRenderedArtifact(previous);
+    }
+
+    function reopenLastRecording() {
+        if(!lastCompletedArtifact||activeRenderJob)return false;
+        if(lastRenderedArtifact&&lastRenderedArtifact!==lastCompletedArtifact)Promise.resolve(disposeRenderedArtifact(lastRenderedArtifact)).catch(showCinematicError);
+        lastRenderedArtifact=lastCompletedArtifact;
+        return openRenderedClipDialog(lastCompletedArtifact);
+    }
+
+    function releaseUnfinishedArtifact() {
+        renderedMediaViewerDispose?.();renderedMediaViewerDispose=null;
+        if(lastRenderedArtifact!==lastCompletedArtifact)Promise.resolve(disposeRenderedArtifact()).catch(()=>{});
+    }
+
     async function replaceLastRenderedArtifact(artifact) {
         const previous = lastRenderedArtifact;
         if (previous === artifact) return artifact;
+        renderedMediaViewerDispose?.();renderedMediaViewerDispose=null;
         if (renderedClipDialog) {
             renderedClipDialog.hide?.();
             renderedClipDialog = null;
         }
         lastRenderedArtifact = artifact || null;
-        if (previous) await disposeRenderedArtifact(previous);
+        if (previous && previous!==lastCompletedArtifact) await disposeRenderedArtifact(previous);
         if (artifact) lastRenderedArtifact = artifact;
         return artifact;
     }
@@ -7370,13 +8570,14 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
 
     async function saveRenderedArtifact(artifact = lastRenderedArtifact) {
         if (!artifact) throw new Error(translate('lightflow_cinematic.message.no_render', 'Render a clip first.'));
+        if(artifact.format==='png')return saveSequenceArchive(artifact);
         const extension = artifact.extension || cinematicFileExtension(artifact.format);
         if (!extension) throw new Error('The rendered clip has no writable file extension.');
 
         if (artifact.managedTarget?.getFile && typeof window !== 'undefined' && typeof window.showSaveFilePicker === 'function') {
             const sourceFile = await artifact.managedTarget.getFile();
             try {
-                const handle = await window.showSaveFilePicker({
+                const handle = artifact.saveHandle || await window.showSaveFilePicker({
                     suggestedName: cleanFileComponent(artifact.sequenceName || 'Cinematic') + '.' + extension,
                     types: [{
                         description: translate('lightflow_cinematic.export.clip', 'Cinematic Clip'),
@@ -7442,6 +8643,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
 
     function openRenderedClipDialog(artifact = lastRenderedArtifact) {
         renderedMediaViewerDispose?.(); renderedMediaViewerDispose = null;
+        renderedResultProgressControl?.delete(); renderedResultProgressControl=null;
         if (!artifact) {
             Blockbench.showQuickMessage(translate('lightflow_cinematic.message.no_render', 'Render a clip first.'));
             return false;
@@ -7449,9 +8651,9 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         renderedClipDialog?.hide?.();
         renderedClipDialog = null;
         const url = cinematicArtifactUrl(artifact);
-        const media = artifact.format === 'gif'
-            ? '<img src="' + escapeCinematicHtml(url) + '" alt="Cinematic preview" style="display:block;width:100%;max-height:440px;object-fit:contain;background:#111;border-radius:6px">'
-            : '<video src="' + escapeCinematicHtml(url) + '" controls autoplay playsinline style="display:block;width:100%;max-height:440px;background:#111;border-radius:6px"></video>';
+        const media = artifact.format === 'gif' || artifact.format === 'png'
+            ? '<img ' + (url ? 'src="' + escapeCinematicHtml(url) + '" ' : '') + 'data-cinematic-preview="true" data-source="' + escapeCinematicHtml(url) + '" alt="Cinematic preview">'
+            : '<video src="' + escapeCinematicHtml(url) + '" autoplay playsinline></video>';
         const saved = artifact.savedPath
             ? translate('lightflow_cinematic.result.saved_to', 'Saved to {path}').replace('{path}', artifact.savedPath)
             : translate('lightflow_cinematic.result.temporary', 'Preview is temporary. Save it when you want to keep it.');
@@ -7459,9 +8661,13 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         let artifactCloseHandled=false;
         const disposeArtifactOnDialogClose = () => {
             renderedMediaViewerDispose?.(); renderedMediaViewerDispose = null;
+            renderedResultProgressControl?.delete(); renderedResultProgressControl=null;
             if(artifactCloseHandled)return;
             artifactCloseHandled=true;
             renderedClipDialog = null;
+            if(artifact.generating){artifact.discarded=true;cancelActiveRender();return;}
+            if(artifact===lastCompletedArtifact)return;
+            if(artifact.saving){artifact.discarded=true;return;}
             if (preserveArtifactOnClose || lastRenderedArtifact !== artifact) return;
             Promise.resolve(disposeRenderedArtifact(artifact)).catch(error => {
                 console.warn('[Lightflow Cinematic] Could not dispose the closed preview artifact.', error);
@@ -7472,83 +8678,107 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
             title: translate('lightflow_cinematic.result.title', 'Cinematic Preview'),
             width: 820,
             lines: [
-                '<div style="padding:2px 0 8px">' + media +
-                '<div style="margin-top:10px;font-weight:600">' + escapeCinematicHtml(artifact.sequenceName) + '</div>' +
-                '<div style="margin-top:3px;opacity:.78">' + escapeCinematicHtml(renderedArtifactSummary(artifact)) + '</div>' +
-                '<div style="margin-top:6px;opacity:.68;word-break:break-word">' + escapeCinematicHtml(saved) + '</div>' +
-                '</div>'
+                '<style>' +
+                '#lightflow_cinematic_render_result .lf-result-header{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;min-width:0;flex-wrap:wrap;}' +
+                '#lightflow_cinematic_render_result .lf-result-name{font-weight:500;overflow-wrap:anywhere;}' +
+                '#lightflow_cinematic_render_result .lf-result-meta{color:var(--color-subtle_text);font-size:12px;font-variant-numeric:tabular-nums;}' +
+                '#lightflow_cinematic_render_result .lf-result-status{display:block;margin-top:10px;color:var(--color-subtle_text);font-size:12px;}' +
+                '#lightflow_cinematic_render_result .lf-result-status[hidden]{display:none;}' +
+                '#lightflow_cinematic_render_result [data-result-feedback]{margin-top:8px;color:var(--color-subtle_text);font-size:12px;overflow-wrap:anywhere;}' +
+                '#lightflow_cinematic_render_result [data-sequence-progress]{flex:1 1 120px;height:5px;accent-color:var(--color-accent);}' +
+                '#lightflow_cinematic_render_result .button_bar{display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap;}' +
+                '#lightflow_cinematic_render_result .button_bar>button{display:flex;align-items:center;justify-content:center;gap:6px;margin:0;min-height:34px;min-width:0;padding:6px 12px;border-radius:8px;}' +
+                '#lightflow_cinematic_render_result .button_bar>button:first-child{background:var(--color-accent);color:var(--color-accent_text);}' +
+                '#lightflow_cinematic_render_result .button_bar .icon{font-size:18px;width:18px;height:18px;}' +
+                '</style><div class="lf-result-header"><span class="lf-result-name">' + escapeCinematicHtml(artifact.sequenceName) +
+                '</span><span class="lf-result-meta">' + escapeCinematicHtml(renderedArtifactSummary(artifact)) + '</span></div>' + media +
+                (artifact.format==='png' ? '<div class="lf-result-status"><progress data-sequence-progress aria-label="'+cinematicUI("generation_progress")+'" max="1" value="0"></progress><span data-sequence-status role="status"></span></div>' : '') +
+                '<div data-result-feedback title="' + escapeCinematicHtml(saved) + '">' + escapeCinematicHtml(artifact.savedPath || cinematicUI("temporary_preview_save_to_keep_it")) + '</div>'
             ],
-            form: (window.LightManagerUI?.prepareForm || (form => form))({
-                result_actions: {
-                    type: 'buttons',
-                    buttons: ['lightflow_cinematic.button.save_as', 'lightflow_cinematic.button.render_again'],
-                    click(index) {
-                        if (index === 0) {
-                            saveRenderedArtifact(artifact).then(savedPath => {
-                                if (savedPath) Blockbench.showQuickMessage(translate(
-                                    'lightflow_cinematic.message.saved',
-                                    'Cinematic clip saved.'
-                                ));
-                            }).catch(showCinematicError);
-                            return;
+            buttons: [artifact.format==='png'?cinematicUI("save_zip"):'lightflow_cinematic.button.save_as', 'lightflow_cinematic.button.render_again', 'dialog.close'],
+            confirmIndex: 2,
+            cancelIndex: 2,
+            onButton(index) {
+                if(index===2)return;
+                if(artifact.generating||artifact.saving||(index===1&&artifact.project!==getActiveProject()))return false;
+                if(index===0){
+                    saveRenderedArtifact(artifact).then(savedPath=>{
+                        if (savedPath) {
+                            const feedback=renderedClipDialog?.object?.querySelector('[data-result-feedback]');
+                            if(feedback)feedback.textContent=cinematicUI("saved")+savedPath;
+                            Blockbench.showQuickMessage(translate('lightflow_cinematic.message.saved','Cinematic clip saved.'));
                         }
-                        preserveArtifactOnClose = true;
-                        renderedMediaViewerDispose?.(); renderedMediaViewerDispose = null;
-                        renderedClipDialog?.hide?.();
-                        renderedClipDialog = null;
-                        const rerender = artifact.montage
-                            ? renderConfiguredMontage()
-                            : renderConfiguredSequence(artifact.sequenceId);
-                        Promise.resolve(rerender).then(reportRenderResult).catch(showCinematicError);
-                    }
+                    }).catch(showCinematicError);
+                    return false;
                 }
-            }),
-            buttons: ['dialog.close'],
+                preserveArtifactOnClose = true;
+                renderedMediaViewerDispose?.(); renderedMediaViewerDispose = null;
+                renderedResultProgressControl?.delete(); renderedResultProgressControl=null;
+                renderedClipDialog?.hide?.(); renderedClipDialog = null;
+                const rerender = artifact.montage ? renderConfiguredMontage() : renderConfiguredSequence(artifact.sequenceId,artifact.renderOptions||{});
+                Promise.resolve(rerender).then(reportRenderResult).catch(showCinematicError);
+                return false;
+            },
             onConfirm: disposeArtifactOnDialogClose,
             onCancel: disposeArtifactOnDialogClose
         });
         renderedClipDialog.show();
+        const statusHost=renderedClipDialog.object?.querySelector('.lf-result-status');
+        if(statusHost&&window.LightManagerUI?.progress?.create){
+            statusHost.querySelector('[data-sequence-progress]')?.remove();
+            const legacy=statusHost.querySelector('[data-sequence-status]');if(legacy)legacy.hidden=true;
+            renderedResultProgressControl=window.LightManagerUI.progress.create(statusHost,{label:cinematicUI("frame_generation"),value:0,color:'var(--lf-cinematic-record,var(--color-accent))'});
+        }
+        const again=renderedClipDialog.object?.querySelectorAll('.button_bar>button')[1];
+        if(again)again.disabled=artifact.project!==getActiveProject();
         const renderedMedia = renderedClipDialog.object?.querySelector('video,img');
         if (renderedMedia && window.LightManagerUI?.mediaViewer?.mount) {
             const host = document.createElement('div'); renderedMedia.before(host);
-            renderedMediaViewerDispose = window.LightManagerUI.mediaViewer.mount(host, renderedMedia);
+            renderedMediaViewerDispose = window.LightManagerUI.mediaViewer.mount(host, renderedMedia, {timeline:artifact.timeline,autoplay:artifact.format==='gif',fps:artifact.frameRate?frameRateValue(artifact.frameRate):24,frameCount:artifact.totalFrames});
         }
+        if(artifact.format==='png')refreshSequenceReview(artifact);
         return true;
     }
 
-    async function renderConfiguredSequence(sequenceId) {
-        const sequence = getSequence(readDocument(), sequenceId);
+    async function renderConfiguredSequence(sequenceId, options = {}) {
+        const sequence = getSequence(options.render_document || readDocument(), sequenceId);
         if (!sequence) throw new Error('Cinematic sequence not found.');
         const format = sequence.output_format;
-        if (format === 'png') return renderPngSequence(sequence.id, { progress: true });
-        if (!isCinematicDesktop()) {
-            if (format === 'gif') return renderGifSequence(sequence.id);
-            return renderIntegratedVideoSequence(sequence.id, { format });
+        if (format === 'png') return renderSequenceReview(sequence, options);
+        if (!isCinematicDesktop() && !globalThis.navigator?.storage?.getDirectory) {
+            if (format === 'gif') return renderGifSequence(sequence.id, options);
+            return renderIntegratedVideoSequence(sequence.id, { ...options, format });
         }
 
         const target = await createDesktopPreviewTarget(format, sequence.name);
         openRenderProgressDialog(sequence, format);
+        const ownedProgressDialog = renderProgressDialog;
         try {
             const result = format === 'gif'
-                ? await renderGifSequence(sequence.id, { target })
-                : await renderIntegratedVideoSequence(sequence.id, { target, format });
+                ? await renderGifSequence(sequence.id, { ...options, target })
+                : await renderIntegratedVideoSequence(sequence.id, { ...options, target, format });
             if (!result.ok) {
                 try { await target.abort?.(); } catch (_) {}
                 return result;
             }
             const artifact = createRenderedArtifact(sequence, format, target, result, { temporary: true });
+            artifact.renderOptions=options.render_document?{render_document:deepClone(options.render_document)}:{};
+            if(format==='gif')await prepareGifPlayback(artifact);
             await replaceLastRenderedArtifact(artifact);
+            await retainCompletedArtifact(artifact);
             return { ...result, outputPath: null, artifact };
         } catch (error) {
             try { await target.abort?.(); } catch (_) {}
             throw error;
+        } finally {
+            if (renderProgressDialog === ownedProgressDialog) closeRenderProgressDialog();
         }
     }
 
     async function renderConfiguredMontage() {
         const plan = buildMontagePlan(readDocument());
         const format = plan.sequence.output_format;
-        if (format === 'png') return exportMontage({ progress: true });
+        if (format === 'png') return renderSequenceReview(plan.sequence, {montage:true});
         if (!isCinematicDesktop()) return exportMontage();
         const target = await createDesktopPreviewTarget(format, plan.sequence.name || 'Montage');
         openRenderProgressDialog(plan.sequence, format, { montage: true });
@@ -7563,7 +8793,9 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                 montage: true,
                 name: plan.sequence.name || 'Montage'
             });
+            if(format==='gif')await prepareGifPlayback(artifact);
             await replaceLastRenderedArtifact(artifact);
+            await retainCompletedArtifact(artifact);
             return { ...result, outputPath: null, artifact };
         } catch (error) {
             try { await target.abort?.(); } catch (_) {}
@@ -8239,18 +9471,23 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         timingToolbarText.updateEnabledState?.();
     }
 
+    function sequenceToolbarState(document) {
+        const options = Object.fromEntries(document.sequences.map(entry => [
+            entry.id, {name: entry.name, icon: 'movie'}
+        ]));
+        if (!document.sequences.length) options.__none__ = {name: cinematicUI('no_sequence'), icon: 'movie'};
+        return {options, value: getSequence(document)?.id || '__none__'};
+    }
+
     function syncFpsToolbar() {
         const document = readDocument();
         const sequence = getSequence(document);
         if (sequenceToolbarSelect) {
-            const sequenceOptions = {};
-            document.sequences.forEach(entry => {
-                sequenceOptions[entry.id] = { name: entry.name, icon: 'movie' };
-            });
+            const state = sequenceToolbarState(document);
             replaceToolbarSelectOptions(
                 sequenceToolbarSelect,
-                sequenceOptions,
-                sequence?.id || document.active_sequence_id
+                state.options,
+                state.value
             );
         }
         if (cameraToolbarSelect) {
@@ -8310,7 +9547,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         if (!nativeAnimation) applyCameraStateToElement(element, state, {sequence});
         const view=cinematicCameraView,preview=getPreview();
         if(view && (view.preview!==preview || view.cameraId!==camera.id ||
-            preview.camera.position.distanceTo(view.position)>.001 || Math.abs(preview.camera.quaternion.dot(view.quaternion))<.999999)) cinematicCameraView=null;
+            preview.camera.position.distanceTo(view.position)>.001 || Math.abs(preview.camera.quaternion.dot(view.quaternion))<.999999)) setCinematicCameraView(null);
         if(cinematicCameraView && sequence.preview_camera!==false){
             applyPhysicalState(state,sequence);
             cinematicCameraView.position.copy(preview.camera.position);
@@ -8478,371 +9715,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         return true;
     }
 
-    function addTranslations() {
-        if (typeof Language === 'undefined' || typeof Language.addTranslations !== 'function') return;
-        Language.addTranslations('en', {
-            'lightflow_cinematic.montage.title': 'Montage',
-            'lightflow_cinematic.montage.shots': 'Shots',
-            'lightflow_cinematic.montage.shot': 'Shot',
-            'lightflow_cinematic.montage.in': 'In frame (included)',
-            'lightflow_cinematic.montage.out': 'Out frame (excluded)',
-            'lightflow_cinematic.montage.add': 'Add shot',
-            'lightflow_cinematic.montage.duplicate': 'Duplicate',
-            'lightflow_cinematic.montage.earlier': 'Earlier',
-            'lightflow_cinematic.montage.later': 'Later',
-            'lightflow_cinematic.montage.remove': 'Remove',
-            'lightflow_cinematic.montage.render': 'Render montage',
 
-            'lightflow_cinematic.field.source_animation': 'Source animation',
-            'lightflow_cinematic.option.current_animation_mix': 'Current animation mix',
-            'lightflow_cinematic.field.video_quality': 'Video quality',
-            'lightflow_cinematic.quality.low': 'Draft',
-            'lightflow_cinematic.quality.medium': 'Standard',
-            'lightflow_cinematic.quality.high': 'High',
-            'lightflow_cinematic.quality.very_high': 'Cinematic / Very High',
-            'lightflow_cinematic.quality.custom': 'Custom',
-
-            'lightflow_cinematic.workflow.hint': 'Set up the shot, choose a camera, then render from Output.',
-            'lightflow_cinematic.plugin.title': 'Lightflow Cinematic',
-            'lightflow_cinematic.action.open': 'Lightflow Cinematic...',
-            'lightflow_cinematic.action.open.desc': 'Manage deterministic sequences and cameras.',
-            'lightflow_cinematic.action.camera': 'Create Camera',
-            'lightflow_cinematic.action.keyframe': 'Add / Update Camera Keyframe',
-            'lightflow_cinematic.action.preview': 'Preview Cinematic Frame',
-            'lightflow_cinematic.action.play': 'Play Cinematic Preview',
-            'lightflow_cinematic.action.pause': 'Pause Cinematic Preview',
-            'lightflow_cinematic.action.view_camera': 'View Through Lightflow Camera',
-            'lightflow_cinematic.action.update_camera': 'Move Camera to Current View',
-            'lightflow_cinematic.action.camera_settings': 'Camera Settings...',
-            'lightflow_cinematic.action.delete_camera': 'Delete Lightflow Camera',
-            'lightflow_cinematic.action.render_sequence': 'Render Cinematic Output...',
-            'lightflow_cinematic.action.cancel_render': 'Cancel Cinematic Render',
-            'lightflow_cinematic.group.sequence': 'Sequence',
-            'lightflow_cinematic.group.camera': 'Camera',
-            'lightflow_cinematic.group.timing': 'Timing and Playback',
-            'lightflow_cinematic.group.capture': 'Capture Region',
-            'lightflow_cinematic.group.output': 'Output',
-            'lightflow_cinematic.group.encoding': 'Advanced Encoding',
-            'lightflow_cinematic.field.sequence': 'Active Sequence',
-            'lightflow_cinematic.field.sequence_name': 'Name',
-            'lightflow_cinematic.field.frame_rate': 'Frame Rate',
-            'lightflow_cinematic.field.frame_range': 'Frame Range (In / Out)',
-            'lightflow_cinematic.field.start_frame': 'Output Start Frame',
-            'lightflow_cinematic.field.duration_mode': 'Length Control',
-            'lightflow_cinematic.field.duration_frames': 'Length (Frames)',
-            'lightflow_cinematic.field.duration_seconds': 'Length (Seconds)',
-            'lightflow_cinematic.field.source_start': 'Animation Start (Seconds)',
-            'lightflow_cinematic.field.playback_rate': 'Source Playback Rate',
-            'lightflow_cinematic.field.loop_preview': 'Loop Preview',
-            'lightflow_cinematic.field.preview_camera': 'View Through Camera While Scrubbing',
-            'lightflow_cinematic.field.capture_area': 'Capture Area',
-            'lightflow_cinematic.field.capture_full': 'Full Viewport',
-            'lightflow_cinematic.field.capture_frame': 'Studio Render Frame',
-            'lightflow_cinematic.field.match_frame_ratio': 'Match Output to Frame Ratio',
-            'lightflow_cinematic.option.duration.frames': 'Frames',
-            'lightflow_cinematic.option.duration.seconds': 'Seconds',
-            'lightflow_cinematic.option.duration.active_animation': 'Active Animation',
-            'lightflow_cinematic.option.no_camera': 'No Camera',
-            'lightflow_cinematic.toolbar.time': 'Current Frame and Duration',
-            'lightflow_cinematic.field.camera': 'Camera',
-            'lightflow_cinematic.field.resolution': 'Resolution',
-            'lightflow_cinematic.field.samples': 'Studio SSAA Samples',
-            'lightflow_cinematic.field.codec': 'Codec',
-            'lightflow_cinematic.field.encoder_acceleration': 'Encoder acceleration',
-            'lightflow_cinematic.field.background': 'Background',
-            'lightflow_cinematic.field.video_bitrate': 'Video bitrate (bit/s)',
-            'lightflow_cinematic.field.bitrate_mode': 'Bitrate mode',
-            'lightflow_cinematic.field.keyframe_interval': 'Keyframe interval (seconds)',
-            'lightflow_cinematic.field.audio': 'Audio',
-            'lightflow_cinematic.field.audio_codec': 'Audio codec',
-            'lightflow_cinematic.field.audio_quality': 'Audio quality',
-            'lightflow_cinematic.field.audio_bitrate': 'Audio bitrate (bit/s)',
-            'lightflow_cinematic.field.audio_sample_rate': 'Audio sample rate',
-            'lightflow_cinematic.field.audio_channels': 'Audio channels',
-            'lightflow_cinematic.button.new_sequence': 'New Sequence',
-            'lightflow_cinematic.button.delete_sequence': 'Delete Sequence',
-            'lightflow_cinematic.button.capture_look': 'Capture Studio Look',
-            'lightflow_cinematic.button.use_active_animation': 'Fit to Active Animation',
-            'lightflow_cinematic.button.start_current': 'Start at Current Time',
-            'lightflow_cinematic.button.jump_start': 'Jump to Start',
-            'lightflow_cinematic.button.play_pause': 'Play / Pause',
-            'lightflow_cinematic.button.edit_region': 'Edit Region in Viewport',
-            'lightflow_cinematic.button.capture_region': 'Capture Current Region',
-            'lightflow_cinematic.button.new_camera': 'Camera from View',
-            'lightflow_cinematic.button.physical_settings': 'Physical Settings',
-            'lightflow_cinematic.button.keyframe': 'Keyframe Current View',
-            'lightflow_cinematic.button.preview': 'Preview Frame',
-            'lightflow_cinematic.button.render_png': 'Render PNG Sequence',
-            'lightflow_cinematic.button.render_output': 'Render Output',
-            'lightflow_cinematic.button.render_preview': 'Render & Preview',
-            'lightflow_cinematic.button.export_png': 'Export PNG Sequence...',
-            'lightflow_cinematic.button.render_export': 'Render / Export',
-            'lightflow_cinematic.button.save_as': 'Save As...',
-            'lightflow_cinematic.button.render_again': 'Render Again',
-            'lightflow_cinematic.button.play_last': 'Play Last Render',
-            'lightflow_cinematic.field.output_format': 'Output Format',
-            'lightflow_cinematic.option.png_sequence': 'PNG image sequence',
-            'lightflow_cinematic.option.integrated_encoder': 'Integrated',
-            'lightflow_cinematic.acceleration.auto': 'Auto',
-            'lightflow_cinematic.acceleration.hardware': 'Prefer hardware',
-            'lightflow_cinematic.acceleration.software': 'Prefer software',
-            'lightflow_cinematic.background.scene': 'Scene',
-            'lightflow_cinematic.background.transparent': 'Transparent',
-            'lightflow_cinematic.bitrate.variable': 'Variable',
-            'lightflow_cinematic.bitrate.constant': 'Constant',
-            'lightflow_cinematic.output.preview_note': 'Render & Preview keeps the finished clip in Blockbench first. Save it wherever you want after reviewing it; saving does not render again.',
-            'lightflow_cinematic.output.png_note': 'PNG sequence exports individual frames. Choose a dedicated folder to keep the images together.',
-            'lightflow_cinematic.output.camera_required': 'This sequence needs a camera before it can render. Create one from the current view or assign one in Camera.',
-            'lightflow_cinematic.output.gif_note': 'GIF uses up to 256 colors and binary transparency.',
-            'lightflow_cinematic.output.download_limit': 'Without direct file saving, downloads are limited to 128 MiB.',
-            'lightflow_cinematic.field.video_backend': 'Video encoder',
-            'lightflow_cinematic.field.ffmpeg_path': 'FFmpeg executable (optional backend)',
-            'lightflow_cinematic.output.backend_note': 'Video formats are checked on your device before rendering. MP4/WebM output is opaque; choose PNG to preserve transparency.',
-            'lightflow_cinematic.status.encoding': 'Encoding video',
-            'lightflow_cinematic.status.preparing': 'Preparing cinematic export',
-            'lightflow_cinematic.status.finalizing': 'Finalizing cinematic export',
-            'lightflow_cinematic.status.rendering_clip': 'Rendering clip',
-            'lightflow_cinematic.button.cancel': 'Cancel Render',
-            'lightflow_cinematic.dialog.delete_sequence': 'Delete sequence "{name}"?',
-            'lightflow_cinematic.dialog.output_directory': 'Choose PNG sequence directory',
-            'lightflow_cinematic.dialog.physical_camera': 'Camera Settings',
-            'lightflow_cinematic.field.projection': 'Projection',
-            'lightflow_cinematic.field.sensor_size': 'Sensor (Width / Height mm)',
-            'lightflow_cinematic.field.focal_length': 'Focal Length (mm)',
-            'lightflow_cinematic.field.aperture': 'Aperture (f-stop)',
-            'lightflow_cinematic.field.focus_distance': 'Focus Distance',
-            'lightflow_cinematic.field.shutter_angle': 'Shutter Angle',
-            'lightflow_cinematic.field.iso': 'ISO',
-            'lightflow_cinematic.field.exposure_compensation': 'Exposure Compensation (EV)',
-            'lightflow_cinematic.field.lens_shift': 'Lens Shift (X / Y)',
-            'lightflow_cinematic.field.anamorphic_squeeze': 'Anamorphic Squeeze',
-            'lightflow_cinematic.field.clipping': 'Clipping (Near / Far)',
-            'lightflow_cinematic.field.blade_count': 'Aperture Blades',
-            'lightflow_cinematic.field.interpolation': 'Interpolation to Next Keyframe',
-            'lightflow_cinematic.info.physical_pending': 'Pose, focal length, lens shift, focus and clipping already reach the render camera. Aperture, shutter, ISO and blades are persisted for the upcoming DOF, motion-blur and physical-exposure passes.',
-            'lightflow_cinematic.message.camera_created': 'Physical camera created',
-            'lightflow_cinematic.message.keyframe_saved': 'Camera keyframe saved at frame {frame}',
-            'lightflow_cinematic.message.sequence_complete': 'Cinematic sequence completed: {frames} frames',
-            'lightflow_cinematic.message.sequence_cancelled': 'Cinematic render cancelled after {frames} frames',
-            'lightflow_cinematic.message.no_render': 'Render a clip first.',
-            'lightflow_cinematic.message.saved': 'Cinematic clip saved.',
-            'lightflow_cinematic.export.clip': 'Cinematic Clip',
-            'lightflow_cinematic.result.title': 'Cinematic Preview',
-            'lightflow_cinematic.result.temporary': 'Preview is temporary. Save it when you want to keep it.',
-            'lightflow_cinematic.result.saved_to': 'Saved to {path}',
-            'lightflow_cinematic.result.last_render': 'Last render: {summary}',
-            'lightflow_cinematic.progress.clip': 'Rendering clip',
-            'lightflow_cinematic.progress.montage': 'Rendering montage',
-            'lightflow_cinematic.progress.preview_destination': 'This render stays in Blockbench first. Choose where to save it after it finishes.',
-            'lightflow_cinematic.progress.png_destination': 'Frames will be written to the folder you selected.',
-            'lightflow_cinematic.progress.eta': 'about {time} remaining',
-            'lightflow_cinematic.message.temporary': 'Cinematic data is temporary in this format. Save as .bbmodel to keep it.',
-            'lightflow_cinematic.message.no_active_animation': 'Select an animation with a non-zero duration first.',
-            'lightflow_cinematic.message.no_camera': 'Create or assign a camera first.',
-            'lightflow_cinematic.message.region_editing': 'Move or resize the Studio Render frame. Changes are saved to this sequence.',
-            'lightflow_cinematic.undo.create_sequence': 'Create Cinematic Sequence',
-            'lightflow_cinematic.undo.edit_sequence': 'Edit Cinematic Sequence',
-            'lightflow_cinematic.undo.delete_sequence': 'Delete Cinematic Sequence',
-            'lightflow_cinematic.undo.adapt_animation': 'Fit Sequence to Active Animation',
-            'lightflow_cinematic.undo.frame_rate': 'Change Cinematic Frame Rate',
-            'lightflow_cinematic.undo.capture_look': 'Capture Studio Look',
-            'lightflow_cinematic.undo.capture_region': 'Edit Cinematic Capture Region',
-            'lightflow_cinematic.undo.create_camera': 'Create Lightflow Camera',
-            'lightflow_cinematic.undo.delete_camera': 'Delete Lightflow Camera',
-            'lightflow_cinematic.undo.camera_keyframe': 'Edit Lightflow Camera Keyframe',
-            'lightflow_cinematic.undo.delete_camera_keyframe': 'Delete Lightflow Camera Keyframe',
-            'lightflow_cinematic.undo.camera_interpolation': 'Change Camera Keyframe Interpolation',
-            'lightflow_cinematic.undo.camera_settings': 'Edit Camera Settings',
-            'lightflow_cinematic.undo.assign_camera': 'Assign Cinematic Camera',
-            'lightflow_cinematic.timeline.pose': 'Pose',
-            'lightflow_cinematic.timeline.lens': 'Lens / Focus',
-            'lightflow_cinematic.timeline.exposure': 'Exposure',
-            'lightflow_cinematic.unit.frames': 'frames',
-            'lightflow_cinematic.unit.source': 'source',
-            'lightflow_cinematic.status.rendering': 'Rendering cinematic frame'
-        });
-        Language.addTranslations('es', {
-            'lightflow_cinematic.montage.title': 'Montaje',
-            'lightflow_cinematic.montage.shots': 'Planos',
-            'lightflow_cinematic.montage.shot': 'Plano',
-            'lightflow_cinematic.montage.in': 'Frame de entrada (incluido)',
-            'lightflow_cinematic.montage.out': 'Frame de salida (excluido)',
-            'lightflow_cinematic.montage.add': 'Añadir plano',
-            'lightflow_cinematic.montage.duplicate': 'Duplicar',
-            'lightflow_cinematic.montage.earlier': 'Antes',
-            'lightflow_cinematic.montage.later': 'Después',
-            'lightflow_cinematic.montage.remove': 'Quitar',
-            'lightflow_cinematic.montage.render': 'Renderizar montaje',
-
-            'lightflow_cinematic.field.source_animation': 'Animación fuente',
-            'lightflow_cinematic.option.current_animation_mix': 'Mezcla de animaciones actual',
-            'lightflow_cinematic.field.video_quality': 'Calidad de vídeo',
-            'lightflow_cinematic.quality.low': 'Borrador',
-            'lightflow_cinematic.quality.medium': 'Estándar',
-            'lightflow_cinematic.quality.high': 'Alta',
-            'lightflow_cinematic.quality.very_high': 'Cinematográfica / Muy alta',
-            'lightflow_cinematic.quality.custom': 'Personalizada',
-
-            'lightflow_cinematic.workflow.hint': 'Prepara el plano, elige una cámara y renderiza desde Salida.',
-            'lightflow_cinematic.plugin.title': 'Lightflow Cinematic',
-            'lightflow_cinematic.action.open': 'Lightflow Cinematic...',
-            'lightflow_cinematic.action.open.desc': 'Administra secuencias deterministas y camaras fisicas.',
-            'lightflow_cinematic.action.camera': 'Crear cámara',
-            'lightflow_cinematic.action.keyframe': 'Agregar / Actualizar Fotograma Clave de Camara',
-            'lightflow_cinematic.action.preview': 'Previsualizar Fotograma Cinematografico',
-            'lightflow_cinematic.action.play': 'Reproducir Previsualizacion Cinematografica',
-            'lightflow_cinematic.action.pause': 'Pausar Previsualizacion Cinematografica',
-            'lightflow_cinematic.action.view_camera': 'Ver a Traves de la Camara Lightflow',
-            'lightflow_cinematic.action.update_camera': 'Mover Camara a la Vista Actual',
-            'lightflow_cinematic.action.camera_settings': 'Ajustes de cámara...',
-            'lightflow_cinematic.action.delete_camera': 'Eliminar Camara Lightflow',
-            'lightflow_cinematic.action.render_sequence': 'Renderizar salida cinematográfica...',
-            'lightflow_cinematic.action.cancel_render': 'Cancelar Render Cinematografico',
-            'lightflow_cinematic.group.sequence': 'Secuencia',
-            'lightflow_cinematic.group.camera': 'Cámara',
-            'lightflow_cinematic.group.timing': 'Tiempo y Reproduccion',
-            'lightflow_cinematic.group.capture': 'Region de Captura',
-            'lightflow_cinematic.group.output': 'Salida',
-            'lightflow_cinematic.group.encoding': 'Codificación avanzada',
-            'lightflow_cinematic.field.sequence': 'Secuencia Activa',
-            'lightflow_cinematic.field.sequence_name': 'Nombre',
-            'lightflow_cinematic.field.frame_rate': 'Fotogramas por Segundo',
-            'lightflow_cinematic.field.frame_range': 'Rango (Entrada / Salida)',
-            'lightflow_cinematic.field.start_frame': 'Fotograma Inicial de Salida',
-            'lightflow_cinematic.field.duration_mode': 'Control de Longitud',
-            'lightflow_cinematic.field.duration_frames': 'Longitud (Fotogramas)',
-            'lightflow_cinematic.field.duration_seconds': 'Longitud (Segundos)',
-            'lightflow_cinematic.field.source_start': 'Inicio de Animacion (Segundos)',
-            'lightflow_cinematic.field.playback_rate': 'Velocidad de la Fuente',
-            'lightflow_cinematic.field.loop_preview': 'Repetir Previsualizacion',
-            'lightflow_cinematic.field.preview_camera': 'Ver por la Camara al Navegar el Timeline',
-            'lightflow_cinematic.field.capture_area': 'Area de Captura',
-            'lightflow_cinematic.field.capture_full': 'Viewport Completo',
-            'lightflow_cinematic.field.capture_frame': 'Marco de Studio Render',
-            'lightflow_cinematic.field.match_frame_ratio': 'Adaptar Salida a la Proporcion del Marco',
-            'lightflow_cinematic.option.duration.frames': 'Fotogramas',
-            'lightflow_cinematic.option.duration.seconds': 'Segundos',
-            'lightflow_cinematic.option.duration.active_animation': 'Animacion Activa',
-            'lightflow_cinematic.option.no_camera': 'Sin Camara',
-            'lightflow_cinematic.toolbar.time': 'Fotograma Actual y Duracion',
-            'lightflow_cinematic.field.camera': 'Camara',
-            'lightflow_cinematic.field.resolution': 'Resolucion',
-            'lightflow_cinematic.field.samples': 'Muestras SSAA de Studio',
-            'lightflow_cinematic.field.codec': 'Códec',
-            'lightflow_cinematic.field.encoder_acceleration': 'Aceleración del codificador',
-            'lightflow_cinematic.field.background': 'Fondo',
-            'lightflow_cinematic.field.video_bitrate': 'Bitrate de vídeo (bit/s)',
-            'lightflow_cinematic.field.bitrate_mode': 'Modo de bitrate',
-            'lightflow_cinematic.field.keyframe_interval': 'Intervalo de keyframes (segundos)',
-            'lightflow_cinematic.field.audio': 'Audio',
-            'lightflow_cinematic.field.audio_codec': 'Códec de audio',
-            'lightflow_cinematic.field.audio_quality': 'Calidad de audio',
-            'lightflow_cinematic.field.audio_bitrate': 'Bitrate de audio (bit/s)',
-            'lightflow_cinematic.field.audio_sample_rate': 'Frecuencia de muestreo de audio',
-            'lightflow_cinematic.field.audio_channels': 'Canales de audio',
-            'lightflow_cinematic.button.new_sequence': 'Nueva Secuencia',
-            'lightflow_cinematic.button.delete_sequence': 'Eliminar Secuencia',
-            'lightflow_cinematic.button.capture_look': 'Capturar Look de Studio',
-            'lightflow_cinematic.button.use_active_animation': 'Adaptar a Animacion Activa',
-            'lightflow_cinematic.button.start_current': 'Iniciar en Tiempo Actual',
-            'lightflow_cinematic.button.jump_start': 'Ir al Inicio',
-            'lightflow_cinematic.button.play_pause': 'Reproducir / Pausar',
-            'lightflow_cinematic.button.edit_region': 'Editar Region en Viewport',
-            'lightflow_cinematic.button.capture_region': 'Capturar Region Actual',
-            'lightflow_cinematic.button.new_camera': 'Camara desde la Vista',
-            'lightflow_cinematic.button.physical_settings': 'Ajustes Fisicos',
-            'lightflow_cinematic.button.keyframe': 'Keyframe de Vista Actual',
-            'lightflow_cinematic.button.preview': 'Previsualizar Fotograma',
-            'lightflow_cinematic.button.render_png': 'Renderizar Secuencia PNG',
-            'lightflow_cinematic.button.render_output': 'Renderizar salida',
-            'lightflow_cinematic.button.render_preview': 'Renderizar y previsualizar',
-            'lightflow_cinematic.button.export_png': 'Exportar secuencia PNG...',
-            'lightflow_cinematic.button.render_export': 'Renderizar / Exportar',
-            'lightflow_cinematic.button.save_as': 'Guardar como...',
-            'lightflow_cinematic.button.render_again': 'Renderizar de nuevo',
-            'lightflow_cinematic.button.play_last': 'Reproducir último render',
-            'lightflow_cinematic.field.output_format': 'Formato de salida',
-            'lightflow_cinematic.option.png_sequence': 'Secuencia de imágenes PNG',
-            'lightflow_cinematic.option.integrated_encoder': 'Integrado',
-            'lightflow_cinematic.acceleration.auto': 'Automática',
-            'lightflow_cinematic.acceleration.hardware': 'Preferir hardware',
-            'lightflow_cinematic.acceleration.software': 'Preferir software',
-            'lightflow_cinematic.background.scene': 'Escena',
-            'lightflow_cinematic.background.transparent': 'Transparente',
-            'lightflow_cinematic.bitrate.variable': 'Variable',
-            'lightflow_cinematic.bitrate.constant': 'Constante',
-            'lightflow_cinematic.output.preview_note': 'Renderizar y previsualizar conserva primero el clip terminado dentro de Blockbench. Guárdalo donde quieras después de revisarlo; guardar no vuelve a renderizar.',
-            'lightflow_cinematic.output.png_note': 'La secuencia PNG exporta cada fotograma como una imagen. Elige una carpeta dedicada para mantenerlas juntas.',
-            'lightflow_cinematic.output.camera_required': 'Esta secuencia necesita una cámara para renderizar. Créala desde la vista actual o asígnala en Cámara.',
-            'lightflow_cinematic.output.gif_note': 'GIF usa hasta 256 colores y transparencia binaria.',
-            'lightflow_cinematic.output.download_limit': 'Sin guardado directo, las descargas se limitan a 128 MiB.',
-            'lightflow_cinematic.field.video_backend': 'Codificador de vídeo',
-            'lightflow_cinematic.field.ffmpeg_path': 'Ejecutable FFmpeg (backend opcional)',
-            'lightflow_cinematic.output.backend_note': 'Los formatos de vídeo se comprueban en tu dispositivo antes de renderizar. MP4/WebM son opacos; elige PNG para conservar transparencia.',
-            'lightflow_cinematic.status.encoding': 'Codificando vídeo',
-            'lightflow_cinematic.status.preparing': 'Preparando exportación cinematográfica',
-            'lightflow_cinematic.status.finalizing': 'Finalizando exportación cinematográfica',
-            'lightflow_cinematic.status.rendering_clip': 'Renderizando clip',
-            'lightflow_cinematic.button.cancel': 'Cancelar Render',
-            'lightflow_cinematic.dialog.delete_sequence': 'Eliminar la secuencia "{name}"?',
-            'lightflow_cinematic.dialog.output_directory': 'Elegir carpeta para la secuencia PNG',
-            'lightflow_cinematic.dialog.physical_camera': 'Ajustes de Cámara',
-            'lightflow_cinematic.field.projection': 'Proyeccion',
-            'lightflow_cinematic.field.sensor_size': 'Sensor (Ancho / Alto mm)',
-            'lightflow_cinematic.field.focal_length': 'Distancia Focal (mm)',
-            'lightflow_cinematic.field.aperture': 'Apertura (f-stop)',
-            'lightflow_cinematic.field.focus_distance': 'Distancia de Enfoque',
-            'lightflow_cinematic.field.shutter_angle': 'Angulo de Obturador',
-            'lightflow_cinematic.field.iso': 'ISO',
-            'lightflow_cinematic.field.exposure_compensation': 'Compensacion de Exposicion (EV)',
-            'lightflow_cinematic.field.lens_shift': 'Desplazamiento de Lente (X / Y)',
-            'lightflow_cinematic.field.anamorphic_squeeze': 'Compresion Anamorfica',
-            'lightflow_cinematic.field.clipping': 'Recorte (Cerca / Lejos)',
-            'lightflow_cinematic.field.blade_count': 'Laminas de Apertura',
-            'lightflow_cinematic.field.interpolation': 'Interpolacion al Siguiente Keyframe',
-            'lightflow_cinematic.info.physical_pending': 'La pose, focal, lens shift, foco y clipping ya llegan a la camara de render. Apertura, shutter, ISO y laminas quedan persistidos para los proximos pases de DOF, motion blur y exposicion fisica.',
-            'lightflow_cinematic.message.camera_created': 'Camara fisica creada',
-            'lightflow_cinematic.message.keyframe_saved': 'Fotograma clave de camara guardado en {frame}',
-            'lightflow_cinematic.message.sequence_complete': 'Secuencia cinematografica terminada: {frames} fotogramas',
-            'lightflow_cinematic.message.sequence_cancelled': 'Render cinematografico cancelado tras {frames} fotogramas',
-            'lightflow_cinematic.message.no_render': 'Renderiza primero un clip.',
-            'lightflow_cinematic.message.saved': 'Clip cinematográfico guardado.',
-            'lightflow_cinematic.export.clip': 'Clip cinematográfico',
-            'lightflow_cinematic.result.title': 'Previsualización cinematográfica',
-            'lightflow_cinematic.result.temporary': 'La previsualización es temporal. Guárdala cuando quieras conservarla.',
-            'lightflow_cinematic.result.saved_to': 'Guardado en {path}',
-            'lightflow_cinematic.result.last_render': 'Último render: {summary}',
-            'lightflow_cinematic.progress.clip': 'Renderizando clip',
-            'lightflow_cinematic.progress.montage': 'Renderizando montaje',
-            'lightflow_cinematic.progress.preview_destination': 'Este render permanece primero en Blockbench. Elige dónde guardarlo cuando termine.',
-            'lightflow_cinematic.progress.png_destination': 'Los fotogramas se escribirán en la carpeta seleccionada.',
-            'lightflow_cinematic.progress.eta': 'aprox. {time} restantes',
-            'lightflow_cinematic.message.temporary': 'Los datos cinematograficos son temporales en este formato. Guarda como .bbmodel para conservarlos.',
-            'lightflow_cinematic.message.no_active_animation': 'Selecciona primero una animacion con duracion mayor que cero.',
-            'lightflow_cinematic.message.no_camera': 'Crea o asigna primero una camara fisica.',
-            'lightflow_cinematic.message.region_editing': 'Mueve o redimensiona el marco de Studio Render. Los cambios se guardan en esta secuencia.',
-            'lightflow_cinematic.undo.create_sequence': 'Crear Secuencia Cinematografica',
-            'lightflow_cinematic.undo.edit_sequence': 'Editar Secuencia Cinematografica',
-            'lightflow_cinematic.undo.delete_sequence': 'Eliminar Secuencia Cinematografica',
-            'lightflow_cinematic.undo.adapt_animation': 'Adaptar Secuencia a la Animacion Activa',
-            'lightflow_cinematic.undo.frame_rate': 'Cambiar Fotogramas por Segundo',
-            'lightflow_cinematic.undo.capture_look': 'Capturar Look de Studio',
-            'lightflow_cinematic.undo.capture_region': 'Editar Region de Captura Cinematografica',
-            'lightflow_cinematic.undo.create_camera': 'Crear Camara Lightflow',
-            'lightflow_cinematic.undo.delete_camera': 'Eliminar Camara Lightflow',
-            'lightflow_cinematic.undo.camera_keyframe': 'Editar Fotograma Clave de Camara Lightflow',
-            'lightflow_cinematic.undo.delete_camera_keyframe': 'Eliminar Fotograma Clave de Camara Lightflow',
-            'lightflow_cinematic.undo.camera_interpolation': 'Cambiar Interpolacion del Fotograma de Camara',
-            'lightflow_cinematic.undo.camera_settings': 'Editar Ajustes de Cámara',
-            'lightflow_cinematic.undo.assign_camera': 'Asignar Camara Cinematografica',
-            'lightflow_cinematic.timeline.pose': 'Pose',
-            'lightflow_cinematic.timeline.lens': 'Lente / Enfoque',
-            'lightflow_cinematic.timeline.exposure': 'Exposicion',
-            'lightflow_cinematic.unit.frames': 'fotogramas',
-            'lightflow_cinematic.unit.source': 'fuente',
-            'lightflow_cinematic.status.rendering': 'Renderizando fotograma cinematografico'
-        });
-    }
 
     function sequenceOptions(document) {
         return Object.fromEntries(document.sequences.map(sequence => [sequence.id, sequence.name]));
@@ -8870,7 +9743,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         const save = () => mutateDocument(nextDocument => {
             const next = getSequence(nextDocument, sequence.id);
             next.name = cleanName(form.sequence_name, next.name);
-            next.frame_rate = normalizeFrameRate(form.frame_rate ?? next.frame_rate);
+            retimeSequenceFrames(next, form.frame_rate ?? next.frame_rate, nextDocument);
             next.duration_mode = ['frames', 'seconds', 'active_animation'].includes(form.duration_mode)
                 ? form.duration_mode
                 : next.duration_mode;
@@ -8962,8 +9835,8 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         });
     }
 
-    function requestManagerMediaProbe(form) {
-        const fallback = getSequence(readDocument(), form?.sequence_id);
+    function requestManagerMediaProbe(form, sequenceOverride = null) {
+        const fallback = sequenceOverride || getSequence(readDocument(), form?.sequence_id);
         if (!fallback) return;
         const draft = sequenceFromManagerMediaForm(form || {}, fallback);
         const format = draft.output_format;
@@ -8997,7 +9870,8 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
             if (!managerDialog) return;
             managerDialog.hide?.();
             managerDialog = null;
-            openManagerDialog();
+            if (viewportCaptureDialog) openViewportCaptureDialog();
+            else openManagerDialog();
         }, 0);
     }
 
@@ -9005,7 +9879,8 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         return managerDialog?.getFormResult?.() || {};
     }
 
-    function openPhysicalCameraDialog(cameraId, sequenceId) {
+    function openPhysicalCameraDialog(cameraId, sequenceId, initialTab) {
+        if(initialTab)physicalCameraTab=initialTab;
         const document = readDocument();
         const sequence = getSequence(document, sequenceId);
         const camera = getCamera(document, cameraId, sequence);
@@ -9028,14 +9903,18 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                     label: 'lightflow_cinematic.field.sequence_name',
                     value: camera.name
                 }),
-                lens_preset: cinematicSelect({label:cinematicUI('Lens preset','Preset de lente'),value:'custom',options:{custom:cinematicUI('Custom','Personalizado'),wide:'24 mm · '+cinematicUI('Wide','Amplio'),natural:'50 mm · '+cinematicUI('Natural','Natural'),portrait:'85 mm · '+cinematicUI('Portrait','Retrato'),tele:'135 mm · '+cinematicUI('Telephoto','Teleobjetivo')},condition:form=>form.projection!=='orthographic'}),
+                lens_preset: cinematicSelect({label:cinematicUI("lens_preset"),value:'custom',options:{custom:cinematicUI("custom"),wide:'24 mm · '+cinematicUI("wide"),natural:'50 mm · '+cinematicUI("natural"),portrait:'85 mm · '+cinematicUI("portrait"),tele:'135 mm · '+cinematicUI("telephoto")},condition:form=>form.projection!=='orthographic'}),
                 projection: cinematicSelect({
                     label: 'lightflow_cinematic.field.projection',
                     value: state.projection,
                     options: {
-                        perspective: cinematicUI('Perspective','Perspectiva'),
-                        orthographic: cinematicUI('Orthographic','Ortográfica')
+                        perspective: cinematicUI("perspective"),
+                        orthographic: cinematicUI("orthographic")
                     }
+                }),
+                sensor_aspect: cinematicSelect({
+                    label:cinematicUI("sensor_proportions"),value:'custom',
+                    options:{custom:cinematicUI("custom"),...Object.fromEntries((window.StudioRender?.aspectRatioPresets||[]).map(p=>[p.label,p.label]))}
                 }),
                 sensor_size: cinematicVector({
                     dimensions: 2,
@@ -9052,7 +9931,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                     step: 0.1,
                     condition:form=>form.projection!=='orthographic'
                 }, 50),
-                ortho_world_height: cinematicNumber({label:cinematicUI('View height (units)','Altura de vista (unidades)'),value:state.ortho_world_height,min:.001,max:128,allow_higher:true,step:.1,condition:form=>form.projection==='orthographic'},16),
+                ortho_world_height: cinematicNumber({label:cinematicUI("view_height_units"),value:state.ortho_world_height,min:.001,max:128,allow_higher:true,step:.1,condition:form=>form.projection==='orthographic'},16),
                 aperture_f_stop: cinematicNumber({
                     label: 'lightflow_cinematic.field.aperture',
                     value: state.aperture_f_stop,
@@ -9061,7 +9940,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                     step: 0.1
                 }, 2.8),
                 focus_distance: cinematicNumber({
-                    label: cinematicUI('Focus distance (units)','Distancia de foco (unidades)'),
+                    label: cinematicUI("focus_distance_units"),
                     value: state.focus_distance,
                     min: 0.0001,
                     max: 128,
@@ -9099,7 +9978,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                 }, [0, 0]),
                 anamorphic_squeeze: cinematicNumber({
                     label: 'lightflow_cinematic.field.anamorphic_squeeze',
-                    description:cinematicUI('This value is saved for physical rendering. Preview and current render do not apply anamorphic squeeze yet.','Este valor se guarda para el render físico. La vista y el render actual todavía no aplican la compresión anamórfica.'),
+                    description:cinematicUI("this_value_is_saved_for_physical_rendering_preview_and_current_r"),
                     value: state.anamorphic_squeeze,
                     min: 0.25,
                     max: 4,
@@ -9123,22 +10002,24 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                     label: 'lightflow_cinematic.field.interpolation',
                     value: keyframe?.interpolation || 'smooth',
                     options: {
-                        step: cinematicUI('Step','Escalonada'),
-                        linear: cinematicUI('Linear','Lineal'),
-                        smooth: cinematicUI('Smooth','Suave'),
-                        ease_in: cinematicUI('Ease in','Entrada suave'),
-                        ease_out: cinematicUI('Ease out','Salida suave')
+                        step: cinematicUI("step"),
+                        linear: cinematicUI("linear"),
+                        smooth: cinematicUI("smooth"),
+                        ease_in: cinematicUI("ease_in"),
+                        ease_out: cinematicUI("ease_out")
                     }
                 }),
                 physical_status: {
                     type: 'info',
                     text: translate('lightflow_cinematic.info.physical_pending', '')
                 }
-            },[['lens',cinematicUI('Lens & focus','Lente y foco'),'camera'],['exposure',cinematicUI('Exposure','Exposición'),'exposure'],['sensor',cinematicUI('Sensor & framing','Sensor y encuadre'),'crop']], '_physical_tab', physicalCameraTab,
-                key=>['sensor_size','lens_shift','anamorphic_squeeze','clipping'].includes(key)?'sensor':['aperture_f_stop','shutter_angle','iso','exposure_compensation_ev','blade_count','physical_status'].includes(key)?'exposure':key==='name'?null:'lens')),
+            },[['lens',cinematicUI("lens_focus"),'camera'],['exposure',cinematicUI("exposure"),'exposure'],['sensor',cinematicUI("sensor_framing"),'crop']], '_physical_tab', physicalCameraTab,
+                key=>['sensor_aspect','sensor_size','lens_shift','anamorphic_squeeze','clipping'].includes(key)?'sensor':['aperture_f_stop','shutter_angle','iso','exposure_compensation_ev','blade_count','physical_status'].includes(key)?'exposure':key==='name'?null:'lens')),
             buttons: ['dialog.confirm', 'dialog.cancel'],
             onFormChange(form){
                 physicalCameraTab=form._physical_tab||physicalCameraTab;
+                const ratio=(window.StudioRender?.aspectRatioPresets||[]).find(p=>p.label===form.sensor_aspect);
+                if(ratio)physicalCameraDialog?.setFormValues?.({sensor_size:[form.sensor_size[0],form.sensor_size[0]*ratio.height/ratio.width],sensor_aspect:'custom'},false);
                 const focal=({wide:24,natural:50,portrait:85,tele:135})[form.lens_preset];
                 if(focal&&focal!==form.focal_length_mm)physicalCameraDialog?.setFormValues?.({focal_length_mm:focal,lens_preset:'custom'},false);
             },
@@ -9169,17 +10050,23 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                     far_clip: clipping[1],
                     blade_count: form.blade_count
                 }, state);
-                addOrUpdateCameraKeyframe(camera.id, frame, {
-                    sequence_id: sequence.id,
-                    state: nextState,
-                    interpolation: form.interpolation,
-                    camera_name: form.name,
-                    undo_label: translate(
-                        'lightflow_cinematic.undo.camera_settings',
-                        'Edit Camera Settings'
-                    )
+                runCinematicUndo(translate('lightflow_cinematic.undo.camera_settings','Edit Camera Settings'),()=>{
+                    addOrUpdateCameraKeyframe(camera.id, frame, {
+                        sequence_id: sequence.id,
+                        state: nextState,
+                        interpolation: form.interpolation,
+                        camera_name: form.name,
+                        undo_label: translate(
+                            'lightflow_cinematic.undo.camera_settings',
+                            'Edit Camera Settings'
+                        )
+                    });
+                    if(cinematicCameraView?.cameraId===camera.id&&window.StudioRender?.frameOwner==='lightflow_cinematic'&&
+                        (Math.abs(sensor[0]-state.sensor_width_mm)>.0001||Math.abs(sensor[1]-state.sensor_height_mm)>.0001)){
+                        window.StudioRender.setFrameAspect(sensor[0]/sensor[1]);
+                    }
                 });
-                applyPhysicalState(nextState, sequence);
+                applyPhysicalState(nextState, getSequence(readDocumentView(),sequence.id));
                 physicalCameraDialog = null;
                 scheduleManagerRefresh();
             },
@@ -9191,20 +10078,20 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         initialDisplay=physicalCameraDialog.getFormResult();
     }
 
-    function createManagerForm() {
+    function createManagerForm(sequenceOverride = null) {
         const document = readDocument();
-        const sequence = getSequence(document);
-        const displaySequence = managerDraftForm ? sequenceFromManagerMediaForm(managerDraftForm, sequence) : sequence;
+        const sequence = sequenceOverride || getSequence(document);
+        const displaySequence = !sequenceOverride && managerDraftForm ? sequenceFromManagerMediaForm(managerDraftForm, sequence) : sequence;
         const mediaCaps = managerMediaCapabilities?.format === displaySequence.output_format ? managerMediaCapabilities : null;
         const videoCodecOptions = { auto: 'Auto' };
         for (const codec of mediaCaps?.videoCodecs || []) videoCodecOptions[codec] = CINEMATIC_CODEC_LABELS[codec] || codec;
         const audioCodecOptions = { auto: 'Auto' };
         for (const codec of mediaCaps?.audioCodecs || []) audioCodecOptions[codec] = CINEMATIC_CODEC_LABELS[codec] || codec;
-        const mediaCapabilityText = mediaCaps?.pending ? cinematicUI('Checking compatible encoders…','Comprobando codificadores compatibles…')
+        const mediaCapabilityText = mediaCaps?.pending ? cinematicUI("checking_compatible_encoders")
             : mediaCaps?.error ? mediaCaps.error
-            : mediaCaps ? ((mediaCaps.videoCodecs.length ? cinematicUI('Available video: ','Vídeo disponible: ') + mediaCaps.videoCodecs.map(codec => CINEMATIC_CODEC_LABELS[codec] || codec).join(', ') : cinematicUI('No video encoder supports this configuration. Try another size or format.','Ningún codificador admite esta configuración. Prueba otro tamaño o formato.')) +
+            : mediaCaps ? ((mediaCaps.videoCodecs.length ? cinematicUI("available_video") + mediaCaps.videoCodecs.map(codec => CINEMATIC_CODEC_LABELS[codec] || codec).join(', ') : cinematicUI("no_video_encoder_supports_this_configuration_try_another_size_or")) +
                 (mediaCaps.audioCodecs.length ? ' · Audio: ' + mediaCaps.audioCodecs.map(codec => CINEMATIC_CODEC_LABELS[codec] || codec).join(', ') : ''))
-            : cinematicUI('Checking compatibility for the chosen size and frame rate.','Comprobando compatibilidad con el tamaño y FPS elegidos.');
+            : cinematicUI("checking_compatibility_for_the_chosen_size_and_frame_rate");
         const formHasPhysicalCamera = form => {
             const cameraId = String(form && Object.prototype.hasOwnProperty.call(form, 'camera_id')
                 ? form.camera_id
@@ -9411,10 +10298,10 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
             camera_tools: {
                 type: 'buttons',
                 buttons: [
-                    cinematicUI('New camera','Nueva cámara'),
-                    cinematicUI('Physical settings','Ajustes físicos'),
-                    cinematicUI('Set view keyframe','Keyframe de vista'),
-                    cinematicUI('View shot','Ver toma')
+                    cinematicUI("new_camera"),
+                    cinematicUI("physical_settings"),
+                    cinematicUI("set_view_keyframe"),
+                    cinematicUI("view_shot")
                 ],
                 click(index) {
                     const form = currentManagerForm();
@@ -9521,9 +10408,10 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
             }, [1920, 1080]),
             samples: cinematicSelect({
                 label: 'lightflow_cinematic.field.samples',
+                description: cinematicUI("adaptive_aa_accumulates_static_scenes_scene_changes_use_current"),
                 value: sequence.samples,
                 options: { 1: '1x', 2: '2x', 3: '3x', 4: '4x', 6: '6x', 8: '8x · Reference',
-                    temporal_2: 'Temporal 2x · Experimental', temporal_4: 'Temporal 4x · Experimental' }
+                    temporal_2: cinematicUI("adaptive_2x"), temporal_4: cinematicUI("adaptive_4x") }
             }),
             output_format: cinematicSelect({
                 label: 'lightflow_cinematic.field.output_format',
@@ -9664,48 +10552,270 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                         managerMediaCapabilities.videoCodecs.length > 0;
                 },
                 click() {
-                    const form = currentManagerForm();
-                    const savedSequence = saveManagerForm(form);
-                    managerDialog?.hide?.();
-                    managerDialog = null;
-                    if (!savedSequence) return;
-                    renderConfiguredSequence(savedSequence.id).then(reportRenderResult).catch(showCinematicError);
+                    recordManagerSequence(false);
                 }
             }
         };
     }
 
     let managerWorkflowTab = 'sequence';
-    function createManagerWorkflowForm() {
-        const tabs = {sequence: {name:cinematicUI('Shot','Toma'),icon:'movie'},camera:{name:cinematicUI('Camera','Cámara'),icon:'videocam'},scene:{name:cinematicUI('Scene','Escena'),icon:'animation'},output:{name:'lightflow_cinematic.group.output',icon:'video_file'}};
+    const viewportCapturePreferences = new WeakMap();
+    let viewportCaptureDialog = false;
+    let viewportCaptureDraft = null;
+    let viewportCaptureProject = null;
+
+    function viewportCaptureSequence(form = {}) {
+        const project = getActiveProject();
+        const preferences = project ? viewportCapturePreferences.get(project) || {} : {};
+        const range = getActiveAnimationRange();
+        const values = {...preferences, ...form};
+        const rate = normalizeFrameRate(values.frame_rate || {numerator: 24, denominator: 1});
+        const previewRate = window.AnimationController?.selected?.selected_state ? 1
+            : Math.max(0.0001, finite(window.Timeline?.playback_speed, 100) / 100);
+        const playbackRate = Math.max(0.0001, finite(values.playback_rate, previewRate));
+        const durationMode = values.duration_mode || (range ? 'active_animation' : 'seconds');
+        const frames = durationMode === 'frames' ? finite(values.duration_frames, 120)
+            : durationMode === 'active_animation' && range ? range.durationSeconds * frameRateValue(rate) / playbackRate
+            : finite(values.duration_seconds, 5) * frameRateValue(rate);
+        return normalizeSequence({
+            ...values, id: '__viewport_capture', name: cinematicUI("viewport_recording"),
+            frame_rate: rate, duration_mode: durationMode, start_frame: 0, end_frame: Math.max(1, Math.round(frames)),
+            output_format: values.output_format || 'gif', resolution: values.resolution || [480, 270],
+            samples: values.samples || '1', camera_id: '', clips: [],
+            playback_rate: playbackRate,
+            source_animation_id: range?.id || '', source_animation_name: range?.name || '',
+            source_start_seconds: range?.startSeconds || 0,
+            studio: captureCurrentStudioSettings()
+        });
+    }
+
+    function createViewportRenderDocument(sequenceValue) {
+        const shot = captureCurrentShot('Viewport capture');
+        if (!shot) throw new Error('A viewport is required to record.');
+        const camera = normalizeCamera({id: '__viewport_projection', name: 'Viewport', base: physicalStateFromShot(shot), keyframes: []});
+        const framed = !!window.document.getElementById('studio_render_frame');
+        const sequence = normalizeSequence({...sequenceValue, camera_id: camera.id,
+            capture_area: framed ? 'frame' : 'full', match_frame_ratio: true,
+            render_frame: framed ? window.StudioRender.getFrameState() : shot.frame,
+            studio: captureCurrentStudioSettings()});
+        // Private render inputs only: no writeDocument, Undo or Outliner elements.
+        return {version: DOCUMENT_VERSION, active_sequence_id: sequence.id, active_camera_id: camera.id,
+            sequences: [sequence], cameras: [camera], montage: normalizeMontage({})};
+    }
+
+    function renderViewportCapture(form = {}) {
+        const sequence = viewportCaptureSequence(form);
+        const document = createViewportRenderDocument(sequence);
+        return renderConfiguredSequence(sequence.id, {render_document: document});
+    }
+
+    function updateCinematicRecordFooter(dialog, form) {
+        const buttons = dialog?.object?.querySelectorAll('.button_bar > button');
+        if (!buttons?.length) return;
+        buttons.forEach(button => {Object.assign(button.style, {borderRadius:'8px',minHeight:'32px'});});
+        const record = buttons[0];
+        Object.assign(record.style, {display:'inline-flex',alignItems:'center',justifyContent:'center',gap:'6px',background:'var(--color-accent)',color:'var(--color-accent_text)'});
+        if (!record.querySelector('.icon')) record.prepend(Blockbench.getIconNode('lightflow:recordframe'));
+        record.disabled = CINEMATIC_VIDEO_FORMAT_IDS.includes(form.output_format) &&
+            !(managerMediaCapabilities?.format === form.output_format && !managerMediaCapabilities.pending && !managerMediaCapabilities.error && managerMediaCapabilities.videoCodecs.length);
+    }
+
+    const VIEWPORT_RESOLUTION_PRESETS = {
+        hd: [1920, 'crop_landscape'], uhd: [3840, 'photo_size_select_large'],
+        dci_4k: [4096, 'movie'], eight_k: [7680, 'high_quality']
+    };
+
+    function viewportRecordingPixelSize() {
+        const preview = getPreview();
+        const width = Math.max(1, finite(preview?.canvas?.width, preview?.width || 1));
+        const height = Math.max(1, finite(preview?.canvas?.height, preview?.height || 1));
+        const frame = window.document?.getElementById('studio_render_frame')
+            ? window.StudioRender?.getFrameState?.({preview}) : null;
+        return frame ? [width * frame.width, height * frame.height] : [width, height];
+    }
+
+    function viewportPresetSize(key, reference, viewportSize) {
+        const edge = key === 'viewport' ? Math.max(...viewportSize) : VIEWPORT_RESOLUTION_PRESETS[key]?.[0];
+        if (!edge) return null;
+        const scale = Math.min(edge, 16384) / Math.max(...reference);
+        return reference.map(value => Math.max(1, Math.round(value * scale)));
+    }
+
+    function applyViewportResolutionPreset(form, dialog, state) {
+        const key = form._resolution_preset;
+        const preset = viewportPresetSize(key, state.reference, state.viewportSize);
+        let update = false;
+        if (key !== state.preset && preset) {
+            form.resolution = preset; update = true;
+        } else if (preset && form.resolution.some((value, i) => value !== preset[i])) {
+            form._resolution_preset = 'custom'; update = true;
+        }
+        state.preset = form._resolution_preset;
+        state.resolution = form.resolution.slice();
+        if (update) dialog.setFormValues({resolution: form.resolution, _resolution_preset: form._resolution_preset}, false);
+    }
+
+    function openViewportCaptureDialog() {
+        const project = getActiveProject();
+        if (!project) return;
+        if (viewportCaptureProject !== project) {viewportCaptureDraft = null;viewportCaptureProject = project;}
+        const sequence = viewportCaptureSequence(viewportCaptureDraft || {});
+        const source = createManagerWorkflowForm(sequence);
+        const keys = ['output_format','duration_mode','duration_frames','duration_seconds','frame_rate','_resolution_preset','resolution','samples','output_backend_note'];
+        const form = Object.fromEntries(keys.map(key => {
+            const field = source[key];
+            return [key,{...field,condition:result=>!field.condition||Condition(field.condition,{...result,_cinematic_workflow:'sequence'})}];
+        }));
+        const viewportSize = viewportRecordingPixelSize();
+        const reference = viewportSize;
+        const presetKeys = [...Object.keys(VIEWPORT_RESOLUTION_PRESETS), 'viewport'];
+        const preset = presetKeys.find(key => sequence.resolution.every((value, i) =>
+            value === viewportPresetSize(key, reference, viewportSize)[i])) || 'custom';
+        form._resolution_preset = {type: hasLightflowFormType('compact_select') ? 'compact_select' : 'select',
+            label: 'studio_render.field.resolution_preset', value: preset, show_value_text: true, expand: true,
+            options: {...Object.fromEntries(Object.entries(VIEWPORT_RESOLUTION_PRESETS).map(([key, size]) => {
+                const name = translate('studio_render.option.resolution.' + key, key).replace(/\s*-\s*\d+\s*x\s*\d+$/, '');
+                return [key, {name: name + ' - ' + viewportPresetSize(key, reference, viewportSize).join(' x '), icon: size[1]}];
+            })), viewport: {name: cinematicUI('viewport_actual_size') + ' - ' + viewportPresetSize('viewport', reference, viewportSize).join(' x '), icon: 'fit_screen'},
+                custom: {name: translate('studio_render.option.resolution.custom', cinematicUI('custom')), icon: 'tune'}}};
+        form.resolution = {...form.resolution, label: 'studio_render.field.resolution', condition: result => result._resolution_preset === 'custom'};
+        const resolutionState = {preset, resolution: sequence.resolution.slice(), reference, viewportSize};
+        form._capture_note = {type:'info',text:cinematicUI("records_the_viewport_and_its_active_render_frame_no_sequence_or")};
+        form._advanced = {type:'action_button',semantic_button:true,text:cinematicUI("advanced_settings"),icon:'tune',click() {
+            const values = managerDialog?.getFormResult() || viewportCaptureDraft || {};
+            viewportCapturePreferences.set(project, deepClone(values));
+            const inherited = viewportCaptureSequence(values);
+            managerDialog?.hide?.();
+            const active = getSequence(readDocument());
+            const patch = {resolution:inherited.resolution, samples:inherited.samples, output_format:inherited.output_format,
+                frame_rate:inherited.frame_rate, duration_mode:inherited.duration_mode, start_frame:0,end_frame:inherited.end_frame};
+            if (active) updateSequence(active.id, patch); else createSequence(patch);
+            openManagerDialog();
+        }};
+        managerDialog?.hide?.();
+        viewportCaptureDialog = true;
+        managerDialog = new Dialog({id:'lightflow_cinematic_viewport_capture',title:cinematicUI("record_viewport"),width:680,
+            form:(window.LightManagerUI?.prepareForm || (value=>value))(form),
+            buttons:[cinematicUI("record"),cinematicUI("apply"),'dialog.cancel'],confirmIndex:1,cancelIndex:2,
+            onFormChange(result) {
+                applyViewportResolutionPreset(result, managerDialog, resolutionState);
+                syncManagerDurationUnits(result, viewportCaptureDraft, managerDialog, sequence);
+                viewportCaptureDraft = deepClone(result);
+                requestManagerMediaProbe(result, viewportCaptureSequence(result));
+                updateCinematicRecordFooter(managerDialog, result);
+            },
+            onConfirm(result) {viewportCapturePreferences.set(project,deepClone(result));viewportCaptureDraft=null;managerDialog=null;},
+            onCancel() {viewportCaptureDraft=null;managerDialog=null;},
+            onButton(index) {
+                if(index!==0)return;
+                const result=managerDialog.getFormResult();
+                viewportCapturePreferences.set(project,deepClone(result));viewportCaptureDraft=null;
+                managerDialog.hide();managerDialog=null;
+                renderViewportCapture(result).then(reportRenderResult).catch(showCinematicError);
+                return false;
+            }
+        });
+        managerDialog.show();
+        if(viewportCaptureDraft)managerDialog.setFormValues(viewportCaptureDraft,false);
+        viewportCaptureDraft=deepClone(managerDialog.getFormResult());
+        requestManagerMediaProbe(viewportCaptureDraft,sequence);
+        updateCinematicRecordFooter(managerDialog,viewportCaptureDraft);
+    }
+
+    function syncManagerDurationUnits(form, previous, dialog, sequenceOverride = null) {
+        if (!previous || previous.sequence_id !== form.sequence_id) return;
+        const changedRate = Math.abs(frameRateValue(previous.frame_rate) - frameRateValue(form.frame_rate)) > 1e-9;
+        if (!changedRate && previous.duration_mode === form.duration_mode) return;
+        if (form.duration_mode === 'frames' && form.duration_frames !== previous.duration_frames) return;
+        if (form.duration_mode === 'seconds' && form.duration_seconds !== previous.duration_seconds) return;
+        const fps = frameRateValue(form.frame_rate);
+        let frames = previous.duration_mode === 'seconds'
+            ? Math.max(1, Math.round(finite(previous.duration_seconds, 5) * fps))
+            : Math.max(1, Math.round(finite(previous.duration_frames, DEFAULT_SEQUENCE_LENGTH) * (changedRate ? fps / frameRateValue(previous.frame_rate) : 1)));
+        if (previous.duration_mode === 'active_animation') {
+            const base = sequenceOverride || getSequence(readDocument(), form.sequence_id);
+            frames = sequenceDurationFrames(adaptSequenceValueToActiveAnimation({...base, frame_rate: normalizeFrameRate(form.frame_rate), playback_rate: finite(form.playback_rate, base?.playback_rate ?? 1)}));
+        }
+        const values = {duration_frames: frames, duration_seconds: frames / fps, ...(changedRate && form.start_frame != null ? {start_frame:Math.round(form.start_frame * fps / frameRateValue(previous.frame_rate))} : {})};
+        Object.assign(form, values);
+        // ComboSlider.setValue has its own dispatch flag; Dialog's silent flag
+        // does not suppress events dispatched by custom FormElements.
+        Object.entries(values).forEach(([key, value]) => dialog?.form?.form_data[key]?.setValue(value, false));
+    }
+
+    function recordManagerSequence(useCurrentView) {
+        const form = currentManagerForm();
+        const savedSequence = runCinematicUndo(cinematicUI("record_shot"), () => {
+            const saved = saveManagerForm(form, '', {undo: false});
+            if (!saved) return null;
+            return getSequence(readDocument(), saved.id);
+        });
+        if (!savedSequence) return;
+        managerDialog?.hide?.();
+        managerDialog = null;
+        const options = useCurrentView && !savedSequence.camera_id
+            ? {render_document: createViewportRenderDocument(savedSequence)} : {};
+        renderConfiguredSequence(savedSequence.id, options).then(reportRenderResult).catch(showCinematicError);
+    }
+
+    function createManagerWorkflowForm(sequenceOverride = null) {
+        const document = readDocument(), sequence = sequenceOverride || getSequence(document);
+        const source = createManagerForm(sequenceOverride);
+        const tabs = {sequence: {name:cinematicUI("shot"),icon:'lightflow:recordframe'},camera:{name:cinematicUI("camera"),icon:'videocam'},scene:{name:cinematicUI("scene"),icon:'animation'},output:{name:'lightflow_cinematic.group.output',icon:'video_file'}};
         const form = {
             _cinematic_workflow: window.LightManagerUI?.formDesign?.tabs
                 ? window.LightManagerUI.formDesign.tabs({presentation:'flat',value: managerWorkflowTab, options: tabs})
-                : {type: 'select', value: managerWorkflowTab, options: Object.fromEntries(Object.entries(tabs).map(([id, tab]) => [id, tab.name]))},
-            _cinematic_workflow_hint: {type: 'info', text: cinematicUI('Apply saves pending settings. Camera, capture and render actions apply this shot first.','Aplicar guarda los ajustes pendientes. Las acciones de cámara, captura y render aplican antes esta toma.')}
+                : {type: 'select', value: managerWorkflowTab, options: Object.fromEntries(Object.entries(tabs).map(([id, tab]) => [id, tab.name]))}
         };
+        const inShot = result => (result._cinematic_workflow || managerWorkflowTab) === 'sequence';
         let section = 'sequence';
-        Object.entries(createManagerForm()).forEach(([key, value]) => {
-            if(['montage_tools','_sequence'].includes(key))return;
+        Object.entries(source).forEach(([key, value]) => {
+            if(['montage_tools','_sequence','_timing'].includes(key))return;
             if(key==='loop_preview'&&['animate','render'].includes(getActiveProject()?.mode))value={...value,condition:()=>false};
             if(key==='timing_tools'&&['animate','render'].includes(getActiveProject()?.mode))value={...value,buttons:value.buttons.slice(0,2)};
-            if(key==='sequence_tools'&&['animate','render'].includes(getActiveProject()?.mode))value={type:'action_button',semantic_button:true,text:cinematicUI('Capture current Studio look','Capturar look actual de Studio'),icon:'photo_camera',description:cinematicUI('Applies the current shot settings before saving the Studio look.','Aplica los ajustes de la toma antes de guardar el look de Studio.'),click:()=>createManagerForm().sequence_tools.click(2)};
-            if(key==='clip_workflow_note')value={...value,text:cinematicUI('Render, review, then Save as. Saving does not render again.','Renderiza, revisa y usa Guardar como. Guardar no vuelve a renderizar.')};
-            if(key==='camera_required_note')value={...value,text:cinematicUI('Assign a camera in Camera or create one from this view.','Asigna una cámara en Cámara o créala desde esta vista.')};
+            if(key==='sequence_tools'&&['animate','render'].includes(getActiveProject()?.mode))value={type:'action_button',semantic_button:true,text:cinematicUI("capture_current_studio_look"),icon:'photo_camera',description:cinematicUI("applies_the_current_shot_settings_before_saving_the_studio_look"),click:()=>source.sequence_tools.click(2)};
+            if(key==='clip_workflow_note')value={...value,text:cinematicUI("render_review_then_save_as_saving_does_not_render_again")};
+            if(key==='camera_required_note')value={...value,text:cinematicUI("assign_a_camera_in_camera_or_create_one_from_this_view")};
             if(key==='output_backend_note')value={...value,condition:result=>CINEMATIC_VIDEO_FORMAT_IDS.includes(result.output_format)&&(!!managerMediaCapabilities?.pending||!!managerMediaCapabilities?.error||managerMediaCapabilities?.videoCodecs?.length===0)};
             if (key === '_camera' || key === '_capture') section = 'camera';
             if (key === '_output') section = 'output';
-            const tab = ['source_animation_id','source_start_seconds','playback_rate','preview_camera'].includes(key)?'scene':section;
-            if(key==='resolution')form._resolution_preset=cinematicSelect({label:cinematicUI('Size preset','Preset de tamaño'),value:'custom',options:{custom:cinematicUI('Custom','Personalizado'),hd:'1280 × 720',fullhd:'1920 × 1080',uhd:'3840 × 2160',portrait:'1080 × 1920',square:'1080 × 1080'},condition:result=>result._cinematic_workflow==='output'});
+            let tab = ['source_animation_id','source_start_seconds','playback_rate','preview_camera','sequence_tools','timing_tools'].includes(key)?'scene':section;
+            if(['output_format','resolution','samples','output_backend_note'].includes(key))tab=['sequence','output'];
+            if(key==='duration_mode'&&window.LightManagerUI?.formDesign?.inlineSelect) value=window.LightManagerUI.formDesign.inlineSelect({
+                label:cinematicUI("duration"),value:value.value,multi_select:false,
+                options:{frames:{name:cinematicUI("frames_3"),icon:'view_timeline'},seconds:{name:cinematicUI("seconds"),icon:'schedule'},
+                    ...(!sequence.clips.length?{active_animation:{name:cinematicUI("animation"),icon:'animation',disabled:!getActiveAnimationRange()&&value.value!=='active_animation'}}:{})}
+            });
+            if(['duration_frames','duration_seconds'].includes(key)&&hasLightflowFormType('combo_slider'))value={...value,type:'combo_slider',compact:false,full_track:false,allow_higher:true,
+                min:key==='duration_seconds'?0.001:1,
+                max:Math.max(key==='duration_frames'?Math.round(frameRateValue(sequence.frame_rate)*30):30,value.value),
+                label:key==='duration_frames'?cinematicUI("frames_3"):cinematicUI("seconds")};
+            if(key==='samples'&&hasLightflowFormType('horizontal_select'))value={...value,type:'horizontal_select',allow_empty:false,multi_select:false,
+                options:{'1':{name:cinematicUI("fast_1"),icon:'speed'},'2':{name:'AA · 2',icon:'photo'},'4':{name:'AA · 4',icon:'photo'},'8':{name:'AA · 8',icon:'high_quality'},
+                    temporal_2:{name:cinematicUI("adaptive_2"),icon:'movie'},temporal_4:{name:cinematicUI("adaptive_4"),icon:'movie'},
+                    ...(!['1','2','4','8','temporal_2','temporal_4'].includes(sequence.samples)?{[sequence.samples]:{name:sequence.samples.startsWith('temporal_')?'Temporal · '+sequence.samples.slice(-1):'AA · '+sequence.samples,icon:'movie'}}:{})}};
+            if(key==='output_format'&&hasLightflowFormType('compact_select'))value={...value,type:'compact_select',hide_icon:false,show_value_text:true,expand:true,
+                options:Object.fromEntries(['gif','mp4','png','webm','mov','mkv','mpegts'].map(id=>[id,{name:value.options[id],icon:id==='gif'?'gif':id==='png'?'collections':'lightflow:recordframe'}]))};
+            if(key==='sequence_id'&&document.sequences.length===1)value={...value,condition:()=>false};
+            if(key==='resolution')form._resolution_preset=cinematicSelect({label:cinematicUI("size_preset"),value:'custom',options:cinematicResolutionPresetOptions(),condition:result=>['sequence','output'].includes(result._cinematic_workflow||'sequence')});
+            if(key==='resolution')form._resolution_factor={...cinematicResolutionFactorField(),condition:result=>['sequence','output'].includes(result._cinematic_workflow||'sequence')&&result._resolution_preset==='factor'};
             const condition = value.condition;
             const advanced=['_media_advanced','video_acceleration','video_bitrate','video_bitrate_mode','keyframe_interval_seconds','audio_codec','audio_quality','audio_bitrate','audio_sample_rate','audio_channels'].includes(key);
-            if(key==='_media_advanced')form._encoding_details={type:'checkbox',label:cinematicUI('Encoding details','Detalles de codificación'),value:false,condition:result=>result._cinematic_workflow==='output'&&CINEMATIC_VIDEO_FORMAT_IDS.includes(result.output_format)};
-            form[key] = {...value, condition: result => (result._cinematic_workflow || managerWorkflowTab) === tab && (!advanced||result._encoding_details===true) && (!condition || Condition(condition, result))};
+            const details=['sequence_name','start_frame','timing_summary'].includes(key);
+            if(key==='_media_advanced')form._encoding_details={type:'checkbox',label:cinematicUI("encoding_details"),value:false,condition:result=>result._cinematic_workflow==='output'&&CINEMATIC_VIDEO_FORMAT_IDS.includes(result.output_format)};
+            form[key] = {...value, condition: result => (Array.isArray(tab)?tab.includes(result._cinematic_workflow||managerWorkflowTab):(result._cinematic_workflow||managerWorkflowTab)===tab) && (!details||result._shot_details===true) && (!advanced||result._encoding_details===true) && (!condition || Condition(condition, result))};
         });
-        return form;
+        form._quick_camera_note={type:'info',text:cinematicUI("no_camera_assigned_record_uses_the_current_view"),condition:result=>inShot(result)&&!document.cameras.some(camera=>camera.id===result.camera_id)};
+        form._shot_details=window.LightManagerUI?.formDesign?.group
+            ? window.LightManagerUI.formDesign.group({label:cinematicUI("shot_details"),value:false,condition:inShot})
+            : {type:'checkbox',label:cinematicUI("shot_details"),value:false,condition:inShot};
+        const quickOrder=['_cinematic_workflow','sequence_id','output_format','duration_mode','duration_frames','duration_seconds','frame_rate','_resolution_preset','_resolution_factor','resolution','samples','output_backend_note','_quick_camera_note','_shot_details','sequence_name','start_frame','timing_summary'];
+        return Object.fromEntries([...quickOrder.map(key=>[key,form[key]]),...Object.entries(form).filter(([key])=>!quickOrder.includes(key))]);
     }
 
     function openManagerDialog() {
+        viewportCaptureDialog = false;
+        if (!getSequence(readDocument())) return openViewportCaptureDialog();
         if (!getActiveProject()) {
             Blockbench.showQuickMessage('Open a project before using Lightflow Cinematic.');
             return;
@@ -9717,7 +10827,9 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
             title: 'lightflow_cinematic.plugin.title',
             width: 680,
             form: (window.LightManagerUI?.prepareForm || (form => form))(createManagerWorkflowForm()),
-            buttons: [cinematicUI('Apply','Aplicar'), 'dialog.cancel'],
+            buttons: [cinematicUI("record"), cinematicUI("apply"), 'dialog.cancel'],
+            confirmIndex: 1, cancelIndex: 2,
+            onButton(index) { if (index === 0) { recordManagerSequence(true); return false; } },
             onFormChange(form) {
                 applyCinematicResolutionPreset(form,managerDialog);
                 if (['sequence', 'camera', 'scene', 'output'].includes(form._cinematic_workflow)) managerWorkflowTab = form._cinematic_workflow;
@@ -9732,13 +10844,15 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                     scheduleManagerRefresh();
                     return;
                 }
+                syncManagerDurationUnits(form, managerDraftForm, managerDialog);
                 managerDraftForm = deepClone(form);
                 managerDrafts.set(document.active_sequence_id,managerDraftForm);
                 requestManagerMediaProbe(form);
+                updateCinematicRecordFooter(managerDialog, form);
             },
             onConfirm(form) {
                 managerDrafts.set(form.sequence_id,deepClone(form));
-                runCinematicUndo(cinematicUI('Apply shot settings','Aplicar ajustes de tomas'),()=>{for(const [id,draft] of managerDrafts)saveManagerForm(draft,id,{undo:false});setActiveSequence(form.sequence_id);});
+                runCinematicUndo(cinematicUI("apply_shot_settings"),()=>{for(const [id,draft] of managerDrafts)saveManagerForm(draft,id,{undo:false});setActiveSequence(form.sequence_id);});
                 managerDrafts.clear();managerDraftProject=null;
                 managerDraftForm = null;
                 managerDialog = null;
@@ -9752,7 +10866,9 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         });
         managerDialog.show();
         if (managerDraftForm) managerDialog.setFormValues?.(managerDraftForm, false);
-        requestManagerMediaProbe(currentManagerForm());
+        managerDraftForm = deepClone(currentManagerForm());
+        requestManagerMediaProbe(managerDraftForm);
+        updateCinematicRecordFooter(managerDialog, managerDraftForm);
     }
 
     function showCinematicError(error) {
@@ -9768,7 +10884,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
     function reportRenderResult(result) {
         closeRenderProgressDialog();
         if (!result) return;
-        if (result.pickerCancelled) return;
+        if (result.pickerCancelled||result.reviewOpen||result.artifact?.discarded) return;
         if (result.cancelled) {
             Blockbench.showQuickMessage(translate(
                 'lightflow_cinematic.message.sequence_cancelled',
@@ -9815,7 +10931,8 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
 
     function unloadPlugin() {
         renderedMediaViewerDispose?.(); renderedMediaViewerDispose = null;
-        cinematicCameraView=null;deleteCinematicLookFrame();
+        renderedResultProgressControl?.delete(); renderedResultProgressControl=null;
+        setCinematicCameraView(null);deleteCinematicLookFrame();
         Timeline.menu?.removeAction?.('lightflow_cinematic_move_camera_to_view');
         finishCinematicFly(true);deleteCinematicCameraMonitor();
         unloading = true;
@@ -9865,7 +10982,9 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         closeRenderProgressDialog();
         renderedClipDialog?.hide?.();
         renderedClipDialog = null;
-        Promise.resolve(disposeRenderedArtifact()).catch(() => {});
+        const retained=lastCompletedArtifact;lastCompletedArtifact=null;
+        releaseUnfinishedArtifact();
+        if(retained&&retained!==lastRenderedArtifact)Promise.resolve(disposeRenderedArtifact(retained)).catch(()=>{});
         cinematicPreviewCachePrepared = false;
         montageDialog?.hide?.();
         montageDialog = null;
@@ -9937,6 +11056,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         cameraTimelineAnimatorType = null;
         [
             openAction,
+            reopenRecordingAction,
             cameraAction,
             keyframeAction,
             previewAction,
@@ -9972,7 +11092,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         selectModeListener = null;
         frameRegionListener = null;
         cinematicUndoHooks = null;
-        openAction = null;
+        openAction = null;reopenRecordingAction=null;
         cameraAction = null;
         keyframeAction = null;
         previewAction = null;
@@ -10022,7 +11142,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                 name: 'lightflow_cinematic.action.camera',
                 icon: 'videocam',
                 category: 'animation',
-                condition: () => !!getActiveProject() && !!getPreview(),
+                condition: () => !!getActiveProject() && !!getPreview() && !!getSequence(readDocumentView()),
                 click() {
                     const { sequence } = getActiveSequenceAndCamera();
                     const camera = createCameraFromView(null, sequence?.id);
@@ -10107,12 +11227,13 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                     applyPhysicalState(state, sequence);
                     if(!(Project.mode==='animate'&&Animation.selected&&!cinematicSequencePreview))applyCameraStateToElement(element, state, { sequence });
                     const preview=getPreview();
-                    cinematicCameraView=preview?{preview,cameraId:camera.id,position:preview.camera.position.clone(),quaternion:preview.camera.quaternion.clone()}:null;
+                    setCinematicCameraView(preview?{preview,cameraId:camera.id,position:preview.camera.position.clone(),quaternion:preview.camera.quaternion.clone()}:null);
+                    if(preview&&(!window.document.getElementById('studio_render_frame')||window.StudioRender?.frameOwner==='lightflow_cinematic'))showCinematicRecordingFrame(sequence.id);
                     syncCinematicLookFrame();
                 }
             });
             updateCameraFromViewAction = new Action('lightflow_cinematic_move_camera_to_view', {
-                name: cinematicUI('Key camera from current view','Guardar cámara desde la vista actual'),
+                name: cinematicUI("key_camera_from_current_view"),
                 icon: 'control_camera',
                 category: 'animation',
                 condition: () => !!getSelectedCameraElement() && !!getPreview(),
@@ -10167,6 +11288,8 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                     cancelRenderAction
                 ])
                 : null;
+            reopenRecordingAction=new Action('lightflow_cinematic_reopen_last',{name:'lightflow_cinematic.action.reopen_last',icon:'history',category:'view',condition:()=>!!lastCompletedArtifact&&!activeRenderJob,click:reopenLastRecording});
+            MenuBar.addAction(reopenRecordingAction,'view');
             openAction = new Action('lightflow_cinematic_open', {
                 name: 'lightflow_cinematic.action.open',
                 description: 'lightflow_cinematic.action.open.desc',
@@ -10174,29 +11297,28 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                 category: 'animation',
                 condition: () => !!getActiveProject() && Project.mode !== 'animate',
                 side_menu: toolbarSideMenu || undefined,
-                click: openManagerDialog
+                click: openViewportCaptureDialog
             });
 
             // Empty projects need an entry point, not an entire sequence toolbar.
             // Keep detailed controls available while animating or using a camera.
-            const showSequenceToolbar = () => !!getActiveProject()
+            const showSequenceToolbar = () => !!getActiveProject() && !!getSequence(readDocumentView())
                 && (Project.mode === 'edit' ? !!getSelectedCameraElement()
                     : (Project.mode === 'animate' && (!Panels.animations || Panels.animations.folded)));
             if (typeof BarSelect !== 'undefined') {
                 // On Blockbench's New Tab there is no persisted Cinematic document yet. Use one
                 // normalized snapshot here so the initial value and option UUIDs cannot diverge.
                 const toolbarDocument = readDocument();
+                const toolbarSequence = sequenceToolbarState(toolbarDocument);
                 sequenceToolbarSelect = new BarSelect('lightflow_cinematic_sequence', {
                     name: 'lightflow_cinematic.field.sequence',
                     category: 'animation',
                     width: 128,
                     condition: showSequenceToolbar,
-                    value: getSequence(toolbarDocument)?.id,
-                    options: Object.fromEntries(toolbarDocument.sequences.map(sequence => [
-                        sequence.id,
-                        { name: sequence.name, icon: 'movie' }
-                    ])),
+                    value: toolbarSequence.value,
+                    options: toolbarSequence.options,
                     onChange(select) {
+                        if (select.get() === '__none__') return;
                         if (readDocumentView().active_sequence_id === select.get()) {
                             syncFpsToolbar();
                             return;
@@ -10299,6 +11421,9 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                     updateCameraFromViewAction,
                     cameraSettingsAction,
                     cameraLensTool,
+                    keyframeAction,
+                    {name:cinematicUI("fly_camera"),icon:'flight',click:()=>startCinematicFly()},
+                    {name:cinematicUI("camera_monitor"),icon:'picture_in_picture_alt',click:()=>toggleCinematicCameraMonitor()},
                     '_',
                     ...Outliner.control_menu_group,
                     '_',
@@ -10386,7 +11511,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                         closeRenderProgressDialog();
                         renderedClipDialog?.hide?.();
                         renderedClipDialog = null;
-                        Promise.resolve(disposeRenderedArtifact()).catch(() => {});
+                        releaseUnfinishedArtifact();
                         return;
                     }
                     if (!project) return;
@@ -10407,7 +11532,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                     closeRenderProgressDialog();
                     renderedClipDialog?.hide?.();
                     renderedClipDialog = null;
-                    Promise.resolve(disposeRenderedArtifact()).catch(() => {});
+                    releaseUnfinishedArtifact();
                     hydrateProject(event?.project || getActiveProject(), null);
                     persistenceWarningShown = false;
                     syncCameraElementsFromDocument();
@@ -10423,7 +11548,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                     closeRenderProgressDialog();
                     renderedClipDialog?.hide?.();
                     renderedClipDialog = null;
-                    Promise.resolve(disposeRenderedArtifact()).catch(() => {});
+                    releaseUnfinishedArtifact();
                 });
             }
             parsedListener = window.Codecs?.project?.on?.('parsed', event => {
@@ -10438,7 +11563,11 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                 get document() { return deepClone(readDocument()); },
                 get capabilities() { return getCapabilities(); },
                 get activeJob() { return snapshotRenderJob(activeRenderJob); },
-                open: openManagerDialog,
+                open: openViewportCaptureDialog,
+                openSettings: openManagerDialog,
+                renderViewport: renderViewportCapture,
+                reopenLastRecording,
+                get hasLastRecording(){return !!lastCompletedArtifact;},
                 createSequence,
                 updateSequence,
                 addSequenceClip,
@@ -10461,7 +11590,13 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                 openViewportCameraMenu,
                 openViewportSequenceMenu,
                 toggleCameraMonitor:toggleCinematicCameraMonitor,
-                get viewportCameraState(){const element=getSelectedCameraElement();return {selected:!!element,looking:!!element&&cinematicCameraView?.cameraId===element.cinematic_camera_id,flying:!!cinematicFlySession,monitorEnabled:cinematicCameraMonitorEnabled};},
+                getViewportCameraControl,
+                getViewportCameraState(preview=getPreview()) {
+                    const element=getSelectedCameraElement(),view=cinematicCameraView;
+                    return {selected:!!element,looking:!!view&&view.projectId===getActiveProject()?.uuid&&view.preview===preview&&!!getCameraElementById(view.cameraId),flying:!!cinematicFlySession,monitorEnabled:cinematicCameraMonitorEnabled};
+                },
+                get viewportCameraState(){return this.getViewportCameraState();},
+                leaveCameraView(){setCinematicCameraView(null);},
                 get sequencePreview(){return cinematicSequencePreview;},
                 openClipSource:openSequenceClipSource,
                 deleteSequence,
@@ -10469,6 +11604,15 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                 adaptSequenceToActiveAnimation,
                 setSequenceFrameRate,
                 createCameraFromView,
+                createCameraFromShot(shot) {
+                    return runCinematicUndo(cinematicUI("create_camera_from_view"), () => {
+                        const sequence = createSequence({...viewportCaptureSequence(), name:shot.name || 'Camera shot'}, {undo:false});
+                        return createCameraFromView(shot.name, sequence.id, {shot, undo:false});
+                    });
+                },
+                viewCamera(id) {
+                    selectCameraElement(id); viewThroughCameraAction?.trigger();
+                },
                 updateCameraFromView,
                 deleteCamera,
                 setActiveCamera,

@@ -219,6 +219,258 @@ function createLightflowPackLibrary({fs, path, root, Zip, hash, fetchBytes, fetc
 
 // Embedded desktop-only source adapters. These readers use the user-installed
 // Java model JAR and primitive library at runtime; no Minecraft assets are bundled.
+const BedrockTerrainWorldEmbedded = (() => {
+    const module = {exports:{}};
+'use strict';
+
+// Compact, deterministic world source. No Three, DOM, files, or per-voxel objects.
+// The host supplies parsed structures and retains ownership of their typed NBT.
+const BedrockTerrainWorld = (() => {
+    const AIR = /^(?:minecraft:)?(?:air|cave_air|void_air)$/;
+    const stable = value => value && typeof value === 'object'
+        ? Array.isArray(value) ? value.map(stable) : Object.fromEntries(Object.keys(value).sort().map(k => [k, stable(value[k])]))
+        : typeof value === 'bigint' ? String(value) : value;
+    function hash(x, z, seed = 0) {
+        let n = Math.imul(x | 0, 374761393) ^ Math.imul(z | 0, 668265263) ^ (seed | 0);
+        n = Math.imul(n ^ n >>> 13, 1274126177);
+        return (n ^ n >>> 16) >>> 0;
+    }
+    function createPerlin(seed) {
+        const permutation = Uint16Array.from({length: 256}, (_, i) => i);
+        let state = seed >>> 0;
+        for (let i = 255; i > 0; i--) {
+            state = hash(state, i, seed);
+            const j = state % (i + 1), v = permutation[i];
+            permutation[i] = permutation[j]; permutation[j] = v;
+        }
+        const p = new Uint16Array(512);
+        p.set(permutation); p.set(permutation, 256);
+        const fade = t => t * t * t * (t * (t * 6 - 15) + 10);
+        const gradient = (h, x, y) => {
+            switch (h & 7) {
+                case 0: return x + y; case 1: return x - y;
+                case 2: return -x + y; case 3: return -x - y;
+                case 4: return x; case 5: return -x;
+                case 6: return y; default: return -y;
+            }
+        };
+        return (x, z) => {
+            const fx = Math.floor(x), fz = Math.floor(z), X = fx & 255, Z = fz & 255;
+            x -= fx; z -= fz;
+            const u = fade(x), v = fade(z);
+            const a = gradient(p[p[X] + Z], x, z), b = gradient(p[p[X + 1] + Z], x - 1, z);
+            const c = gradient(p[p[X] + Z + 1], x, z - 1), d = gradient(p[p[X + 1] + Z + 1], x - 1, z - 1);
+            return (a + u * (b - a)) * (1 - v) + (c + u * (d - c)) * v;
+        };
+    }
+    const vec = (value, fallback) => {
+        const result = value === undefined ? fallback.slice() : Array.from(value);
+        if (result.length !== 3 || !result.every(Number.isSafeInteger)) throw new TypeError('Expected three integer coordinates.');
+        return result;
+    };
+    class TerrainWorld {
+        constructor(options = {}, sources = new Map()) {
+            this.seed = Number(options.seed ?? 327) | 0;
+            this.size = vec(options.size, [1024, 128, 1024]);
+            if (this.size.some(n => n < 1 || n > 16384) || this.size[1] > 512) throw new RangeError('World bounds exceed 16384 x 512 x 16384.');
+            this.origin = vec(options.origin, [-Math.floor(this.size[0] / 2), 0, -Math.floor(this.size[2] / 2)]);
+            this.maximum = this.origin.map((n, i) => n + this.size[i]);
+            this.waterLevel = Math.max(1, Math.min(this.size[1] - 1, Math.round(options.waterLevel ?? this.size[1] * .28))) + this.origin[1];
+            this.noise = createPerlin(this.seed);
+            this.palette = [];
+            this.paletteKeys = new Map();
+            this.columns = new Map();
+            this.maxColumnTiles = Math.max(1, Math.min(128, Math.round(options.columnCacheTiles || 32)));
+            this.stats = {columnTilesBuilt: 0, regionsRead: 0, cellsRead: 0};
+            this.ids = Object.fromEntries(['bedrock', 'stone', 'dirt', 'grass_block', 'sand', 'water', 'snow', 'oak_log', 'oak_leaves', 'short_grass', 'dandelion'].map(name => [name, this.addPalette({name: 'minecraft:' + name, states: {}})]));
+            this.sources = sources instanceof Map ? sources : new Map(Object.entries(sources));
+            this.sourceRemaps = new Map();
+            for (const [id, source] of this.sources) {
+                if (!source?.blockIndices || !source?.blockPalette) throw new TypeError('A world source must be a parsed mcstructure: ' + id);
+                const typed = source.nbtDocument?.value?.structure?.value?.palette?.value?.[source.paletteName || 'default']?.value?.block_palette?.value?.items;
+                this.sourceRemaps.set(id, Int32Array.from(source.blockPalette, (block, index) => AIR.test(block.name) ? -1 : this.addPalette({...block, statesNBT: typed?.[index]?.value?.states})));
+            }
+            this.placements = [];
+            this.placementTiles = new Map();
+            for (const placement of options.placements || []) this.addPlacement(placement);
+        }
+        addPalette(block) {
+            const key = JSON.stringify([block.name, stable(block.states || {}), block.version || 18168865]);
+            if (this.paletteKeys.has(key)) return this.paletteKeys.get(key);
+            const index = this.palette.length;
+            this.palette.push({...block, version: block.version || 18168865}); this.paletteKeys.set(key, index);
+            return index;
+        }
+        column(x, z) {
+            const tx = Math.floor(x / 32), tz = Math.floor(z / 32), key = tx + ',' + tz;
+            let tile = this.columns.get(key);
+            if (!tile) {
+                tile = new Array(1024);
+                for (let lx = 0; lx < 32; lx++) for (let lz = 0; lz < 32; lz++) {
+                    const px = tx * 32 + lx, pz = tz * 32 + lz, n = this.noise;
+                    const h = this.heightUncached(px, pz);
+                    const gx = Math.floor(px / 8), gz = Math.floor(pz / 8), tree = hash(gx, gz, this.seed);
+                    const cx = gx * 8 + 2 + (tree & 3), cz = gz * 8 + 2 + (tree >>> 2 & 3);
+                    const treeHere = tree % 7 === 0;
+                    const dx = Math.abs(px - cx), dz = Math.abs(pz - cz);
+                    const base = treeHere && dx <= 2 && dz <= 2 ? this.heightUncached(cx, cz) : -10000;
+                    tile[lz + 32 * lx] = {
+                        h, snow: h > this.origin[1] + this.size[1] * .64,
+                        cave: this.origin[1] + 10 + Math.floor((n(px / 70 + 91, pz / 70) + 1) * 9),
+                        hollow: Math.abs(n(px / 84, pz / 84 + 48)) < .16,
+                        trunk: treeHere && dx === 0 && dz === 0 && base > this.waterLevel + 1,
+                        leaves: treeHere && dx + dz < 4 && base > this.waterLevel + 1,
+                        treeBase: base, flower: hash(px, pz, this.seed + 1) % 41,
+                    };
+                }
+                this.columns.set(key, tile); this.stats.columnTilesBuilt++;
+                if (this.columns.size > this.maxColumnTiles) this.columns.delete(this.columns.keys().next().value);
+            } else {
+                this.columns.delete(key); this.columns.set(key, tile);
+            }
+            return tile[z - tz * 32 + 32 * (x - tx * 32)];
+        }
+        heightUncached(x, z) {
+            const n = this.noise, warp = n(x / 240, z / 240) * 28;
+            let h = this.origin[1] + this.size[1] * (.30 + n((x + warp) / 180, (z - warp) / 180) * .24
+                + n(x / 58, z / 58) * .22 + n(x / 21, z / 21) * .07
+                + Math.pow(1 - Math.abs(n(x / 120 + 73, z / 120 - 91)), 3) * .17);
+            const river = Math.abs(n(x / 310 + 19, z / 310 + 31));
+            if (river < .045) h -= (1 - river / .045) * this.size[1] * .19;
+            return Math.max(this.origin[1] + 3, Math.min(this.maximum[1] - 14, Math.floor(h)));
+        }
+        heightAt(x, z) { return this.column(x, z).h; }
+        baseBlock(c, y) {
+            const id = this.ids;
+            if (y === this.origin[1]) return id.bedrock;
+            if (y <= c.h) {
+                if (c.hollow && y > this.origin[1] + 4 && y < c.h - 4 && Math.abs(y - c.cave) < 3) return -1;
+                if (y < c.h - 3) return id.stone;
+                if (c.h < this.waterLevel + 2) return id.sand;
+                return y < c.h ? id.dirt : c.snow ? id.snow : id.grass_block;
+            }
+            if (y <= this.waterLevel) return id.water;
+            if (c.trunk && y <= c.treeBase + 5) return id.oak_log;
+            if (c.leaves && y >= c.treeBase + 3 && y <= c.treeBase + 6) return id.oak_leaves;
+            if (y === c.h + 1 && c.h > this.waterLevel && !c.snow) {
+                if (c.flower === 0) return id.dandelion;
+                if (c.flower < 7) return id.short_grass;
+            }
+            return -1;
+        }
+        addPlacement(value) {
+            const source = this.sources.get(value.source);
+            if (!source) throw new Error('Missing structure source: ' + value.source);
+            const position = vec(value.position, [0, 0, 0]);
+            const placement = {source: value.source, position, pasteAir: value.pasteAir === true};
+            const index = this.placements.length; this.placements.push(placement);
+            for (let x = Math.floor(position[0] / 32); x <= Math.floor((position[0] + source.size.x - 1) / 32); x++)
+                for (let z = Math.floor(position[2] / 32); z <= Math.floor((position[2] + source.size.z - 1) / 32); z++) {
+                    const key = x + ',' + z;
+                    if (!this.placementTiles.has(key)) this.placementTiles.set(key, []);
+                    this.placementTiles.get(key).push(index);
+                }
+            return placement;
+        }
+        readRegion(minimum, size) {
+            minimum = vec(minimum, this.origin); size = vec(size, [16, 16, 16]);
+            const volume = size[0] * size[1] * size[2];
+            if (size.some(n => n < 1) || volume > 16777216) throw new RangeError('Read regions in tiles of at most 16 million cells.');
+            const layers = [new Int32Array(volume).fill(-1), new Int32Array(volume).fill(-1)];
+            for (let x = 0; x < size[0]; x++) for (let z = 0; z < size[2]; z++) {
+                const wx = minimum[0] + x, wz = minimum[2] + z;
+                if (wx < this.origin[0] || wx >= this.maximum[0] || wz < this.origin[2] || wz >= this.maximum[2]) continue;
+                const c = this.column(wx, wz), base = z + size[2] * size[1] * x;
+                for (let y = 0; y < size[1]; y++) {
+                    const wy = minimum[1] + y;
+                    if (wy >= this.origin[1] && wy < this.maximum[1]) layers[0][base + size[2] * y] = this.baseBlock(c, wy);
+                }
+            }
+            const candidates = new Set();
+            for (let x = Math.floor(minimum[0] / 32); x <= Math.floor((minimum[0] + size[0] - 1) / 32); x++)
+                for (let z = Math.floor(minimum[2] / 32); z <= Math.floor((minimum[2] + size[2] - 1) / 32); z++)
+                    for (const index of this.placementTiles.get(x + ',' + z) || []) candidates.add(index);
+            // Placement order is authoritative even when a read spans several tiles.
+            for (const index of Array.from(candidates).sort((a, b) => a - b)) {
+                const placement = this.placements[index], source = this.sources.get(placement.source), remap = this.sourceRemaps.get(placement.source);
+                const lo = minimum.map((n, axis) => Math.max(n, placement.position[axis], this.origin[axis]));
+                const hi = minimum.map((n, axis) => Math.min(n + size[axis], placement.position[axis] + source.size[['x', 'y', 'z'][axis]], this.maximum[axis]));
+                for (let x = lo[0]; x < hi[0]; x++) for (let y = lo[1]; y < hi[1]; y++) for (let z = lo[2]; z < hi[2]; z++) {
+                    const si = z - placement.position[2] + source.size.z * (y - placement.position[1] + source.size.y * (x - placement.position[0]));
+                    const di = z - minimum[2] + size[2] * (y - minimum[1] + size[1] * (x - minimum[0]));
+                    for (let layer = 0; layer < 2; layer++) {
+                        const raw = source.blockIndices[layer]?.[si] ?? -1;
+                        if (raw >= 0 && (remap[raw] >= 0 || placement.pasteAir)) layers[layer][di] = remap[raw];
+                    }
+                }
+            }
+            this.stats.regionsRead++; this.stats.cellsRead += volume;
+            return {minimum, size, layers};
+        }
+        describe() {
+            return {schema: 'lightflow-terrain-world-1', seed: this.seed, size: this.size.slice(), origin: this.origin.slice(), waterLevel: this.waterLevel - this.origin[1], placements: this.placements.map(p => ({...p, position: p.position.slice()}))};
+        }
+        diagnostics() {
+            return {...this.stats, cachedColumnTiles: this.columns.size, maxColumnTiles: this.maxColumnTiles, palette: this.palette.length,
+                placements: this.placements.length, sourceVoxels: Array.from(this.sources.values()).reduce((n, s) => n + s.volume, 0),
+                worldVoxels: this.size.reduce((a, b) => a * b, 1)};
+        }
+    }
+    function materializeRegion(world, parser, minimum, size) {
+        const region = world.readRegion(minimum, size), NBT = parser.NBT;
+        const editor = parser.MinecraftBedrockStructureEditor.create({size: {x: size[0], y: size[1], z: size[2]},
+            worldOrigin: {x: minimum[0], y: minimum[1], z: minimum[2]}, fillPrimary: -1});
+        const remap = Int32Array.from(world.palette, block => editor.ensureBlockPermutation(block));
+        for (let layer = 0; layer < 2; layer++) for (let i = 0; i < region.layers[layer].length; i++) {
+            const value = region.layers[layer][i]; editor.blockIndices[layer][i] = value < 0 ? -1 : remap[value];
+        }
+        const inside = p => p.every((n, axis) => n >= minimum[axis] && n < minimum[axis] + size[axis]);
+        // Preserve typed block NBT; later placement writes own their coordinates.
+        const metadata = new Map();
+        for (let pi = 0; pi < world.placements.length; pi++) {
+            const placement = world.placements[pi], source = world.sources.get(placement.source);
+            for (const [key, value] of metadata) {
+                const p = value.position.map((n, axis) => n - placement.position[axis]);
+                if (p[0] < 0 || p[0] >= source.size.x || p[1] < 0 || p[1] >= source.size.y || p[2] < 0 || p[2] >= source.size.z) continue;
+                const i = p[2] + source.size.z * (p[1] + source.size.y * p[0]);
+                const map = world.sourceRemaps.get(placement.source);
+                if (source.blockIndices.some(cells => cells[i] >= 0 && (map[cells[i]] >= 0 || placement.pasteAir))) metadata.delete(key);
+            }
+            const typedPalette = source.nbtDocument?.value?.structure?.value?.palette?.value?.[source.paletteName || 'default']?.value;
+            for (const [index] of source.blockPositionData || []) {
+                const x = Math.floor(index / (source.size.y * source.size.z)), y = Math.floor((index % (source.size.y * source.size.z)) / source.size.z), z = index % source.size.z;
+                const p = [x, y, z].map((n, axis) => n + placement.position[axis]);
+                if (!inside(p)) continue;
+                const node = typedPalette?.block_position_data?.value?.[String(index)];
+                if (!node) continue;
+                const copy = NBT.clone(node), entity = copy.value?.block_entity_data;
+                if (entity?.value) for (let axis = 0; axis < 3; axis++) {
+                    const name = ['x', 'y', 'z'][axis]; if (entity.value[name]) entity.value[name].value = p[axis];
+                }
+                metadata.set(p.join(','), {position: p, node: copy});
+            }
+            const entities = source.nbtDocument?.value?.structure?.value?.entities?.value?.items || [];
+            for (let ei = 0; ei < entities.length; ei++) {
+                const copy = NBT.clone(entities[ei]), position = copy.value?.Pos || copy.value?.pos;
+                if (!position?.value?.items || position.value.items.length < 3) continue;
+                const p = position.value.items.slice(0, 3).map((tag, axis) => tag.value - source.worldOrigin[['x', 'y', 'z'][axis]] + placement.position[axis]);
+                if (!inside(p)) continue;
+                for (let axis = 0; axis < 3; axis++) position.value.items[axis].value = p[axis];
+                // Repeated copies must not retain colliding Bedrock actor IDs.
+                if (copy.value.UniqueID) copy.value.UniqueID = NBT.long(BigInt(pi + 1) * 1048576n + BigInt(ei + 1));
+                editor.addEntity(copy);
+            }
+        }
+        for (const {position, node} of metadata.values()) editor.setBlockPositionData(...position.map((n, axis) => n - minimum[axis]), node);
+        return editor;
+    }
+    return Object.freeze({TerrainWorld, createPerlin, hash, materializeRegion});
+})();
+if (typeof module !== 'undefined' && module.exports) module.exports = BedrockTerrainWorld;
+if (typeof window !== 'undefined') window.BedrockTerrainWorld = BedrockTerrainWorld;
+
+    return module.exports;
+})();
 const BedrockFeatureRuntimeEmbedded = (() => {
     const module = {exports:{}};
     const exports = module.exports;
@@ -1925,6 +2177,7 @@ function translateStates(name, bedrock = {}, originalName = name) {
         return item === true || item === 1 || item === 'true' || item === '1';
     };
     const values = {...bedrock};
+    if (originalName === 'snow_layer') values.layers = String(Math.max(1, Math.min(8, 1 + (Number(value('height')) || 0))));
     const direction = value('minecraft:cardinal_direction', 'cardinal_direction', 'facing');
     const legacyDirection = Number(value('direction'));
     // The four-valued Bedrock `direction` state is NOT universal. Doors use
@@ -2096,6 +2349,7 @@ class PrimitiveLibrary {
         // Keep the Bedrock block name on the resulting shape, but use the
         // matching authored Java model as a geometry/material reference.
         const bedrockToJava = {
+            snow: 'snow_block', snow_layer: 'snow',
             wooden_door: 'oak_door', trapdoor: 'oak_trapdoor', waterlily: 'lily_pad',
             powered_repeater: 'repeater', unpowered_repeater: 'repeater',
             powered_comparator: 'comparator', unpowered_comparator: 'comparator',
@@ -3578,9 +3832,9 @@ const BedrockStructureParser = (() => {
 
             const structure = this.requireRecord(root.structure, 'structure');
             const rawLayers = this.requireList(structure.block_indices, 'structure.block_indices');
-            if (rawLayers.length !== 2) {
+            if (rawLayers.length < 1 || rawLayers.length > 2) {
                 throw new MCStructureParseError(
-                    `Expected exactly two block index layers, received ${rawLayers.length}.`,
+                    `Expected one or two block index layers, received ${rawLayers.length}.`,
                     {path: 'structure.block_indices', code: 'INVALID_LAYER_COUNT'}
                 );
             }
@@ -3611,6 +3865,13 @@ const BedrockStructureParser = (() => {
                 }
                 return result;
             });
+
+            // Some exporters omit the unused secondary (waterlogged) layer.
+            // Normalize it once to the editor's two-layer contract, using -1
+            // (no block), never palette entry 0. Keep the source NBT untouched.
+            if (this.blockIndices.length === 1) {
+                this.blockIndices.push(new Int32Array(this.volume).fill(-1));
+            }
 
             this.primaryLayer = this.blockIndices[0];
             this.secondaryLayer = this.blockIndices[1];
@@ -8171,6 +8432,7 @@ const BedrockStructureStudioPlugin = (() => {
     const STRUCTURE_MODE_ID = 'bedrock_structure';
     const PREFERENCES_STORAGE_KEY = 'bedrock_structure_studio_preferences_v1';
     const STRUCTURE_TOOL_IDS = Object.freeze({
+        build: 'bedrock_structure_build_tool',
         select: 'bedrock_structure_select_tool',
         region: 'bedrock_structure_region_tool',
         place: 'bedrock_structure_place_tool',
@@ -8232,6 +8494,13 @@ const BedrockStructureStudioPlugin = (() => {
     ]);
     const TYPED_JSON_KEY = '__bedrock_structure_type';
     let bedrockFeatureRuntimeModuleCache = null;
+
+    function getTerrainWorldModule() {
+        if (typeof BedrockTerrainWorldEmbedded !== 'undefined') return BedrockTerrainWorldEmbedded;
+        if (typeof globalThis !== 'undefined' && globalThis.BedrockTerrainWorld) return globalThis.BedrockTerrainWorld;
+        if (typeof require === 'function') return require('./bedrock_terrain_world.js');
+        throw new Error('Load bedrock_terrain_world.js before using the world preview API.');
+    }
 
     function getBedrockFeatureRuntimeModule() {
         if (bedrockFeatureRuntimeModuleCache) return bedrockFeatureRuntimeModuleCache;
@@ -8915,7 +9184,7 @@ const BedrockStructureStudioPlugin = (() => {
     });
 
     defineBlockShape('flowerbed', {
-        names: ['pink_petals','leaf_litter'],
+        names: ['pink_petals','wildflowers','leaf_litter'],
         occludes: false,
         build: ({name,states}) => {
             const growth = Math.max(0,Math.min(7,Math.floor(stateNumber(states,0,'growth'))));
@@ -9644,9 +9913,33 @@ const BedrockStructureStudioPlugin = (() => {
         };
     }
 
+    let shapeMappingSource = null;
+    let shapeMappingValues = {};
+    function projectBlockShapeMappings() {
+        const raw = typeof Project !== 'undefined' ? Project?.mcstructure_shape_mappings_json || '' : '';
+        if (raw !== shapeMappingSource) {
+            shapeMappingSource = raw;
+            try { const value = JSON.parse(raw || '{}'); shapeMappingValues = value && typeof value === 'object' && !Array.isArray(value) ? value : {}; }
+            catch { shapeMappingValues = {}; }
+        }
+        return shapeMappingValues;
+    }
+    function effectiveBlockShapeOverride(blockName, override = 'auto') {
+        if (override && override !== 'auto') return String(override);
+        const mappings = projectBlockShapeMappings();
+        const value = mappings[String(blockName)] || mappings[bareBlockName(blockName)];
+        return typeof value === 'string' ? value : 'auto';
+    }
+    function blockShapeOverrideOptions() {
+        const options = {auto:{name:tr('bedrock_structure.ui.shape.auto','Auto · vanilla')},full:{name:tr('bedrock_structure.ui.shape.full','Full cube')},none:{name:tr('bedrock_structure.ui.shape.none','No geometry')}};
+        for (const definition of builtinShapeDefinitions) {
+            if (!options[definition.id]) options[definition.id] = {name:tr('bedrock_structure.ui.shape.'+definition.id,definition.id.replace(/_/g,' '))};
+        }
+        return options;
+    }
     function resolveBlockShape(blockName, states = {}, override = 'auto') {
         const name = String(blockName || 'minecraft:stone').replace(/^minecraft:/, '').toLowerCase();
-        const requested = String(override || 'auto').toLowerCase();
+        const requested = effectiveBlockShapeOverride(blockName, override).toLowerCase();
         if (AIR_BLOCKS.has(`minecraft:${name}`) || requested === 'none') return EMPTY_BLOCK_SHAPE;
         if (requested === 'full') return makeShape('full', [FULL_BLOCK_BOX], {occludes: true, source: 'override'});
         if (requested === 'slab') {
@@ -9657,6 +9950,12 @@ const BedrockStructureStudioPlugin = (() => {
         if (requested === 'fence') return makeShape('fence', fenceBoxes(states), {source: 'override'});
         if (requested === 'wall') return makeShape('wall', wallBoxes(states), {source: 'override'});
         if (requested === 'cross') return makeShape('cross', [], {quads: crossPlantQuads(), occludes: false, source: 'override'});
+        if (requested.startsWith('vanilla:')) {
+            const reference = requested.slice('vanilla:'.length);
+            return resolveLocalPrimitiveShape(reference, states, true) || resolveBlockShape(reference, states, 'native');
+        }
+        const forced = requested !== 'auto' && builtinShapeDefinitions.find(definition => definition.id === requested);
+        if (forced) return buildRegisteredShape(forced, name, states, blockName);
 
         const referenceShape = requested === 'auto' ? resolveLocalPrimitiveShape(blockName, states) : null;
         if (referenceShape) return referenceShape;
@@ -9699,7 +9998,7 @@ const BedrockStructureStudioPlugin = (() => {
     function blockShapeCacheKey(blockName, states, override) {
         let stateKey;
         try { stateKey = JSON.stringify(states || {}); } catch (error) { stateKey = '{}'; }
-        return `${blockName || 'minecraft:stone'}|${override || 'auto'}|${stateKey}`;
+        return `${blockName || 'minecraft:stone'}|${effectiveBlockShapeOverride(blockName, override)}|${stateKey}`;
     }
 
     function cloneArrayBuffer(input) {
@@ -10431,6 +10730,8 @@ const BedrockStructureStudioPlugin = (() => {
     const reportedErrors = new Set();
 
     const shapeCache = new Map();
+    const bakedBlockClasses = new Map();
+    let terrainWorldPreview = null;
     // Terrain hot-path caches. Logical block records remain the editor-facing API,
     // but renderer rebuilds must not repeatedly parse identical state JSON or box
     // primitive vertex data in ordinary JavaScript arrays.
@@ -10542,6 +10843,16 @@ const BedrockStructureStudioPlugin = (() => {
     let structureActiveHotbarSlot = 0;
     let structureToolHoverHit = null;
     let structureViewportStroke = null;
+    let structureBuildTool = null;
+    let structureBuildGesture = null;
+    let structureBuildJob = null;
+    let structureBuildCursor = null;
+    let structureBuildVolume = null;
+    let structureBuildModifiers = {};
+    let structureBuildPointer = null;
+    let structureBuildLastCancel = null;
+    let structureBuildKeyUpHandler = null;
+    let structureBuildBlurHandler = null;
     let structureRegionGesture = null;
     let optimizedKeyDownHandler = null;
     const structureToolbarItems = [];
@@ -10760,7 +11071,7 @@ const BedrockStructureStudioPlugin = (() => {
         refreshStructureHotbar();
         updateStructureToolPreview();
         syncStructurePanel();
-        if (options.activatePlace === true) selectStructureTool(STRUCTURE_TOOL_IDS.place);
+        if (options.activatePlace !== false && isStructureModeSelected() && !terrainCreative) selectStructureTool(STRUCTURE_TOOL_IDS.build);
         return activeStructureBrushDescriptor();
     }
 
@@ -12965,6 +13276,9 @@ const BedrockStructureStudioPlugin = (() => {
                 mcstructure_chunk_size: Number(project?.mcstructure_chunk_size) || 16,
                 mcstructure_biome: project?.mcstructure_biome || 'minecraft:plains',
                 mcstructure_biome_tint_index: Number(project?.mcstructure_biome_tint_index) || 0,
+                mcstructure_grass_color_override: project?.mcstructure_grass_color_override || '',
+                mcstructure_water_color_override: project?.mcstructure_water_color_override || '',
+                mcstructure_shape_mappings_json: project?.mcstructure_shape_mappings_json || '',
                 mcstructure_fancy_leaves: project?.mcstructure_fancy_leaves !== false,
             },
         };
@@ -13025,6 +13339,8 @@ const BedrockStructureStudioPlugin = (() => {
                 chunkSize: Number(project.mcstructure_chunk_size) || 16,
                 biome: project.mcstructure_biome || 'minecraft:plains',
                 biomeTintIndex: Number(project.mcstructure_biome_tint_index) || 0,
+                tintOverrides: [project.mcstructure_grass_color_override || '',project.mcstructure_water_color_override || ''].join('|'),
+                shapes: project.mcstructure_shape_mappings_json || '',
                 fancyLeaves: project.mcstructure_fancy_leaves !== false,
             };
             const dirtyPositions = [];
@@ -13076,6 +13392,9 @@ const BedrockStructureStudioPlugin = (() => {
                 project.mcstructure_chunk_size = Number(settings.mcstructure_chunk_size) || project.mcstructure_chunk_size;
                 project.mcstructure_biome = settings.mcstructure_biome || project.mcstructure_biome;
                 project.mcstructure_biome_tint_index = Number(settings.mcstructure_biome_tint_index) || 0;
+                project.mcstructure_grass_color_override = settings.mcstructure_grass_color_override || '';
+                project.mcstructure_water_color_override = settings.mcstructure_water_color_override || '';
+                project.mcstructure_shape_mappings_json = settings.mcstructure_shape_mappings_json || '';
                 project.mcstructure_fancy_leaves = settings.mcstructure_fancy_leaves !== false;
             }
 
@@ -13083,6 +13402,8 @@ const BedrockStructureStudioPlugin = (() => {
                 || previousRenderSettings.chunkSize !== (Number(project.mcstructure_chunk_size) || 16)
                 || previousRenderSettings.biome !== (project.mcstructure_biome || 'minecraft:plains')
                 || previousRenderSettings.biomeTintIndex !== (Number(project.mcstructure_biome_tint_index) || 0)
+                || previousRenderSettings.tintOverrides !== [project.mcstructure_grass_color_override || '',project.mcstructure_water_color_override || ''].join('|')
+                || previousRenderSettings.shapes !== (project.mcstructure_shape_mappings_json || '')
                 || previousRenderSettings.fancyLeaves !== (project.mcstructure_fancy_leaves !== false);
 
             const preserveSelectionByReference = payload.selected === undefined && targetedNonRegion;
@@ -13434,6 +13755,9 @@ const BedrockStructureStudioPlugin = (() => {
     }
 
     function runLogicalUndo(label, callback, options = {}) {
+        if (structureBuildJob?.mutating && options.buildJob !== structureBuildJob) {
+            throw new Error(tr('bedrock_structure.build.busy', 'A Build operation is running. Wait or press Esc to cancel.'));
+        }
         const project = Project;
         if (
             options.undo === false ||
@@ -14281,6 +14605,9 @@ const BedrockStructureStudioPlugin = (() => {
     }
 
     function spatialRecordGet(recordMap, x, y, z, layer = 0) {
+        // Section windows and the editor's chunk index accept coordinates directly.
+        // Avoid packing, decoding and allocating a location for every AO sample.
+        if (recordMap?.getCoordinates) return recordMap.getCoordinates(x, y, z, layer) || null;
         if (!recordMap?.get) return null;
         const key = spatialRecordKey(x, y, z, layer);
         const direct = recordMap.get(key);
@@ -14445,12 +14772,28 @@ const BedrockStructureStudioPlugin = (() => {
         return rectCovered(mask, faceRect(box, face));
     }
 
+    function bakedBlockClass(record) {
+        const source = record?.block || record?.mcstructure_block || '';
+        if (record?._bedrockBlockClass?.source === source) return record._bedrockBlockClass;
+        let value = bakedBlockClasses.get(source);
+        if (!value) {
+            const name = String(source).replace(/^minecraft:/, '').toLowerCase();
+            value = {source, name, leaves: /leaves/.test(name),
+                translucent: /(water|lava|glass|ice|portal|slime|honey)/.test(name),
+                cutout: /(leaves|sapling|flower|tulip|orchid|dandelion|poppy|daisy|azure_bluet|fern|grass$|vine|mushroom|crop|wheat|roots|bush|torch|rail|door|trapdoor|ladder|cobweb|lily_pad|seagrass|kelp|coral_fan)/.test(name)};
+            if (bakedBlockClasses.size >= 4096) bakedBlockClasses.clear();
+            bakedBlockClasses.set(source, value);
+        }
+        if (record && typeof record === 'object') record._bedrockBlockClass = value;
+        return value;
+    }
+
     function bakedRecordName(record) {
-        return String(record?.block || record?.mcstructure_block || '').replace(/^minecraft:/, '').toLowerCase();
+        return bakedBlockClass(record).name;
     }
 
     function bakedRecordIsLeaves(record) {
-        return /(?:^|_)leaves(?:$|_)/.test(bakedRecordName(record)) || /leaves/.test(bakedRecordName(record));
+        return bakedBlockClass(record).leaves;
     }
 
     function fancyLeavesEnabled(options = null) {
@@ -14479,12 +14822,10 @@ const BedrockStructureStudioPlugin = (() => {
         if (bakedRecordIsLeaves(record)) return bakedRecordIsCanonicalFullCube(record) && bakedLeafMode(record) === 'opaque';
         if (!record.shape?.occludes) return false;
         if (record._bedrockCanOccludeNeighbor !== undefined) return record._bedrockCanOccludeNeighbor;
-        const name = bakedRecordName(record);
         // Alpha-cutout and translucent blocks must not delete opaque faces
         // behind them. Cache this classification per renderer record because the
         // mesher queries it up to six times for every adjacent full cube.
-        const translucent = /(water|lava|glass|ice|portal|slime|honey)/.test(name);
-        const cutout = /(leaves|sapling|flower|tulip|orchid|dandelion|poppy|daisy|azure_bluet|fern|grass$|vine|mushroom|crop|wheat|roots|bush|torch|rail|door|trapdoor|ladder|cobweb|lily_pad|seagrass|kelp|coral_fan)/.test(name);
+        const {translucent, cutout} = bakedBlockClass(record);
         record._bedrockCanOccludeNeighbor = !(translucent || cutout);
         return record._bedrockCanOccludeNeighbor;
     }
@@ -15074,7 +15415,12 @@ const BedrockStructureStudioPlugin = (() => {
     }
 
     function ensureMaterialBuffer(map, info, blockAoEnabled = false) {
-        let buffer = map.get(info.key);
+        // Atlas island/repeat/animation data lives on each vertex/range. Opaque
+        // islands sharing the exact same material can therefore use one draw
+        // group, rather than submitting the atlas again for every block type.
+        // Preserve descriptor order for blended materials.
+        const key = info.material && info.material.transparent !== true ? info.material : info.key;
+        let buffer = map.get(key);
         if (!buffer) {
             buffer = {
                 material: info.material,
@@ -15095,7 +15441,7 @@ const BedrockStructureStudioPlugin = (() => {
                 blockAoValues: blockAoEnabled ? new Uint8Builder(128) : null,
                 logicalFaceRanges: [],
             };
-            map.set(info.key, buffer);
+            map.set(key, buffer);
         } else if (blockAoEnabled && !buffer.blockAoValues) {
             // A material buffer can be created by the greedy collector before a
             // regular face reaches it. Keep the AO stream aligned with every
@@ -15295,8 +15641,9 @@ const BedrockStructureStudioPlugin = (() => {
 
     function isFullGreedyBox(shape, box) {
         if (!shape || shape.key !== 'full' || shape.boxes?.length !== 1 || !Array.isArray(box) || box.length < 6) return false;
-        const target = [0, 0, 0, BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE];
-        return target.every((value, index) => Math.abs(Number(box[index]) - value) <= SHAPE_EPSILON);
+        return Math.abs(Number(box[0])) <= SHAPE_EPSILON && Math.abs(Number(box[1])) <= SHAPE_EPSILON
+            && Math.abs(Number(box[2])) <= SHAPE_EPSILON && Math.abs(Number(box[3]) - BLOCK_SIZE) <= SHAPE_EPSILON
+            && Math.abs(Number(box[4]) - BLOCK_SIZE) <= SHAPE_EPSILON && Math.abs(Number(box[5]) - BLOCK_SIZE) <= SHAPE_EPSILON;
     }
 
     function isFullVisibleFaceRect(rect) {
@@ -15738,7 +16085,45 @@ const BedrockStructureStudioPlugin = (() => {
         return true;
     }
 
+    function createChunkRecordWindow(records, source) {
+        // One-voxel halo includes the diagonal samples used by block AO and the
+        // geometry masks at section edges. Populate lazily: sparse vegetation
+        // should not pay for a dense scan of every empty cell in its section.
+        if (!source || records.length < 32) return source;
+        const minimum = [Infinity, Infinity, Infinity], maximum = [-Infinity, -Infinity, -Infinity];
+        for (const record of records) for (let axis = 0; axis < 3; axis++) {
+            minimum[axis] = Math.min(minimum[axis], record.position[axis] - 1);
+            maximum[axis] = Math.max(maximum[axis], record.position[axis] + 1);
+        }
+        const sx = maximum[0] - minimum[0] + 1;
+        const sy = maximum[1] - minimum[1] + 1;
+        const sz = maximum[2] - minimum[2] + 1;
+        const volume = sx * sy * sz;
+        // Public/test callers may supply arbitrary scattered records. Never
+        // allocate a world-sized dense cache just to render a sparse selection.
+        if (!Number.isSafeInteger(volume) || volume > 160000) return source;
+        const cells = new Array(volume * 2);
+        const known = new Uint8Array(volume * 2);
+        return {
+            bedrockPackedSpatialKeys: true,
+            bedrockGridBounds: source.bedrockGridBounds,
+            getCoordinates(x, y, z, layer = 0) {
+                const lx = x - minimum[0], ly = y - minimum[1], lz = z - minimum[2];
+                if (lx < 0 || lx >= sx || ly < 0 || ly >= sy || lz < 0 || lz >= sz || (layer !== 0 && layer !== 1)) {
+                    return spatialRecordGet(source, x, y, z, layer);
+                }
+                const index = lz + sz * (ly + sy * lx) + layer * volume;
+                if (!known[index]) {
+                    cells[index] = spatialRecordGet(source, x, y, z, layer);
+                    known[index] = 1;
+                }
+                return cells[index];
+            },
+        };
+    }
+
     function buildOptimizedChunk(records, recordMap, chunkId, fallbackMaterial, stats, options = {}) {
+        if (options.neighborhood !== false) recordMap = createChunkRecordWindow(records, recordMap);
         const buffers = new Map();
         const greedyGroups = new Map();
         const blockAoEnabled = options.blockAo !== false && fancyLeavesEnabled(options);
@@ -15752,13 +16137,11 @@ const BedrockStructureStudioPlugin = (() => {
             stats.sourceBoxes += shape.boxes.length;
             for (let boxIndex = 0; boxIndex < shape.boxes.length; boxIndex++) {
                 const box = shape.boxes[boxIndex];
+                const fullCube = isFullGreedyBox(shape, box);
                 for (const face of SHAPE_FACE_NAMES) {
                     stats.candidateFaces++;
-                    const baseRect = faceRect(box, face);
-                    const baseArea = Math.max(0, baseRect[2] - baseRect[0]) * Math.max(0, baseRect[3] - baseRect[1]);
-                    stats.candidateFaceArea += baseArea;
                     let visibleRects;
-                    if (isFullGreedyBox(shape, box)) {
+                    if (fullCube) {
                         const fastVisibility = fastFullCubeFaceVisibility(recordMap, record, face);
                         if (fastVisibility !== null) {
                             terrainBuildDiagnostics.fastFullCubeFaces++;
@@ -15766,13 +16149,17 @@ const BedrockStructureStudioPlugin = (() => {
                         } else {
                             terrainBuildDiagnostics.maskedShapeFaces++;
                             const occlusion = faceOcclusionMask(recordMap, record, shape, boxIndex, face);
-                            visibleRects = visibleRectangles(baseRect, occlusion);
+                            visibleRects = visibleRectangles(FULL_VISIBLE_RECTS[0], occlusion);
                         }
                     } else {
                         terrainBuildDiagnostics.maskedShapeFaces++;
                         const occlusion = faceOcclusionMask(recordMap, record, shape, boxIndex, face);
-                        visibleRects = visibleRectangles(baseRect, occlusion);
+                        visibleRects = visibleRectangles(faceRect(box, face), occlusion);
                     }
+                    const baseRect = fullCube ? FULL_VISIBLE_RECTS[0] : faceRect(box, face);
+                    const baseArea = fullCube ? BLOCK_SIZE * BLOCK_SIZE
+                        : Math.max(0, baseRect[2] - baseRect[0]) * Math.max(0, baseRect[3] - baseRect[1]);
+                    stats.candidateFaceArea += baseArea;
                     if (!visibleRects.length) {
                         stats.culledFaces++;
                         stats.culledFaceArea += baseArea;
@@ -15936,17 +16323,19 @@ const BedrockStructureStudioPlugin = (() => {
             }
             vertexStart += vertexCount;
         }
-        geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-        geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
-        geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+        // Float32BufferAttribute copies even an existing Float32Array in r129.
+        // These arrays have just been finalized and have no other mutable owner.
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+        geometry.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
 
         // Atlas materials are shared by many chunk meshes. Once the material's
         // greedy shader hook is installed every geometry using that atlas must
         // provide the custom attributes, even if this particular chunk contains
         // no merged rectangle. Non-greedy vertices carry a zero enable flag.
-        geometry.setAttribute('bedrockTileUv', new THREE.Float32BufferAttribute(bedrockTileUvs, 2));
-        geometry.setAttribute('bedrockAtlasRect', new THREE.Float32BufferAttribute(bedrockAtlasRects, 4));
-        geometry.setAttribute('bedrockGreedyRepeat', new THREE.Float32BufferAttribute(bedrockGreedyRepeats, 1));
+        geometry.setAttribute('bedrockTileUv', new THREE.BufferAttribute(bedrockTileUvs, 2));
+        geometry.setAttribute('bedrockAtlasRect', new THREE.BufferAttribute(bedrockAtlasRects, 4));
+        geometry.setAttribute('bedrockGreedyRepeat', new THREE.BufferAttribute(bedrockGreedyRepeats, 1));
         if (bedrockBlockAo) geometry.setAttribute('bedrockBlockAo', new THREE.BufferAttribute(bedrockBlockAo, 1, true));
         geometry.userData ||= {};
         geometry.userData.saLogicalFaceRanges = logicalFaceRanges;
@@ -15992,6 +16381,205 @@ const BedrockStructureStudioPlugin = (() => {
             }
         }
         return mesh;
+    }
+
+    function createTerrainWorldSection(world, minimum, size, fallbackMaterial, options = {}) {
+        const halo = 2;
+        const region = world.readRegion(minimum.map(n => n - halo), size.map(n => n + halo * 2));
+        const [sx, sy, sz] = region.size, volume = sx * sy * sz;
+        const prototypes = options.prototypes || world.palette.map((block, index) => {
+            const element = {mcstructure_block: block.name, mcstructure_states_json: JSON.stringify(block.states || {})};
+            const shape = resolveBlockShape(block.name, block.states || {});
+            const record = {block: block.name, shape};
+            return {element, shape, sourceStates: block.states || {}, paletteIndex: index,
+                leaves: bakedRecordIsLeaves(record),
+                connected: /(?:^|_)door$/.test(block.name) || ['fence', 'wall', 'pane', 'trip_wire', 'rail'].includes(blockFamily(block.name)),
+                opaqueFull: bakedRecordIsCanonicalFullCube(record) && !(shape.quads?.length) && !bakedRecordIsLeaves(record) && bakedBlockCanOccludeNeighbor(record)};
+        });
+        const cached = new Array(volume * 2);
+        const recordMap = {
+            bedrockPackedSpatialKeys: true,
+            getCoordinates(x, y, z, layer = 0) {
+                const lx = x - region.minimum[0], ly = y - region.minimum[1], lz = z - region.minimum[2];
+                if (lx < 0 || lx >= sx || ly < 0 || ly >= sy || lz < 0 || lz >= sz || (layer !== 0 && layer !== 1)) return null;
+                const index = lz + sz * (ly + sy * lx), slot = index + layer * volume;
+                if (cached[slot]) return cached[slot];
+                const paletteIndex = region.layers[layer][index], prototype = prototypes[paletteIndex];
+                if (!prototype) return null;
+                const record = {element: prototype.element, position: [x, y, z], block: prototype.element.mcstructure_block,
+                    layer, sourceStates: prototype.sourceStates, shape: prototype.shape, shapeOverride: 'auto'};
+                // Connected blocks can query each other while deriving states.
+                cached[slot] = record;
+                record.renderStates = prototype.sourceStates;
+                if (prototype.connected) {
+                    record.renderStates = deriveConnectedBlockStates(record, recordMap, record.sourceStates);
+                    const shapeKey = blockShapeCacheKey(record.block, record.renderStates, 'auto');
+                    if (!shapeCache.has(shapeKey)) shapeCache.set(shapeKey, resolveBlockShape(record.block, record.renderStates));
+                    record.shape = shapeCache.get(shapeKey);
+                }
+                record.renderLayer = classifyBakedRenderLayer(record);
+                return record;
+            },
+        };
+        const groups = new Map();
+        let occupied = 0, buried = 0;
+        for (let layer = 0; layer < 2; layer++) {
+            const cells = region.layers[layer];
+            const opaque = i => prototypes[cells[i]]?.opaqueFull === true;
+            for (let x = halo; x < sx - halo; x++) for (let y = halo; y < sy - halo; y++) for (let z = halo; z < sz - halo; z++) {
+                const index = z + sz * (y + sy * x);
+                if (cells[index] < 0) continue;
+                occupied++;
+                // An opaque full cube enclosed by six opaque full cubes has no
+                // visible face. Keep its compact index for AO/topology queries,
+                // but never allocate a renderer/editor record for that voxel.
+                if (opaque(index) && opaque(index - 1) && opaque(index + 1) && opaque(index - sz) && opaque(index + sz)
+                    && opaque(index - sz * sy) && opaque(index + sz * sy)) { buried++; continue; }
+                const record = recordMap.getCoordinates(region.minimum[0] + x, region.minimum[1] + y, region.minimum[2] + z, layer);
+                const key = layer + ',' + record.renderLayer;
+                if (!groups.has(key)) groups.set(key, []);
+                groups.get(key).push(record);
+            }
+        }
+        // Resolve the enclosure of leaves sampled by boundary AO as well as the
+        // leaves actually emitted. The two-cell halo includes their six neighbors.
+        for (let layer = 0; layer < 2; layer++) for (let i = 0; i < volume; i++) {
+            const prototype = prototypes[region.layers[layer][i]];
+            if (prototype?.leaves) {
+                const x = Math.floor(i / (sy * sz)), y = Math.floor((i % (sy * sz)) / sz), z = i % sz;
+                recordMap.getCoordinates(region.minimum[0] + x, region.minimum[1] + y, region.minimum[2] + z, layer);
+            }
+        }
+        resolveBakedLeafModes(cached.filter(Boolean), recordMap, options);
+        const meshes = [], stats = {occupied, buried, surfaceRecords: occupied - buried, vertexBytes: 0, chunks: 0};
+        try {
+            for (const [key, records] of groups) {
+                const chunkStats = blockRenderStats();
+                const mesh = buildOptimizedChunk(records, recordMap, minimum.join(',') + ',' + key, fallbackMaterial, chunkStats, {...options, neighborhood: false});
+                if (!mesh) continue;
+                mesh.userData.bedrockWorldPreview = true;
+                mesh.userData.bedrockRenderLayer = records[0].renderLayer;
+                mesh.userData.bedrockChunkStats = chunkStats;
+                meshes.push(mesh); mergeChunkRenderStats(stats, chunkStats); stats.chunks++;
+            }
+        } catch (error) {
+            for (const mesh of meshes) { unregisterGeometryFlipbookTargets(mesh); mesh.geometry.dispose(); }
+            throw error;
+        }
+        return {meshes, stats, prototypes};
+    }
+
+    function disposeTerrainWorldPreview() {
+        const preview = terrainWorldPreview;
+        if (!preview) return false;
+        terrainWorldPreview = null;
+        preview.cancelled = true;
+        clearTimeout(preview.timer);
+        const engine = getShaderArchitectEngine();
+        for (const mesh of preview.chunkMeshes) {
+            restoreLightflowChunkMaterial(mesh, engine);
+            unregisterGeometryFlipbookTargets(mesh);
+            mesh.geometry.dispose(); mesh.removeFromParent();
+        }
+        preview.root.removeFromParent(); preview.fallbackMaterial.dispose();
+        preview.chunkMeshes.clear();
+        preview.resolve?.({...preview.stats, complete: false, cancelled: true});
+        invalidateLightflowChunkIntegrationCaches(engine);
+        window.LightManagerMarkShadowsDirty?.({scene: true});
+        return true;
+    }
+
+    function previewTerrainWorld(world, options = {}) {
+        if (!isStructureProject() || allStructureBlocks().length) throw new Error('Open a disposable empty Terrain project for a render-only world preview.');
+        if (!world?.readRegion || !world?.palette) throw new TypeError('Expected a TerrainWorld source.');
+        const chunkSize = Math.max(8, Math.min(64, Math.round(options.chunkSize || 32)));
+        const geometryMiB = Number(options.maxGeometryMiB || 384);
+        if (!Number.isFinite(chunkSize) || !Number.isFinite(geometryMiB) || geometryMiB <= 0) throw new TypeError('Finite positive world preview budgets required.');
+        const sectionCount = Math.ceil(world.size[0] / chunkSize) * Math.ceil(world.size[1] / TERRAIN_SECTION_HEIGHT) * Math.ceil(world.size[2] / chunkSize);
+        if (sectionCount > 65536) throw new RangeError('Preview at most 65536 sections per region.');
+        disposeTerrainWorldPreview();
+        const root = new THREE.Group(), fallbackMaterial = new THREE.MeshBasicMaterial({color: 0x8b8b8b});
+        root.name = 'Terrain World Preview'; root.userData.bedrockWorldPreview = true;
+        Canvas.scene.add(root);
+        const preview = {root, fallbackMaterial, project: Project, description: world.describe(), geometryLimit: geometryMiB * 1048576,
+            chunkMeshes: new Set(), cancelled: false,
+            stats: {complete: false, plannedSections: 0, builtSections: 0, occupied: 0, buried: 0, chunks: 0, vertexBytes: 0}, timer: null};
+        terrainWorldPreview = preview;
+        const queue = [];
+        for (let x = world.origin[0]; x < world.maximum[0]; x += chunkSize)
+            for (let z = world.origin[2]; z < world.maximum[2]; z += chunkSize)
+                for (let y = world.origin[1]; y < world.maximum[1]; y += TERRAIN_SECTION_HEIGHT)
+                    queue.push({minimum: [x, y, z], size: [Math.min(chunkSize, world.maximum[0] - x), Math.min(TERRAIN_SECTION_HEIGHT, world.maximum[1] - y), Math.min(chunkSize, world.maximum[2] - z)]});
+        const context = createStructureChunkCullContext(), camera = context?.cameraPosition;
+        if (camera) queue.sort((a, b) => {
+            const distance = entry => entry.minimum.reduce((n, value, axis) => n + (value * BLOCK_SIZE - camera[['x','y','z'][axis]]) ** 2, 0);
+            return distance(b) - distance(a);
+        });
+        preview.stats.plannedSections = queue.length;
+        const started = performance.now(), limit = Math.max(1, geometryMiB) * 1048576;
+        return new Promise((resolve, reject) => {
+            preview.resolve = resolve;
+            let prototypes;
+            const pump = () => {
+                if (terrainWorldPreview !== preview || preview.cancelled) return;
+                if (Project !== preview.project) { disposeTerrainWorldPreview(); return; }
+                const tick = performance.now();
+                try {
+                    do {
+                        const entry = queue.pop();
+                        if (!entry) break;
+                        const section = createTerrainWorldSection(world, entry.minimum, entry.size, fallbackMaterial, {...options, prototypes});
+                        prototypes = section.prototypes;
+                        for (const mesh of section.meshes) { preview.chunkMeshes.add(mesh); root.add(mesh); }
+                        mergeChunkRenderStats(preview.stats, section.stats);
+                        preview.stats.chunks += section.meshes.length;
+                        preview.stats.occupied += section.stats.occupied; preview.stats.buried += section.stats.buried;
+                        preview.stats.builtSections++;
+                        // Include attributes and retained greedy mappings, not just
+                        // the base position/normal/UV byte counter.
+                        let bytes = 0;
+                        for (const mesh of section.meshes) {
+                            const arrays = new Set(Object.values(mesh.geometry.attributes).map(a => a.array));
+                            for (const a of Object.values(mesh.geometry.userData?.bedrockGreedyLightflow || {})) if (ArrayBuffer.isView(a)) arrays.add(a);
+                            for (const array of arrays) bytes += array.byteLength;
+                            preview.stats.baseVertexCount = (preview.stats.baseVertexCount || 0) + mesh.geometry.attributes.position.count;
+                        }
+                        preview.stats.retainedGeometryBytes = (preview.stats.retainedGeometryBytes || 0) + bytes;
+                        // Prepared Lightflow streams add substantially more data
+                        // than the native atlas mesh. Preflight with a conservative
+                        // allowance before a later view-mode switch allocates them.
+                        preview.stats.estimatedDecoratedBytes = preview.stats.retainedGeometryBytes + preview.stats.baseVertexCount * 256;
+                        if (preview.stats.retainedGeometryBytes > limit) throw new RangeError('World preview geometry budget exceeded; use a smaller region or a larger explicit maxGeometryMiB.');
+                    } while (queue.length && performance.now() - tick < 6);
+                    preview.stats.maxBatchMs = Math.max(preview.stats.maxBatchMs || 0, performance.now() - tick);
+                    if (!queue.length || performance.now() - (preview.lastPaint || 0) > 100) {
+                        preview.lastPaint = performance.now();
+                        invalidateLightflowChunkIntegrationCaches(getShaderArchitectEngine(), {connectedClip: false});
+                        window.LightManagerMarkShadowsDirty?.({scene: true});
+                        for (const p of window.Preview?.all || []) p.render();
+                    }
+                    if (queue.length) preview.timer = setTimeout(pump, 0);
+                    else {
+                        preview.stats.complete = true;
+                        syncLightflowRenderBridge();
+                        let decoratedBytes = 0;
+                        for (const mesh of preview.chunkMeshes) {
+                            const arrays = new Set(Object.values(mesh.geometry.attributes).map(a => a.array));
+                            for (const a of Object.values(mesh.geometry.userData?.bedrockGreedyLightflow || {})) if (ArrayBuffer.isView(a)) arrays.add(a);
+                            for (const array of arrays) decoratedBytes += array.byteLength;
+                        }
+                        preview.stats.decoratedGeometryBytes = decoratedBytes;
+                        if (decoratedBytes > limit) throw new RangeError('Decorated world preview exceeds the geometry budget.');
+                        preview.stats.buildMs = performance.now() - started;
+                        preview.stats.source = world.diagnostics();
+                        preview.resolve = null; resolve({...preview.stats});
+                    }
+                } catch (error) {
+                    preview.resolve = null; disposeTerrainWorldPreview(); reject(error);
+                }
+            };
+            preview.timer = setTimeout(pump, 0);
+        });
     }
 
     function collectOptimizedRecords() {
@@ -16439,12 +17027,14 @@ const BedrockStructureStudioPlugin = (() => {
     }
 
     function collectBridgeChunkMeshes() {
-        if (optimizedPreview?.chunkMeshes instanceof Set) return Array.from(optimizedPreview.chunkMeshes);
+        const worldMeshes = terrainWorldPreview?.project === (typeof Project !== 'undefined' ? Project : null)
+            ? Array.from(terrainWorldPreview.chunkMeshes) : [];
+        if (optimizedPreview?.chunkMeshes instanceof Set) return [...optimizedPreview.chunkMeshes, ...worldMeshes];
         const meshes = [];
         optimizedPreview?.root?.traverse?.(object => {
             if (object?.isMesh && object.userData?.bedrockStructureOptimized) meshes.push(object);
         });
-        return meshes;
+        return [...meshes, ...worldMeshes];
     }
 
     function syncOptimizedPreviewVisibility() {
@@ -16669,6 +17259,17 @@ const BedrockStructureStudioPlugin = (() => {
     }
 
     function applyLightflowChunkMaterial(mesh, engine = getShaderArchitectEngine()) {
+        if (mesh?.userData?.bedrockWorldPreview && terrainWorldPreview) {
+            const preview = terrainWorldPreview;
+            const lightflow = isLightflowRenderMode(engine);
+            const withinBudget = Number(preview.stats.estimatedDecoratedBytes || 0) <= preview.geometryLimit;
+            if (!lightflow || !preview.stats.complete || !withinBudget) {
+                preview.stats.bridgeState = !lightflow ? 'native' : !preview.stats.complete ? 'deferred' : 'native_geometry_budget';
+                restoreLightflowChunkMaterial(mesh, engine);
+                return false;
+            }
+            preview.stats.bridgeState = 'lightflow';
+        }
         if (!engine || !mesh?.userData || mesh.userData.bedrockLightflowSourceMaterials) return false;
         const sourceSlots = Array.isArray(mesh.material) ? mesh.material.slice() : [mesh.material];
         if (!sourceSlots.length || sourceSlots.some(slot => !slot)) return false;
@@ -18467,11 +19068,14 @@ const BedrockStructureStudioPlugin = (() => {
     function updateStructureToolPreview() {
         ensureLogicalSelectionHelpers();
         if (!structureToolPreviewHelper) return;
+        if (structureBuildVolume) structureBuildVolume.visible=false;
+        if (structureBuildCursor) {structureBuildCursor.hidden=true;structureBuildCursor.style.display='none';}
         if (!isStructureProject() || !isStructureModeSelected()) {
             structureToolPreviewHelper.visible = false;
             return;
         }
         const kind = structureToolKind();
+        if (kind === 'build') { updateStructureBuildPreview(); return; }
         if (structureRegionGesture?.startPosition && structureRegionGesture?.currentPosition) {
             const minimum = structureRegionGesture.startPosition.map((value, axis) => Math.min(value, structureRegionGesture.currentPosition[axis]) * BLOCK_SIZE);
             const maximum = structureRegionGesture.startPosition.map((value, axis) => (Math.max(value, structureRegionGesture.currentPosition[axis]) + 1) * BLOCK_SIZE);
@@ -18479,8 +19083,13 @@ const BedrockStructureStudioPlugin = (() => {
             setBoundsLineHelper(structureToolPreviewHelper, minimum, maximum);
             structureToolPreviewHelper.visible = true;
             structureToolPreviewHelper.updateMatrixWorld?.(true);
+            showStructurePreviewVolume(minimum,maximum,STRUCTURE_GIZMO_COLORS.hover);
             refreshStructureToolStatus();
             return;
+        }
+        if(kind==='select' && structureToolHoverHit?.record){
+            const cell=getStructureGridPosition(structureToolHoverHit.record);
+            showStructurePreviewVolume(cell.map(v=>v*BLOCK_SIZE),cell.map(v=>(v+1)*BLOCK_SIZE),STRUCTURE_GIZMO_COLORS.hover);
         }
         if (kind === 'select' || (!isLogicalStructureBlock(structureToolHoverHit?.record) && !(kind === 'place' && structureToolHoverHit?.groundPosition))) {
             structureToolPreviewHelper.visible = false;
@@ -18650,11 +19259,39 @@ const BedrockStructureStudioPlugin = (() => {
     }
 
     function logicalRecordRayHit(record, origin, direction, minimumDistance, maximumDistance) {
-        if (!record?.shape?.boxes?.length) return null;
+        if (!record?.shape) return null;
         const position = record.position;
         let nearest = Infinity;
         let nearestNormal = null;
-        for (const box of record.shape.boxes) {
+        // Planar plants have no boxes. Test their actual triangles, from both
+        // sides, before boxes so the voxel fast path cannot skip them.
+        const subtract = (a, b) => a.map((value, axis) => value - b[axis]);
+        const cross = (a, b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+        const dot = (a, b) => a.reduce((sum, value, axis) => sum + value*b[axis], 0);
+        for (const quad of record.shape.quads || []) {
+            const vertices = quad.vertices.map(vertex => vertex.map((value, axis) => value + position[axis]*BLOCK_SIZE));
+            for (let index = 1; index + 1 < vertices.length; index++) {
+                const edge1 = subtract(vertices[index], vertices[0]);
+                const edge2 = subtract(vertices[index + 1], vertices[0]);
+                const p = cross(direction, edge2);
+                const determinant = dot(edge1, p);
+                if (Math.abs(determinant) < 1e-10) continue;
+                const offset = subtract(origin, vertices[0]);
+                const u = dot(offset, p) / determinant;
+                if (u < -1e-7 || u > 1 + 1e-7) continue;
+                const q = cross(offset, edge1);
+                const v = dot(direction, q) / determinant;
+                if (v < -1e-7 || u + v > 1 + 1e-7) continue;
+                const distance = dot(edge2, q) / determinant;
+                if (distance < Math.max(0, minimumDistance) - 1e-5 || distance > maximumDistance + 1e-5 || distance >= nearest) continue;
+                nearest = distance;
+                const normal = cross(edge1, edge2);
+                const length = Math.sqrt(dot(normal, normal));
+                const sign = dot(normal, direction) > 0 ? -1 : 1;
+                nearestNormal = normal.map(value => sign * value / length);
+            }
+        }
+        for (const box of record.shape.boxes || []) {
             const minimum = [
                 position[0] * BLOCK_SIZE + Number(box[0] || 0),
                 position[1] * BLOCK_SIZE + Number(box[1] || 0),
@@ -18940,6 +19577,9 @@ const BedrockStructureStudioPlugin = (() => {
 
     function selectStructureTool(id) {
         if (id === STRUCTURE_TOOL_IDS.region) id = STRUCTURE_TOOL_IDS.select;
+        if (id === STRUCTURE_TOOL_IDS.place && !terrainCreative) id = STRUCTURE_TOOL_IDS.build;
+        if(activeStructureToolId()===id)return id;
+        cancelStructureBuildGesture();
         const tool = typeof BarItems !== 'undefined' ? BarItems[id] : null;
         if (tool?.select) tool.select();
         else if (tool?.trigger) tool.trigger();
@@ -18993,6 +19633,7 @@ const BedrockStructureStudioPlugin = (() => {
         }
         const kind = structureToolKind();
         const brush = activeStructureBrushDescriptor();
+        if(kind==='build')return structureBuildFeedback().text;
         if (kind === 'region') {
             if (structureRegionGesture?.startPosition && structureRegionGesture?.currentPosition) {
                 const a = structureRegionGesture.startPosition;
@@ -19055,7 +19696,7 @@ const BedrockStructureStudioPlugin = (() => {
             layer: Number(record.mcstructure_layer || 0),
         });
         if (options.activatePlace !== false) selectStructureTool(STRUCTURE_TOOL_IDS.place);
-        Blockbench.showQuickMessage?.(
+        if (options.notify !== false) Blockbench.showQuickMessage?.(
             trf('bedrock_structure.message.picked_block', 'Picked {0} into hotbar slot {1}.', [structureBlockDisplayName(descriptor.block), structureActiveHotbarSlot + 1]),
             1800
         );
@@ -19389,6 +20030,7 @@ const BedrockStructureStudioPlugin = (() => {
         const recordMap = runtimePlacementRecordMap(runtime);
         let changed = 0;
         for (const record of affected) {
+            if (record.locked) continue;
             const family = blockFamily(record.mcstructure_block);
             if (!['fence', 'wall', 'pane', 'rail'].includes(family)) continue;
             const wrapper = recordMap.get(logicalRecordKey(record));
@@ -19584,6 +20226,339 @@ const BedrockStructureStudioPlugin = (() => {
         return changed;
     }
 
+    // Build owns consumed left-pointer gestures only. Select, Fly and host camera
+    // navigation keep their input routes. Intent, brush and camera are immutable
+    // for a gesture; neither pointerup modifiers nor hotbar changes reinterpret it.
+    const STRUCTURE_BUILD_ICONS = Object.freeze({place:'add_box',paint:'brush',erase:'ink_eraser',replace:'swap_horiz',region_fill:'grid_on',region_erase:'grid_off',pick:'colorize',invalid:'block'});
+    function resolveStructureBuildIntent(event = {}, moved = false, leftDrag = 'navigate') {
+        if (event.altKey || event.metaKey || event.button === 2) return 'navigate';
+        if (event.button === 1) return moved ? 'navigate' : 'pick';
+        if (event.button !== 0) return 'navigate';
+        if (event.ctrlKey && event.shiftKey) return moved ? 'region_erase' : 'erase';
+        if (event.shiftKey) return moved ? 'region_fill' : 'replace';
+        if (event.ctrlKey) return 'erase';
+        return moved ? (leftDrag === 'navigate' ? 'navigate' : 'paint') : 'place';
+    }
+    function structureBuildRegion(origin, end, normal, depth = 1) {
+        const axis = normal.findIndex(value=>value !== 0);
+        if (axis < 0 || !origin.every(Number.isSafeInteger) || !end.every(Number.isFinite)) return null;
+        const maximumDepth = Math.max(1, Math.floor(Number(depth) || 1));
+        const target = end.map(Math.floor); target[axis] = origin[axis];
+        const minimum = origin.map((value,i)=>Math.min(value,target[i]));
+        const maximum = origin.map((value,i)=>Math.max(value,target[i]));
+        if (normal[axis] > 0) maximum[axis] += maximumDepth - 1;
+        else minimum[axis] -= maximumDepth - 1;
+        const size=minimum.map((value,i)=>maximum[i]-value+1);
+        const volume=size.reduce((a,b)=>a*b,1);
+        return Number.isSafeInteger(volume) ? {origin:origin.slice(),normal:normal.slice(),axis,minimum,maximum,size,depth:maximumDepth,volume} : null;
+    }
+    function* structureBuildLine(a,b) {
+        const steps=Math.max(...a.map((v,i)=>Math.abs(b[i]-v)));
+        for(let i=0;i<=steps;i++)yield a.map((v,axis)=>Math.round(v+(b[axis]-v)*(steps?i/steps:0)));
+    }
+    function structureBuildBlocked(record, brush, runtime, replacing = false) {
+        if (record && (record.locked || !isOptimizedRecordVisible(record))) return true;
+        if (!replacing || !record || record.mcstructure_block === brush.block) return false;
+        // Position NBT belongs to the coordinate, not the rendered voxel. Keep it
+        // untouched; changing the type of a block entity requires explicit editing.
+        const raw=runtime.positionData?.get(logicalPositionKey(getStructureGridPosition(record))) || record.mcstructure_position_data_json;
+        if (!raw) return false;
+        try { return !!getCompoundChild(parseTypedNBT(raw,'Build position data'),'block_entity_data'); }
+        catch { return true; }
+    }
+    function structureBuildHitOnPlane(event, gesture) {
+        const preview=gesture.preview, canvas=gesture.canvas;
+        const rect=canvas.getBoundingClientRect();
+        if (!rect.width || !rect.height || !preview?.camera || preview.camera!==gesture.camera) return null;
+        const raycaster=new THREE.Raycaster();
+        raycaster.setFromCamera(new THREE.Vector2((event.clientX-rect.left)/rect.width*2-1,1-(event.clientY-rect.top)/rect.height*2),gesture.camera);
+        const point=raycaster.ray.applyMatrix4(gesture.worldToLocal).intersectPlane(gesture.plane,new THREE.Vector3());
+        if (!point) return null;
+        const position=[point.x,point.y,point.z].map(value=>Math.floor(value/BLOCK_SIZE));
+        position[gesture.axis]=gesture.origin[gesture.axis];
+        return position;
+    }
+    function structureBuildCanHandle(event) {
+        return !terrainCreative && isStructureProject() && isStructureModeSelected() && structureToolKind()==='build'
+            && !structureInputTargetIsEditable(event.target) && !Dialog.open && !Menu.open && !window.open_interface;
+    }
+    function beginStructureBuildGesture(event,canvas) {
+        if (!structureBuildCanHandle(event) || structureBuildJob) return false;
+        if(event.isPrimary===false){cancelStructureBuildGesture();return false;}
+        if(structureBuildGesture)cancelStructureBuildGesture();
+        const intent=resolveStructureBuildIntent(event);
+        const altNavigation=event.button===0&&event.altKey&&!event.metaKey;
+        if (intent==='navigate'&&!altNavigation) return false;
+        const runtime=ensureLogicalRuntime(), hit=raycastOptimizedBlockHitFromEvent(event);
+        const preview=hit?.preview || Preview.all.find(p=>p.canvas===canvas);
+        const prefs=readStudioPreferences();
+        const navigation=altNavigation||(!event.ctrlKey&&!event.shiftKey&&event.button===0&&prefs.buildLeftDrag!=='paint');
+        if (!runtime || !preview || (!hit?.record && !hit?.groundPosition&&!navigation)) return false;
+        const brush={...activeStructureBrushDescriptor()};
+        const normal=dominantGridNormal(hit?.normal)||[0,1,0], axis=normal.findIndex(v=>v!==0);
+        const point=hit?.record?getStructureGridPosition(hit.record).slice():hit?.groundPosition?.slice()||[0,0,0];
+        const regionOrigin=event.ctrlKey?point:structurePlacementTargetForHit(hit);
+        const origin=regionOrigin||point;
+        optimizedPreview.root.updateWorldMatrix?.(true,false);
+        const worldToLocal=optimizedPreview.root.matrixWorld.clone().invert();
+        const planeCoordinate=hit?.point?hit.point.clone().applyMatrix4(worldToLocal).getComponent(axis):origin[axis]*BLOCK_SIZE;
+        structureBuildGesture={
+            project:Project,runtime,startRevision:Number(runtime.revision||0),pointerId:event.pointerId,pointerType:event.pointerType,
+            canvas,preview,camera:preview.camera,controlsEnabled:preview.controls?.enabled,
+            startX:event.clientX,startY:event.clientY,lastX:event.clientX,lastY:event.clientY,event:{button:event.button,ctrlKey:event.ctrlKey,shiftKey:event.shiftKey,altKey:event.altKey},
+            intent,moved:false,brush,layer:brush.layer,hit,origin,normal,axis,
+            worldToLocal,
+            plane:new THREE.Plane(new THREE.Vector3(...normal),-normal[axis]*planeCoordinate),
+            samples:new Map(),lastSample:null,region:null,replaceExisting:prefs.buildReplaceExisting===true,
+            nativeDrag:event.button===1,
+            navigation,
+        };
+        const gesture=structureBuildGesture;
+        if (!gesture.nativeDrag) {
+            if(preview.controls)preview.controls.enabled=false;
+            canvas.setPointerCapture?.(event.pointerId);
+            event.preventDefault();event.stopPropagation();
+            if(!event.shiftKey&&!gesture.navigation)sampleStructureBuildStroke(gesture,hit);
+        }
+        structureToolHoverHit=hit;structureBuildPointer={canvas,x:event.clientX,y:event.clientY};
+        updateStructureToolPreview();return true;
+    }
+    function sampleStructureBuildStroke(gesture,hit) {
+        const erase=gesture.intent==='erase';
+        const position=erase?hit?.record&&getStructureGridPosition(hit.record):structurePlacementTargetForHit(hit);
+        if(!position)return;
+        const layer=gesture.brush.layer;
+        const previous=gesture.lastSample;
+        const samePlane=previous && previous.normal.every((v,i)=>v===(dominantGridNormal(hit.normal)||[])[i]) && previous.position[gesture.axis]===position[gesture.axis];
+        for(const cell of samePlane?structureBuildLine(previous.position,position):[position]){
+            const key=spatialRecordKey(...cell,layer);
+            if(!gesture.samples.has(key))gesture.samples.set(key,{key,position:cell.slice(),layer,hit});
+        }
+        gesture.lastSample={position:position.slice(),normal:dominantGridNormal(hit.normal)||gesture.normal};
+    }
+    function continueStructureBuildGesture(event) {
+        const gesture=structureBuildGesture;
+        if (!gesture || gesture.pointerId!==event.pointerId) return false;
+        if (!structureBuildCanHandle(event) || Project!==gesture.project || gesture.preview.camera!==gesture.camera) {
+            structureBuildLastCancel={reason:'context',dialog:Dialog.open?.id,menu:!!Menu.open,interface:window.open_interface?.id,tool:Toolbox.selected?.id,target:event.target?.tagName,camera:gesture.preview.camera===gesture.camera};
+            cancelStructureBuildGesture();return false;
+        }
+        gesture.moved ||= (event.clientX-gesture.startX)**2+(event.clientY-gesture.startY)**2>25;
+        gesture.intent=resolveStructureBuildIntent(gesture.event,gesture.moved,gesture.navigation?'navigate':'paint');
+        structureBuildPointer={canvas:gesture.canvas,x:event.clientX,y:event.clientY};
+        if(gesture.nativeDrag)return true;
+        event.preventDefault();event.stopPropagation();
+        if(gesture.navigation){
+            // Blockbench keybinds can reject Alt+left or left over a voxel. Use
+            // its own orbit API so Build's explicit camera gesture always works.
+            const controls=gesture.preview.controls;
+            if(gesture.moved&&controls?.enableRotate!==false){
+                const rect=gesture.canvas.getBoundingClientRect(),scale=Math.max(600,Math.min(1200,rect.width+rect.height));
+                controls.rotateLeft(2*Math.PI*(event.clientX-gesture.lastX)/scale*controls.rotateSpeed);
+                controls.rotateUp(2*Math.PI*(event.clientY-gesture.lastY)/scale*controls.rotateSpeed);
+                controls.update();
+            }
+            gesture.lastX=event.clientX;gesture.lastY=event.clientY;updateStructureToolPreview();return true;
+        }
+        if(gesture.moved && gesture.event.shiftKey){
+            const position=structureBuildHitOnPlane(event,gesture);
+            if(position){const region=structureBuildRegion(gesture.origin,position,gesture.normal);if(region)gesture.region={...region,operation:gesture.intent,brush:gesture.brush,layer:gesture.layer,plane:gesture.plane};}
+        }else if(!gesture.event.shiftKey){
+            const hit=raycastOptimizedBlockHitFromEvent({...event,target:gesture.canvas,clientX:event.clientX,clientY:event.clientY});
+            if(hit){structureToolHoverHit=hit;sampleStructureBuildStroke(gesture,hit);}
+        }
+        updateStructureToolPreview();return true;
+    }
+    function cancelStructureBuildGesture(markCancelled=true) {
+        const gesture=structureBuildGesture;structureBuildGesture=null;
+        if(gesture){
+            if(markCancelled)gesture.cancelled=true;
+            if(!gesture.nativeDrag && gesture.preview.controls)gesture.preview.controls.enabled=gesture.controlsEnabled;
+            if(gesture.canvas.hasPointerCapture?.(gesture.pointerId))gesture.canvas.releasePointerCapture(gesture.pointerId);
+        }
+        if(structureBuildVolume)structureBuildVolume.visible=false;
+        if(structureToolPreviewHelper)structureToolPreviewHelper.visible=false;
+        if(structureBuildCursor){structureBuildCursor.hidden=true;structureBuildCursor.style.display='none';}
+        return !!gesture;
+    }
+    function finishStructureBuildGesture(event,cancel=false) {
+        const gesture=structureBuildGesture;
+        if(!gesture || event && gesture.pointerId!==event.pointerId)return false;
+        if(!cancel && event)continueStructureBuildGesture(event);
+        cancelStructureBuildGesture(false);
+        if(cancel || gesture.cancelled || Project!==gesture.project || !isStructureModeSelected() || Dialog.open || Menu.open)return true;
+        if(!gesture.nativeDrag){event?.preventDefault();event?.stopPropagation();}
+        if(gesture.intent==='navigate')return true;
+        if(gesture.intent==='pick'){
+            if(!gesture.moved)pickStructureBlock(gesture.hit.record,{notify:false});
+            return true;
+        }
+        if((gesture.nativeDrag||gesture.navigation)&&!gesture.moved)sampleStructureBuildStroke(gesture,gesture.hit);
+        const commit=()=>commitStructureBuildGesture(gesture).catch(error=>{
+            if(!error.buildCancelled)showError('Build terrain',error);
+        });
+        if(gesture.region?.volume>=LOGICAL_FILL_WARNING_THRESHOLD){
+            Blockbench.showMessageBox({title:tr('bedrock_structure.ui.build_tool','Build'),message:trf('bedrock_structure.build.large_region','{0} cells · {1}. Continue?',[gesture.region.volume.toLocaleString(),gesture.region.size.join(' × ')]),buttons:['dialog.continue','dialog.cancel'],confirm:0,cancel:1},button=>{if(button===0)commit();});
+        }else commit();
+        updateStructureToolPreview();return true;
+    }
+    function structureBuildStepEach(iterable,callback,guard=()=>{},progress=false) {
+        const iterator=iterable[Symbol.iterator]();
+        const step=()=>{guard();let next;const started=performance.now();
+            while(!(next=iterator.next()).done){callback(next.value);if(performance.now()-started>=8)return false;}return true;};
+        if(!progress){guard();for(let next=iterator.next();!next.done;next=iterator.next())callback(next.value);return Promise.resolve();}
+        return new Promise((resolve,reject)=>{const pump=()=>{try{if(step())resolve();else requestAnimationFrame(pump);}catch(error){reject(error);}};pump();});
+    }
+    async function commitStructureBuildGesture(gesture) {
+        if(structureBuildJob)return 0;
+        const job={...gesture,cancelled:false,mutating:false};structureBuildJob=job;
+        const cancelled=()=>{const error=new Error(tr('bedrock_structure.build.cancelled','Build cancelled.'));error.buildCancelled=true;return error;};
+        const guard=()=>{if(job.cancelled || Project!==job.project || !isStructureModeSelected() || logicalStructureRuntimes.get(job.project)!==job.runtime || Number(job.runtime.revision||0)!==job.startRevision)throw cancelled();};
+        const runtime=job.runtime, samples=new Map(), topology=new Set();
+        const erasing=['erase','region_erase'].includes(job.intent), replacing=job.intent==='replace'||job.region&&job.replaceExisting;
+        const large=job.region?job.region.volume>4096:job.samples.size>4096;
+        try {
+            guard();
+            if(!erasing && (job.brush.empty || AIR_BLOCKS.has(job.brush.block)) || job.layer===1&&!Project.mcstructure_secondary_visible)return 0;
+            function* regionSamples(){const r=job.region;for(let x=r.minimum[0];x<=r.maximum[0];x++)for(let y=r.minimum[1];y<=r.maximum[1];y++)for(let z=r.minimum[2];z<=r.maximum[2];z++)yield {position:[x,y,z],layer:job.layer,hit:job.hit,key:spatialRecordKey(x,y,z,job.layer)};}
+            const source=job.region?regionSamples():job.intent==='replace'||job.intent==='erase'&&!job.samples.size
+                ? job.hit.record?[{position:getStructureGridPosition(job.hit.record).slice(),layer:job.layer,hit:job.hit,key:spatialRecordKey(...getStructureGridPosition(job.hit.record),job.layer)}]:[]
+                :job.samples.values();
+            if(large){Blockbench.setProgress?.(.01);Blockbench.setStatusBarText?.(tr('bedrock_structure.build.processing','Building region · Esc cancels'));}
+            let visited=0;
+            await structureBuildStepEach(source,sample=>{
+                if(large && ++visited%1024===0)Blockbench.setProgress?.(.45*visited/(job.region?.volume||job.samples.size));
+                const record=runtime.byKey.get(sample.key);
+                if(structureBuildBlocked(record,job.brush,runtime,!!replacing))return;
+                if(erasing&&!record || job.intent==='replace'&&!record || !erasing&&!replacing&&record)return;
+                const placement=erasing?null:deriveStructurePlacementDescriptor(job.brush,sample.hit,sample.position);
+                if(placement&&!structurePlacementAllowed(placement,sample.hit))return;
+                if(record && placement && record.mcstructure_block===placement.block && record.mcstructure_version===placement.version && logicalStatesEqual(cachedParsedBlockStates(record),placement.states))return;
+                samples.set(sample.key,{...sample,record,placement});
+                for(const adjacent of collectPlacementTopologyRecords(runtime,[sample]))topology.add(adjacent);
+            },guard,large);
+            if(!samples.size){Blockbench.setStatusBarText?.(tr('bedrock_structure.build.no_change','No eligible cells · locked, occupied or block-entity data protected'));return 0;}
+            guard();job.mutating=true;
+            const targets={keys:Array.from(samples.keys()),recordRefs:topology,positionData:false,persistTargets:false};
+            const removed=new Set(),dirty=[];
+            const result=await runLogicalUndo(tr('bedrock_structure.ui.build_tool','Build'),async()=>{
+                let applied=0;
+                await structureBuildStepEach(samples.values(),sample=>{
+                    if(large && ++applied%1024===0)Blockbench.setProgress?.(.5+.4*applied/samples.size);
+                    const record=sample.record;
+                    if(erasing){removed.add(record);runtime.byKey.delete(sample.key);runtime.byId.delete(record.mcstructure_runtime_id);runtime.selected.delete(record);}
+                    else if(record){
+                        record.mcstructure_block=sample.placement.block;record.mcstructure_states_json=sample.placement.statesJson;record.mcstructure_version=sample.placement.version;
+                        record.mcstructure_shape_override='auto';record.name=makeBlockLabel({name:sample.placement.block,states:sample.placement.states,version:sample.placement.version},job.layer);
+                    }else{
+                        const created=createLogicalStructureBrushRecord(sample.position,job.brush,sample.hit);
+                        appendLogicalRuntimeRecord(runtime,created);runtime.byKey.set(sample.key,created);runtime.byId.set(created.mcstructure_runtime_id,created);
+                    }
+                    dirty.push({position:sample.position,layer:job.layer});
+                },guard,large);
+                guard();if(removed.size)removeLogicalRuntimeRecords(runtime,removed);
+                refreshPlacementTopology(runtime,samples.values(),dirty);
+                touchLogicalRuntime(runtime,{rebuildIndex:false});scheduleOptimizedPreviewRebuild(0,dirty);
+                updateLogicalSelectionHelpers();syncStructurePanel();return samples.size;
+            },{targets,buildJob:job});
+            return result;
+        }finally{
+            if(structureBuildJob===job)structureBuildJob=null;
+            if(large)Blockbench.setProgress?.();
+        }
+    }
+    function structureBuildFeedback() {
+        const gesture=structureBuildGesture, hit=structureToolHoverHit;
+        const brush=gesture?.brush||activeStructureBrushDescriptor();
+        let intent=gesture?.intent||resolveStructureBuildIntent({button:0,...structureBuildModifiers});
+        const region=gesture?.region;
+        let position=region?.minimum || (['erase','replace','region_erase','pick'].includes(intent)
+            ?hit?.record&&getStructureGridPosition(hit.record):structurePlacementTargetForHit(hit));
+        const runtime=ensureLogicalRuntime(), record=position&&runtime?.byKey.get(spatialRecordKey(...position,brush.layer));
+        const erase=['erase','region_erase','pick'].includes(intent);
+        let valid=!!position && (brush.layer===0||Project.mcstructure_secondary_visible);
+        if(!region){
+            valid &&= !structureBuildBlocked(record,brush,runtime,intent==='replace');
+            if(!erase)valid &&= !brush.empty&&!AIR_BLOCKS.has(brush.block);
+            if(intent==='replace'||intent==='erase'||intent==='pick')valid &&= !!record;
+            if(intent==='place'||intent==='paint')valid &&= !record;
+            if(valid&&!erase)valid=structurePlacementAllowed(deriveStructurePlacementDescriptor(brush,hit,position),hit);
+        }
+        const name=tr('bedrock_structure.build.'+intent,({place:'Place',paint:'Paint',erase:'Erase',replace:'Replace',region_fill:'Fill region',region_erase:'Erase region',pick:'Pick block',navigate:'Navigate'})[intent]);
+        const dimensions=region?`${region.size.join(' × ')} · ${region.volume.toLocaleString()} ${tr('bedrock_structure.ui.blocks','blocks')}`:gesture?.samples.size>1?`${gesture.samples.size} ${tr('bedrock_structure.ui.blocks','blocks')}`:structureBlockDisplayName(brush.block);
+        const text=`${name} · ${dimensions} · ${trf('bedrock_structure.build.layer','Layer {0}',[brush.layer+1])}${valid?'':' · '+tr('bedrock_structure.build.blocked','Blocked / unavailable')}`;
+        return {intent,position,region,valid,text,icon:STRUCTURE_BUILD_ICONS[valid?intent:'invalid']||'block'};
+    }
+    function showStructurePreviewVolume(minimum,maximum,color,cells=null) {
+        // Large traces retain their complete bounds without allocating unbounded GPU instances.
+        const count=cells?.length<=4096?cells.length:1;
+        if(!structureBuildVolume || structureBuildVolume.instanceMatrix.count<count){
+            if(structureBuildVolume){
+                const index=Canvas.gizmos.indexOf(structureBuildVolume);if(index>=0)Canvas.gizmos.splice(index,1);
+                structureBuildVolume.removeFromParent();structureBuildVolume.geometry.dispose();structureBuildVolume.material.dispose();
+            }
+            structureBuildVolume=new THREE.InstancedMesh(new THREE.BoxGeometry(1,1,1),new THREE.MeshBasicMaterial({color,transparent:true,opacity:.18,depthWrite:false,depthTest:false,toneMapped:false}),Math.max(32,count));
+            structureBuildVolume.name='Terrain operation preview';structureBuildVolume.renderOrder=1199;
+            structureBuildVolume.userData.bedrockBoundsLine=true;structureBuildVolume.matrixAutoUpdate=false;structureBuildVolume.frustumCulled=false;
+            Canvas.scene.add(structureBuildVolume);Canvas.gizmos.push(structureBuildVolume);
+        }
+        optimizedPreview.root.updateWorldMatrix(true,false);structureBuildVolume.parent.updateWorldMatrix(true,false);
+        structureBuildVolume.matrix.copy(structureBuildVolume.parent.matrixWorld).invert().multiply(optimizedPreview.root.matrixWorld);
+        const matrix=new THREE.Matrix4(),position=new THREE.Vector3(),scale=new THREE.Vector3(),rotation=new THREE.Quaternion();
+        for(let i=0;i<count;i++){
+            if(cells&&cells.length<=4096){position.set(...cells[i].map(v=>(v+.5)*BLOCK_SIZE));scale.setScalar(BLOCK_SIZE);}
+            else{position.set(...minimum.map((v,axis)=>(v+maximum[axis])/2));scale.set(...minimum.map((v,axis)=>maximum[axis]-v));}
+            matrix.compose(position,rotation,scale);structureBuildVolume.setMatrixAt(i,matrix);
+        }
+        structureBuildVolume.count=count;structureBuildVolume.instanceMatrix.needsUpdate=true;
+        structureBuildVolume.material.color.setHex(color);structureBuildVolume.visible=true;structureBuildVolume.updateMatrixWorld(true);
+    }
+    function updateStructureBuildPreview() {
+        const feedback=structureBuildFeedback(), pointer=structureBuildPointer;
+        const normalState=feedback.intent!=='navigate'&&!Dialog.open&&!Menu.open;
+        if(!normalState){structureToolPreviewHelper.visible=false;return;}
+        if(feedback.position){
+            const minimum=(feedback.region?.minimum||feedback.position).map(v=>v*BLOCK_SIZE);
+            const maximum=(feedback.region?.maximum||feedback.position).map(v=>(v+1)*BLOCK_SIZE);
+            const destructive=['erase','region_erase'].includes(feedback.intent);
+            const color=feedback.valid?(destructive?STRUCTURE_GIZMO_COLORS.erase:STRUCTURE_GIZMO_COLORS.place):STRUCTURE_GIZMO_COLORS.warning;
+            structureToolPreviewHelper.material.color.setHex(color);
+            setBoundsLineHelper(structureToolPreviewHelper,minimum,maximum);structureToolPreviewHelper.visible=true;
+            const samples=structureBuildGesture?.samples;
+            const cells=!feedback.region&&samples?.size>1 ? Array.from(samples.values(),sample=>sample.position) : null;
+            if(cells){
+                for(const cell of cells)for(let axis=0;axis<3;axis++){
+                    minimum[axis]=Math.min(minimum[axis],cell[axis]*BLOCK_SIZE);
+                    maximum[axis]=Math.max(maximum[axis],(cell[axis]+1)*BLOCK_SIZE);
+                }
+                setBoundsLineHelper(structureToolPreviewHelper,minimum,maximum);
+            }
+            showStructurePreviewVolume(minimum,maximum,color,cells);
+            structureToolPreviewHelper.updateMatrixWorld?.(true);
+        }else structureToolPreviewHelper.visible=false;
+        if(pointer && (structureToolHoverHit||structureBuildGesture)){
+            if(!structureBuildCursor){
+                structureBuildCursor=document.createElement('span');structureBuildCursor.className='bedrock-build-cursor';
+                structureBuildCursor.style.cssText='position:fixed;pointer-events:none;z-index:40;display:flex;align-items:center;justify-content:center;gap:4px;padding:3px;border-radius:var(--border-radius,4px);background:var(--color-ui);color:var(--color-text);border:1px solid var(--color-border);font-size:var(--font-size);';
+                structureBuildCursor.setAttribute('role','status');document.body.appendChild(structureBuildCursor);
+            }
+            if(structureBuildCursor.dataset.icon!==feedback.icon){
+                const icon=Blockbench.getIconNode(feedback.icon);icon.setAttribute('aria-hidden','true');icon.style.cssText='display:block;flex:0 0 18px;width:18px;height:18px;line-height:18px;font-size:18px;margin:0;';
+                structureBuildCursor.replaceChildren(icon,document.createElement('span'));structureBuildCursor.dataset.icon=feedback.icon;
+            }
+            structureBuildCursor.lastChild.textContent=feedback.region?feedback.region.size.join(' × '):'';
+            structureBuildCursor.lastChild.hidden=!feedback.region;
+            structureBuildCursor.setAttribute('aria-label',feedback.text);structureBuildCursor.title=feedback.text;
+            structureBuildCursor.hidden=false;
+            structureBuildCursor.style.display='flex';
+            const rect=pointer.canvas.getBoundingClientRect();
+            structureBuildCursor.style.left=Math.max(rect.left,Math.min(pointer.x+18,rect.right-structureBuildCursor.offsetWidth-4))+'px';
+            structureBuildCursor.style.top=Math.max(rect.top,Math.min(pointer.y+18,rect.bottom-structureBuildCursor.offsetHeight-4))+'px';
+        }
+        const button=document.querySelector(`[data-terrain-action="${STRUCTURE_TOOL_IDS.build}"]`);
+        if(button){button.dataset.operation=feedback.intent;button.title=feedback.text;button.setAttribute('aria-label',feedback.text);}
+        Blockbench.setStatusBarText?.(feedback.text);
+    }
     function beginStructureViewportStroke(event, canvas) {
         const kind = structureToolKind();
         if (kind !== 'place' && kind !== 'erase') return false;
@@ -19793,6 +20768,11 @@ const BedrockStructureStudioPlugin = (() => {
             const canvas = event.target?.closest?.('canvas') || (event.target?.tagName === 'CANVAS' ? event.target : null);
             if (!canvas) return;
             const kind = structureToolKind();
+            if(kind==='build'){
+                if(Dialog.open||Menu.open||structureInputTargetIsEditable(event.target))return;
+                if(structureBuildJob){event.preventDefault();event.stopPropagation();return;}
+                beginStructureBuildGesture(event,canvas);return;
+            }
             if (event.altKey) { optimizedPointerGesture=null; return; }
             if (pointerButton === 0 && kind === 'select' && !event.altKey && beginStructureSelectionGizmoDrag(event)) {
                 optimizedPointerGesture = null;
@@ -19821,6 +20801,7 @@ const BedrockStructureStudioPlugin = (() => {
             };
         };
         optimizedRaycastHandler = event => {
+            if(finishStructureBuildGesture(event))return;
             if (finishStructureSelectionGizmoDrag(event)) return;
             if (finishStructureRegionSelection(event)) return;
             if (finishStructureViewportStroke(event)) return;
@@ -19868,6 +20849,7 @@ const BedrockStructureStudioPlugin = (() => {
         };
         optimizedHoverHandler = event => {
             if(terrainCreative)return;
+            if(continueStructureBuildGesture(event))return;
             if (continueStructureSelectionGizmoDrag(event)) return;
             if (continueStructureRegionSelection(event)) return;
             if (continueStructureViewportStroke(event)) return;
@@ -19886,6 +20868,8 @@ const BedrockStructureStudioPlugin = (() => {
                 const runtime = ensureLogicalRuntime();
                 if (!runtime) return;
                 const hit = raycastOptimizedBlockHitFromEvent(snapshot);
+                structureBuildModifiers={ctrlKey:event.ctrlKey,shiftKey:event.shiftKey,altKey:event.altKey,metaKey:event.metaKey};
+                structureBuildPointer=hit?{canvas:hit.canvas,x:event.clientX,y:event.clientY}:null;
                 structureToolHoverHit = hit;
                 runtime.hovered = activeStructureToolId() === STRUCTURE_TOOL_IDS.select ? hit?.record || null : null;
                 updateLogicalSelectionHelpers();
@@ -19896,6 +20880,11 @@ const BedrockStructureStudioPlugin = (() => {
                 : setTimeout(run, 16);
         };
         optimizedPointerCancelHandler = event => {
+            // Capture transfer can deliver an older target's loss after a new
+            // pointerdown. Only a real loss of this gesture's canvas cancels it.
+            if(event.type==='lostpointercapture'&&(!structureBuildGesture||event.target!==structureBuildGesture.canvas||structureBuildGesture.canvas.hasPointerCapture?.(structureBuildGesture.pointerId)))return;
+            if(structureBuildGesture)structureBuildLastCancel={reason:event?.type};
+            if(finishStructureBuildGesture(event,true))return;
             if (finishStructureSelectionGizmoDrag(event, {cancel: true})) return;
             if (finishStructureRegionSelection(event, {cancel: true})) return;
             if (finishStructureViewportStroke(event, {cancel: true})) return;
@@ -19905,6 +20894,12 @@ const BedrockStructureStudioPlugin = (() => {
         };
         optimizedKeyDownHandler = event => {
             if (!isStructureProject() || !isStructureModeSelected() || event.defaultPrevented || structureInputTargetIsEditable(event.target)) return;
+            if(event.key==='Escape'||((event.ctrlKey||event.metaKey)&&['z','y'].includes(String(event.key).toLowerCase()))){
+                if(structureBuildJob){structureBuildJob.cancelled=true;event.preventDefault();event.stopPropagation();return;}
+                if(structureBuildGesture){cancelStructureBuildGesture();updateStructureToolPreview();if(event.key==='Escape')event.preventDefault();}
+            }
+            structureBuildModifiers={ctrlKey:event.ctrlKey,shiftKey:event.shiftKey,altKey:event.altKey,metaKey:event.metaKey};
+            if(structureToolKind()==='build')updateStructureToolPreview();
             if (event.key === 'Escape' && (structureSelectionGizmoDrag || structureViewportStroke || structureRegionGesture)) {
                 if (structureSelectionGizmoDrag) finishStructureSelectionGizmoDrag(null, {cancel: true});
                 else if (structureRegionGesture) finishStructureRegionSelection(null, {cancel: true});
@@ -19925,6 +20920,14 @@ const BedrockStructureStudioPlugin = (() => {
             }
         };
         installTerrainQuickInputs();
+        structureBuildKeyUpHandler=event=>{
+            structureBuildModifiers={ctrlKey:event.ctrlKey,shiftKey:event.shiftKey,altKey:event.altKey,metaKey:event.metaKey};
+            if(isStructureProject()&&isStructureModeSelected()&&structureToolKind()==='build')updateStructureToolPreview();
+        };
+        structureBuildBlurHandler=()=>{cancelStructureBuildGesture();structureBuildModifiers={};structureToolHoverHit=null;if(structureBuildJob)structureBuildJob.cancelled=true;updateStructureToolPreview();};
+        document.addEventListener('keyup',structureBuildKeyUpHandler,true);
+        document.addEventListener('lostpointercapture',optimizedPointerCancelHandler,true);
+        window.addEventListener('blur',structureBuildBlurHandler);
         document.addEventListener('pointerdown', optimizedPointerDownHandler, true);
         document.addEventListener('pointerup', optimizedRaycastHandler, true);
         document.addEventListener('pointercancel', optimizedPointerCancelHandler, true);
@@ -19933,8 +20936,12 @@ const BedrockStructureStudioPlugin = (() => {
     }
 
     function uninstallOptimizedRaycastSelection() {
+        cancelStructureBuildGesture();if(structureBuildJob)structureBuildJob.cancelled=true;
         uninstallTerrainQuickInputs();
         if (typeof document !== 'undefined') {
+            document.removeEventListener('keyup',structureBuildKeyUpHandler,true);
+            document.removeEventListener('lostpointercapture',optimizedPointerCancelHandler,true);
+            window.removeEventListener('blur',structureBuildBlurHandler);
             if (optimizedPointerDownHandler) document.removeEventListener('pointerdown', optimizedPointerDownHandler, true);
             if (optimizedRaycastHandler) document.removeEventListener('pointerup', optimizedRaycastHandler, true);
             if (optimizedPointerCancelHandler) document.removeEventListener('pointercancel', optimizedPointerCancelHandler, true);
@@ -19958,6 +20965,8 @@ const BedrockStructureStudioPlugin = (() => {
     }
 
     function disposeLogicalSelectionHelpers() {
+        structureBuildCursor?.remove();structureBuildCursor=null;
+        if(structureBuildVolume){const i=Canvas.gizmos.indexOf(structureBuildVolume);if(i>=0)Canvas.gizmos.splice(i,1);structureBuildVolume.removeFromParent();structureBuildVolume.geometry.dispose();structureBuildVolume.material.dispose();structureBuildVolume=null;}
         for (const helper of [selectionHelper, hoverHelper, structureToolPreviewHelper]) {
             if (!helper) continue;
             if (window.Canvas && Array.isArray(Canvas.gizmos)) {
@@ -19996,6 +21005,23 @@ const BedrockStructureStudioPlugin = (() => {
 
     function addTranslations() {
         Language.addTranslations('en', {
+            'bedrock_structure.ui.build_tool':'Build',
+            'bedrock_structure.ui.tool_short.build':'Build',
+            'bedrock_structure.ui.build_tool.desc':'Click: place. Drag: camera. P: toggle painting. Ctrl: erase. Shift: replace / fill area. Ctrl+Shift: erase area. Middle click: pick. Right / Alt: camera. Esc: cancel.',
+            'bedrock_structure.build.place':'Place', 'bedrock_structure.build.paint':'Paint',
+            'bedrock_structure.build.erase':'Erase', 'bedrock_structure.build.replace':'Replace',
+            'bedrock_structure.build.region_fill':'Fill region', 'bedrock_structure.build.region_erase':'Erase region',
+            'bedrock_structure.build.pick':'Pick block', 'bedrock_structure.build.navigate':'Navigate camera',
+            'bedrock_structure.build.paint_toggle':'Paint on drag',
+            'bedrock_structure.build.paint_toggle.desc':'P · Toggle painting. Off: left drag orbits the camera; click still places a block.',
+            'bedrock_structure.build.left_drag':'Build · left drag',
+            'bedrock_structure.build.replace_existing':'Build regions · replace existing blocks',
+            'bedrock_structure.build.layer':'Layer {0}', 'bedrock_structure.build.blocked':'Blocked / unavailable',
+            'bedrock_structure.build.no_change':'No eligible cells · locked, occupied or block-entity data protected',
+            'bedrock_structure.build.cancelled':'Build cancelled.',
+            'bedrock_structure.build.processing':'Building region · Esc cancels',
+            'bedrock_structure.build.busy':'A Build operation is running. Wait or press Esc to cancel.',
+            'bedrock_structure.build.large_region':'{0} cells · {1}. Continue?',
             'bedrock_structure.ui.preview_summary': '{0} chunks · {1} visible faces\n{2}% hidden faces removed · {3} ms build',
             'bedrock_structure.ui.inventory.slot_short': 'Hotbar · {0}',
             'bedrock_structure.ui.state.persistent_bit': 'Persistent',
@@ -20017,7 +21043,7 @@ const BedrockStructureStudioPlugin = (() => {
             'bedrock_structure.ui.coordinates': 'Position',
             'bedrock_structure.ui.blocks': 'blocks',
             'bedrock_structure.ui.frame': 'Frame terrain',
-            'bedrock_structure.ui.brush_help': 'B · Place   X · Erase   P · Pick\n1–9 · Hotbar   E · Blocks',
+            'bedrock_structure.ui.brush_help': 'B · Build   P · Toggle painting   Ctrl · Erase   Shift · Replace / area\nMiddle click · Pick   1–9 · Hotbar   E · Blocks',
             'bedrock_structure.ui.data_note': 'Block states, version and block-entity NBT are preserved when exporting.',
             'bedrock_structure.ui.inventory.all': 'All blocks',
             'bedrock_structure.ui.shape.kind': 'Shape',
@@ -20450,6 +21476,35 @@ const BedrockStructureStudioPlugin = (() => {
             'bedrock_structure.undo.edit_entity': 'Edit structure entity data',
         });
         Language.addTranslations('es', {
+            'bedrock_structure.ui.build_tool':'Construir',
+            'bedrock_structure.ui.tool_short.build':'Construir',
+            'bedrock_structure.ui.build_tool.desc':'Clic: colocar. Arrastre: cámara. P: activar / desactivar pintura. Ctrl: borrar. Shift: reemplazar / rellenar área. Ctrl+Shift: borrar área. Clic central: tomar. Derecho / Alt: cámara. Esc: cancelar.',
+            'bedrock_structure.build.place':'Colocar', 'bedrock_structure.build.paint':'Pintar',
+            'bedrock_structure.build.erase':'Borrar', 'bedrock_structure.build.replace':'Reemplazar',
+            'bedrock_structure.build.region_fill':'Rellenar área', 'bedrock_structure.build.region_erase':'Borrar área',
+            'bedrock_structure.build.pick':'Tomar bloque', 'bedrock_structure.build.navigate':'Mover cámara',
+            'bedrock_structure.build.paint_toggle':'Pintar al arrastrar',
+            'bedrock_structure.build.paint_toggle.desc':'P · Alternar pintura. Desactivado: arrastrar gira la cámara; un clic coloca un bloque.',
+            'bedrock_structure.build.left_drag':'Construir · arrastre izquierdo',
+            'bedrock_structure.build.replace_existing':'Áreas de construcción · reemplazar bloques existentes',
+            'bedrock_structure.build.layer':'Capa {0}', 'bedrock_structure.build.blocked':'Bloqueado / no disponible',
+            'bedrock_structure.build.no_change':'Sin celdas editables · ocupación, bloqueo o datos de entidad protegidos',
+            'bedrock_structure.build.cancelled':'Construcción cancelada.',
+            'bedrock_structure.build.processing':'Construyendo área · Esc cancela',
+            'bedrock_structure.build.busy':'Hay una construcción en curso. Espera o pulsa Esc para cancelar.',
+            'bedrock_structure.build.large_region':'{0} celdas · {1}. ¿Continuar?',
+            'bedrock_structure.ui.shape_mappings': 'Formas de bloques',
+            'bedrock_structure.ui.shape_assignment': 'Asignación',
+            'bedrock_structure.ui.new_assignment': 'Nueva asignación',
+            'bedrock_structure.ui.edit_shapes': 'Editar asignaciones',
+            'bedrock_structure.ui.shape.reference': 'Modelo vanilla de otro bloque',
+            'bedrock_structure.ui.shape.reference_block': 'Bloque de referencia',
+            'bedrock_structure.ui.shape_mapping_hint': 'Se aplica a todos los bloques coincidentes del proyecto. Auto elimina la asignación. La forma individual de una celda tiene prioridad.',
+            'bedrock_structure.undo.shape_mappings': 'Asignar formas de bloques',
+            'bedrock_structure.field.grass_override': 'Personalizar color de césped',
+            'bedrock_structure.field.grass_color': 'Color de césped',
+            'bedrock_structure.field.water_override': 'Personalizar color de agua',
+            'bedrock_structure.field.water_color': 'Color de agua',
             'bedrock_structure.ui.preview_summary': '{0} chunks · {1} caras visibles\n{2}% de caras ocultas eliminadas · {3} ms de construcción',
             'bedrock_structure.ui.inventory.slot_short': 'Paleta · {0}',
             'bedrock_structure.ui.state.persistent_bit': 'Persistente',
@@ -20471,7 +21526,7 @@ const BedrockStructureStudioPlugin = (() => {
             'bedrock_structure.ui.coordinates': 'Posición',
             'bedrock_structure.ui.blocks': 'bloques',
             'bedrock_structure.ui.frame': 'Encuadrar terreno',
-            'bedrock_structure.ui.brush_help': 'B · Colocar   X · Borrar   P · Tomar\n1–9 · Paleta   E · Bloques',
+            'bedrock_structure.ui.brush_help': 'B · Construir   P · Alternar pintura   Ctrl · Borrar   Shift · Reemplazar / área\nClic central · Tomar   1–9 · Paleta   E · Bloques',
             'bedrock_structure.ui.data_note': 'Los estados, la versión y el NBT de entidades de bloque se conservan al exportar.',
             'bedrock_structure.ui.inventory.all': 'Todos',
             'bedrock_structure.ui.shape.kind': 'Forma',
@@ -21382,6 +22437,7 @@ const BedrockStructureStudioPlugin = (() => {
     }
 
     function compileCurrentProject() {
+        if (terrainWorldPreview?.project === Project) throw new Error('Materialize a bounded world region before exporting .mcstructure. The world preview contains render surfaces only.');
         return compileCurrentProjectResult().arrayBuffer;
     }
 
@@ -24953,6 +26009,7 @@ const BedrockStructureStudioPlugin = (() => {
         document.removeEventListener('pointerup',session.pointerUp,true);
         window.removeEventListener('blur',session.stop);session.hud.remove();
         if(document.pointerLockElement===session.canvas)document.exitPointerLock();
+        if(Project===session.project&&isStructureModeSelected())selectStructureTool(session.originalTool||STRUCTURE_TOOL_IDS.build);
         structureToolHoverHit=null;updateStructureToolPreview();updateLogicalSelectionHelpers();updateBoundsHelper();
         structureHotbarRoot?.classList.remove('is-creative');
         for(const rails of structureViewportRails.values()) {
@@ -24974,6 +26031,7 @@ const BedrockStructureStudioPlugin = (() => {
         const positionLabel=document.createElement('span');positionLabel.style.cssText='position:absolute;font-size:12px;font-variant-numeric:tabular-nums;padding:3px 8px;background:var(--color-back);border-radius:6px;transform:translateX(-50%);';
         hud.append(cross,help,positionLabel);document.body.append(hud);
         const session={project:Project,preview,canvas,hud,settings,keys:new Set(),buttons:new Set(),frame:null,controlsEnabled:preview.controls.enabled,
+            originalTool:activeStructureToolId(),
             originalFov:preview.camPers.fov,originalUpdate:preview.controls.update,lastTime:performance.now(),lastHover:0,lastBuild:0,lastHud:0,startEvent:triggerEvent};
         terrainCreative=session;
         // enabled controls still update in Preview.render(). Suspend only this
@@ -25332,19 +26390,48 @@ const BedrockStructureStudioPlugin = (() => {
     }
 
     const terrainGeometrySnapshots = new WeakMap();
-    function createTerrainLinkSnapshot() {
+    const terrainConnectedClipSnapshots = new WeakMap();
+    function createTerrainLinkSnapshot(options = {}) {
         if (!isStructureProject()) return null;
+        // Auto-backups call this hook too. A transient render workload has no
+        // authoritative editable cells; omit the Scene Link cache without an
+        // error dialog on every backup. Explicit .mcstructure export is guarded.
+        if (terrainWorldPreview && options.includeWorldPreview !== true) return null;
+        const worldPreview = terrainWorldPreview?.project === Project ? terrainWorldPreview : null;
+        if (worldPreview && !worldPreview.stats.complete) throw new Error('Wait for the world preview to finish before exporting its Scene Link.');
         // A saved terrain must contain the whole render cache, including sections
         // still queued or temporarily culled by the editor camera.
         clearTimeout(optimizedRebuildTimer);
         optimizedRebuildTimer = null;
-        if (!optimizedPreview || optimizedPendingFullRebuild) buildOptimizedPreview();
-        else if (optimizedPendingDirtyPositions.size) rebuildOptimizedSections(Array.from(optimizedPendingDirtyPositions.values()), {allowDuringProgressive:true,preserveGeneration:true});
-        optimizedPendingFullRebuild = false;
-        optimizedPendingDirtyPositions.clear();
-        optimizedPreview?.finishPendingBuild?.();
-        const preview = optimizedPreview;
+        if (!worldPreview) {
+            if (!optimizedPreview || optimizedPendingFullRebuild) buildOptimizedPreview();
+            else if (optimizedPendingDirtyPositions.size) rebuildOptimizedSections(Array.from(optimizedPendingDirtyPositions.values()), {allowDuringProgressive:true,preserveGeneration:true});
+            optimizedPendingFullRebuild = false;
+            optimizedPendingDirtyPositions.clear();
+            optimizedPreview?.finishPendingBuild?.();
+        }
+        const preview = worldPreview || optimizedPreview;
         if (!preview) return null;
+        // Explicit snapshot/save work only. Editing/preview does not rasterize
+        // static terrain joins or add it to the live scene-wide clip search.
+        // Fail before allocating base64 strings for an explicitly exported world.
+        // Ordinary editor saves retain their existing snapshot behavior.
+        const names = ['position','normal','uv','color','bedrockTileUv','bedrockAtlasRect','bedrockGreedyRepeat','bedrockBlockAo'];
+        let vertexBytes = 0;
+        for (const mesh of preview.chunkMeshes) {
+            for (const name of names) vertexBytes += mesh.geometry.getAttribute(name)?.array.byteLength || 0;
+            vertexBytes += mesh.geometry.index?.array.byteLength || 0;
+        }
+        const snapshotMiB = Number(options.maxSnapshotMiB ?? 256);
+        if (worldPreview && (!Number.isFinite(snapshotMiB) || snapshotMiB <= 0 || vertexBytes * 4 / 3 > snapshotMiB * 1048576)) {
+            throw new RangeError('World Scene Link exceeds maxSnapshotMiB; export a smaller region or set a larger explicit snapshot budget.');
+        }
+        const connectedClip = typeof window !== 'undefined'
+            ? window.RendercraftConnectedBevel?.bakeTerrainConnectedClip?.(Array.from(preview.chunkMeshes)) : null;
+        const connectedClipBytes = connectedClip ? Array.from(connectedClip.values()).reduce((bytes,clip)=>bytes+clip.data.byteLength,0) : 0;
+        if (worldPreview && (vertexBytes + connectedClipBytes) * 4 / 3 > snapshotMiB * 1048576) {
+            throw new RangeError('World Scene Link including connected clip exceeds maxSnapshotMiB.');
+        }
         const textures = [], textureIds = new Map(), sections = [];
         const textureRef = texture => {
             if (!texture?.image) return null;
@@ -25376,14 +26463,33 @@ const BedrockStructureStudioPlugin = (() => {
             for (const [name,attribute] of Object.entries(mesh.geometry.attributes)) {
                 // Render attributes only: no cell records or triangle-owner arrays.
                 if (cached?.signature===signature) break;
-                if (!['position','normal','uv','color','bedrockTileUv','bedrockAtlasRect','bedrockGreedyRepeat','bedrockBlockAo'].includes(name)) continue;
+                if (!names.includes(name)) continue;
                 const array = attribute.array;
                 attributes[name] = {itemSize:attribute.itemSize,type:array.constructor.name,normalized:attribute.normalized === true,
                     data:bytesToBase64(new Uint8Array(array.buffer,array.byteOffset,array.byteLength))};
             }
             const index = mesh.geometry.index;
             const indexed = cached?.signature===signature ? cached.data.index : index ? {type:index.array.constructor.name,data:bytesToBase64(new Uint8Array(index.array.buffer,index.array.byteOffset,index.array.byteLength))} : null;
-            const geometryData={attributes,index:indexed,groups:mesh.geometry.groups.map(group=>({...group}))};
+            // Preserve logical UV domains as compact runs. Expanding a material
+            // group into one object per triangle on import scales with the world.
+            const faceRuns = [];
+            for (const range of mesh.geometry.userData?.saLogicalFaceRanges || []) {
+                const run = {start:range.start,count:range.count,faceSize:range.count,materialIndex:range.materialIndex,
+                    connectedClip:range.connectedClip !== false,
+                    ...(range.noTextureRepeat === true ? {noTextureRepeat:true} : {}),
+                    ...(range.uvTextureSize ? {uvTextureSize:range.uvTextureSize.slice(0,2)} : {})};
+                const previous = faceRuns[faceRuns.length - 1];
+                if (previous && previous.start + previous.count === run.start && previous.faceSize === run.faceSize &&
+                    previous.materialIndex === run.materialIndex && previous.connectedClip === run.connectedClip &&
+                    previous.noTextureRepeat === run.noTextureRepeat && String(previous.uvTextureSize) === String(run.uvTextureSize)) previous.count += run.count;
+                else faceRuns.push(run);
+            }
+            const geometryData={attributes,index:indexed,groups:mesh.geometry.groups.map(group=>({...group})),face_runs:faceRuns};
+            const clip = connectedClip?.get(mesh.geometry);
+            if (clip) {
+                if (!terrainConnectedClipSnapshots.has(clip)) terrainConnectedClipSnapshots.set(clip,{...clip,data:bytesToBase64(clip.data)});
+                geometryData.connected_clip = terrainConnectedClipSnapshots.get(clip);
+            }
             terrainGeometrySnapshots.set(mesh.geometry,{signature,data:geometryData});
             const materials = sourceMaterialsForChunk(mesh).map(material => ({map:textureRef(material.map),color:material.color?.getHex() ?? 0xffffff,
                 alphaTest:material.alphaTest || 0,transparent:material.transparent === true,opacity:material.opacity ?? 1,
@@ -25393,9 +26499,19 @@ const BedrockStructureStudioPlugin = (() => {
             for (let parent=mesh.parent;parent&&parent!==Canvas.scene;parent=parent.parent) if (!parent.visible) visible=false;
             sections.push({type:'mesh',uuid:`terrain-section-${mesh.userData?.chunkId || mesh.uuid}`,name:owner?.name || 'Terrain section',visibility:visible,
                 matrix:new THREE.Matrix4().multiplyMatrices(inverse,mesh.matrixWorld).toArray(),
+                terrain_layer:Number(mesh.userData?.bedrockChunkLayer || 0),terrain_render_layer:mesh.userData?.bedrockRenderLayer || 'opaque',
                 terrain_geometry:geometryData,terrain_materials:materials});
         }
-        return {version:1,centered_grid:Format.centered_grid===true,uuid:'lightflow-terrain-root',name:Project.name || 'Minecraft terrain',blockCount:Number(ensureLogicalRuntime()?.recordCount || 0),sections,textures};
+        return {version:1,centered_grid:Format.centered_grid===true,uuid:'lightflow-terrain-root',name:Project.name || 'Minecraft terrain',
+            blockCount:Number(worldPreview?.stats.occupied || ensureLogicalRuntime()?.recordCount || 0),
+            performance:{prebatched:true,geometryBytes:vertexBytes,connectedClipBytes,maxGeometryBytes:worldPreview?.geometryLimit || 384 * 1048576},sections,textures};
+    }
+
+    function createWorldSceneLinkModel(options = {}) {
+        if (!terrainWorldPreview || terrainWorldPreview.project !== Project) throw new Error('A complete world preview is required.');
+        return {meta:{format_version:'4.12',model_format:'free',box_uv:false},name:Project.name || 'Minecraft terrain',
+            resolution:{width:16,height:16},elements:[],outliner:[],textures:[],
+            lightflow_terrain:createTerrainLinkSnapshot({...options,includeWorldPreview:true})};
     }
 
     function sourceMaterialsForChunk(mesh) {
@@ -27499,9 +28615,7 @@ const BedrockStructureStudioPlugin = (() => {
                 const previews = Array.isArray(window.Preview?.all) ? Preview.all : [window.Preview?.selected].filter(Boolean);
                 previews.forEach(preview => preview?.render?.());
                 window.LightManagerMarkShadowsDirty?.({scene: true});
-                if (window.LightflowAnimationRuntime) {
-                    window.LightflowAnimationRuntime.sceneMotionEpoch = (Number(window.LightflowAnimationRuntime.sceneMotionEpoch) || 0) + 1;
-                }
+                window.LightflowAnimationRuntime?.markSceneMotion?.();
             }
         }, 50);
     }
@@ -28235,6 +29349,8 @@ const BedrockStructureStudioPlugin = (() => {
             scheduleTextureReady(texture, () => {
                 colorMapRefreshPending.delete(mapName);
                 colorMapSampleCache.clear();
+                faceDescriptorCache.clear();
+                customMaterialDescriptorCache.clear();
                 if (disposed) return;
                 try {
                     if (Project?.mcstructure_optimized_preview) scheduleOptimizedPreviewRebuild(0);
@@ -28257,7 +29373,8 @@ const BedrockStructureStudioPlugin = (() => {
             if (!filePath) return fallback;
             const texture = getTexture(filePath);
             const canvas = textureCanvas(texture);
-            if (!canvas || !climate) {
+            if (!climate) return fallback;
+            if (!canvas) {
                 refreshTintedBlocksWhenReady(texture, mapName);
                 return fallback;
             }
@@ -28283,6 +29400,7 @@ const BedrockStructureStudioPlugin = (() => {
         }
 
         function grassTintColor() {
+            if (Project?.mcstructure_grass_color_override) return normalizeTintHex(Project.mcstructure_grass_color_override).css;
             const spec = biomeAppearanceColorSpec('minecraft:grass_appearance');
             if (spec.color) return spec.color;
             const grassVariants = terrainVariants('grass_side');
@@ -28290,7 +29408,7 @@ const BedrockStructureStudioPlugin = (() => {
                 Math.max(0, grassVariants.length - 2),
                 Math.round(Number(Project?.mcstructure_biome_tint_index) || 0)
             ));
-            const fallback = grassVariants[tintIndex]?.overlayColor || '#79c05a';
+            const fallback = (grassVariants.length > 1 ? grassVariants[tintIndex]?.overlayColor : terrainVariants('grass_carried')[0]?.overlayColor) || '#79c05a';
             return sampleBiomeColorMap(spec.colorMap || 'grass', fallback);
         }
 
@@ -28347,7 +29465,8 @@ const BedrockStructureStudioPlugin = (() => {
             // entries generally point at grayscale alpha-tested textures and do
             // not need an overlay_color field to participate in biome tinting.
             if ([
-                'short_grass', 'tall_grass', 'fern', 'large_fern', 'tallgrass', 'bush'
+                'short_grass', 'tall_grass', 'fern', 'large_fern', 'tallgrass', 'bush',
+                'reeds', 'sugar_cane', 'seagrass', 'tall_seagrass', 'potted_fern'
             ].includes(identifier)) return 'grass';
             if (identifier === 'double_plant') {
                 const type = String(states.double_plant_type ?? states.double_plant_type_bit ?? '').toLowerCase();
@@ -29001,7 +30120,7 @@ const BedrockStructureStudioPlugin = (() => {
             const materialDefinition = selected.definition;
             const alias = typeof materialDefinition.texture === 'string' ? materialDefinition.texture : null;
             if (!alias) return null;
-            const biomeKey = `${Project?.mcstructure_biome || 'minecraft:plains'}:${Number(Project?.mcstructure_biome_tint_index) || 0}`;
+            const biomeKey = `${Project?.mcstructure_biome || 'minecraft:plains'}:${Number(Project?.mcstructure_biome_tint_index) || 0}:${Project?.mcstructure_grass_color_override || ''}:${Project?.mcstructure_water_color_override || ''}`;
             const leafModeKey = renderOptions?.forceOpaqueLeaves === true ? 'opaque-leaves' : 'fancy-leaves';
             const cacheKey = `${context.permutation}|${selected.key}|${materialToken}|${biomeKey}|${leafModeKey}`;
             if (customMaterialDescriptorCache.has(cacheKey)) return customMaterialDescriptorCache.get(cacheKey);
@@ -29089,7 +30208,7 @@ const BedrockStructureStudioPlugin = (() => {
             const legacy = biomesClient?.biomes?.[biomeId] || biomesClient?.biomes?.default || {};
             const opacity = modern.surface_opacity ?? legacy.water_surface_transparency;
             return {
-                color: modern.surface_color || legacy.water_surface_color || '#44AFF5',
+                color: Project?.mcstructure_water_color_override || modern.surface_color || legacy.water_surface_color || '#44AFF5',
                 transparency: Number.isFinite(Number(opacity)) ? Number(opacity) : 0.65,
             };
         }
@@ -29244,6 +30363,12 @@ const BedrockStructureStudioPlugin = (() => {
             let alias = typeof reference === 'string' ? reference : firstTextureReference(reference);
             let variants = terrainVariants(reference);
             if (!variants.length && alias) variants = terrainVariants(alias);
+            // Bedrock's water tint is applied to its neutral texture; tinting
+            // the precolored blue texture would multiply the color twice.
+            if (/^(?:minecraft:)?(?:flowing_)?water$/.test(String(blockName)) && alias && !alias.endsWith('_grey')) {
+                const grey = terrainVariants(alias + '_grey');
+                if (grey.length && resolveFile(grey[0].path)) { alias += '_grey'; variants = grey; }
+            }
             let variant = selectedVariant(alias || '', variants, states, renderOptions);
             if (!variant || !resolveFile(variant.path)) {
                 const identifier = String(blockName).replace(/^.*:/, '');
@@ -29404,7 +30529,7 @@ const BedrockStructureStudioPlugin = (() => {
                 name: String(blockName || 'minecraft:stone'),
                 states: states || {},
             });
-            const biomeKey = `${Project?.mcstructure_biome || 'minecraft:plains'}:${Number(Project?.mcstructure_biome_tint_index) || 0}:${Project?.mcstructure_fancy_leaves !== false}`;
+            const biomeKey = `${Project?.mcstructure_biome || 'minecraft:plains'}:${Number(Project?.mcstructure_biome_tint_index) || 0}:${Project?.mcstructure_fancy_leaves !== false}:${Project?.mcstructure_grass_color_override || ''}:${Project?.mcstructure_water_color_override || ''}`;
             const leafModeKey = renderOptions?.forceOpaqueLeaves === true ? 'opaque-leaves' : 'fancy-leaves';
             const cacheKey = `${permutation}|${face}|${biomeKey}|${leafModeKey}${positionSensitive ? `|${position.join(',')}` : ''}`;
             if (faceDescriptorCache.has(cacheKey)) {
@@ -29898,6 +31023,43 @@ form.on('change',({result})=>{if(editable){const index=ids.indexOf(id);ids[index
         if (rootPath) loadResourcePack(rootPath,{forceReload:true});
     }
 
+    function showBlockShapeMappings() {
+        if (!isStructureProject()) return;
+        const parent = Dialog.open; parent?.hide?.();
+        const mappings = {...projectBlockShapeMappings()}, identifiers = structureInventoryCatalog().map(item=>item.block);
+        let selected = '__new__';
+        createStructureDialog({
+            id:'bedrock_structure_shape_mappings',title:tr('bedrock_structure.ui.shape_mappings','Block shapes'),width:600,
+            form:{
+                assignment:{type:'select',label:tr('bedrock_structure.ui.shape_assignment','Assignment'),value:selected,options:{__new__:tr('bedrock_structure.ui.new_assignment','New assignment'),...Object.fromEntries(Object.entries(mappings).map(([id,shape])=>[id,`${id} → ${shape}`]))}},
+                block:{type:window.FormElement?.types?.block_select?'block_select':'text',label:'bedrock_structure.field.block',value:Project.mcstructure_default_block||'minecraft:stone',options:()=>identifiers},
+                shape:{type:'select',label:'bedrock_structure.ui.shape',value:'auto',options:{...blockShapeOverrideOptions(),vanilla:{name:tr('bedrock_structure.ui.shape.reference','Vanilla model of another block')}}},
+                reference:{type:window.FormElement?.types?.block_select?'block_select':'text',label:tr('bedrock_structure.ui.shape.reference_block','Reference block'),value:'minecraft:stone',options:()=>identifiers,condition:form=>form.shape==='vanilla'},
+                hint:{type:'info',text:tr('bedrock_structure.ui.shape_mapping_hint','Applies to every matching block in this project. Auto removes the assignment. A cell-specific shape takes priority.')}
+            },
+            onFormChange(form){
+                if(form.assignment===selected)return;
+                selected=form.assignment;
+                if(selected==='__new__')return;
+                const value=mappings[selected]||'auto';
+                this.setFormValues({block:selected,shape:value.startsWith('vanilla:')?'vanilla':value,reference:value.startsWith('vanilla:')?value.slice(8):'minecraft:stone'},false);
+            },
+            onConfirm(form){
+                const id=String(form.block||'').trim();
+                if(!/^[a-z0-9_.-]+:[a-z0-9_./-]+$/.test(id)) {Blockbench.showQuickMessage('Invalid block identifier');return false;}
+                const value=form.shape==='vanilla'?'vanilla:'+String(form.reference||'').trim():form.shape;
+                if(form.shape==='vanilla'&&!/^vanilla:[a-z0-9_.-]+:[a-z0-9_./-]+$/.test(value)){Blockbench.showQuickMessage('Invalid reference identifier');return false;}
+                runLogicalUndo(tr('bedrock_structure.undo.shape_mappings','Assign block shapes'),()=>{
+                    if(selected!=='__new__'&&selected!==id)delete mappings[selected];
+                    if(value==='auto')delete mappings[id];else mappings[id]=value;
+                    Project.mcstructure_shape_mappings_json=JSON.stringify(mappings);
+                    shapeCache.clear();clearBlockBehaviorCache();return true;
+                },{targets:{keys:[]}});
+                scheduleOptimizedPreviewRebuild(0);syncStructurePanel();parent?.show?.();
+            },
+            onCancel(){parent?.show?.();}
+        }).show();
+    }
     function showStructureSettings() {
         if (!isStructureProject()) return;
         const origin = Project.mcstructure_world_origin || [0, 0, 0];
@@ -29906,6 +31068,9 @@ form.on('change',({result})=>{if(editable){const index=ids.indexOf(id);ids[index
             title: 'bedrock_structure.dialog.settings',
             width: 580,
             form: {
+                shape_mappings:{type:'buttons',label:tr('bedrock_structure.ui.shape_mappings','Block shapes'),buttons:[tr('bedrock_structure.ui.edit_shapes','Edit assignments')],click:showBlockShapeMappings},
+                build_left_drag:{type:'select',label:'bedrock_structure.build.left_drag',value:readStudioPreferences().buildLeftDrag||'navigate',options:{paint:'bedrock_structure.build.paint',navigate:'bedrock_structure.build.navigate'}},
+                build_replace_existing:{type:'checkbox',label:'bedrock_structure.build.replace_existing',value:readStudioPreferences().buildReplaceExisting===true},
                 origin_x: {label: 'bedrock_structure.field.origin_x', type: 'number', value: origin[0], step: 1},
                 origin_y: {label: 'bedrock_structure.field.origin_y', type: 'number', value: origin[1], step: 1},
                 origin_z: {label: 'bedrock_structure.field.origin_z', type: 'number', value: origin[2], step: 1},
@@ -29962,6 +31127,10 @@ form.on('change',({result})=>{if(editable){const index=ids.indexOf(id);ids[index
                     type: 'checkbox',
                     value: Project.mcstructure_fancy_leaves !== false,
                 },
+                grass_override_enabled: {type:'checkbox',label:tr('bedrock_structure.field.grass_override','Override grass color'),value:!!Project.mcstructure_grass_color_override},
+                grass_color_override: {type:'color',label:tr('bedrock_structure.field.grass_color','Grass color'),value:Project.mcstructure_grass_color_override || '#79c05a',condition:form=>!!form.grass_override_enabled},
+                water_override_enabled: {type:'checkbox',label:tr('bedrock_structure.field.water_override','Override water color'),value:!!Project.mcstructure_water_color_override},
+                water_color_override: {type:'color',label:tr('bedrock_structure.field.water_color','Water color'),value:Project.mcstructure_water_color_override || '#44aff5',condition:form=>!!form.water_override_enabled},
             },
             onConfirm(result) {
                 try {
@@ -29979,6 +31148,8 @@ form.on('change',({result})=>{if(editable){const index=ids.indexOf(id);ids[index
                     const updated = runLogicalUndo(
                         tr('bedrock_structure.undo.edit_settings', 'Edit structure settings'),
                         () => {
+                            writeStudioPreferences({buildLeftDrag:result.build_left_drag==='paint'?'paint':'navigate',buildReplaceExisting:result.build_replace_existing===true});
+                            BarItems.bedrock_structure_paint_drag?.set?.(result.build_left_drag==='paint');
                             Project.mcstructure_world_origin = nextOrigin;
                             Project.mcstructure_default_block = defaultBlock.includes(':')
                                 ? defaultBlock
@@ -29989,6 +31160,8 @@ form.on('change',({result})=>{if(editable){const index=ids.indexOf(id);ids[index
                             setSecondaryLayerVisible(Boolean(result.secondary_visible), {rebuild: false, undo: false});
                             Project.mcstructure_biome = String(result.biome || 'minecraft:plains').trim() || 'minecraft:plains';
                             Project.mcstructure_biome_tint_index = Math.max(0, Math.min(16, Math.round(Number(result.biome_tint_index) || 0)));
+                            Project.mcstructure_grass_color_override = result.grass_override_enabled ? '#' + new THREE.Color(String(result.grass_color_override)).getHexString() : '';
+                            Project.mcstructure_water_color_override = result.water_override_enabled ? '#' + new THREE.Color(String(result.water_color_override)).getHexString() : '';
                             Project.mcstructure_fancy_leaves = result.fancy_leaves !== false;
                             buildOptimizedPreview();
                             Project.saved = false;
@@ -30691,6 +31864,14 @@ form.on('change',({result})=>{if(editable){const index=ids.indexOf(id);ids[index
     }
 
     const structureViewportRails = new Map();
+    let structureViewportSyncFrame = null;
+    function scheduleStructureViewportSync() {
+        if (structureViewportSyncFrame !== null) return;
+        structureViewportSyncFrame = requestAnimationFrame(() => {
+            structureViewportSyncFrame = null;
+            updateStructureHotbarPosition();
+        });
+    }
 
     function syncStructureViewportRails() {
         const visible = isStructureProject() && isStructureModeSelected();
@@ -30741,11 +31922,8 @@ form.on('change',({result})=>{if(editable){const index=ids.indexOf(id);ids[index
                 const divider = side => {
                     const node=document.createElement('div');node.className='lightflow_viewport_tools_divider';node.setAttribute('role','separator');rails[side].appendChild(node);
                 };
+                add('left',STRUCTURE_TOOL_IDS.build,'construction',tr('bedrock_structure.ui.build_tool','Build'));
                 add('left',STRUCTURE_TOOL_IDS.select,'ads_click','Select');
-                divider('left');
-                add('left',STRUCTURE_TOOL_IDS.place,'add_box','Place');
-                add('left',STRUCTURE_TOOL_IDS.erase,'backspace','Erase');
-                add('left',STRUCTURE_TOOL_IDS.pick,'colorize','Pick block');
                 divider('left');
                 add('left','bedrock_structure_inventory','apps',tr('bedrock_structure.action.inventory','Block inventory'));
                 add('left','terrain_fly','sports_esports',tr('bedrock_structure.ui.creative','Build / fly · F'),()=>startTerrainCreative());
@@ -31225,6 +32403,7 @@ form.on('change',({result})=>{if(editable){const index=ids.indexOf(id);ids[index
                 .bedrock_structure_viewport_tools[hidden] {display:none !important;}
                 .bedrock_structure_viewport_tools .lightflow_viewport_tool {position:relative;display:grid;place-items:center;width:30px !important;min-width:30px !important;height:30px;min-height:30px;padding:0;margin:0;border:0;border-radius:8px;background:transparent;color:var(--color-text);}
                 .bedrock_structure_viewport_tools .lightflow_viewport_tool > .material-icons {font-size:20px;}
+                .bedrock_structure_viewport_tools .lightflow_viewport_tool > .icon {display:block;width:20px;height:20px;line-height:20px;margin:0;}
                 .bedrock_structure_viewport_tools .lightflow_viewport_tool:hover,
                 .bedrock_structure_viewport_tools .lightflow_viewport_tool.selected {background:var(--color-selected);color:var(--color-accent);}
                 .bedrock_structure_viewport_tools .lightflow_viewport_tool:disabled {opacity:.4;cursor:default;}
@@ -31489,7 +32668,8 @@ form.on('change',({result})=>{if(editable){const index=ids.indexOf(id);ids[index
                 #bedrock_structure_hotbar button {min-width:30px; width:30px; height:30px; border-radius:0px;}
                 #bedrock_structure_hotbar .bedrock-structure-hotbar-grip {width:12px; flex:0 0 12px; min-width:12px;}
                 #bedrock_structure_hotbar .bedrock-structure-hotbar-slots {gap:2px;}
-                #bedrock_structure_hotbar .bedrock-structure-hotbar-thumb {width:26px; height:26px; padding-right: 1.5px; }
+                #bedrock_structure_hotbar .bedrock-structure-hotbar-slot {display:grid;place-items:center;padding:0;}
+                #bedrock_structure_hotbar .bedrock-structure-hotbar-thumb {width:26px;height:26px;padding:0;margin:0;}
                 #bedrock_structure_hotbar .bedrock-structure-hotbar-layer,
                 #bedrock_structure_hotbar .bedrock-structure-hotbar-layer-toggle,
                 #bedrock_structure_hotbar .bedrock-structure-hotbar-tool {display:none;}
@@ -31865,16 +33045,7 @@ form.on('change',({result})=>{if(editable){const index=ids.indexOf(id);ids[index
                 value: cube?.mcstructure_shape_override || 'auto',
                 show_value_text: true,
                 background: 'transparent',
-                options: {
-                    auto: {name: tr('bedrock_structure.ui.shape.auto', 'Auto'), icon: 'auto_awesome'},
-                    full: {name: tr('bedrock_structure.ui.shape.full', 'Full cube'), icon: 'check_box_outline_blank'},
-                    slab: {name: tr('bedrock_structure.ui.shape.slab', 'Slab'), icon: 'horizontal_rule'},
-                    stairs: {name: tr('bedrock_structure.ui.shape.stairs', 'Stairs'), icon: 'stairs'},
-                    fence: {name: tr('bedrock_structure.ui.shape.fence', 'Fence'), icon: 'fence'},
-                    wall: {name: tr('bedrock_structure.ui.shape.wall', 'Wall'), icon: 'view_week'},
-                    cross: {name: tr('bedrock_structure.ui.shape.cross', 'Cross plant'), icon: 'grass'},
-                    none: {name: tr('bedrock_structure.ui.shape.none', 'No geometry'), icon: 'visibility_off'}
-                },
+                options: blockShapeOverrideOptions(),
                 condition: inCell,
             },
             block_layer: {
@@ -32812,6 +33983,8 @@ form.on('change',({result})=>{if(editable){const index=ids.indexOf(id);ids[index
         if (structureMode || typeof Mode === 'undefined') return;
         if (typeof Tool !== 'undefined') {
             const toolSelected = () => {
+                cancelStructureBuildGesture();
+                if(structureBuildJob)structureBuildJob.cancelled=true;
                 structureToolHoverHit = null;
                 const runtime = isStructureProject() ? ensureLogicalRuntime() : null;
                 if (runtime) runtime.hovered = null;
@@ -32819,9 +33992,15 @@ form.on('change',({result})=>{if(editable){const index=ids.indexOf(id);ids[index
                 updateStructureToolPreview();
                 refreshStructureHotbar();
                 refreshStructureToolStatus();
-                structureLeftTab = ['place', 'pick', 'erase'].includes(structureToolKind()) ? 'build' : 'selection';
+                structureLeftTab = ['build','place', 'pick', 'erase'].includes(structureToolKind()) ? 'build' : 'selection';
+                writeStudioPreferences({terrainTool:structureToolKind()==='select'?'select':'build'});
                 syncStructurePanel();
             };
+            structureBuildTool = new Tool(STRUCTURE_TOOL_IDS.build, {
+                name:'bedrock_structure.ui.build_tool',description:'bedrock_structure.ui.build_tool.desc',
+                icon:'construction',category:'tools',modes:[STRUCTURE_MODE_ID],selectElements:false,toolbar:'main_tools',
+                keybind:typeof Keybind!=='undefined'?new Keybind({key:'b'}):undefined,onSelect:toolSelected,
+            });
             structureSelectTool = new Tool(STRUCTURE_TOOL_IDS.select, {
                 name: 'bedrock_structure.ui.select_tool',
                 description: 'bedrock_structure.ui.select_tool.desc',
@@ -32837,6 +34016,7 @@ form.on('change',({result})=>{if(editable){const index=ids.indexOf(id);ids[index
                 icon: 'select_all',
                 category: 'tools',
                 modes: [STRUCTURE_MODE_ID],
+                condition: () => false,
                 selectElements: false,
                 keybind: typeof Keybind !== 'undefined' ? new Keybind({key: 'r'}) : undefined,
                 onSelect: () => selectStructureTool(STRUCTURE_TOOL_IDS.select),
@@ -32847,9 +34027,9 @@ form.on('change',({result})=>{if(editable){const index=ids.indexOf(id);ids[index
                 icon: 'add_box',
                 category: 'tools',
                 modes: [STRUCTURE_MODE_ID],
+                condition: () => terrainCreative,
                 selectElements: false,
-                keybind: typeof Keybind !== 'undefined' ? new Keybind({key: 'b'}) : undefined,
-                onSelect: toolSelected,
+                onSelect: () => {if(terrainCreative)toolSelected();else selectStructureTool(STRUCTURE_TOOL_IDS.build);},
             });
             structureEraseTool = new Tool(STRUCTURE_TOOL_IDS.erase, {
                 name: 'bedrock_structure.ui.erase_tool',
@@ -32857,6 +34037,7 @@ form.on('change',({result})=>{if(editable){const index=ids.indexOf(id);ids[index
                 icon: 'ink_eraser',
                 category: 'tools',
                 modes: [STRUCTURE_MODE_ID],
+                condition: () => false,
                 selectElements: false,
                 keybind: typeof Keybind !== 'undefined' ? new Keybind({key: 'x'}) : undefined,
                 onSelect: toolSelected,
@@ -32867,8 +34048,8 @@ form.on('change',({result})=>{if(editable){const index=ids.indexOf(id);ids[index
                 icon: 'colorize',
                 category: 'tools',
                 modes: [STRUCTURE_MODE_ID],
+                condition: () => false,
                 selectElements: false,
-                keybind: typeof Keybind !== 'undefined' ? new Keybind({key: 'p'}) : undefined,
                 onSelect: toolSelected,
             });
         }
@@ -32876,10 +34057,13 @@ form.on('change',({result})=>{if(editable){const index=ids.indexOf(id);ids[index
             name: tr('bedrock_structure.ui.mode', 'Structure'),
             icon: 'lightflow:grassblock',
             category: 'navigate',
-            default_tool: structureSelectTool?.id || 'move_tool',
+            default_tool: structureBuildTool?.id || 'move_tool',
             selectElements: true,
             condition: {formats: [FORMAT_ID]},
             onSelect() {
+                cancelStructureBuildGesture();
+                const saved=readStudioPreferences().terrainTool;
+                selectStructureTool(saved==='select'?STRUCTURE_TOOL_IDS.select:STRUCTURE_TOOL_IDS.build);
                 ensureStructureOutlinerHierarchy();
                 updateLogicalSelectionHelpers();
                 syncStructurePanel();
@@ -32889,6 +34073,8 @@ form.on('change',({result})=>{if(editable){const index=ids.indexOf(id);ids[index
                 setTimeout(applyStructureWorkspaceDefaults, 0);
             },
             onUnselect() {
+                cancelStructureBuildGesture();if(structureBuildJob)structureBuildJob.cancelled=true;
+                if(structureBuildVolume)structureBuildVolume.visible=false;
                 stopTerrainCreative(); closeTerrainFill();
                 if (selectionHelper) selectionHelper.visible = false;
                 if (hoverHelper) hoverHelper.visible = false;
@@ -32900,6 +34086,7 @@ form.on('change',({result})=>{if(editable){const index=ids.indexOf(id);ids[index
                 Blockbench.setStatusBarText?.();
             },
         });
+        if (typeof Vue !== 'undefined' && Vue.observable) Vue.observable(structureMode);
         // Structure has no UV or texture editing surface. The redesigned workspace
         // keeps single-cell inspection above the hierarchy on the right, frequent
         // editing actions in native Blockbench toolbars, and infrequent pack/layer/
@@ -32914,6 +34101,10 @@ form.on('change',({result})=>{if(editable){const index=ids.indexOf(id);ids[index
     }
 
     function unregisterStructureMode() {
+        cancelStructureBuildGesture();
+        structureBuildTool?.delete?.();structureBuildTool=null;
+        if (structureViewportSyncFrame !== null) cancelAnimationFrame(structureViewportSyncFrame);
+        structureViewportSyncFrame = null;
         structureSelectTool?.delete?.();
         structureRegionTool?.delete?.();
         structurePlaceTool?.delete?.();
@@ -33018,6 +34209,9 @@ form.on('change',({result})=>{if(editable){const index=ids.indexOf(id);ids[index
             exposed: false,
             condition: structureCondition,
         });
+        for (const key of ['mcstructure_grass_color_override','mcstructure_water_color_override','mcstructure_shape_mappings_json']) {
+            registerProperty(projectClass, 'string', key, {default:'',exposed:false,condition:structureCondition});
+        }
         registerProperty(projectClass, 'boolean', 'mcstructure_fancy_leaves', {
             default: true,
             exposed: false,
@@ -33171,12 +34365,17 @@ form.on('change',({result})=>{if(editable){const index=ids.indexOf(id);ids[index
             structureToolbarItems.push({toolbar, item});
         };
 
-        [structureSelectTool, structurePlaceTool, structureEraseTool, structurePickTool]
+        // Migrate saved and deferred legacy placements as well as hydrated buttons.
+        for (const id of [STRUCTURE_TOOL_IDS.place, STRUCTURE_TOOL_IDS.erase, STRUCTURE_TOOL_IDS.pick, STRUCTURE_TOOL_IDS.region]) {
+            window.LightManagerUI?.removeToolbarAction?.({id}, ['tools', 'main_tools']);
+        }
+        [structureBuildTool, structureSelectTool]
             .filter(Boolean)
             .forEach((tool, index) => addOnce(toolbars.tools, tool, index));
 
         const mainToolbar = toolbars.main_tools;
         if (!mainToolbar) return;
+        addOnce(mainToolbar, BarItems.bedrock_structure_paint_drag, 0);
         const actionIds = [
             'bedrock_structure_frame',
             'bedrock_structure_inventory',
@@ -33213,6 +34412,18 @@ form.on('change',({result})=>{if(editable){const index=ids.indexOf(id);ids[index
     }
 
     function registerActions() {
+        addAction(new Toggle('bedrock_structure_paint_drag', {
+            name:'bedrock_structure.build.paint_toggle', description:'bedrock_structure.build.paint_toggle.desc',
+            icon:'brush', category:'tools', value:readStudioPreferences().buildLeftDrag==='paint',
+            condition:()=>isStructureProject()&&isStructureModeSelected()&&!terrainCreative&&structureToolKind()==='build',
+            keybind:new Keybind({key:'p'}),
+            onChange(value){
+                cancelStructureBuildGesture();
+                writeStudioPreferences({buildLeftDrag:value?'paint':'navigate'});
+                selectStructureTool(STRUCTURE_TOOL_IDS.build);
+                updateStructureToolPreview();refreshStructureToolStatus();
+            },
+        }), 'tools');
         addAction(new Action('bedrock_structure_pack_library',{name:structurePackText('Lightflow Resource Packs','Paquetes de recursos Lightflow'),icon:'folder_special',category:'tools',condition:()=>typeof require==='function',click:showStructurePackLibrary}),'filter');
         const structureCondition = () => isStructureProject();
         addAction(new Action('bedrock_structure_frame', {
@@ -33693,6 +34904,9 @@ form.on('change',({result})=>{if(editable){const index=ids.indexOf(id);ids[index
                         ? Project.mcstructure_bounds_min.slice(0, 3).map(value => Math.round(Number(value) || 0))
                         : [0, 0, 0];
                     event.model.lightflow_terrain = createTerrainLinkSnapshot();
+                    if (terrainWorldPreview?.project === Project) {
+                        event.model.lightflow_terrain_world_preview = {transient: true, ...terrainWorldPreview.description};
+                    }
                     stripRuntimeOnlyStructureProjectData(event.model);
                 } catch (error) {
                     showError('save Bedrock Structure project', error);
@@ -33707,7 +34921,7 @@ form.on('change',({result})=>{if(editable){const index=ids.indexOf(id);ids[index
             activeFlipbookAnimations.forEach(animation => { changed = animation.update(now) || changed; });
             if (changed) {
                 window.LightManagerMarkShadowsDirty?.({scene: true});
-                if (window.LightflowAnimationRuntime) window.LightflowAnimationRuntime.sceneMotionEpoch++;
+                window.LightflowAnimationRuntime?.markSceneMotion?.();
             }
         }));
         listeners.push(Blockbench.on('load_project', ({project, model} = {}) => {
@@ -33747,6 +34961,10 @@ form.on('change',({result})=>{if(editable){const index=ids.indexOf(id);ids[index
             }, 0);
         }));
         listeners.push(Blockbench.on('select_project', () => {
+            if (terrainWorldPreview && terrainWorldPreview.project !== Project) disposeTerrainWorldPreview();
+            cancelStructureBuildGesture();if(structureBuildJob)structureBuildJob.cancelled=true;
+            structureToolHoverHit=null;structureBuildPointer=null;
+            scheduleStructureViewportSync();
             structureRenderLayer = '';
             structureSpatialSelection = null;
             structureSelectionGizmoPreviewBounds = null;
@@ -33805,6 +35023,7 @@ form.on('change',({result})=>{if(editable){const index=ids.indexOf(id);ids[index
             refreshStructureHotbar();
         }));
         listeners.push(Blockbench.on('close_project', ({project} = {}) => {
+            if (terrainWorldPreview?.project === project) disposeTerrainWorldPreview();
             if (typeof Mesh !== 'undefined' && Array.isArray(Mesh.all)) {
                 Mesh.all.filter(mesh => mesh?.mcstructure_baked_mesh).forEach(restoreEditableGreedyPreviewMaterials);
             }
@@ -33891,6 +35110,12 @@ form.on('change',({result})=>{if(editable){const index=ids.indexOf(id);ids[index
                 updateStructureSelectionGizmo();
             }
         }));
+        for (const event of ['select_mode', 'new_project', 'close_project']) {
+            listeners.push(Blockbench.on(event, scheduleStructureViewportSync));
+        }
+        for(const event of ['select_tool','unselect_project','open_dialog']){
+            listeners.push(Blockbench.on(event,()=>{cancelStructureBuildGesture();if(structureBuildJob)structureBuildJob.cancelled=true;updateStructureToolPreview();}));
+        }
         listeners.push(Blockbench.on('lightflow_environment_changed', () => {
             if (isStructureProject() && optimizedPreview) scheduleOptimizedChunkVisibilitySync();
         }));
@@ -33999,6 +35224,10 @@ form.on('change',({result})=>{if(editable){const index=ids.indexOf(id);ids[index
                 };
             },
             getOptimizedPreviewStats: () => optimizedPreview?.stats ? {...optimizedPreview.stats} : null,
+            createWorldSource: (options, sources) => new (getTerrainWorldModule().TerrainWorld)(options, sources),
+            previewWorld: previewTerrainWorld,
+            disposeWorldPreview: disposeTerrainWorldPreview,
+            getWorldPreviewStats: () => terrainWorldPreview ? {...terrainWorldPreview.stats} : null,
             getTerrainDiagnostics() {
                 return {
                     ...terrainBuildDiagnostics,
@@ -34104,6 +35333,10 @@ form.on('change',({result})=>{if(editable){const index=ids.indexOf(id);ids[index
                 return normalizeStructureSelectionBounds(bounds.minimum, bounds.maximum);
             },
             clearSpatialSelection: clearStructureSpatialSelection,
+            getBuildState() {
+                const g=structureBuildGesture;
+                return {active:!!g,operation:g?.intent||null,samples:g?.samples?.size||0,lastPosition:g?.lastSample?.position?.slice()||null,normal:g?.normal?.slice()||null,region:g?.region?{minimum:g.region.minimum.slice(),maximum:g.region.maximum.slice()}:null,busy:!!structureBuildJob,lastCancel:structureBuildLastCancel};
+            },
             getSpatialSelection() {
                 const bounds = currentStructureSelectionBounds();
                 return bounds ? {
@@ -34131,6 +35364,7 @@ form.on('change',({result})=>{if(editable){const index=ids.indexOf(id);ids[index
             replaceBlocks: replaceLogicalBlocks,
             replaceBlocksProgressive: replaceLogicalBlocksProgressive,
             createTerrainLinkSnapshot,
+            createWorldSceneLinkModel,
             importIntoTerrain,
             copySelection: copyLogicalSelection,
             copySelectionProgressive: copyLogicalSelectionProgressive,
@@ -34237,6 +35471,8 @@ form.on('change',({result})=>{if(editable){const index=ids.indexOf(id);ids[index
     }
 
     function unloadPlugin() {
+        disposeTerrainWorldPreview();
+        bakedBlockClasses.clear();
         structurePackLibraryLive=false;for(const transfer of structurePackTransfers)transfer.abort();structurePackTransfers.clear();for(const dialog of [...structurePackDialogs])dialog.cancel();structurePackDialogs.clear();structurePackLibrary=null;
         uninstallTerrainNativeMove();
         if (structureGeometryRecoveryTimer) {
@@ -34374,8 +35610,12 @@ form.on('change',({result})=>{if(editable){const index=ids.indexOf(id);ids[index
         _testCreateResourcePackResolver: createResourcePackResolver,
         _testCompileBedrockGeometryShape: compileBedrockGeometryShape,
         _testEffectiveBedrockBlockComponents: effectiveBedrockBlockComponents,
+        _testResolveBuildIntent:resolveStructureBuildIntent,
+        _testBuildRegion:structureBuildRegion,
+        _testBuildLine:structureBuildLine,
         _testEvaluateBedrockStateCondition: evaluateBedrockStateCondition,
         resolveBlockShape,
+        blockShapeOverrideOptions,
         registerBlockShapeResolver,
         defineBlockShape,
         defineBlockList,
@@ -34395,6 +35635,10 @@ form.on('change',({result})=>{if(editable){const index=ids.indexOf(id);ids[index
         _testDirtySectionKeys: dirtySectionKeys,
         _testCreateLogicalSpatialIndex: createLogicalSpatialIndex,
         _testSpatialRecordKey: spatialRecordKey,
+        _testCreateChunkRecordWindow: createChunkRecordWindow,
+        _testBuildOptimizedChunk: buildOptimizedChunk,
+        _testCreateWorldSection: createTerrainWorldSection,
+        _testBlockRenderStats: blockRenderStats,
         transformBlockStates,
         getBedrockFeatureRuntimeModule,
         createBedrockFeatureRegistry,
