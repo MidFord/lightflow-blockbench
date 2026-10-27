@@ -1451,6 +1451,43 @@
         }
     }
 
+    function unloadForReplacement(plugin) {
+        // Published Shader Architect builds use Menu.menus in their synchronous
+        // unload callback. Blockbench 5.2 exposes those menus on element prototypes.
+        // Bridge the old callback before loading new code; never skip its cleanup.
+        if (plugin.id !== 'shader_architect' || typeof Menu === 'undefined' || Menu.menus
+            || !/\bMenu\.menus\b/.test(String(plugin.onunload || ''))) return plugin.unload?.();
+        const descriptor = Object.getOwnPropertyDescriptor(Menu, 'menus');
+        if (descriptor && !descriptor.configurable) return plugin.unload?.();
+        const menus = Object.create(null);
+        const types = [
+            ['outliner_cube', typeof Cube === 'undefined' ? null : Cube],
+            ['outliner_mesh', typeof Mesh === 'undefined' ? null : Mesh],
+            ['outliner_texture_mesh', typeof TextureMesh === 'undefined' ? null : TextureMesh]
+        ];
+        for (const [id, type] of types) {
+            const menu = type?.prototype?.menu;
+            if (Array.isArray(menu?.structure)) menus[id] = menu;
+        }
+        // These two actions were not tracked by the published unload callback.
+        // Capture their identities before cleanup; never delete a replacement.
+        const actions = ['sa_apply_override', 'sa_clear_override']
+            .map(id => globalThis.BarItems?.[id])
+            .filter(action => action && Object.values(menus).some(menu => menu.structure.includes(action)));
+        Object.defineProperty(Menu, 'menus', {value: menus, configurable: true});
+        try {
+            const result = plugin.unload?.();
+            for (const action of actions) {
+                if (globalThis.BarItems?.[action.id] === action) action.delete?.();
+            }
+            return result;
+        }
+        finally {
+            if (descriptor) Object.defineProperty(Menu, 'menus', descriptor);
+            else delete Menu.menus;
+        }
+    }
+
     async function replacePlugin(module, kind, path, options = {}) {
         assertPluginSourceFilename(module.id, path);
         if (!options.preflighted) {
@@ -1472,7 +1509,7 @@
         // artist preferences and project data, so they are reserved for Uninstall.
         if (!plugin) plugin = new Plugin(module.id, {disabled: previous?.disabled});
         try {
-            if (previous && !plugin.disabled) plugin.unload?.();
+            if (previous && !plugin.disabled) unloadForReplacement(plugin);
             // Native Plugin.reload increments this before loading a local file.
             // Reusing the same path/version without it can evaluate cached code,
             // even though preflight just read the updated source from disk.
@@ -1490,7 +1527,7 @@
             // Reload the previous source and check its version before reporting recovery.
             if (previous) {
                 try {
-                    if (!plugin.disabled) plugin.unload?.();
+                    if (!plugin.disabled) unloadForReplacement(plugin);
                     plugin.cache_version = (Number(plugin.cache_version) || 0) + 1;
                     resetPluginMetadata(plugin); plugin.version = ''; plugin.installed = false;
                     plugin.disabled = !!previous.disabled;
