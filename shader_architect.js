@@ -1202,6 +1202,15 @@ function shaderArchitectInlineText(key) { return typeof tl === 'function' ? tl(k
         "shader_architect.uniform.SHADE.desc": "Toggle scene shading/shadowing systems",
         "shader_architect.uniform.uSAAlphaMode": "Alpha Mode",
         "shader_architect.uniform.uSAAlphaMode.desc": "Choose how this override blends: inherit texture, opaque, cutout, transparent, or additive.",
+        "shader_architect.preset.shadow_catcher": "Shadow Catcher",
+        "shader_architect.uniform.uSACatcherColor": "Shadow Color",
+        "shader_architect.uniform.uSACatcherColor.desc": "Tint of the received shadows. Unshadowed areas stay transparent.",
+        "shader_architect.uniform.uSACatcherFade": "Shadow Fade",
+        "shader_architect.uniform.uSACatcherFade.desc": "Fade across the receiver in the selected direction. 0 keeps the shadow; 1 fully fades its far edge.",
+        "shader_architect.uniform.uSACatcherFadeMode": "Fade Direction",
+        "shader_architect.uniform.uSACatcherFadeMode.desc": "Follow light travel or the camera view, from the near edge to the far edge of the receiver.",
+        "shader_architect.enum.catcher_fade_light": "Light",
+        "shader_architect.enum.catcher_fade_camera": "Camera",
         "shader_architect.uniform.uSAOpacity": "Material Opacity",
         "shader_architect.uniform.uSAOpacity.desc": "Opacity multiplier for this material override, including emission and Bloom.",
         "shader_architect.enum.alpha_auto": "Inherit texture",
@@ -2226,6 +2235,15 @@ function shaderArchitectInlineText(key) { return typeof tl === 'function' ? tl(k
         "shader_architect.uniform.SHADE.desc": "Activa el sombreado del material",
         "shader_architect.uniform.uSAAlphaMode": "Modo alfa",
         "shader_architect.uniform.uSAAlphaMode.desc": "Elige cómo se mezcla este override: heredar textura, opaco, recorte, transparente o aditivo.",
+        "shader_architect.preset.shadow_catcher": "Receptor de sombras",
+        "shader_architect.uniform.uSACatcherColor": "Color de sombra",
+        "shader_architect.uniform.uSACatcherColor.desc": "Color de las sombras recibidas. Las zonas sin sombra permanecen transparentes.",
+        "shader_architect.uniform.uSACatcherFade": "Desvanecer sombra",
+        "shader_architect.uniform.uSACatcherFade.desc": "Degrada la sombra sobre el receptor en la dirección elegida. 0 conserva la sombra; 1 desvanece por completo su extremo lejano.",
+        "shader_architect.uniform.uSACatcherFadeMode": "Dirección del degradado",
+        "shader_architect.uniform.uSACatcherFadeMode.desc": "Sigue el recorrido de la luz o la vista de la cámara, desde el borde cercano al lejano del receptor.",
+        "shader_architect.enum.catcher_fade_light": "Luz",
+        "shader_architect.enum.catcher_fade_camera": "Cámara",
         "shader_architect.uniform.uSAOpacity": "Opacidad del material",
         "shader_architect.uniform.uSAOpacity.desc": "Multiplicador de opacidad de este material override, incluida su emisión y Bloom.",
         "shader_architect.enum.alpha_auto": "Heredar textura",
@@ -4715,6 +4733,9 @@ vec3 saApplyInstanceNormal(vec3 value) {
 
     function injectLightflowMRTVertex(vertexShader) {
         let source = String(vertexShader || '');
+        if (source.includes('// SA_SHADOW_CATCHER_COLOR_ONLY')) {
+            return isLightflowMRTAvailable() ? injectLightflowInstancingVertex(source) : source;
+        }
         if (!isLightflowMRTAvailable() || source.includes('SA_LIGHTFLOW_MRT_VERTEX')) return source;
         source = injectLightflowInstancingVertex(source);
         const declaration = `
@@ -4730,6 +4751,9 @@ varying vec3 vSA_MRTViewNormal;
 
     function injectLightflowMRTFragment(fragmentShader) {
         let source = String(fragmentShader || '');
+        // The existing MRT router gives non-MRT materials attachment 0 only.
+        // A transparent receiver has no normals, emission or rim data to write.
+        if (source.includes('// SA_SHADOW_CATCHER_COLOR_ONLY')) return source;
         if (!isLightflowMRTAvailable() || source.includes('SA_LIGHTFLOW_MRT_FRAGMENT')) return source;
         const rimDepthMRT = isLightflowMRT5RimDepthAvailable();
         const declaration = `
@@ -12310,6 +12334,17 @@ uniform float uSSRIntensity;
         white-space: pre-line;
         font-variant-numeric: tabular-nums;
     }
+    .sa-shader-warmup-preview-feedback.has-lantern {
+        display: grid;
+        grid-template-columns: 32px minmax(0, 1fr);
+        align-items: center;
+        column-gap: 10px;
+    }
+    .sa-shader-warmup-preview-feedback.has-lantern::before { display:none; }
+    .sa-shader-warmup-preview-feedback.has-lantern::after { grid-column:1 / -1; }
+    .sa-warmup-feedback-text { min-width:0; overflow-wrap:anywhere; }
+    .sa-shader-warmup-preview-feedback.has-lantern[data-state="failed"] { grid-template-columns:minmax(0, 1fr); }
+    .sa-shader-warmup-preview-feedback[data-state="failed"] .lightflow_loading_lantern { display:none!important; }
     .sa-shader-warmup-preview-feedback::before {
         content: '';
         display: inline-block;
@@ -12648,6 +12683,7 @@ uniform float uSSRIntensity;
             this.uniforms = props.uniforms || {};
             this.isCustom = props.isCustom !== undefined ? props.isCustom : true;
             this.enableShadows = props.enableShadows !== undefined ? props.enableShadows : false;
+            this.overrideOnly = props.overrideOnly === true;
             this.supportsScreenSpaceReflections = props.supportsScreenSpaceReflections !== undefined
                 ? props.supportsScreenSpaceReflections
                 : false;
@@ -14917,6 +14953,7 @@ uniform float uSSRIntensity;
                 uniforms: this.getMaterialInstanceUniforms(instance),
                 isCustom: false,
                 enableShadows: base.enableShadows,
+                overrideOnly: base.overrideOnly,
                 supportsScreenSpaceReflections: base.supportsScreenSpaceReflections,
                 screenAccess: base.screenAccess,
                 isMaterialInstanceRender: true,
@@ -18043,6 +18080,146 @@ void main() {
             this.materials['pbr_metallic_roughness'] = pbrMetallicRoughness;
             this.materials['vibrant_visuals_pbr'] = vibrantVisualsPbr;
             this.materials['cinematic_craft'] = cinematicCraft;
+            // Non-enumerable built-in: available to persisted instances, never
+            // offered as a global renderer or a Material Studio surface family.
+            // A catcher is a shadow mask, not a lit surface. Combine native
+            // maps directly, retaining Lightflow's shared softness filters.
+            const catcherMapFilters = LIGHTFLOW_SHADOW_SELECTOR_FRAGMENT.slice(0,
+                LIGHTFLOW_SHADOW_SELECTOR_FRAGMENT.indexOf('float lfGetRegularDirectionalShadowByIndex(')) + '\n#endif\n';
+            const catcherShadowMaps = [
+                ['DIR', 'Directional', 1, 'directional', false],
+                ['SPOT', 'Spot', 2, 'spot', false],
+                ['POINT', 'Point', 0, 'point', true]
+            ];
+            const catcherMapOwners = catcherShadowMaps.map(([, struct]) =>
+                `uniform int uLight${struct}ShadowLightIndex[16];`).join('\n');
+            const catcherShadowMask = catcherShadowMaps.map(([macro, struct, type, prefix, point]) => `
+#if defined(USE_SHADOWMAP) && NUM_${macro}_LIGHT_SHADOWS > 0
+    #pragma unroll_loop_start
+    for ( int i = 0; i < NUM_${macro}_LIGHT_SHADOWS; i ++ ) {
+      {
+        float sourceScale = 0.0;
+        bool mapRelevant = false;
+        vec3 fadeDirection = -vec3(viewMatrix[0][2], viewMatrix[1][2], viewMatrix[2][2]);
+        int owner = uLight${struct}ShadowLightIndex[i];
+        #if __VERSION__ >= 300
+        if (owner >= 0 && owner < max_light_number) {
+            sourceScale = uLightShadowSourceScale[owner];
+            mapRelevant = uLightCastShadow[owner] != 0 && uLightObjectMask[owner] != 0 && uLightIntensity[owner] > 0.0;
+            if (uSACatcherFadeMode == 0 && uSACatcherFade > 0.0)
+                fadeDirection = ${point ? 'uSACatcherFadeCenter - uLightPos[owner]' : 'uLightDir[owner]'};
+        }
+        #else
+        for (int light = 0; light < 16; light++) {
+            if (light >= max_light_number) break;
+            if (light == owner &&
+                uLightCastShadow[light] != 0 && uLightObjectMask[light] != 0 && uLightIntensity[light] > 0.0) {
+                sourceScale = uLightShadowSourceScale[light];
+                mapRelevant = true;
+                if (uSACatcherFadeMode == 0 && uSACatcherFade > 0.0)
+                    fadeDirection = ${point ? 'uSACatcherFadeCenter - uLightPos[light]' : 'uLightDir[light]'};
+            }
+        }
+        #endif
+        float visibility = 1.0;
+        if (mapRelevant && uShadowStrength > 0.0 && uShadowFloor < 1.0) {
+            ${struct}LightShadow shadow = ${prefix}LightShadows[i];
+            visibility = ${point ? 'lfGetRegularPointShadowWithMap' : 'lfGetRegularProjectedShadowWithMap'}(
+                ${prefix}ShadowMap[i], shadow.shadowMapSize, shadow.shadowBias, shadow.shadowRadius,
+                v${struct}ShadowCoord[i], ${point ? 'shadow.shadowCameraNear, shadow.shadowCameraFar, ' : ''}sourceScale);
+        }
+        result *= saCatcherFadeVisibility(visibility, fadeDirection);
+      }
+    }
+    #pragma unroll_loop_end
+#endif`).join('\n');
+            const shadowCatcherUniforms = createMaterialLightingUniforms();
+            Object.values(shadowCatcherUniforms).forEach(def => { def.expose = false; });
+            Object.assign(shadowCatcherUniforms, {
+                uLightObjectMask: {type: 'intv', value: Array(16).fill(1), expose: false},
+                SHADOWS: {type: 'bool', value: true, expose: true},
+                uSACatcherColor: {type: 'vec3', value: new THREE.Vector3(0, 0, 0), hexValue: '#000000', is_color: true, expose: true, group: 'shadows'},
+                uSACatcherFade: {type: 'float', value: 0, expose: true, group: 'surface', min: 0, max: 1, step: 0.01, allow_higher: false, allow_lower: false},
+                uSACatcherFadeMode: {type: 'int', value: 0, expose: true, group: 'surface', min: 0, max: 1, step: 1, options: {0: 'shader_architect.enum.catcher_fade_light', 1: 'shader_architect.enum.catcher_fade_camera'}},
+                uSACatcherFadeCenter: {type: 'vec3', value: new THREE.Vector3(), expose: false},
+                uSACatcherFadeAxes: {type: 'mat3', value: new THREE.Matrix3(), expose: false},
+                uShadowStrength: {...shadowCatcherUniforms.uShadowStrength, expose: true},
+                uShadowFloor: {...shadowCatcherUniforms.uShadowFloor, expose: true}
+            });
+            const shadowCatcher = new FancyShaderMaterial({
+                id: 'shadow_catcher', name: tl('shader_architect.preset.shadow_catcher'),
+                icon: 'ev_shadow', isCustom: false, overrideOnly: true, enableShadows: true,
+                vertex: `// SA_SHADOW_CATCHER_COLOR_ONLY
+#include <common>
+#include <shadowmap_pars_vertex>
+attribute float affected_by_shadow;
+uniform mat3 uWorldNormalMatrix;
+varying float vCatcherReceivesShadow;
+varying vec3 vCatcherWorldPosition;
+void main() {
+    vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+    vCatcherWorldPosition = worldPosition.xyz;
+    vCatcherReceivesShadow = affected_by_shadow;
+    vec3 transformedNormal = normalMatrix * normal;
+    #include <shadowmap_vertex>
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}`,
+                fragment: `// SA_SHADOW_CATCHER_COLOR_ONLY
+#if __VERSION__ >= 300 && !defined(gl_FragColor)
+layout(location = 0) out highp vec4 saCatcherColor;
+#define gl_FragColor saCatcherColor
+#endif
+#include <common>
+#include <packing>
+uniform bool receiveShadow;
+#include <shadowmap_pars_fragment>
+${catcherMapFilters}
+uniform bool SHADOWS;
+uniform float uSAOpacity;
+uniform vec3 uSACatcherColor;
+uniform int max_light_number;
+uniform int uLightObjectMask[16];
+uniform float uLightIntensity[16];
+uniform vec3 uLightPos[16];
+uniform vec3 uLightDir[16];
+uniform float uSACatcherFade;
+uniform int uSACatcherFadeMode;
+uniform vec3 uSACatcherFadeCenter;
+uniform mat3 uSACatcherFadeAxes;
+varying float vCatcherReceivesShadow;
+varying vec3 vCatcherWorldPosition;
+${catcherMapOwners}
+float saCatcherFadeVisibility(float visibility, vec3 direction) {
+    if (uSACatcherFade <= 0.0 || visibility >= 1.0) return visibility;
+    float lengthSquared = dot(direction, direction);
+    if (lengthSquared < 1e-10) return visibility;
+    direction *= inversesqrt(lengthSquared);
+    float radius = abs(dot(uSACatcherFadeAxes[0], direction)) +
+        abs(dot(uSACatcherFadeAxes[1], direction)) + abs(dot(uSACatcherFadeAxes[2], direction));
+    if (radius < 1e-5) return visibility;
+    float progress = clamp(0.5 + dot(vCatcherWorldPosition - uSACatcherFadeCenter, direction) / (2.0 * radius), 0.0, 1.0);
+    float fade = 1.0 - clamp(uSACatcherFade, 0.0, 1.0) * smoothstep(0.0, 1.0, progress);
+    return 1.0 - (1.0 - visibility) * fade;
+}
+float saCatcherVisibility() {
+    float result = 1.0;
+${catcherShadowMask}
+    return result;
+}
+void main() {
+    if (!SHADOWS || !receiveShadow || vCatcherReceivesShadow < 0.5 || uSAOpacity <= 0.0 || uShadowStrength <= 0.0) discard;
+    float visibility = max(clamp(saCatcherVisibility(), 0.0, 1.0), clamp(uShadowFloor, 0.0, 1.0));
+    float alpha = (1.0 - visibility) * clamp(uShadowStrength, 0.0, 1.0) * clamp(uSAOpacity, 0.0, 1.0);
+    if (alpha <= 0.0) discard;
+    gl_FragColor = vec4(uSACatcherColor, alpha);
+}`,
+                uniforms: shadowCatcherUniforms
+            });
+            shadowCatcher.uniforms.uSAAlphaMode.expose = false;
+            shadowCatcher.uniforms.map.expose = false;
+            Object.defineProperty(this.materials, 'shadow_catcher', {
+                value: shadowCatcher, configurable: true, writable: true, enumerable: false
+            });
             // Preserve projects and .samat files created before the public rename.
             Object.defineProperty(this.materials, 'luma_forge', {
                 value: cinematicCraft,
@@ -31623,6 +31800,7 @@ void main() {
                     ShaderEngine.refreshSharedFrameUniforms(ShaderEngine.clock.getElapsedTime());
                 }
                 ShaderEngine.refreshSharedCameraUniforms(renderer, camera, rendererFrame);
+                if (material?.uniforms?.uSACatcherFadeAxes) ShaderEngine.syncShadowCatcherFadeBounds(this, material);
                 const normalUniform =
                     material?.uniforms?.uWorldNormalMatrix;
                 const lightObjectMaskUniform =
@@ -34285,6 +34463,8 @@ void main() {
             }
             delete userData.saPerDrawUniformSync;
             delete userData.saPerDrawUniformSyncHandler;
+            delete userData.saCatcherBoundsPosition;
+            delete userData.saCatcherBoundsVersion;
             delete userData.saPreviousOnBeforeRender;
             delete userData.saCollapsedMaterialSlots;
             delete userData.saOriginalMaterialSlotCount;
@@ -37039,7 +37219,8 @@ void main() {
                         <div class="sa-warmup-content" role="status" aria-live="polite">
                             <div class="sa-warmup-intro">
                                 <div class="sa-warmup-icon" :class="{ ready, warning }" aria-hidden="true">
-                                    <i class="material-icons">{{ warning ? 'warning' : (ready ? 'check_circle' : 'autorenew') }}</i>
+                                    <template v-if="!ready && !warning">${window.LightManagerUI?.progress?.loadingIndicatorHTML?.() || '<i class="material-icons">autorenew</i>'}</template>
+                                    <i v-else class="material-icons">{{ warning ? 'warning' : 'check_circle' }}</i>
                                 </div>
                                 <div>
                                     <h3 class="sa-warmup-heading">{{ heading }}</h3>
@@ -37132,7 +37313,15 @@ void main() {
                 banner.setAttribute('aria-live', 'polite');
                 // This is an informational layer over one canvas only. It must
                 // never steal orbit, selection, keyboard or context-menu input.
-                banner.style.cssText = 'position:fixed;z-index:19;pointer-events:none;max-width:min(390px,calc(100vw - 24px));padding:7px 10px;border-radius:2px;background:var(--color-back);color:var(--color-text);font-size:12px;font-weight:600;line-height:1.3;';
+                banner.style.cssText = 'position:fixed;z-index:19;pointer-events:none;transform:translateX(-50%);max-width:min(390px,calc(100vw - 24px));padding:7px 10px;border-radius:8px;background:var(--color-back);color:var(--color-text);font-size:12px;font-weight:600;line-height:1.3;';
+                const activity = window.LightManagerUI?.progress?.loadingIndicatorHTML?.();
+                if (activity) {
+                    banner.insertAdjacentHTML('afterbegin', activity);
+                    banner.classList.add('has-lantern');
+                }
+                const text = document.createElement('span');
+                text.className = 'sa-warmup-feedback-text';
+                banner.appendChild(text);
                 document.body.appendChild(banner);
                 this.shaderWarmupPreviewFeedbackBanner = banner;
             }
@@ -37150,12 +37339,12 @@ void main() {
             const count = unitTotal > 0
                 ? `${tl('shader_architect.warmup.counter')}: ${unitCompleted}/${unitTotal}`
                 : '';
-            banner.textContent = session.failure
+            banner.querySelector('.sa-warmup-feedback-text').textContent = session.failure
                 ? message
                 : `${message}\n${[count, `${elapsedSeconds} s`].filter(Boolean).join(' · ')}`;
             banner.setAttribute('data-state', session.failure ? 'failed' : 'busy');
             banner.style.setProperty?.('--sa-warmup-progress', `${progress}%`);
-            banner.style.left = `${Math.max(8, Math.round(rect.left + 10))}px`;
+            banner.style.left = `${Math.round(rect.left + rect.width / 2)}px`;
             banner.style.top = `${Math.max(8, Math.round(rect.top + 10))}px`;
             banner.style.boxSizing = 'border-box';
             banner.style.maxWidth = `${Math.max(1, Math.min(390, rect.width - 20))}px`;
@@ -42052,7 +42241,7 @@ void main() {
         requestGlobalRenderModeChange(renderMode) {
             const nextRenderMode = String(renderMode || '').trim();
             const material = MaterialManager.materials?.[nextRenderMode] || null;
-            if (!nextRenderMode || !material || this.isUnloading) return false;
+            if (!nextRenderMode || !material || material.overrideOnly || this.isUnloading) return false;
             if (
                 nextRenderMode === this.globalRenderMode &&
                 !this.pendingGlobalRenderMode
@@ -43302,6 +43491,17 @@ void main() {
 
         applyMaterialAlphaState(sourceState, shader) {
             const uniforms = shader?.uniforms || {};
+            if ((shader?.baseMaterialId || shader?.id) === 'shadow_catcher') {
+                // The receiver ignores source texture coverage. Its alpha is
+                // calculated from shadow visibility, including soft penumbrae.
+                Object.assign(sourceState, {
+                    shadowCatcher: true, baseAlpha: 1, alphaMode: LightflowAlphaMode.BLEND,
+                    transparent: true, depthWrite: false, blending: THREE.NormalBlending,
+                    alphaTest: 0, hasTranslucency: true, alphaClass: 'translucent',
+                    alphaProfile: {...sourceState.alphaProfile, isEmpty: false, alphaClass: 'translucent'}
+                });
+                return sourceState;
+            }
             const rawOpacity = Number(uniforms.uSAOpacity?.value ?? 1);
             const opacity = Number.isFinite(rawOpacity) ? Math.max(0, Math.min(1, rawOpacity)) : 1;
             const mode = Number(uniforms.uSAAlphaMode?.value) || 0;
@@ -44854,6 +45054,29 @@ void main() {
          * @param {Cube} cube
          * @param {FancyShaderMaterial} shader
          */
+        syncShadowCatcherFadeBounds(mesh, material) {
+            const uniforms = material?.uniforms;
+            if (!uniforms?.uSACatcherFadeAxes || !(Number(uniforms.uSACatcherFade?.value) > 0)) return;
+            const geometry = mesh.geometry, position = geometry?.getAttribute('position');
+            if (!position || !mesh.matrixWorld) return;
+            const data = mesh.userData ||= {};
+            if (!geometry.boundingBox || data.saCatcherBoundsPosition !== position ||
+                data.saCatcherBoundsVersion !== position.version) {
+                geometry.computeBoundingBox();
+                data.saCatcherBoundsPosition = position;
+                data.saCatcherBoundsVersion = position.version;
+            }
+            const bounds = geometry.boundingBox;
+            if (!bounds || bounds.isEmpty()) return;
+            uniforms.uSACatcherFadeCenter.value.copy(bounds.min).add(bounds.max).multiplyScalar(0.5).applyMatrix4(mesh.matrixWorld);
+            const x = (bounds.max.x - bounds.min.x) * 0.5;
+            const y = (bounds.max.y - bounds.min.y) * 0.5;
+            const z = (bounds.max.z - bounds.min.z) * 0.5;
+            const e = mesh.matrixWorld.elements;
+            uniforms.uSACatcherFadeAxes.value.set(e[0]*x, e[4]*y, e[8]*z,
+                e[1]*x, e[5]*y, e[9]*z, e[2]*x, e[6]*y, e[10]*z);
+        },
+
         releaseOpaqueCoveragePass(mesh) {
             const record = this.opaqueCoveragePasses?.get(mesh);
             if (!record) return;
@@ -44865,9 +45088,13 @@ void main() {
         syncOpaqueCoveragePass(mesh) {
             if (!mesh?.geometry || mesh.userData?.saOpaqueCoveragePass) return;
             const sources = this.getMaterialList(mesh.material);
+            // A receiver stays a transparent overlay even at alpha 1.
+            // Coverage clones cannot receive its shadows.
+            const usesCoverage = source => source?.sa_shader_id !== 'shadow_catcher' &&
+                source?.transparent && source.depthTest !== false && source.blending === THREE.NormalBlending;
             for (const source of sources) {
                 if (!source?.isShaderMaterial) continue;
-                const blended = source.transparent && source.depthTest !== false && source.blending === THREE.NormalBlending;
+                const blended = usesCoverage(source);
                 if (blended && !source.fragmentShader.includes('// SA_TRANSLUCENT_SURFACE_PASS')) {
                     source.saOpaqueCoverageFragmentBase = source.fragmentShader;
                     source.fragmentShader = source.fragmentShader.replace(/void\s+main\s*\(\s*(?:void)?\s*\)/, 'void saTranslucentSurfaceMain()') +
@@ -44879,8 +45106,7 @@ void main() {
                     source.needsUpdate = true;
                 }
             }
-            const needsCoverage = sources.some(material => material?.transparent &&
-                material.depthTest !== false && material.blending === THREE.NormalBlending);
+            const needsCoverage = sources.some(usesCoverage);
             if (!needsCoverage) { this.releaseOpaqueCoveragePass(mesh); return; }
             this.opaqueCoveragePasses ||= new Map();
             let record = this.opaqueCoveragePasses.get(mesh);
@@ -44900,8 +45126,7 @@ void main() {
                     material.depthWrite = true;
                     material.colorWrite = source.colorWrite;
                     material.blending = THREE.NoBlending;
-                    material.visible = source.visible !== false && source.transparent &&
-                        source.depthTest !== false && source.blending === THREE.NormalBlending;
+                    material.visible = source.visible !== false && usesCoverage(source);
                     if (source.isShaderMaterial) {
                         // Resolve solid color/depth before transparent faces. The
                         // source draws only partial coverage, including glasses.
@@ -44928,8 +45153,7 @@ void main() {
             record.pass.layers.mask = mesh.layers.mask;
             record.materials.forEach((material,index) => {
                 const source = sources[index];
-                material.visible = source.visible !== false && source.transparent &&
-                    source.depthTest !== false && source.blending === THREE.NormalBlending;
+                material.visible = source.visible !== false && usesCoverage(source);
                 material.side = source.side;
                 if (source.isShaderMaterial) material.uniforms = source.uniforms;
                 else { material.opacity = source.opacity; material.map = source.map; }
@@ -45161,9 +45385,11 @@ void main() {
                     return;
                 }
 
-                const shadowStates = allSourceStates && allSourceStates.length > 1
+                const casterState = state => state?.shadowCatcher ? {...state, baseAlpha: 0} : state;
+                sourceState = casterState(sourceState);
+                const shadowStates = (allSourceStates && allSourceStates.length > 1
                     ? allSourceStates.map(state => state || sourceState)
-                    : [sourceState];
+                    : [sourceState]).map(casterState);
                 const geometry = mesh.geometry;
                 const useMaterialSlots = !!(
                     shadowStates.length > 1 && geometry && geometry.getAttribute?.('position')
@@ -45691,7 +45917,7 @@ ${stochasticAlpha
                     structuralProgram ? structuralProgram.fragmentShader : activeShader.fragment,
                     sourceState
                 );
-                const atmosphereSurfaceProgram = window.LightflowAtmosphere?.decorateSurfaceProgram?.({
+                const atmosphereSurfaceProgram = activeShader.overrideOnly ? null : window.LightflowAtmosphere?.decorateSurfaceProgram?.({
                     vertexShader: baseVertexShader,
                     fragmentShader: baseFragmentShader
                 }) || null;
@@ -45701,7 +45927,7 @@ ${stochasticAlpha
                 let targetFragmentShader = decorateLightflowShadowFilters(injectLightflowMRTFragment(
                     atmosphereSurfaceProgram?.fragmentShader || baseFragmentShader
                 ));
-                if (mesh.geometry.getAttribute('bedrockBlockAo') && activeShader.id !== 'bedrock_structure_fancy_classic') {
+                if (mesh.geometry.getAttribute('bedrockBlockAo') && !activeShader.overrideOnly && activeShader.id !== 'bedrock_structure_fancy_classic') {
                     const terrainProgram = injectTerrainVertexAO(targetVertexShader,targetFragmentShader);
                     targetVertexShader = terrainProgram.vertexShader;
                     targetFragmentShader = terrainProgram.fragmentShader;
@@ -45799,7 +46025,7 @@ ${stochasticAlpha
                         pass: 'beauty',
                         features: {
                             ...(structuralProgram?.features || {}),
-                            mrt: targetFragmentShader !== baseFragmentShader,
+                            mrt: activeShader.id === 'shadow_catcher' ? false : targetFragmentShader !== baseFragmentShader,
                             lights: activeShaderUsesLights,
                             layered: !!sourceState.layered,
                             nativeMerMap: !!sourceState.nativePBR?.useMERMap,
@@ -45966,7 +46192,8 @@ ${stochasticAlpha
                 slotShader && slotShader.enableShadows && isAffectedByLight(slotShader)
             ));
             mesh.castShadow = cube[ELEMENT_CAST_SHADOW_PROP] !== false &&
-                mesh.userData?.lightflowSourceElement?.sa_cast_shadow !== false;
+                mesh.userData?.lightflowSourceElement?.sa_cast_shadow !== false &&
+                slotShaders.some(slotShader => (slotShader?.baseMaterialId || slotShader?.id) !== 'shadow_catcher');
             mesh.receiveShadow = meshReceivesShadows;
 
             const firstSourceState = sourceStates.filter(Boolean).sort((left, right) => {
@@ -46397,6 +46624,7 @@ ${stochasticAlpha
 
         syncAlphaShadowOpacity(mesh, states) {
             if (!states[0]) return;
+            states = states.map(state => state?.shadowCatcher ? {...state, baseAlpha: 0} : state);
             const attribute = mesh.geometry?.getAttribute?.('sa_shadow_opacity');
             if (attribute) {
                 const geometry = mesh.geometry, index = geometry.getIndex?.();
@@ -51458,10 +51686,19 @@ ${stochasticAlpha
                 let globalMaterialMenuOptions = {};
                 for (let id in MaterialManager.materials) {
                     let m = MaterialManager.materials[id];
+                    if (m.overrideOnly) continue;
                     globalMaterialMenuOptions['sa_' + id] = { name: m.name, icon: m.icon };
                 };
                 return globalMaterialMenuOptions;
             };
+            const getOverrideMaterialMenuOptions = () => ({
+                ...getGlobalMaterialMenuOptions(),
+                sa_shadow_catcher: {
+                    name: MaterialManager.materials.shadow_catcher.name,
+                    icon: MaterialManager.materials.shadow_catcher.icon,
+                    separator_before: true
+                }
+            });
 
             // Older versions left this directly-mounted widget behind on unload.
             // Reclaim only Shader Architect's reserved selector before replacement.
@@ -53127,7 +53364,7 @@ ${stochasticAlpha
                             material_base: {
                                 label: 'shader_architect.material_panel.base_material',
                                 type: 'compact_select', show_value_text: true, expand: true, searchable: true,
-                                options: getGlobalMaterialMenuOptions(),
+                                options: getOverrideMaterialMenuOptions(),
                                 value: 'sa_' + initialBaseId,
                                 description: 'shader_architect.material_panel.base_material.desc'
                             },
@@ -53491,7 +53728,7 @@ ${stochasticAlpha
                             label: 'shader_architect.material_panel.base_material',
                             type: 'compact_select', show_value_text: true, expand: true, searchable: true,
                             value: 'sa_' + (instance.baseMaterialId || 'classic'),
-                            options: getGlobalMaterialMenuOptions(),
+                            options: getOverrideMaterialMenuOptions(),
                             description: 'shader_architect.material_panel.base_material.desc'
                         }
                     }),

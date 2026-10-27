@@ -2,7 +2,7 @@
   "schema_version": 1,
   "suite": "Lightflow",
   "artwork": "assets/hub/copper-golem.png",
-  "generated_at": "2026-10-25",
+  "generated_at": "2026-10-26",
   "repository": {
     "owner": "MidFord",
     "name": "lightflow-blockbench",

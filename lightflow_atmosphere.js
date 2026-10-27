@@ -2482,7 +2482,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
     lfAtmosphereWorldHeight = (modelMatrix * lfFogLocalPosition).y;
     lfAtmosphereWorldPosition = (modelMatrix * lfFogLocalPosition).xyz;
 ` + vertexShader.slice(vertexEnd);
-            const decoratedFragment = fragmentShader.slice(0, fragmentEnd) + `
+            const surfaceAtmosphereFragment = `
     // Interpolate position, then measure distance. Interpolated vertex lengths
     // change with triangulation and exaggerate fog on large merged terrain.
     float lfDistance = length(lfAtmosphereViewPosition);
@@ -2525,12 +2525,26 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             lfFogFactor
         ));
     }
-` + fragmentShader.slice(fragmentEnd);
+`;
+            // The unlit texture path returns before the shared surface epilogue.
+            // Apply the same atmosphere there, while leaving emission/data passes
+            // untouched and preserving the unlit alpha and MRT emission export.
+            const surfaceBody = fragmentShader.slice(0, fragmentEnd).replace(
+                '// SA_UNLIT_EMISSION_EXPORT',
+                `// SA_UNLIT_EMISSION_EXPORT
+#if !defined(SA_RENDERCRAFT_RIM_GLOW) && !defined(SA_RENDERCRAFT_GLOW_BLOOM) && !defined(SA_RENDERCRAFT_STUDIO_BLOOM)
+        {${surfaceAtmosphereFragment.replace(
+                    '    // Interpolate position, then measure distance.',
+                    '    // Unlit atmosphere uses the same interpolated position.'
+                )}}
+#endif`
+            );
+            const decoratedFragment = surfaceBody + surfaceAtmosphereFragment + fragmentShader.slice(fragmentEnd);
             return {
                 vertexShader: prependPreamble(decoratedVertex, vertexPreamble),
                 fragmentShader: prependPreamble(decoratedFragment, fragmentPreamble),
                 uniforms: this.surfaceFogUniforms,
-                family: 'lightflow_surface_fog_v6'
+                family: 'lightflow_surface_fog_v7'
             };
         },
 
@@ -4857,10 +4871,11 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             if (!gizmo?.material) return;
             gizmo.material.color.set(selected ? 0x5ba7ff : 0x67d7e8);
             gizmo.material.opacity = selected ? 0.65 : 0.18;
+            window.LightManagerUI?.gizmos?.style?.(gizmo, 'outline', selected);
         });
     }
 
-    function updateGodRayHelper(element, camera) {
+    function updateGodRayHelper(element, camera, renderer) {
         const node = element.mesh;
         if (!node) return;
         godRayRuntime.sanitize(element);
@@ -4897,13 +4912,17 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         for (const [key, handle] of Object.entries(node.rayHandles || {})) {
             handle.position.copy(node.worldToLocal(positions[key]));
             const preview = Preview.selected || window.main_preview;
-            const size = Math.max(.12, (preview?.calculateControlScale?.(positions[key]) || .5) * .6);
+            const size = window.LightManagerUI?.gizmos?.screenWorldSize?.(handle, camera || preview?.camera, renderer, 5)
+                ?? Math.max(.12, (preview?.calculateControlScale?.(positions[key]) || .5) * .6);
             handle.scale.set(size/frame.scale.x,size/frame.scale.y,size/frame.scale.z);
+            handle.updateWorldMatrix(true, false);
             handle.visible = editing;
+            window.LightManagerUI?.gizmos?.style?.(handle, key === 'length' ? 'w' : 'u', true);
         }
         if (node.rayGizmo) {
             node.rayGizmo.material.color.set(element.selected ? 0x5ba7ff : 0xffd99a);
             node.rayGizmo.material.opacity = element.selected ? 0.8 : 0.3;
+            window.LightManagerUI?.gizmos?.style?.(node.rayGizmo, 'outline', !!element.selected);
         }
     }
 
@@ -4963,10 +4982,13 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
     }
 
     function installGodRayGizmoControls() {
-        let drag = null, hovered = null, statusBefore = '';
+        let drag = null, hovered = null, hoveredHandle = null;
         const raycaster = new THREE.Raycaster();
         const stop = event => {event.preventDefault();event.stopPropagation();event.stopImmediatePropagation();};
-        const restoreStatus = () => {if (hovered) {if(window.Prop?.file_name===hovered)Blockbench.setStatusBarText();hovered=null;}};
+        const restoreStatus = () => {
+            window.LightManagerUI?.gizmos?.highlight?.(hoveredHandle, false); hoveredHandle = null;
+            if (hovered) {if(window.Prop?.file_name===hovered)Blockbench.setStatusBarText();hovered=null;}
+        };
         const project = (event, preview) => {
             const rect=preview.canvas.getBoundingClientRect();
             raycaster.setFromCamera(new THREE.Vector2((event.clientX-rect.left)/rect.width*2-1,1-(event.clientY-rect.top)/rect.height*2),preview.camera);
@@ -4992,7 +5014,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             const preview=Preview.all.find(p=>p.canvas===event.target)||Preview.selected;if(!preview)return;project(event,preview);
             const handles=GodRayElement.selected.flatMap(e=>Object.values(e.mesh?.rayHandles||{}).filter(h=>h.visible&&h.parent?.visible));
             const hit=raycaster.intersectObjects(handles,false)[0];
-            if(hit){hovered=tl('lightflow_god_ray.'+hit.object.userData.rayKey);Blockbench.setStatusBarText(hovered);}
+            if(hit){hoveredHandle=hit.object;window.LightManagerUI?.gizmos?.highlight?.(hoveredHandle,true);hovered=tl('lightflow_god_ray.'+hit.object.userData.rayKey);Blockbench.setStatusBarText(hovered);}
         };
         const down = event => {
             if(event.button!==0||Toolbox.selected?.id!=='lightflow_god_ray_gizmos'||!event.target?.closest?.('.preview'))return;
@@ -5001,6 +5023,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 if(element.locked||!element.mesh?.visible)continue;
                 const hit=raycaster.intersectObjects(Object.values(element.mesh.rayHandles||{}).filter(h=>h.visible),false)[0];if(!hit)continue;
                 const frame=godRayFrame(element,preview.camera),key=hit.object.userData.rayKey;
+                restoreStatus();hoveredHandle=hit.object;window.LightManagerUI?.gizmos?.highlight?.(hoveredHandle,true);
                 const plane=new THREE.Plane().setFromNormalAndCoplanarPoint(preview.camera.getWorldDirection(new THREE.Vector3()),hit.point);
                 drag={element,key,preview,project:Project,plane,start:hit.point.clone(),axis:key==='length'?frame.axis:frame.right,factor:key==='length'?1/frame.scale.y:2/frame.scale.x,before:{length:element.length,width:element.width,end_width:element.end_width},changed:false};
                 Undo.initEdit({elements:[element]});stop(event);return;
@@ -5261,10 +5284,10 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 node.raySelection = proxy;
                 node.rayHandles = {};
                 for (const [key,color] of [['length',0x67d7e8],['width',0xffd99a],['end_width',0xb2a5ff]]) {
-                    const handle = new THREE.Mesh(key==='length'?new THREE.OctahedronGeometry(.5):new THREE.BoxGeometry(1,.55,.55), new THREE.MeshBasicMaterial({color,depthTest:false,depthWrite:false}));
+                    const handle = new THREE.Mesh(key==='length'?new THREE.OctahedronGeometry(1):new THREE.BoxGeometry(1.4,1.4,1.4), new THREE.MeshBasicMaterial({color,transparent:true,depthTest:false,depthWrite:false}));
                     handle.userData.rayKey=key;handle.userData.lightflowNoShadow=true;handle.renderOrder=1100;node.rayHandles[key]=handle;node.add(handle);
                 }
-                node.rayGizmo.onBeforeRender = (_renderer,_scene,camera) => updateGodRayHelper(element,camera);
+                node.rayGizmo.onBeforeRender = (renderer,_scene,camera) => updateGodRayHelper(element,camera,renderer);
                 node.geometry = new THREE.BufferGeometry();
                 node.geometry.boundingBox = new THREE.Box3().makeEmpty();
                 node.raycast = (raycaster, hits) => {
@@ -5702,7 +5725,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         updateParticleHelper(element, record);
     }
 
-    function updateParticleHelper(element, record, camera = Preview.selected?.camera || window.main_preview?.camera) {
+    function updateParticleHelper(element, record, camera = Preview.selected?.camera || window.main_preview?.camera, renderer) {
         const node=element.mesh;if(!node?.particleGizmo)return;
         const workspace=window.LightManagerUI?.workspace;
         const show=element.visibility!==false && canShowVolumeGizmos();
@@ -5710,11 +5733,16 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         const bounds=show && (workspace?.helperVisible({selected:!!element.selected})??true);
         node.particleOrigin.visible=marker;
         const origin=node.getWorldPosition(new THREE.Vector3()), preview=Preview.all.find(p=>p.camera===camera)||Preview.selected;
-        const scale=Math.max(.08,(preview?.calculateControlScale?.(origin)||.5)*.65);
-        node.particleOrigin.scale.setScalar(scale);
-        node.particleSelection.visible=marker;node.particleSelection.scale.setScalar(scale*2);
+        const scale=window.LightManagerUI?.gizmos?.screenWorldSize?.(node, camera, renderer, 6)
+            ?? Math.max(.08,(preview?.calculateControlScale?.(origin)||.5)*.65);
+        const parentScale=node.getWorldScale(new THREE.Vector3());
+        node.particleOrigin.scale.set(scale/Math.max(.0001,Math.abs(parentScale.x)),scale/Math.max(.0001,Math.abs(parentScale.y)),scale/Math.max(.0001,Math.abs(parentScale.z)));
+        node.particleSelection.visible=marker;node.particleSelection.scale.copy(node.particleOrigin.scale).multiplyScalar(2);
+        node.particleOrigin.updateWorldMatrix(true,false);node.particleSelection.updateWorldMatrix(true,false);
         node.particleOrigin.material.color.set(element.selected?0x5ba7ff:0x78ddff);
         node.particleOrigin.material.opacity=element.selected ? .9 : .45;
+        window.LightManagerUI?.gizmos?.style?.(node.particleOrigin, 'outline', !!element.selected);
+        window.LightManagerUI?.gizmos?.style?.(node.particleGizmo, 'outline', !!element.selected);
         const config=record?.config;
         const literal=value=>typeof value==='number'&&Number.isFinite(value)?value:typeof value==='string'&&value.trim()!==''&&Number.isFinite(Number(value))?Number(value):null;
         const vector=(value,fallback)=>Array.isArray(value)?value.map(literal):fallback;
@@ -5725,6 +5753,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         node.particleGizmo.visible=bounds&&!dynamic;
         if(dynamic)return;
         node.particleGizmo.material.color.set(element.selected?0x5ba7ff:0x78ddff);node.particleGizmo.material.opacity=element.selected ? .65 : .18;
+        window.LightManagerUI?.gizmos?.style?.(node.particleGizmo, 'outline', !!element.selected);
         const signature=JSON.stringify([mode,offset,half,radius,config?.emitter_shape_plane_normal,element.particle_size,element.selected,mode==='point'?scale:0]);
         if(node.userData.particleShapeSignature===signature)return;
         node.userData.particleShapeSignature=signature;
@@ -5922,7 +5951,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             dialog.validationNode.style.color = state.error ? 'var(--color-error)' : 'var(--color-subtle_text)';
             dialog.form.form_data.source.bar.querySelector('textarea')?.setAttribute('aria-invalid', String(!!state.error));
         };
-        dialog = showEffectDialog('lightflow_particle_json_dialog', { title: uiText('edit_json'), width: 720,
+        dialog = showEffectDialog('lightflow_particle_json_dialog', { title: uiText('edit_json'), width: 720, resizable:true,
             form: {
                 source: window.LightManagerUI.formDesign.code({label:'Bedrock .particle.json',language:'json',mode:'visual',height:280,value:formatted,validate:source=>validate(source).error||''})
             },
@@ -5990,7 +6019,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             form[id]=window.LightManagerUI.formDesign.code({language:scalar?'molang':'json',height:100,label:uiText(label),value:initial[id],placeholder,readonly:!scalar,condition:result=>result._expression_tab===category});
         }
         form._help={type:'info',text:uiText('variables_help')};
-        showEffectDialog('lightflow_particle_expressions',{title:uiText('variables').replace(/…$/,''),width:560,form,onConfirm(result){
+        showEffectDialog('lightflow_particle_expressions',{title:uiText('variables').replace(/…$/,''),width:720,resizable:true,form,onConfirm(result){
             if(!ParticleEffectElement.all.includes(element))return;
             const current=particleJSONControls(element).json;if(!current?.particle_effect?.components)return false;
             const next=current.particle_effect.components;let changed=false;
@@ -6317,7 +6346,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                     new THREE.Vector3(-.5,0,0),new THREE.Vector3(.5,0,0),new THREE.Vector3(0,-.5,0),new THREE.Vector3(0,.5,0),new THREE.Vector3(0,0,-.5),new THREE.Vector3(0,0,.5)
                 ]),new THREE.LineBasicMaterial({color:0x78ddff,transparent:true,opacity:.7,depthTest:false,depthWrite:false}));
                 node.particleOrigin.raycast=()=>{};node.particleOrigin.renderOrder=1100;
-                node.particleOrigin.onBeforeRender=(_renderer,_scene,camera)=>updateParticleHelper(element,particleEffectRecords.get(element.uuid),camera);
+                node.particleOrigin.onBeforeRender=(renderer,_scene,camera)=>updateParticleHelper(element,particleEffectRecords.get(element.uuid),camera,renderer);
                 node.particleSelection = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2),
                     new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: false, side: THREE.DoubleSide }));
                 node.particleSelection.name = element.uuid;
@@ -6651,13 +6680,16 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 const boxSourceGeometry = new THREE.BoxGeometry(1, 1, 1);
                 const sphereSourceGeometry = new THREE.SphereGeometry(0.5, 16, 10);
                 const boxGeometry = new THREE.EdgesGeometry(boxSourceGeometry);
-                const sphereGeometry = new THREE.WireframeGeometry(sphereSourceGeometry);
+                const sphereGeometry = window.LightManagerUI?.gizmos?.sphereOutline?.() || new THREE.WireframeGeometry(sphereSourceGeometry);
                 boxSourceGeometry.dispose();
                 sphereSourceGeometry.dispose();
                 mesh.boxGizmo = new THREE.LineSegments(boxGeometry, lineMaterial);
                 mesh.sphereGizmo = new THREE.LineSegments(sphereGeometry, lineMaterial.clone());
                 mesh.boxGizmo.raycast = () => { };
                 mesh.sphereGizmo.raycast = () => { };
+                [mesh.boxGizmo, mesh.sphereGizmo].forEach(gizmo => {
+                    gizmo.onBeforeRender = () => window.LightManagerUI?.gizmos?.style?.(gizmo, 'outline', !!element.selected);
+                });
                 mesh.add(mesh.boxGizmo, mesh.sphereGizmo);
 
                 const selectionMaterial = new THREE.MeshBasicMaterial({

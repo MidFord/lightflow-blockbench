@@ -8930,6 +8930,8 @@
                 cancel.disabled = true;
                 label.textContent = translate('studio_render.workflow.cancelling');
             });
+            const activity = window.LightManagerUI?.progress?.loadingIndicatorHTML?.();
+            if (activity) node.insertAdjacentHTML('afterbegin', activity);
             node.append(label, cancel);
             sourcePreview.node.append(node);
             renderSession.progressUI = {node, label};
@@ -11410,9 +11412,10 @@
         const items = presets.map(preset => ({
             id: 'studio_render_camera_preset_' + preset.id,
             name: preset.name,
+            description: preset.name,
             icon: preset.camera.projection === 'orthographic' ? 'videocam' : 'photo_camera',
-            click: () => usePreset(preset),
             children: [
+                {name:'studio_render.button.apply_preset',icon:'check',click:()=>usePreset(preset)},
                 {name:translate('studio_render.menu.camera.create_physical'),icon:'add_a_photo',
                     condition:()=>!!window.LightflowCinematic?.createCameraFromShot,
                     click:()=>window.LightflowCinematic.createCameraFromShot(preset)},
@@ -13251,13 +13254,14 @@
                 #studio_render_camera_presets .button_bar button { padding-inline: 8px; flex: 1; }
             }
             .lightflow_render_progress {
+                --lf-progress-radius: 12px; --lf-progress-padding: 4px; --lf-progress-border: 1px;
                 position: absolute; left: 12px; bottom: 12px; z-index: 35;
-                display: flex; align-items: center; gap: 12px; max-width: calc(100% - 24px);
-                padding: 6px 8px; border: 1px solid var(--color-border); border-radius: 4px;
+                display: flex; align-items: center; gap: 12px; box-sizing: border-box; max-width: calc(100% - 24px);
+                padding: var(--lf-progress-padding); border: var(--lf-progress-border) solid var(--color-border); border-radius: var(--lf-progress-radius);
                 background: var(--color-ui); color: var(--color-text); font-size: 13px;
             }
-            .lightflow_render_progress span { min-width: 0; overflow-wrap: anywhere; }
-            .lightflow_render_progress button { min-height: 28px; flex-shrink: 0; }
+            .lightflow_render_progress span { min-width: 0; padding-inline-start: 4px; overflow-wrap: anywhere; }
+            .lightflow_render_progress button { min-height: 28px; flex-shrink: 0; border-radius: max(0px, calc(var(--lf-progress-radius) - var(--lf-progress-padding) - var(--lf-progress-border))); }
             #studio_render .form_bar__studio_workflow_tab { position: sticky; top: 0; z-index: 2; background: var(--color-ui); }
             #studio_render .dialog_content {
                 scrollbar-gutter: stable;
@@ -13536,6 +13540,12 @@
             }
             .studio_render_camera_presets_menu {
                 min-width: 270px;
+            }
+            .studio_render_camera_presets_menu li[menu_item="studio_camera_presets"] > ul.contextMenu.sub {
+                max-width: min(360px, calc(100vw - 16px)) !important;
+            }
+            .studio_render_camera_presets_menu li[menu_item^="studio_render_camera_preset_"] > span {
+                flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
             }
             .studio_render_quick_selector_menu {
                 min-width: 220px;

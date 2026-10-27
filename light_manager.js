@@ -325,7 +325,7 @@ function mountLightflowPlaybackViewer(root, media, options = {}) {
     .lf-playback-viewer .lf-playback-row button[aria-pressed=true]:not(.lf-playback-play){background:var(--color-button);color:var(--color-accent);}
     .lf-playback-viewer .lf-playback-row button:disabled{opacity:.4;}
     .lf-playback-viewer .lf-playback-row .icon{font-size:20px;width:20px;height:20px;}
-    .lf-playback-viewer .lf-playback-speed{width:58px;min-width:58px;height:30px;min-height:30px;margin:0;padding:0 4px;background:var(--color-button);color:var(--color-text);border:0;border-radius:8px;font-size:12px;}
+    .lf-playback-viewer .lf-playback-speed{width:58px;min-width:58px;height:30px;min-height:30px;margin:0;padding:0 16px;background:var(--color-button);color:var(--color-text);border:0;border-radius:8px;font-size:12px;}
     .lf-playback-viewer .lf-playback-seek{display:block;appearance:none;box-sizing:border-box;width:100%;min-width:0;height:20px;margin:0 0 4px;padding:0;background:transparent;cursor:pointer;}
     .lf-playback-seek::-webkit-slider-runnable-track{height:3px;border-radius:2px;background:linear-gradient(to right,var(--color-accent) var(--lf-progress,0%),var(--color-button) var(--lf-progress,0%));}
     .lf-playback-seek::-webkit-slider-thumb{appearance:none;width:11px;height:11px;margin-top:-4px;border:2px solid var(--color-back);border-radius:50%;background:var(--color-accent);box-shadow:0 0 0 1px var(--color-accent);}
@@ -634,19 +634,23 @@ function installLightflowControlStyles() {
         .lf-code-editor {width:100%;min-width:0;border:1px solid var(--color-border);border-radius:var(--lf-radius-control,8px);background:var(--color-back);overflow:hidden;}
         .lf-code-label {display:block;padding:8px;font-weight:600;overflow-wrap:anywhere;}
         .lf-code-toolbar {display:flex;align-items:center;gap:4px;padding:4px;border-bottom:1px solid var(--color-border);flex-wrap:wrap;}
-        .lf-code-toolbar > button {min-height:28px;padding:4px 8px;border-radius:6px;background:transparent;color:var(--color-text);}
-        .lf-code-toolbar > button[aria-pressed=true] {background:var(--color-button);box-shadow:inset 0 -2px var(--color-accent);}
         .lf-code-toolbar > .form {flex:1 1 160px;min-width:0;margin:0;}
         .lf-code-toolbar > .form > .dialog_bar {margin:0;padding:0;}
         .lf-code-toolbar > span {margin-left:auto;color:var(--color-subtle_text);font-size:11px;}
+        .lf-code-toolbar .lf-tabs[data-presentation=flat] {background:transparent!important;}
+        .lf-code-toolbar .lf-tabs[data-presentation=flat] > button {background:transparent!important;color:var(--color-subtle_text)!important;}
+        .lf-code-toolbar .lf-tabs[data-presentation=flat] > button.selected {background:var(--color-back)!important;color:var(--color-text)!important;}
         .lf-code-source {position:relative;display:grid;grid-template-columns:40px minmax(0,1fr);min-width:0;}
         .lf-code-source pre,.lf-code-source textarea {font-family:var(--font-code,monospace);font-size:13px;line-height:20px;tab-size:2;letter-spacing:normal;padding:8px;margin:0;border:0;box-sizing:border-box;white-space:pre;}
         .lf-code-source .lf-code-gutter {position:absolute;inset:0 auto 0 0;width:40px;overflow:hidden;text-align:right;color:var(--color-subtle_text);background:var(--color-ui);user-select:none;}
         .lf-code-source .lf-code-highlight {position:absolute;inset:0 0 0 40px;overflow:auto;scrollbar-width:none;pointer-events:none;color:var(--color-text);}
-        .lf-code-source textarea.lf-code-input {grid-column:2;width:100%;min-width:0;min-height:100px;max-height:min(480px,60vh);position:relative;background:transparent;color:transparent;caret-color:var(--color-text);resize:vertical;overflow:auto;outline-offset:-2px;}
+        .lf-code-source textarea.lf-code-input {grid-column:2;width:100%;min-width:0;min-height:180px;max-height:min(600px,65vh);position:relative;background:transparent;color:transparent;caret-color:var(--color-text);resize:vertical;overflow:auto;outline-offset:-2px;}
+        .lf-code-source.lf-code-native {display:block;}
+        .lf-code-source.lf-code-native > .prism-editor-component {min-width:0;min-height:160px;max-height:min(600px,65vh);resize:vertical;overflow:auto;}
+        .lf-code-source.lf-code-native .prism-editor-wrapper {min-height:100%;}
         @media (forced-colors:active) { .lf-code-source textarea.lf-code-input {color:CanvasText;caret-color:CanvasText;} .lf-code-highlight {visibility:hidden;} }
         .lf-code-input::selection {background:color-mix(in srgb,var(--color-accent) 35%,transparent);}
-        .lf-code-key {color:var(--color-text);font-weight:600;}.lf-code-string {color:var(--color-subtle_text);}.lf-code-number {color:var(--color-text);font-weight:600;}
+        .lf-code-highlight .token.property {color:var(--color-accent);}.lf-code-highlight .token.string {color:var(--color-text);}.lf-code-highlight .token.number,.lf-code-highlight .token.boolean,.lf-code-highlight .token.null {color:var(--color-accent);font-weight:600;}
         .lf-code-properties {padding:8px;max-height:min(480px,60vh);overflow:auto;min-width:0;}
         .lf-code-properties details {min-width:0;margin-bottom:4px;}.lf-code-properties summary {padding:6px 4px;cursor:pointer;overflow-wrap:anywhere;}.lf-code-properties details > div {padding-left:8px;border-left:1px solid var(--color-border);min-width:0;}
         .lf-code-properties .form_bar {min-width:0;}.lf-code-status {padding:6px 8px;font-size:12px;line-height:1.4;color:var(--color-subtle_text);overflow-wrap:anywhere;border-top:1px solid var(--color-border);}.lf-code-status.invalid {color:var(--color-error);}
@@ -783,7 +787,8 @@ function installLightflowControlStyles() {
         .lf-outliner-select { width:100%; min-width:0; display:flex; flex-direction:column; gap:8px; }
         .lf-outliner-search { width:100%; min-width:0; }
         .lf-outliner-tree { max-height:min(400px,calc(100vh - 240px)); overflow:auto; padding:2px; }
-        .lf-outliner-row { display:grid; grid-template-columns:24px minmax(0,1fr) 118px; align-items:center; gap:4px; min-height:32px; padding:2px 4px; border-bottom:1px solid var(--color-border); }
+        .lf-outliner-row { display:grid; grid-template-columns:24px 18px minmax(0,1fr) 118px; align-items:center; gap:4px; min-height:32px; padding:2px 4px 2px calc(4px + var(--lf-tree-indent, 0px)); border-bottom:1px solid var(--color-border); }
+        .lf-outliner-row > .lf-outliner-icon { width:18px; height:18px; font-size:18px; margin:0; color:var(--color-subtle_text); }
         .lf-outliner-row > span { min-width:0; overflow-wrap:anywhere; }
         .lf-outliner-row select { min-width:0; width:100%; height:28px; }
         .lf-controls .lf-outliner-row button { width:24px!important; min-width:0!important; max-width:24px!important; height:24px!important; padding:0!important; background:transparent; border:0; box-shadow:none; }
@@ -1275,6 +1280,17 @@ const lightManagerIconsApi = {
 
 // Built-in example: this is a real SVG icon registered once and then consumed
 // by name through Blockbench's normal `icon:` API below.
+const LIGHTFLOW_LANTERN_LOADING_GIF = 'data:image/gif;base64,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';
+const LIGHTFLOW_LANTERN_LOADING_STILL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwCAYAAABXAvmHAAADEUlEQVR4nO2av2/TQBTHv3722U2bJhW0NKUTrSoQgglRBqRO5fdCWRhY+0+wof4LsCGxsbAglgqEBAsUAUKqkJCoKkCIVqhUpb8SktixjWwnaRybxE7sNAd8huTu3d3zvfvxfPcSoT8zCZ4hcA6BcwicI7XSaOfJuBl1R1IXPgkdM8Di5GwuUD0iQjqdgUCCS1Zh9tpT3Dh96t9dQgTOkeJQSiRBEJwlQ2Isj6gSi3ZFSSHRm0AnIHCO1Gl3GfZZqSbuVWqkUN3I4vXikm95IX/E/tY01SU/MHgIIpVgGu7+SIyBSPToWVkpYSH7ziMvHT+GqeG+Rn1vbIBtxO4mzt3aW2VMSUBmveVc1v5Ui7vVcllRMDIy6himOuUVEokhiD4b+vGbS3iY27LT1sY3Tcfwma1XmJo5w8ceEMoey+p8JR2UeH1cCISajocxoitmoB0Cz4BCEgxEj2EY1XVvEXYJdcUMCCE7Hf0e8HGPgZsStWVEUwOuZz5CKQJiD5BKijg/d9GWMyZC03TM33y5p4yJmBxe99Uzffss0gdPeOQvni9j7e6iRz4g56MxICymUepIm67aA+3w34D9hsA5BM6RmlXQc0DRSmQtNwrIS8u2XCRAK+r4ZRcCzNakQ9t2Tpb1pL/2A9/fe+Tjm2v45tumLxoDnG45lDQdqubkZCYCehZ6oVzYU66j+k+qursKOXnYI/+yuuHbxvwgA1c6uITMYO+dyKGoFAmducP/fZuYwDkEzpGaVdCYvJfWVdvzWKhIYn0jh2L5HKYUAJYEVOPPAYK04H/sVo0YDXj0c6yaZrkE7t+pRCUsMu6ohKbg7dBRXz0P7vlHJfKFURRo2yO/OrGAaR6WkGE4w197raxNR2uAUXmlRQfV/FYQf1SijatjUMwQo994D+imKyJhEUdUon7UY4lKFNu48rU1A7rZ/Zu41aUTyI2mU4N4NvejnLOi0CryE/UnygFXjrEdX11E7mCvnyeqZWJ7GEEQGv3VYGd+zDssYutBqEDo7kemLn8WWjaABwicQ+Ac2u8OtMtv+8De/34UDh0AAAAASUVORK5CYII=';
+
+// Decorative activity cue: the adjacent live text owns the accessible status.
+// A real still frame avoids animating GIFs for reduced-motion preferences.
+function createLightflowLoadingIndicatorHTML() {
+    return `<picture class="lightflow_loading_lantern" aria-hidden="true" style="display:inline-flex;width:32px;height:32px;flex:0 0 32px;align-items:center;justify-content:center;pointer-events:none"><source media="(prefers-reduced-motion: reduce)" srcset="${LIGHTFLOW_LANTERN_LOADING_STILL}"><img src="${LIGHTFLOW_LANTERN_LOADING_GIF}" alt="" width="32" height="32" style="display:block;width:32px;height:32px;object-fit:contain;image-rendering:pixelated"></picture>`;
+}
+
+
+
 const LIGHT_MANAGER_PLUGIN_ICON = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABUAAAAVCAYAAACpF6WWAAABcElEQVR4AbSSzytEURTHv142MlmwmJXdMAslRfazkA2lLG2sNBbsZS1/gJTsLZWFspBsLKTZivEjNsqPzIaRRKPPq3N73e4zb8Krzzs/7jnfe7qdqFDoa/w1kTJ81eqcIENpXJJJNK5s4edEmQRCvcXipiB0Ru50qyTABydK4ENhEi41/Npk7ESZBJKH+GPLzzImpi8E5JMMzBwKLOdELYGtLBQE+EZnrtvc2P40cVCUrtGNBw2Xz3R/d0Oo+msttvxK48cC/BCpoqHirLlU0cGOJy3O54Wd7LoW7G73C/BB3mdPkirq1QfDz8plMB/ZyvinH/V3fd0+CvtWexEgAvjg97A98KtJfVGLI/YLLGH2POrV+l5D2IP2IcHUakOAD1br2/+Z1L/F4pNyXkezOWH3V3oEO0ttAnywWt8GJx1Zu1ISnicNX5DYidqOkWwVv9eJNhNKW71QnxNlvyBU1CxHH1idE7VEmrU3TTtP5r8BAAD//xoLiVwAAAAGSURBVAMAh6vDB21yRkMAAAAASUVORK5CYII=';
 
 const LIGHTFLOW_ADD_LIGHTBULB_ICON = lightManagerIconsApi.registerSVG(
@@ -1283,6 +1299,15 @@ const LIGHTFLOW_ADD_LIGHTBULB_ICON = lightManagerIconsApi.registerSVG(
     {
         monochrome: true,
         fallback: 'lightbulb_add'
+    }
+);
+
+const LIGHTFLOW_CLAPPERBOARD_ICON = lightManagerIconsApi.registerSVG(
+    'lightflow:clapperboard',
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><path d="M24.07 9.76a2.394 2.394 0 0 0-2.71-2.04l-.75.11-.85 2.54 4.32-.61Zm-6.97.98.85-2.54-3.88.55-.85 2.54zm-6.54.92.85-2.54-1.94.27c-1.31.18-2.23 1.4-2.04 2.71zm10.46-6.32a4.796 4.796 0 0 1 5.42 4.09l.17 1.19c.09.66-.37 1.26-1.02 1.36L8.3 14.41h17.49c.66 0 1.2.54 1.2 1.2v4.19c0 .97 0 1.76-.05 2.41-.06.67-.17 1.29-.47 1.88a4.8 4.8 0 0 1-2.1 2.1c-.58.3-1.2.42-1.88.47-.65.05-1.45.05-2.41.05H12.3c-.97 0-1.76 0-2.41-.05-.67-.06-1.29-.17-1.88-.47a4.8 4.8 0 0 1-2.1-2.1c-.3-.58-.42-1.2-.47-1.88-.05-.65-.05-1.45-.05-2.41v-5.03l-.33-2.33a4.796 4.796 0 0 1 4.09-5.42l11.88-1.67ZM7.78 16.8v2.94c0 1.03 0 1.73.05 2.27.04.53.12.8.22.98.23.45.6.82 1.05 1.05.19.1.46.17.98.22.54.04 1.24.05 2.27.05h7.68c1.03 0 1.73 0 2.27-.05.53-.04.8-.12.98-.22.45-.23.82-.6 1.05-1.05.1-.19.17-.46.22-.98.04-.54.04-1.24.04-2.27V16.8H7.79Z" style="fill-rule:evenodd;stroke-width:0"/></svg>`,
+    {
+        monochrome: true,
+        fallback: 'movie'
     }
 );
 
@@ -5735,13 +5760,56 @@ function getLightManagerScreenWorldSize(object, camera, renderer, pixels = 120) 
     object.getWorldPosition(worldPosition);
     camera.updateWorldMatrix?.(true, false);
     const distance = Math.max(0.001, Math.abs(worldPosition.applyMatrix4(camera.matrixWorldInverse).z));
-    const fov = THREE.MathUtils.degToRad(Number(camera.fov) || 45);
+    const fov = THREE.MathUtils.degToRad(Number(camera.getEffectiveFOV?.() ?? camera.fov) || 45);
     return 2 * distance * Math.tan(fov * 0.5) * (pixels / viewportHeight);
 }
 
 function getLightManagerScreenScale(object, camera, renderer, logicalExtent = 1, pixels = 120) {
     const safeExtent = Math.max(0.0001, Number(logicalExtent) || 1);
     return getLightManagerScreenWorldSize(object, camera, renderer, pixels) / safeExtent;
+}
+
+// Read Blockbench's live palette instead of caching theme-specific hex colors.
+function refreshLightflowGizmoStyle(object) {
+    const style = object?.userData?.lightflowGizmoStyle;
+    const material = object?.material;
+    if (!style || !material?.color) return;
+    const palette = window.Canvas?.gizmo_colors || {};
+    const color = style.hovered ? palette.gizmo_hover
+        : style.role === 'outline' ? (style.selected ? window.Canvas?.outlineMaterial?.color : window.Canvas?.outlineUnselectedMaterial?.color)
+            : palette[style.role];
+    if (color) material.color.copy(color);
+    material.opacity = style.hovered ? 1 : style.role === 'outline' ? (style.selected ? 0.75 : 0.28) : 0.95;
+}
+
+function styleLightflowGizmo(object, role = 'outline', selected = false) {
+    if (!object) return;
+    object.userData.lightflowGizmoStyle ||= {};
+    object.userData.lightflowGizmoStyle.role = role;
+    object.userData.lightflowGizmoStyle.selected = selected;
+    refreshLightflowGizmoStyle(object);
+}
+
+function highlightLightflowGizmo(object, hovered) {
+    if (!object?.userData?.lightflowGizmoStyle) return;
+    object.userData.lightflowGizmoStyle.hovered = !!hovered;
+    refreshLightflowGizmoStyle(object);
+}
+
+function createLightflowSphereOutline() {
+    const vertices = [];
+    for (let axis = 0; axis < 3; axis++) for (let index = 0; index < 48; index++) {
+        for (const step of [index, index + 1]) {
+            const angle = step / 48 * Math.PI * 2;
+            const point = [0, 0, 0];
+            point[(axis + 1) % 3] = Math.cos(angle) * 0.5;
+            point[(axis + 2) % 3] = Math.sin(angle) * 0.5;
+            vertices.push(...point);
+        }
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3));
+    return geometry;
 }
 
 if (window.LightManagerAreaGizmos && typeof window.LightManagerAreaGizmos.clear === 'function') {
@@ -5967,6 +6035,7 @@ window.LightManagerAreaGizmos = {
 
         const helper = { root, line, material, signature: '', logicalExtent: 1, element };
         line.onBeforeRender = (renderer, _scene, camera) => {
+            styleLightflowGizmo(line, 'outline', !!helper.element?.selected);
             const targetPixels = helper.element?.selected ? 156 : 112;
             const scale = ['directional', 'spot'].includes(helper.element?.light_type) && helper.element?.has_shadow !== false
                 ? 1 : getLightManagerScreenScale(root, camera, renderer, helper.logicalExtent, targetPixels);
@@ -6320,6 +6389,10 @@ window.LightManagerViewportControls = {
         mesh.name = `light_manager_handle_${type}_${element.uuid}`;
         mesh.renderOrder = 1003;
         mesh.userData.lightManagerHandle = { uuid: element.uuid, type, ...extra };
+        const role = extra.axis ? ({ x: 'r', y: 'g', z: 'b' })[extra.axis]
+            : type === 'penumbra' || type === 'shadow_far' ? 'v'
+                : type === 'cone_angle' || type === 'shadow_near' ? 'u' : 'w';
+        styleLightflowGizmo(mesh, role, true);
         return mesh;
     },
 
@@ -6386,8 +6459,16 @@ window.LightManagerViewportControls = {
         helper.targetLines = targetLines;
         const updateTargetScale = (renderer, _scene, camera) => {
             if (!targetRoot.visible) return;
-            const size = getLightManagerScreenWorldSize(targetRoot, camera, renderer, 8);
-            const length = size * 5;
+            Object.values(helper.targetHandles).forEach(refreshLightflowGizmoStyle);
+            const colors = targetLines.geometry.getAttribute('color');
+            ['target', 'x', 'y', 'z'].forEach((key, index) => {
+                const color = helper.targetHandles[key].material.color;
+                colors.setXYZ(index * 2, color.r, color.g, color.b);
+                colors.setXYZ(index * 2 + 1, color.r, color.g, color.b);
+            });
+            colors.needsUpdate = true;
+            const size = getLightManagerScreenWorldSize(targetRoot, camera, renderer, 5);
+            const length = size * 6;
             const start = helper.root.position.clone().sub(targetRoot.position);
             const signature = [size, start.x, start.y, start.z].join('|');
             if (helper.targetScaleSignature === signature) return;
@@ -6407,6 +6488,7 @@ window.LightManagerViewportControls = {
         targetLines.onBeforeRender = updateTargetScale;
         Object.values(helper.targetHandles).forEach(handle => { handle.onBeforeRender = updateTargetScale; });
         const applyScreenSpaceScale = (renderer, _scene, camera) => {
+            styleLightflowGizmo(guideLine, 'outline', true);
             const displayScale = helper.worldShadowRegion ? 1 : this.drag?.light === helper.element && this.drag.displayScale
                 ? this.drag.displayScale : getLightManagerScreenScale(
                     root,
@@ -6426,8 +6508,11 @@ window.LightManagerViewportControls = {
                     position.needsUpdate = true;
                 }
             }
+            root.updateWorldMatrix?.(true, true);
             Object.values(handles).forEach(handle => {
-                const desiredWorldScale = Number(handle.userData?.lightflowScreenHandleScale) || 0;
+                if (!handle.visible) return;
+                refreshLightflowGizmoStyle(handle);
+                const desiredWorldScale = getLightManagerScreenWorldSize(handle, camera, renderer, 5);
                 handle.scale.setScalar(desiredWorldScale / Math.max(0.0001, displayScale));
             });
             root.updateWorldMatrix?.(true, true);
@@ -6602,7 +6687,7 @@ window.LightManagerViewportControls = {
         const bounds = Math.max(0.001, this.num(element.shadow_bounds, 35));
         const aimDistance = lightType === 'directional'
             ? 16
-            : Math.max(4, Math.min(range, 48));
+            : Math.max(0.001, Math.min(range * 0.55, 24));
 
         this.setHandle(helper, 'aim', !this.hasAimTarget(element) && (lightType === 'directional' || lightType === 'spot'), new THREE.Vector3(0, 0, -aimDistance), scale);
         if (lightType === 'directional' || lightType === 'spot') {
@@ -6613,10 +6698,10 @@ window.LightManagerViewportControls = {
         if (lightType === 'point') vertices.push(0, 0, 0, range, 0, 0);
 
         this.setHandle(helper, 'cone', lightType === 'spot', new THREE.Vector3(radius, 0, -range), scale);
-        this.setHandle(helper, 'penumbra', lightType === 'spot', new THREE.Vector3(innerRadius, 0, -range * 0.96), scale * 0.82);
+        this.setHandle(helper, 'penumbra', lightType === 'spot', new THREE.Vector3(-innerRadius, 0, -range), scale * 0.82);
         if (lightType === 'spot') {
             vertices.push(0, 0, 0, radius, 0, -range);
-            vertices.push(0, 0, 0, innerRadius, 0, -range * 0.96);
+            vertices.push(0, 0, 0, -innerRadius, 0, -range);
             this.setHandle(helper, 'range', true, new THREE.Vector3(0, 0, -range), scale);
         }
 
@@ -6775,9 +6860,9 @@ window.LightManagerViewportControls = {
 
     setHoveredHandle(handle) {
         if (this.hoveredHandle === handle) return;
-        if (this.hoveredHandle?.material) this.hoveredHandle.material.opacity = 0.9;
+        highlightLightflowGizmo(this.hoveredHandle, false);
         this.hoveredHandle = handle || null;
-        if (this.hoveredHandle?.material) this.hoveredHandle.material.opacity = 1;
+        highlightLightflowGizmo(this.hoveredHandle, true);
         if (this.hoveredHandle) {
             const type = this.hoveredHandle.userData.lightManagerHandle.type;
             const text = type.startsWith('target') ? translateLightManager('light_manager.target.move') : this.getHandleUndoLabel(type);
@@ -6813,7 +6898,7 @@ window.LightManagerViewportControls = {
         return window.OutlinerNode && OutlinerNode.uuids ? OutlinerNode.uuids[uuid] : null;
     },
 
-    beginHandleDrag(light, handleData, hitPoint, preview, event) {
+    beginHandleDrag(light, handleData, hitPoint, preview, event, handleObject) {
         if (!light || !handleData || !hitPoint || !preview) return;
         Undo.initEdit({ elements: [light] });
         this.drag = {
@@ -6832,6 +6917,9 @@ window.LightManagerViewportControls = {
             plane: this.createCameraPlane(preview, hitPoint),
             label: this.getHandleUndoLabel(handleData.type),
             startPoint: hitPoint.clone(),
+            grabOffset: handleObject ? hitPoint.clone().sub(handleObject.getWorldPosition(new THREE.Vector3())) : new THREE.Vector3(),
+            pointerStart: [event.clientX, event.clientY],
+            moved: false,
             start: {
                 distance: light.distance,
                 angle: light.angle,
@@ -6855,7 +6943,6 @@ window.LightManagerViewportControls = {
             this.drag.startPoint = this.projectEventToPlane(event, preview, this.drag.plane) || target;
         }
         this.stopEvent(event);
-        this.updateHandleDrag(event);
     },
 
     getHandleUndoLabel(handle) {
@@ -6901,7 +6988,10 @@ window.LightManagerViewportControls = {
             this.refreshLight(light, 'aim_target');
             return;
         }
-        const local = this.getLocalDragPoint(light, point);
+        // Keep the grab point relative to the handle's center. Picking a face
+        // must not add the handle's own thickness to a numeric parameter.
+        const controlPoint = point.clone().sub(drag.grabOffset);
+        const local = this.getLocalDragPoint(light, controlPoint);
         if (!local) return;
 
         if (drag.handle === 'art_point') {
@@ -6916,7 +7006,7 @@ window.LightManagerViewportControls = {
             return;
         }
         if (drag.handle === 'aim') {
-            window.LightManagerFitTool?.setLightLookAt(light, point);
+            window.LightManagerFitTool?.setLightLookAt(light, controlPoint);
             this.refreshLight(light, 'rotation');
             return;
         }
@@ -7190,7 +7280,8 @@ window.LightManagerViewportControls = {
     finishDrag() {
         if (!this.drag) return;
         const label = this.drag.label;
-        Undo.finishEdit(label);
+        if (this.drag.mode === 'light_handle' && !this.drag.moved) Undo.cancelEdit(false);
+        else Undo.finishEdit(label);
         this.drag = null;
         this.clearMoveIndicator();
         updateSelection();
@@ -7225,7 +7316,8 @@ window.LightManagerViewportControls = {
         const handleData = hit.object.userData.lightManagerHandle;
         const light = this.getLightByUuid(handleData.uuid);
         if (!light || light.locked) return;
-        this.beginHandleDrag(light, handleData, hit.point, preview, event);
+        this.setHoveredHandle(hit.object);
+        this.beginHandleDrag(light, handleData, hit.point, preview, event, hit.object);
     },
 
     onPointerMove(event) {
@@ -7243,7 +7335,11 @@ window.LightManagerViewportControls = {
             return;
         }
         this.stopEvent(event);
-        if (this.drag.mode === 'light_handle') this.updateHandleDrag(event);
+        if (this.drag.mode === 'light_handle') {
+            if (!this.drag.moved && Math.hypot(event.clientX - this.drag.pointerStart[0], event.clientY - this.drag.pointerStart[1]) < 2) return;
+            this.drag.moved = true;
+            this.updateHandleDrag(event);
+        }
         else if (this.drag.mode === 'free_move') this.applyFreeMoveDrag(event);
     },
 
@@ -8231,7 +8327,6 @@ function initializeLightManagerPlugin() {
         'light_manager.ui.loading': 'Loading preview…',
         'light_manager.ui.search_shortcut': 'Find setting · Ctrl+Shift+F',
         'light_manager.ui.viewport_tools': 'Lightflow scene tools',
-        'light_manager.ui.render_toolbar': 'Compose and render',
         'light_manager.ui.edit_selection': 'Edit model',
         'light_manager.ui.edit_selection_desc': 'Switch to Edit mode to change geometry or UVs.',
         'light_manager.ui.inspect_material': 'Inspect material',
@@ -8374,6 +8469,7 @@ function initializeLightManagerPlugin() {
         'light_manager.art.only': 'Included only',
         'light_manager.art.targets': 'Include / exclude elements',
         'light_manager.art.auto': 'Box',
+        'light_manager.ui.target_auto': 'Automatic',
         'light_manager.art.include': 'Include',
         'light_manager.art.exclude': 'Exclude',
         'light_manager.art.strength': 'Glow / Rim strength',
@@ -8642,6 +8738,7 @@ function initializeLightManagerPlugin() {
         "light_manager.inline.code": "Code",
         "light_manager.inline.properties": "Properties",
         "light_manager.inline.format": "Format",
+        "light_manager.ui.clipboard_unavailable": "Clipboard unavailable. Use your keyboard shortcut instead.",
         "light_manager.inline.draft_changes_apply_with_the_surrounding_form": "Draft · changes apply with the surrounding form",
         "light_manager.inline.empty_document_enter_json_in_code": "Empty document. Enter JSON in Code.",
         "light_manager.inline.continue_editing_this_branch_in_code": "Continue editing this branch in Code.",
@@ -8704,7 +8801,6 @@ function initializeLightManagerPlugin() {
         'light_manager.ui.loading': 'Cargando vista previa…',
         'light_manager.ui.search_shortcut': 'Buscar ajuste · Ctrl+Shift+F',
         'light_manager.ui.viewport_tools': 'Herramientas de escena Lightflow',
-        'light_manager.ui.render_toolbar': 'Componer y renderizar',
         'light_manager.ui.edit_selection': 'Editar modelo',
         'light_manager.ui.edit_selection_desc': 'Vuelve al modo Editar para modificar geometría o UV.',
         'light_manager.ui.inspect_material': 'Inspeccionar material',
@@ -8847,6 +8943,7 @@ function initializeLightManagerPlugin() {
         'light_manager.art.only': 'Solo incluidos',
         'light_manager.art.targets': 'Incluir / excluir elementos',
         'light_manager.art.auto': 'Caja',
+        'light_manager.ui.target_auto': 'Automático',
         'light_manager.art.include': 'Incluir',
         'light_manager.art.exclude': 'Excluir',
         'light_manager.art.strength': 'Fuerza Glow / Rim',
@@ -9115,6 +9212,7 @@ function initializeLightManagerPlugin() {
         "light_manager.inline.code": "Código",
         "light_manager.inline.properties": "Propiedades",
         "light_manager.inline.format": "Formatear",
+        "light_manager.ui.clipboard_unavailable": "Portapapeles no disponible. Usa el atajo de teclado.",
         "light_manager.inline.draft_changes_apply_with_the_surrounding_form": "Borrador · los cambios se aplican con el formulario",
         "light_manager.inline.empty_document_enter_json_in_code": "Documento vacío. Introduce JSON en Código.",
         "light_manager.inline.continue_editing_this_branch_in_code": "Continúa editando esta rama en Código.",
@@ -10438,7 +10536,7 @@ function initializeLightManagerPlugin() {
     function addLightManagerDesignedPanelStyles(panelId, options = {}) {
         const safeId = String(panelId || '').replace(/[^a-z0-9_-]/gi, '');
         if (!safeId || typeof Blockbench?.addCSS !== 'function') return null;
-        const selector = `#panel_${safeId}`;
+        const selector = options.lab === true ? '.lf-ui-lab-fixture' : `#panel_${safeId}`;
         const scrollbarWidth = Math.max(3, Math.min(8, Number(options.scrollbar_width) || 4));
         const rowPadding = options.row_padding || '3px 4px';
         return Blockbench.addCSS(`
@@ -10527,10 +10625,11 @@ function initializeLightManagerPlugin() {
                 flex: 1 1 50% !important;
                 min-width: 0 !important;
             }
-            ${selector} .light_manager_horizontal_select .horizontal_select_btn.selected {
+            ${selector} .light_manager_horizontal_select:not(.lf-tabs) .horizontal_select_btn.selected {
                 background: color-mix(in srgb, var(--color-accent) 68%, #000) !important;
                 color: #fff !important;
             }
+            ${selector} .light_manager_horizontal_select:not(.lf-tabs) .horizontal_select_btn.selected :is(.horizontal_select_label, .horizontal_select_icon, .icon) { color: inherit !important; }
             ${selector} .dialog_form_description {
                 font-size: 12px;
                 line-height: 1.4;
@@ -11030,9 +11129,7 @@ function initializeLightManagerPlugin() {
         };
     }
 
-    // A native, customizable toolbar connects composition with repeated captures.
-    // The host's tool/options bars and saved arrangements remain independent.
-    function createLightflowRenderToolbar() {
+    function createLightflowInspectMaterialAction() {
         const t = key => translateLightManager('light_manager.ui.' + key);
         const inspectMaterial = new Action('lightflow_inspect_material', {
             name: t('inspect_material'), description: t('inspect_material_desc'), icon: 'texture', category: 'edit',
@@ -11053,191 +11150,9 @@ function initializeLightManagerPlugin() {
             window[type]?.prototype.menu).filter(Boolean));
         if (MenuBar.menus.tools) materialMenus.add(MenuBar.menus.tools);
         materialMenus.forEach(menu => menu.addAction(inspectMaterial));
-        const toolbar = new Toolbar('lightflow_render_workflow', {
-            name: t('render_toolbar'), no_wrap: true,
-            condition: () => !!window.Project && !!Modes?.render,
-            children: ['studio_render_toggle_frame', 'studio_render_cancel']
-        });
-        const rejectedDefaults = new Set(['light_manager_add_light_menu','studio_render_camera_presets','studio_render_draft',
-            'studio_render_capture','studio_render_settings','lightflow_edit_selection','lightflow_inspect_material',
-            'lightflow_paint_pbr_channels','lightflow_scene_link_open','lightflow_scene_link_skin_pose','lightflow_scene_link_reset_pose',
-            'lightflow_find_setting','lightflow_toggle_wide_canvas']);
-        let migrationPending = toolbar.postload?.some(item => rejectedDefaults.has(item[0])) || false;
-        if (toolbar.postload) toolbar.postload = toolbar.postload.filter(item => !rejectedDefaults.has(item[0]));
-        const kept = toolbar.children.filter(item => !rejectedDefaults.has(typeof item === 'object' ? item.id || item[0] : item));
-        if (kept.length !== toolbar.children.length) {
-            toolbar.children.filter(item => !kept.includes(item)).forEach(item => item.toolbars?.remove(toolbar));
-            toolbar.children = kept; toolbar.update(true); migrationPending = true;
-        }
-        const wrapper = document.createElement('div');
-        wrapper.className = 'toolbar_wrapper lightflow_render_actions';
-        wrapper.hidden = true;
-        wrapper.setAttribute('role', 'toolbar');
-        wrapper.setAttribute('aria-label', t('render_toolbar'));
-        wrapper.append(toolbar.node);
-        document.getElementById('mode_selector')?.before(wrapper);
-        // Source actions can unload independently. Rebind their new objects at
-        // the same position while respecting explicit native customization.
-        const bindings = new Map();
-        const sourceListeners = new Map();
-        let mainToolbar = document.getElementById('main_toolbar');
-        let disposed = false, frame = null, overflowMenu = null;
-        const toolVisible = node => {
-            const style = getComputedStyle(node);
-            if (!node.getClientRects().length || style.display === 'none' || style.visibility === 'hidden') return false;
-            if (!node.parentElement.classList.contains('content')) return true;
-            const rect = node.getBoundingClientRect(), clip = node.parentElement.getBoundingClientRect();
-            return node.offsetTop < 12 && rect.left >= clip.left - 1 && rect.right <= clip.right + 1;
-        };
-        const controlsFor = () => [
-            ...toolbar.node.querySelectorAll('.content > .tool'),
-            ...toolbar.node.querySelectorAll(':scope > .toolbar_overflow_button, :scope > .toolbar_menu')
-        ].filter(toolVisible);
-        const sync = () => {
-            if (disposed) return;
-            mainToolbar = document.getElementById('main_toolbar');
-            const selector = mainToolbar?.querySelector(':scope > #mode_selector');
-            // Native mode updates may reinsert the selector. Keep it last without
-            // moving/replacing it or changing its labels, width or layout rules.
-            if (mainToolbar && selector && (wrapper.parentElement !== mainToolbar || wrapper.nextElementSibling !== selector)) mainToolbar.insertBefore(wrapper,selector);
-            const hadFocus = wrapper.contains(document.activeElement);
-            const focusedId = document.activeElement?.getAttribute('toolbar_item');
-            wrapper.hidden = !window.Project || !Modes?.render;
-            mainToolbar?.classList.toggle('lightflow-render-workflow-active', !wrapper.hidden);
-
-            // Resolve native postload slots before rebinding. Otherwise a late
-            // source action could be inserted twice by the two independent paths.
-            toolbar.update();
-            const replacements = [];
-            for (const [id, binding] of bindings) {
-                const replacement = BarItems[id];
-                if (replacement === binding.item) {
-                    if (!toolbar.children.includes(binding.item)) {
-                        bindings.delete(id); sourceListeners.get(id)?.listener?.delete(); sourceListeners.delete(id);
-                    }
-                    continue;
-                }
-                if (!replacement && !toolbar.children.some(item => item?.id === id)) continue;
-                replacements.push({id, ...binding, replacement});
-            }
-            if (replacements.length) {
-                const ids = new Set(replacements.map(binding => binding.id));
-                toolbar.children = toolbar.children.filter(item => {
-                    if (typeof item !== 'object' || !ids.has(item.id)) return true;
-                    item.toolbars?.remove(toolbar); return false;
-                });
-                for (const binding of replacements.sort((a, b) => a.index - b.index)) {
-                    if (binding.replacement) toolbar.children.splice(Math.min(binding.index, toolbar.children.length), 0, binding.replacement);
-                }
-                toolbar.update(true);
-            }
-            for (const item of toolbar.children) {
-                if (typeof item !== 'object') continue;
-                bindings.set(item.id, {item, index: toolbar.children.indexOf(item)});
-                if (sourceListeners.get(item.id)?.item !== item) {
-                    sourceListeners.get(item.id)?.listener?.delete();
-                    sourceListeners.set(item.id, {item, listener: item.on('delete', () => {
-                        if (!toolbar.children.includes(item)) {
-                            bindings.delete(item.id);
-                            sourceListeners.get(item.id)?.listener?.delete(); sourceListeners.delete(item.id);
-                            return;
-                        }
-                        // BarItem.delete normally saves a toolbar with this item
-                        // removed. A source reload must not erase customization.
-                        item.toolbars?.remove(toolbar);
-                        schedule();
-                    })});
-                }
-            }
-            toolbar.update();
-            if (migrationPending && BarItems.studio_render_toggle_frame && BarItems.studio_render_cancel) {toolbar.save(); migrationPending = false;}
-            const controls = controlsFor();
-            toolbar.node.querySelectorAll('.tool').forEach(node => { node.tabIndex = -1; });
-            controls.forEach(node => {
-                const item = BarItems[node.getAttribute('toolbar_item')];
-                if (item) {
-                    node.setAttribute('aria-label', item.name);
-                    if (item.side_menu || item.children || item.id === 'studio_render_camera_presets') node.setAttribute('aria-haspopup', 'menu');
-                }
-                else node.setAttribute('aria-label', node.classList.contains('toolbar_menu') ? tl('data.toolbar') : tl('menu.toolbar.overflow'));
-                node.setAttribute('role', 'button');
-                node.tabIndex = node === document.activeElement ? 0 : -1;
-            });
-            if (!controls.some(node => node.tabIndex === 0) && controls.length) {
-                const first = controls.find(node => focusedId && node.getAttribute('toolbar_item') === focusedId) || controls[0];
-                first.tabIndex = 0;
-                if (hadFocus) first.focus({preventScroll: true});
-            }
-        };
-        const schedule = () => {
-            if (!disposed && frame === null) frame = requestAnimationFrame(() => { frame = null; sync(); });
-        };
-        const keydown = event => {
-            const controls = controlsFor();
-            const index = controls.indexOf(event.target);
-            if (index < 0) return;
-            let next;
-            const action = BarItems[event.target.getAttribute('toolbar_item')];
-            if (event.key === 'ArrowDown' && action?.side_menu?.open) {
-                event.preventDefault(); event.stopPropagation(); action.side_menu.open(event.target); return;
-            }
-            if (event.key === 'Home') next = 0;
-            else if (event.key === 'End') next = controls.length - 1;
-            else if (['ArrowLeft', 'ArrowRight'].includes(event.key)) next = (index + (event.key === 'ArrowRight' ? 1 : -1) + controls.length) % controls.length;
-            else if (['Enter', ' '].includes(event.key)) {
-                event.preventDefault(); event.stopPropagation(); event.target.click(); schedule(); return;
-            } else return;
-            event.preventDefault(); event.stopPropagation();
-            controls.forEach((node, position) => { node.tabIndex = position === next ? 0 : -1; });
-            controls[next]?.focus();
-        };
-        wrapper.addEventListener('keydown', keydown);
-        wrapper.addEventListener('click', event => {
-            const button = event.target.closest('.toolbar_overflow_button');
-            if (!button) return;
-            // Native overflow only checks wrapped rows. A narrow toolbar can
-            // also clip its first item horizontally; keep that action reachable.
-            event.preventDefault(); event.stopImmediatePropagation();
-            const visible = new Set(controlsFor().map(node => node.getAttribute('toolbar_item')));
-            overflowMenu = new Menu('lightflow_render_overflow', toolbar.children.filter(item =>
-                typeof item === 'object' && !visible.has(item.id) && Condition(item.condition)), {class: 'toolbar_overflow_menu'});
-            overflowMenu.open(button);
-        }, true);
-        const resize = new ResizeObserver(schedule);
-        resize.observe(wrapper);
-        const overflowState = new MutationObserver(schedule);
-        const overflowButton = toolbar.node.querySelector('.toolbar_overflow_button');
-        if (overflowButton) overflowState.observe(overflowButton, {attributes: true, attributeFilter: ['style']});
-        const customization = new MutationObserver(schedule);
-        customization.observe(toolbar.node.querySelector('.content'), {childList: true});
-        const listeners = ['select_mode', 'select_project', 'close_project', 'update_selection', 'select_tool',
-            'loaded_plugin', 'unloaded_plugin', 'studio_render_started', 'studio_render_complete', 'update_interface']
-            .map(event => Blockbench.on(event, schedule));
-        const style = Blockbench.addCSS(`
-            #main_toolbar.lightflow-render-workflow-active > .tool_options { min-width:0; }
-            #main_toolbar .lightflow_render_actions { flex:0 1 auto; min-width:64px; max-width:96px; }
-            #main_toolbar .lightflow_render_actions[hidden] { display: none !important; }
-            #main_toolbar .lightflow_render_actions > .toolbar { width: 100%; min-width: 0; }
-            .lightflow_render_actions .tool:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
-        `);
-        sync();
         return {delete() {
-            disposed = true;
-            if (frame !== null) cancelAnimationFrame(frame);
-            listeners.forEach(listener => listener.delete());
-            sourceListeners.forEach(binding => binding.listener.delete());
-            resize.disconnect();
-            overflowState.disconnect();
-            customization.disconnect();
-            if (toolbar.menu === Menu.open) Menu.open.hide();
-            if (overflowMenu && overflowMenu === Menu.open) overflowMenu.hide();
-            for (const item of toolbar.children) if (typeof item === 'object') item.toolbars?.remove(toolbar);
-            toolbar.children.length = 0;
-            toolbar.node.remove(); wrapper.remove();
-            mainToolbar?.classList.remove('lightflow-render-workflow-active', 'lightflow-render-workflow-compact');
-            if (Toolbars[toolbar.id] === toolbar) delete Toolbars[toolbar.id];
             materialMenus.forEach(menu => menu.removeAction(inspectMaterial.id));
-            inspectMaterial.delete(); style.delete();
+            inspectMaterial.delete();
         }};
     }
 
@@ -12445,6 +12360,12 @@ function initializeLightManagerPlugin() {
             #right_bar.lightflow-right-workspace .lightflow-right-inspector .dialog_bar[form_type="enum_select"] { display: flex; flex-direction: column; align-items: stretch; gap: 4px; height: auto !important; padding: 5px 4px !important; }
             #right_bar.lightflow-right-workspace .lightflow-right-inspector .dialog_bar[form_type="enum_select"] > label { width: 100%; padding: 0; }
             #right_bar.lightflow-right-workspace .lightflow-right-inspector .light_manager_enum_select_input { width: 100% !important; flex: none !important; min-height: 30px; height: auto !important; white-space: normal !important; padding: 5px 26px 5px 8px !important; justify-content: flex-start; }
+            :is(#left_bar :is(#panel_lightflow_environment_panel, #panel_material_properties, #panel_lightflow_scene_composer_panel), #right_bar.lightflow-right-workspace .lightflow-right-inspector, .lf-ui-lab) .dialog_bar[form_type="enum_select"] {
+                display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px; height: auto !important;
+            }
+            :is(#left_bar :is(#panel_lightflow_environment_panel, #panel_material_properties, #panel_lightflow_scene_composer_panel), #right_bar.lightflow-right-workspace .lightflow-right-inspector, .lf-ui-lab) .dialog_bar[form_type="enum_select"] > label { grid-column: 1 / -1; }
+            :is(#left_bar :is(#panel_lightflow_environment_panel, #panel_material_properties, #panel_lightflow_scene_composer_panel), #right_bar.lightflow-right-workspace .lightflow-right-inspector, .lf-ui-lab) .dialog_bar[form_type="enum_select"] > .light_manager_enum_select_input { grid-column: 1; min-width: 0; width: 100% !important; }
+            :is(#left_bar :is(#panel_lightflow_environment_panel, #panel_material_properties, #panel_lightflow_scene_composer_panel), #right_bar.lightflow-right-workspace .lightflow-right-inspector, .lf-ui-lab) .dialog_bar[form_type="enum_select"] > .light_manager_enum_reset { grid-column: 2; width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; }
             #right_bar.lightflow-right-workspace .lightflow-right-inspector .light_manager_form_variant_panel_tabs { position: static !important; }
             #right_bar.lightflow-right-workspace :is(#panel_lightflow_atmosphere_properties,#panel_lightflow_god_ray_properties) .light_manager_form_variant_panel_tabs,
             #right_bar.lightflow-right-workspace .lf-particle-tabs-row { position: sticky !important; top: 0; z-index: 5; background: var(--color-ui) !important; box-shadow: 0 4px 0 var(--color-ui); }
@@ -13058,7 +12979,7 @@ function initializeLightManagerPlugin() {
                 listeners.push(createLightflowLeftSidebar(api));
                 listeners.push(createLightflowRightSidebar());
                 listeners.push(createLightflowViewportTools(api));
-                listeners.push(createLightflowRenderToolbar());
+                listeners.push(createLightflowInspectMaterialAction());
                 listeners.push(createLightflowParticlePlayer());
                 if (helperPolicy === 'clean') api.setHelperPolicy('clean');
             },
@@ -14073,6 +13994,13 @@ function initializeLightManagerPlugin() {
                         row.classList.remove('focused');
                         if (matches) visible++;
                     });
+                    const children = [...menu.node.children];
+                    for (const separator of children.filter(node => node.classList.contains('menu_separator'))) {
+                        const index = children.indexOf(separator);
+                        const hasVisibleOption = nodes => nodes.some(node => rows.includes(node) && node.style.display !== 'none');
+                        separator.style.display = hasVisibleOption(children.slice(0, index)) &&
+                            hasVisibleOption(children.slice(index + 1)) ? '' : 'none';
+                    }
                     empty.style.display = visible ? 'none' : '';
                 });
                 input.addEventListener('keydown', event => {
@@ -16276,6 +16204,7 @@ function initializeLightManagerPlugin() {
                     for (let key in this.options_dict) {
                         let opt = this.options_dict[key];
                         if (opt) {
+                            if (opt.separator_before) items.push('_');
                             items.push({
                                 id: key,
                                 name: opt.name || key,
@@ -20763,40 +20692,90 @@ function initializeLightManagerPlugin() {
                     this.language=this.options.language||'json';this.mode=this.options.mode||'code';
                     this.node=document.createElement('div');this.node.className='lf-code-editor';
                     this.toolbar=document.createElement('div');this.toolbar.className='lf-code-toolbar';
-                    this.text=text;
-                    const button=(label,click)=>{const b=document.createElement('button');b.type='button';b.textContent=label;b.addEventListener('click',click);this.toolbar.append(b);return b;};
                     this.modeForm=new InputForm((window.LightManagerUI?.prepareForm || (form => form))({mode:{type:'tab_select',dock:false,label:false,presentation:'flat',value:this.mode,options:{code:{name:lightManagerInlineText('light_manager.inline.code'),icon:'code'},visual:{name:lightManagerInlineText('light_manager.inline.properties'),icon:'tune',condition:()=>this.language==='json'}}}}));
                     this.modeTabs=this.modeForm.form_data.mode;this.modeForm.node.hidden=this.language!=='json';this.toolbar.append(this.modeForm.node);
                     this.modeForm.on('change',({result})=>this.setMode(result.mode));
                     this.codeButton=this.modeTabs.button_nodes.code;this.visualButton=this.modeTabs.button_nodes.visual;this.visualButton.hidden=this.language!=='json';
-                    this.formatButton=button(lightManagerInlineText('light_manager.inline.format'),()=>this.format());this.formatButton.hidden=this.language!=='json';
                     this.languageBadge=document.createElement('span');this.languageBadge.textContent=this.language.toUpperCase();this.toolbar.append(this.languageBadge);
                     this.code=document.createElement('div');this.code.className='lf-code-source';
                     this.gutter=document.createElement('pre');this.gutter.className='lf-code-gutter';this.gutter.setAttribute('aria-hidden','true');
                     this.highlight=document.createElement('pre');this.highlight.className='lf-code-highlight';this.highlight.setAttribute('aria-hidden','true');
                     this.input=document.createElement('textarea');this.input.className='lf-code-input focusable_input';this.input.spellcheck=false;this.input.wrap='off';
-                    this.input.setAttribute('aria-label',tl(this.options.label||lightManagerInlineText('light_manager.inline.code')));this.input.style.height=(this.options.height||240)+'px';
+                    this.input.setAttribute('aria-label',tl(this.options.label||lightManagerInlineText('light_manager.inline.code')));this.input.style.height=Math.max(180,Number(this.options.height)||240)+'px';this.input.placeholder=this.options.placeholder||'';this.input.readOnly=!!this.options.readonly;
                     this.input.addEventListener('input',()=>{this.value=this.input.value;this.renderCode();this.validate();this.change();});
                     this.input.addEventListener('scroll',()=>{this.highlight.scrollTop=this.input.scrollTop;this.highlight.scrollLeft=this.input.scrollLeft;this.gutter.scrollTop=this.input.scrollTop;});
                     this.input.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.shiftKey&&e.key.toLowerCase()==='f'&&this.language==='json'){e.preventDefault();e.stopPropagation();this.format();}});
                     this.code.append(this.gutter,this.highlight,this.input);
+                    if(this.language==='molang' && typeof Vue==='function' && typeof VuePrismEditor!=='undefined' && typeof MolangAutocomplete!=='undefined') {
+                        this.code.classList.add('lf-code-native');this.gutter.hidden=true;this.highlight.hidden=true;this.input.hidden=true;
+                        const mount=document.createElement('div');this.code.append(mount);const field=this;
+                        this.nativeEditor=new Vue({data(){return {text:'',readonly:!!field.options.readonly};},render(h){return h(VuePrismEditor,{class:'molang_input',style:{height:Math.max(160,Number(field.options.height)||200)+'px'},props:{code:this.text,language:'molang',lineNumbers:true,readonly:this.readonly,placeholder:field.options.placeholder||'',ignoreTabKey:false,autocomplete:(text,position)=>typeof Settings!=='undefined'&&Settings.get('autocomplete_code')===false?[]:MolangAutocomplete.DefaultContext.autocomplete(text,position)},on:{change:value=>{if(field.is_disabled||field.options.readonly)return;this.text=value;field.value=value;field.input.value=value;field.validate();field.change();}}});}}).$mount(mount);
+                        const nativeComponent=this.nativeEditor.$children[0];if(nativeComponent?.setLineNumbersHeight){const measure=nativeComponent.setLineNumbersHeight;nativeComponent.setLineNumbersHeight=function(){if(this.$refs.pre)measure.call(this);};}
+                        const editable=this.nativeEditor.$el.querySelector('[contenteditable]');if(editable){editable.setAttribute('role','textbox');editable.setAttribute('aria-multiline','true');editable.setAttribute('aria-label',this.input.getAttribute('aria-label'));}
+                    }
+                    this.code.addEventListener('contextmenu',event=>this.openCodeMenu(event));
+                    this.code.addEventListener('keydown',event=>{if(event.key==='ContextMenu'||(event.shiftKey&&event.key==='F10')){event.preventDefault();event.stopPropagation();this.openCodeMenu(event);}});
                     this.visual=document.createElement('div');this.visual.className='lf-code-properties';
                     this.status=document.createElement('div');this.status.className='lf-code-status';this.status.setAttribute('role','status');this.status.setAttribute('aria-live','polite');
-                    this.status.id='lf_code_status_'+(++lightflowControlInstance);this.input.setAttribute('aria-describedby',this.status.id);
+                    this.status.id='lf_code_status_'+(++lightflowControlInstance);this.input.setAttribute('aria-describedby',this.status.id);this.nativeEditor?.$el.querySelector('[contenteditable]')?.setAttribute('aria-describedby',this.status.id);
                     if(this.options.label){const label=document.createElement('label');label.className='lf-code-label';label.textContent=tl(this.options.label);this.input.id='lf_code_input_'+(++lightflowControlInstance);label.htmlFor=this.input.id;this.node.append(label);}
                     this.node.append(this.toolbar,this.code,this.visual,this.status);bar.append(this.node);this.setValue(this.options.value??'');
                 }
                 getValue() { return this.value; }
-                setValue(value) {this.value=String(value??'');this.input.value=this.value;this.renderCode();this.validate();this.setMode(this.mode);}
+                codeSelection() {
+                    const native=this.nativeEditor?.$el.querySelector('[contenteditable]');
+                    if(!native)return {start:this.input.selectionStart,end:this.input.selectionEnd};
+                    const selection=window.getSelection();
+                    if(selection?.rangeCount && native.contains(selection.anchorNode) && native.contains(selection.focusNode)) {
+                        const range=selection.getRangeAt(0),prefix=range.cloneRange();prefix.selectNodeContents(native);prefix.setEnd(range.startContainer,range.startOffset);
+                        const start=prefix.toString().length;return {start,end:start+range.toString().length};
+                    }
+                    const saved=this.nativeEditor?.$children[0]?.selection;return {start:saved?.start??0,end:saved?.end??0};
+                }
+                restoreCodeSelection(start,end=start) {
+                    const native=this.nativeEditor?.$el.querySelector('[contenteditable]');
+                    if(!native){this.input.focus();this.input.setSelectionRange(start,end);return;}
+                    native.focus();const walker=document.createTreeWalker(native,NodeFilter.SHOW_TEXT);let node,offset=0,first=null,last=null;
+                    while((node=walker.nextNode())){const next=offset+node.data.length;if(!first&&start<=next)first=[node,start-offset];if(end<=next){last=[node,end-offset];break;}offset=next;}
+                    if(!first||!last)return;const range=document.createRange();range.setStart(...first);range.setEnd(...last);const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);
+                    const component=this.nativeEditor?.$children[0];if(component)component.selection={start,end};
+                }
+                replaceCodeSelection(selection,text) {
+                    if(this.is_disabled||this.options.readonly||!this.node.isConnected)return;
+                    const start=Math.min(selection.start,this.value.length),end=Math.min(selection.end,this.value.length),next=this.value.slice(0,start)+text+this.value.slice(end),cursor=start+text.length;
+                    const component=this.nativeEditor?.$children[0];if(component){component.recordChange?.(this.value,selection);component.recordChange?.(next,{start:cursor,end:cursor});component.updateContent(next);Vue.nextTick(()=>{if(this.node.isConnected)this.restoreCodeSelection(cursor);});}
+                    else {this.input.setRangeText(text,start,end,'end');this.value=this.input.value;this.renderCode();this.validate();this.change();this.restoreCodeSelection(cursor);}
+                }
+                openCodeMenu(event) {
+                    if(typeof Menu==='undefined'||this.mode!=='code')return;
+                    event.preventDefault();event.stopPropagation();const selection=this.codeSelection(),original=this.value,selected=original.slice(selection.start,selection.end),editable=!this.is_disabled&&!this.options.readonly;
+                    const copy=async()=>{if(!selected)return false;try{if(typeof isApp!=='undefined'&&isApp&&typeof clipboard!=='undefined')clipboard.writeText(selected);else if(navigator.clipboard?.writeText)await navigator.clipboard.writeText(selected);else return false;return true;}catch(error){return false;}};
+                    const failure=()=>Blockbench.showQuickMessage?.(lightManagerInlineText('light_manager.ui.clipboard_unavailable'));
+                    this.codeMenu?.delete?.();this.codeMenu=new Menu([
+                        {name:'action.cut',icon:'content_cut',condition:()=>editable&&!!selected,click:async()=>{if(await copy()){if(this.value===original)this.replaceCodeSelection(selection,'');}else failure();}},
+                        {name:'action.copy',icon:'content_copy',condition:()=>!!selected,click:async()=>{if(!await copy())failure();}},
+                        {name:'action.paste',icon:'content_paste',condition:()=>editable,click:async()=>{try{let value;if(typeof isApp!=='undefined'&&isApp&&typeof clipboard!=='undefined')value=clipboard.readText();else if(navigator.clipboard?.readText)value=await navigator.clipboard.readText();else throw new Error('Clipboard unavailable');if(this.value===original)this.replaceCodeSelection(selection,value);}catch(error){failure();}}},
+                        {name:'action.select_all',icon:'select_all',click:()=>this.restoreCodeSelection(0,this.value.length)},
+                        '_',
+                        {name:lightManagerInlineText('light_manager.inline.format'),icon:'format_align_left',condition:()=>editable&&this.language==='json',click:()=>this.format()}
+                    ]);this.codeMenu.open(event instanceof KeyboardEvent ? (this.nativeEditor?.$el.querySelector('[contenteditable]')||this.input) : event);
+                }
+                setValue(value) {this.value=String(value??'');this.input.value=this.value;if(this.nativeEditor)this.nativeEditor.text=this.value;this.renderCode();this.validate();this.setMode(this.mode);}
                 validate() {
                     this.error='';
                     if(this.language==='json'&&this.value.trim())try{JSON.parse(this.value);}catch(e){this.error=e.message;}
                     if(!this.error&&typeof this.options.validate==='function')try{this.error=this.options.validate(this.value)||'';}catch(e){this.error=e.message;}
-                    this.input.setAttribute('aria-invalid',String(!!this.error));this.status.textContent=this.error||lightManagerInlineText('light_manager.inline.draft_changes_apply_with_the_surrounding_form');
+                    this.input.setAttribute('aria-invalid',String(!!this.error));this.nativeEditor?.$el.querySelector('[contenteditable]')?.setAttribute('aria-invalid',String(!!this.error));this.status.textContent=this.error||lightManagerInlineText('light_manager.inline.draft_changes_apply_with_the_surrounding_form');
                     this.status.classList.toggle('invalid',!!this.error);return !this.error;
                 }
                 renderCode() {
+                    if(this.nativeEditor)return;
                     const source=this.value+'\n';this.highlight.replaceChildren();
+                    if(this.language==='json' && typeof Prism!=='undefined' && Prism.languages?.json && source.length<200000) {
+                        this.highlight.innerHTML=Prism.highlight(source,Prism.languages.json,'json');
+                        const lines=Math.min(20000,this.value.split('\n').length);this.gutter.textContent=Array.from({length:lines},(_,i)=>i+1).join('\n');
+                        this.highlight.scrollTop=this.input.scrollTop;this.highlight.scrollLeft=this.input.scrollLeft;return;
+                    }
                     if(['json','molang'].includes(this.language)&&source.length<200000){
                         const pattern=this.language==='json'?/("(?:\\.|[^"\\])*"\s*:?)|\b(?:true|false|null)\b|-?\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b/g:/"(?:\\.|[^"\\])*"|\b(?:query|q|variable|v|temp|t|context|c|math)\.[\w.]+|\b(?:return|true|false|this|break|continue)\b|-?\b\d+(?:\.\d+)?\b/g;
                         let offset=0;for(const match of source.matchAll(pattern)){this.highlight.append(document.createTextNode(source.slice(offset,match.index)));const span=document.createElement('span');span.className=match[0].startsWith('"')?(match[0].trimEnd().endsWith(':')?'lf-code-key':'lf-code-string'):'lf-code-number';span.textContent=match[0];this.highlight.append(span);offset=match.index+match[0].length;}this.highlight.append(document.createTextNode(source.slice(offset)));
@@ -20849,7 +20828,7 @@ function initializeLightManagerPlugin() {
                         form.on('change',({result})=>{if(config.readonly||this.is_disabled)return;let next=result[fieldId];if(typeof value==='number'&&typeof next==='boolean')next=Number(next);if(schema.options&&typeof value==='number')next=Number(next);if(schema.options&&typeof value==='boolean')next=next==='true'||next===true;if(typeof value==='number'&&!Number.isFinite(Number(next)))return;write(path,next);});
                     };visit(root,[],this.visual,this.options.document_label||'');
                 }
-                delete() {this.disposeVisual();this.modeForm?.delete?.();super.delete?.();}
+                delete() {this.codeMenu?.delete?.();this.codeMenu=null;this.disposeVisual();const editor=this.nativeEditor;this.nativeEditor=null;if(editor)Vue.nextTick(()=>{editor.$destroy();editor.$el?.remove();});this.modeForm?.delete?.();super.delete?.();}
             };
 
             FormElement.types.image_preview = class LightflowImagePreview extends FormElement {
@@ -20910,18 +20889,24 @@ function initializeLightManagerPlugin() {
                     const append = (node, depth) => {
                         if (words.length && !containsMatch(node)) return;
                         const children = (node.children || []).filter(child => entries.has(child.uuid));
-                        const row = document.createElement('div'); row.className = 'lf-outliner-row'; row.dataset.uuid = node.uuid; row.setAttribute('role', 'treeitem');
+                        const row = document.createElement('div'); row.className = 'lf-outliner-row'; row.dataset.uuid = node.uuid; row.style.setProperty('--lf-tree-indent', `${Math.min(depth, 4) * 10}px`); row.setAttribute('role', 'treeitem');
                         row.setAttribute('aria-level', String(depth + 1)); row.setAttribute('aria-label', node.name || node.uuid); row.tabIndex = count++ === 0 ? 0 : -1;
                         const fold = document.createElement('button'); fold.type = 'button'; fold.tabIndex = -1;
                         fold.disabled = !children.length;
                         if (children.length) fold.setAttribute('aria-label', tl(this.collapsed.has(node.uuid) ? 'light_manager.ui.expand_group' : 'light_manager.ui.collapse_group'));
                         else fold.setAttribute('aria-hidden', 'true');
-                        fold.append(Blockbench.getIconNode(children.length ? (this.collapsed.has(node.uuid) ? 'chevron_right' : 'expand_more') : (node.icon || 'deployed_code')));
+                        if (children.length) fold.append(Blockbench.getIconNode(this.collapsed.has(node.uuid) ? 'chevron_right' : 'expand_more'));
                         if (children.length) row.setAttribute('aria-expanded', String(!this.collapsed.has(node.uuid) || !!words.length));
                         fold.addEventListener('click', () => { this.collapsed.has(node.uuid) ? this.collapsed.delete(node.uuid) : this.collapsed.add(node.uuid); this.render(); });
-                        const name = document.createElement('span'); name.textContent = node.name || node.uuid; name.style.paddingInlineStart = `${Math.min(depth, 8) * 10}px`;
+                        const iconName = typeof node.icon === 'string' ? node.icon.replace('fa ', '').replace(/ /g, '.') : (children.length ? 'folder' : 'deployed_code');
+                        const icon = Blockbench.getIconNode(iconName); icon.classList.add('lf-outliner-icon'); icon.setAttribute('aria-hidden', 'true');
+                        const colors = window.markerColors; const colorIndex = Number(node.color);
+                        if (window.settings?.outliner_colors?.value && node.color != null && Number.isInteger(colorIndex) && colorIndex >= 0 && colors?.length) {
+                            const color = colors[colorIndex % colors.length]?.pastel; if (color) icon.style.color = color;
+                        }
+                        const name = document.createElement('span'); name.textContent = node.name || node.uuid;
                         const select = document.createElement('select'); select.setAttribute('aria-label', `${node.name} · ${tl('light_manager.art.targets')}`);
-                        for (const key of ['auto', 'include', 'exclude']) { const option = document.createElement('option'); option.value = key; option.textContent = tl(`light_manager.art.${key}`); select.append(option); }
+                        for (const key of ['auto', 'include', 'exclude']) { const option = document.createElement('option'); option.value = key; option.textContent = tl(key === 'auto' ? 'light_manager.ui.target_auto' : `light_manager.art.${key}`); select.append(option); }
                         select.value = this.value[node.uuid] || 'auto'; select.disabled = !!this.is_disabled;
                         select.addEventListener('change', event => {
                             if (this.is_disabled) return;
@@ -20939,7 +20924,7 @@ function initializeLightManagerPlugin() {
                                 event.preventDefault(); event.key === 'ArrowLeft' ? this.collapsed.add(node.uuid) : this.collapsed.delete(node.uuid); this.render();
                             } else if (event.key === 'Enter') { event.preventDefault(); select.focus(); }
                         });
-                        row.append(fold, name, select); fragment.append(row);
+                        row.append(fold, icon, name, select); fragment.append(row);
                         if (!this.collapsed.has(node.uuid) || words.length) children.forEach(child => append(child, depth + 1));
                     };
                     roots.forEach(node => append(node, 0)); this.tree.replaceChildren(fragment); this.updateSummary(count);
@@ -21098,7 +21083,7 @@ function initializeLightManagerPlugin() {
                 addDesignedPanelStyles: addLightManagerDesignedPanelStyles,
                 formDesign: LightManagerFormDesign,
                 prepareForm: prepareLightflowForm,
-                progress: Object.freeze({ create: createLightflowProgress }),
+                progress: Object.freeze({ create: createLightflowProgress, loadingIndicatorHTML: createLightflowLoadingIndicatorHTML }),
                 textureSource: LightflowTextureSource,
                 creationGuide: createLightflowCreationGuide,
                 markerColor: getLightManagerMarkerColor,
@@ -21117,7 +21102,11 @@ function initializeLightManagerPlugin() {
                 GradientEditor: FormElement.types.gradient_editor,
                 gizmos: Object.freeze({
                     screenWorldSize: getLightManagerScreenWorldSize,
-                    screenScale: getLightManagerScreenScale
+                    screenScale: getLightManagerScreenScale,
+                    style: styleLightflowGizmo,
+                    refreshStyle: refreshLightflowGizmoStyle,
+                    highlight: highlightLightflowGizmo,
+                    sphereOutline: createLightflowSphereOutline
                 })
             };
             window.LightManagerUI = lightManagerUIApi;
@@ -21796,6 +21785,7 @@ function initializeLightManagerPlugin() {
                     mesh.boxGizmo = new THREE.LineSegments(new THREE.EdgesGeometry(boxSource), lineMaterial);
                     boxSource.dispose();
                     mesh.boxGizmo.raycast = () => { };
+                    mesh.boxGizmo.onBeforeRender = () => styleLightflowGizmo(mesh.boxGizmo, 'outline', !!element.selected);
                     mesh.add(mesh.boxGizmo);
 
                     const ringPoints = [];
@@ -21831,6 +21821,7 @@ function initializeLightManagerPlugin() {
                     arrowGeometry.setAttribute('position', new THREE.BufferAttribute(arrowVertices, 3));
                     mesh.directionGizmo = new THREE.LineSegments(arrowGeometry, lineMaterial.clone());
                     mesh.directionGizmo.raycast = () => { };
+                    mesh.directionGizmo.onBeforeRender = () => styleLightflowGizmo(mesh.directionGizmo, 'outline', !!element.selected);
                     mesh.add(mesh.directionGizmo);
 
                     // A small center marker owns selection; the influence box
@@ -22030,6 +22021,9 @@ function initializeLightManagerPlugin() {
                     spotLines.raycast = () => { };
                     gizmo.add(spotLines);
                     gizmo.spot_lines = spotLines;
+                    gizmo.children.forEach(child => {
+                        child.onBeforeRender = () => styleLightflowGizmo(child, 'outline', !!element.selected);
+                    });
 
                     mesh.add(gizmo);
                     mesh.gizmo = gizmo;

@@ -4203,7 +4203,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
     function resolutionScaleOptions() {
         const es = String(typeof Language !== 'undefined' ? Language.code : '').startsWith('es');
         return {
-            custom: es ? 'Personalizado' : 'Custom', double: '2\u00d7', quadruple: '4\u00d7',
+            custom: es ? 'Personalizado' : 'Custom', single: '1\u00d7', double: '2\u00d7', quadruple: '4\u00d7',
             uhd: es ? '4K \u00b7 lado mayor 3840 px' : '4K \u00b7 long edge 3840 px',
             eight_k: es ? '8K \u00b7 lado mayor 7680 px' : '8K \u00b7 long edge 7680 px',
             factor: es ? 'Factor de escala\u2026' : 'Scale factor\u2026'
@@ -4227,8 +4227,10 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         if (!dialog || !form.resolution) return;
         let state = resolutionScaleDialogs.get(dialog);
         if (!preset || preset === 'custom') { resolutionScaleDialogs.delete(dialog); return; }
-        if (!['double', 'quadruple', 'uhd', 'eight_k', 'factor'].includes(preset)) return;
-        if (!state) state = {base: form.resolution.slice(), result: form.resolution.slice()};
+        if (!['single', 'double', 'quadruple', 'uhd', 'eight_k', 'factor'].includes(preset)) return;
+        // A dialog can be rebuilt while its draft retains an already scaled output.
+        // Always derive 1x from the active viewport/frame, never from that draft.
+        if (!state) state = {base: viewportRecordingPixelSize(), result: form.resolution.slice()};
         else if (form.resolution.some((value, i) => value !== state.result[i])) {
             form[presetKey] = 'custom'; resolutionScaleDialogs.delete(dialog);
             dialog.setFormValues?.({[presetKey]: 'custom'}, false); return;
@@ -10761,7 +10763,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
     function createManagerWorkflowForm(sequenceOverride = null) {
         const document = readDocument(), sequence = sequenceOverride || getSequence(document);
         const source = createManagerForm(sequenceOverride);
-        const tabs = {sequence: {name:cinematicUI("shot"),icon:'lightflow:recordframe'},camera:{name:cinematicUI("camera"),icon:'videocam'},scene:{name:cinematicUI("scene"),icon:'animation'},output:{name:'lightflow_cinematic.group.output',icon:'video_file'}};
+        const tabs = {sequence: {name:cinematicUI("shot"),icon:'lightflow:clapperboard'},camera:{name:cinematicUI("camera"),icon:'videocam'},scene:{name:cinematicUI("scene"),icon:'animation'},output:{name:'lightflow_cinematic.group.output',icon:'video_file'}};
         const form = {
             _cinematic_workflow: window.LightManagerUI?.formDesign?.tabs
                 ? window.LightManagerUI.formDesign.tabs({presentation:'flat',value: managerWorkflowTab, options: tabs})
@@ -10795,7 +10797,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                     temporal_2:{name:cinematicUI("adaptive_2"),icon:'movie'},temporal_4:{name:cinematicUI("adaptive_4"),icon:'movie'},
                     ...(!['1','2','4','8','temporal_2','temporal_4'].includes(sequence.samples)?{[sequence.samples]:{name:sequence.samples.startsWith('temporal_')?'Temporal · '+sequence.samples.slice(-1):'AA · '+sequence.samples,icon:'movie'}}:{})}};
             if(key==='output_format'&&hasLightflowFormType('compact_select'))value={...value,type:'compact_select',hide_icon:false,show_value_text:true,expand:true,
-                options:Object.fromEntries(['gif','mp4','png','webm','mov','mkv','mpegts'].map(id=>[id,{name:value.options[id],icon:id==='gif'?'gif':id==='png'?'collections':'lightflow:recordframe'}]))};
+                options:Object.fromEntries(['gif','mp4','png','webm','mov','mkv','mpegts'].map(id=>[id,{name:value.options[id],icon:id==='gif'?'gif':id==='png'?'collections':'lightflow:clapperboard'}]))};
             if(key==='sequence_id'&&document.sequences.length===1)value={...value,condition:()=>false};
             if(key==='resolution')form._resolution_preset=cinematicSelect({label:cinematicUI("size_preset"),value:'custom',options:cinematicResolutionPresetOptions(),condition:result=>['sequence','output'].includes(result._cinematic_workflow||'sequence')});
             if(key==='resolution')form._resolution_factor={...cinematicResolutionFactorField(),condition:result=>['sequence','output'].includes(result._cinematic_workflow||'sequence')&&result._resolution_preset==='factor'};

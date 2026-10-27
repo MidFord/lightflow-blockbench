@@ -3,7 +3,7 @@
     // Explicitly installed developer plugin. Never loaded by the essential suite.
     const instances = new Set();
     const actions = [];
-    let panel, dialog, css, panelVisible = false;
+    let panel, dialog, css, fixtureCss, panelVisible = false;
     let nextInstance = 0;
     const isSpanish = () => String(globalThis.Language?.code || '').startsWith('es');
     const text = (en, es) => isSpanish() ? es : en;
@@ -63,7 +63,7 @@
             };
             case 'selects': return {
                 select:{...shared,type:'compact_select',options,value:'one',show_value_text:true,expand:true,searchable:true},
-                enum:{...shared,type:'enum_select',options:{0:{name:'0'},1:{name:'1'},2:{name:'2'}},value:1},
+                enum:{...shared,type:'enum_select',options:{0:{name:'0'},1:{name:'1'},2:{name:'2'}},value:state==='selected'?0:1,resettable:true,reset_value:0},
                 inline:{...shared,type:'horizontal_select',presentation:'inline',options,value:'one'},
                 many:{...shared,type:'compact_select',show_value_text:true,expand:true,searchable:true,options:Object.fromEntries(Array.from({length:100},(_,i)=>[String(i),{name:`${label} ${i}`}])) ,value:'50'}
             };
@@ -90,8 +90,8 @@
                 texture:{...shared,type:'texture_source',value:''}
             };
             case 'tree': {
-                const group={uuid:'lab-group',name:text('Fixture group','Grupo de prueba'),children:[]};
-                group.children=Array.from({length:long?80:8},(_,i)=>({uuid:`lab-object-${i}`,name:`${label} ${i}`,parent:group}));
+                const group={uuid:'lab-group',name:text('Fixture group','Grupo de prueba'),icon:'folder',color:0,children:[]};
+                group.children=Array.from({length:long?80:8},(_,i)=>({uuid:`lab-object-${i}`,name:`${label} ${i}`,icon:i===0?'fa fas fa-bookmark':'deployed_code',color:i%8,parent:group}));
                 return {targets:{...shared,type:'outliner_select',nodes:state==='empty'?[]:[group],value:{'lab-object-1':'include','lab-object-2':'exclude'}}};
             }
             case 'information': return {
@@ -192,6 +192,7 @@
         title:'Lightflow UI Lab',author:'Lightflow',description:'Development-only gallery of real Lightflow controls.',
         icon:'widgets',version:'1.0.0',variant:'both',min_version:'4.9.0',
         onload(){
+            fixtureCss=window.LightManagerUI?.addDesignedPanelStyles?.('lightflow_ui_lab_panel',{lab:true});
             css=Blockbench.addCSS(`
                 .lf-ui-lab {display:flex;flex-direction:column;gap:8px;min-width:0;padding:8px;}
                 .lf-ui-lab-toolbar {display:flex;flex-wrap:wrap;gap:4px;}
@@ -223,7 +224,7 @@
         },
         onunload(){
             for(const instance of [...instances])instance.dispose();
-            dialog?.hide();dialog?.delete();dialog=null;panel?.delete();panel=null;css?.delete();css=null;
+            dialog?.hide();dialog?.delete();dialog=null;panel?.delete();panel=null;css?.delete();css=null;fixtureCss?.delete();fixtureCss=null;
             for(const action of actions.splice(0))action.delete();
         }
     });

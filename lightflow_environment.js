@@ -5209,10 +5209,16 @@ void main() {
             depthTest: false,
             depthWrite: false
         });
-        const handle = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 8), material);
+        const handle = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.4, 1.4), material);
         handle.name = `lightflow_environment_shadow_${name}`;
         handle.renderOrder = 1003;
         handle.userData.lightflowEnvironmentShadowHandle = { name, axis, sign };
+        handle.onBeforeRender = (renderer, _scene, camera) => {
+            const gizmos = window.LightManagerUI?.gizmos;
+            gizmos?.style?.(handle, axis === 'x' ? 'r' : axis === 'y' ? 'g' : 'b', true);
+            const size = gizmos?.screenWorldSize?.(handle, camera, renderer, 5);
+            if (size) { handle.scale.setScalar(size); handle.updateWorldMatrix(true, false); }
+        };
         root.add(handle);
         return handle;
     }
@@ -5234,6 +5240,7 @@ void main() {
         const line = new THREE.LineSegments(new THREE.BufferGeometry(), lineMaterial);
         line.name = 'lightflow_environment_shadow_area';
         line.raycast = () => { };
+        line.onBeforeRender = () => window.LightManagerUI?.gizmos?.style?.(line, 'outline', window.Toolbox?.selected?.id === 'lightflow_sun_region_tool');
         root.add(line);
 
         const handles = {
@@ -5388,6 +5395,13 @@ void main() {
 
     function installSunShadowGizmoInteraction() {
         if (typeof document === 'undefined' || sunShadowGizmoListeners.length) return;
+        let hoveredHandle = null, hoverStatus = null;
+        const clearHover = () => {
+            window.LightManagerUI?.gizmos?.highlight?.(hoveredHandle, false);
+            hoveredHandle = null;
+            if (hoverStatus && window.Prop?.file_name === hoverStatus) Blockbench.setStatusBarText();
+            hoverStatus = null;
+        };
         const onPointerDown = event => {
             if (event.button !== 0 || !sunShadowGizmo?.root?.visible || window.Canvas?.show_gizmos === false) return;
             const preview = getSunShadowGizmoPreview(event);
@@ -5397,6 +5411,7 @@ void main() {
             const hit = sunShadowGizmoRaycaster.intersectObjects(handles, false)[0];
             const handle = hit?.object?.userData?.lightflowEnvironmentShadowHandle;
             if (!hit || !handle) return;
+            clearHover();hoveredHandle=hit.object;window.LightManagerUI?.gizmos?.highlight?.(hoveredHandle,true);
             beginEnvironmentUndo();
             const normal = new THREE.Vector3(0, 0, -1);
             preview.camera.getWorldDirection(normal);
@@ -5422,7 +5437,21 @@ void main() {
             stopSunShadowGizmoEvent(event);
         };
         const onPointerMove = event => {
-            if (!sunShadowGizmoDrag) return;
+            if (!sunShadowGizmoDrag) {
+                clearHover();
+                if (!sunShadowGizmo?.root?.visible || window.Canvas?.show_gizmos === false) return;
+                const preview = getSunShadowGizmoPreview(event);
+                if (!preview?.canvas || event.target !== preview.canvas) return;
+                setSunShadowGizmoRay(event, preview);
+                const handles = Object.values(sunShadowGizmo.handles).filter(handle => handle.visible);
+                hoveredHandle = sunShadowGizmoRaycaster.intersectObjects(handles, false)[0]?.object || null;
+                if (hoveredHandle) {
+                    window.LightManagerUI?.gizmos?.highlight?.(hoveredHandle, true);
+                    hoverStatus = tl('light_manager.ui.sun_region') + ' · ' + hoveredHandle.userData.lightflowEnvironmentShadowHandle.axis.toUpperCase();
+                    Blockbench.setStatusBarText(hoverStatus);
+                }
+                return;
+            }
             stopSunShadowGizmoEvent(event);
             updateSunShadowGizmoDrag(event);
         };
@@ -5431,6 +5460,7 @@ void main() {
             stopSunShadowGizmoEvent(event);
             sunShadowGizmoDrag = null;
             finishEnvironmentUndo();
+            clearHover();
         };
         const onKeyDown = event => {
             if (!sunShadowGizmoDrag || event.key !== 'Escape') return;
@@ -5443,8 +5473,10 @@ void main() {
                 captureShadowFitRegion: false
             });
             cancelEnvironmentUndo(false);
+            clearHover();
         };
         const cancelPointer = () => {
+            clearHover();
             if (!sunShadowGizmoDrag) return;
             const original = sunShadowGizmoDrag.original;
             sunShadowGizmoDrag = null;
@@ -5458,6 +5490,7 @@ void main() {
         document.addEventListener('pointercancel', cancelPointer, true);
         window.addEventListener('blur', cancelPointer);
         sunShadowGizmoListeners.push(
+            clearHover,
             () => document.removeEventListener('pointerdown', onPointerDown, true),
             () => document.removeEventListener('pointermove', onPointerMove, true),
             () => document.removeEventListener('pointerup', onPointerUp, true),
