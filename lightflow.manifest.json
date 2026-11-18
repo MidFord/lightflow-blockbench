@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "suite": "Lightflow",
-  "artwork": "assets/hub/copper-golem.png",
+  "artwork": "assets/hub/lightflow-showcase.webp",
   "generated_at": "2026-10-26",
   "repository": {
     "owner": "MidFord",

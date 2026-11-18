@@ -3,13 +3,18 @@
 // Reads the user's locally installed Minecraft client JAR on demand. This
 // module does not redistribute Minecraft models or textures. It extracts only
 // requested JSON model/state definitions from the ZIP stream in memory.
-const fs = require('node:fs');
-const path = require('node:path');
-const os = require('node:os');
-const zlib = require('node:zlib');
+let fs, path, os, zlib;
+function loadNativeModules() {
+    // Merely loading the Terrain plugin must not request filesystem permission.
+    fs ||= require('node:fs');
+    path ||= require('node:path');
+    os ||= require('node:os');
+    zlib ||= require('node:zlib');
+}
 
 class MinecraftJarArchive {
     constructor(file) {
+        loadNativeModules();
         this.file = file;
         this.bytes = fs.readFileSync(file);
         this.entries = new Map();
@@ -118,6 +123,7 @@ class MinecraftJarArchive {
 let cached;
 function getMinecraftJar() {
     if (cached !== undefined) return cached;
+    loadNativeModules();
     cached = null;
     for (const version of ['26.3','26.2']) {
         const file = path.join(os.homedir(),'AppData','Roaming','.minecraft','versions',version,`${version}.jar`);

@@ -243,6 +243,7 @@
     const sceneComposerPanelGroupsOpen = {
         preview: true,
         bloom: true,
+        rim_halo: true,
         grading: false
     };
     let syncingSceneComposerDialog = false;
@@ -779,6 +780,9 @@
             'studio_render.workflow.guides': 'Rule of thirds',
             'studio_render.workflow.center': 'Center frame',
             'studio_render.workflow.fit': 'Fit to viewport',
+            'studio_render.workflow.reference': 'Match reference image',
+            'studio_render.workflow.reference_empty': 'No visible reference images',
+            'studio_render.workflow.reference_outside': 'The reference image must fit inside the active viewport.',
             'studio_render.workflow.preview': 'Draft preview · up to 960 px',
             'studio_render.workflow.move_hint': 'Drag to move · Arrows: move · Shift + arrows: resize · Alt: 1 px · Enter / double-click: settings',
             'studio_render.workflow.resize_hint': 'Resize · Shift: toggle proportion lock · Alt: from center · Ctrl: square',
@@ -803,6 +807,14 @@
             'studio_render.workflow.cancelling': 'Cancelling; restoring the scene…',
             'studio_render.composer.summary': 'Realtime Post-Processing',
             'studio_render.composer.summary.desc': 'Coordinate viewport preview and Studio Render finishing effects.',
+            'studio_render.composer.status.bloom_on': 'Bloom on',
+            'studio_render.composer.status.bloom_off': 'Bloom off',
+            'studio_render.composer.status.preview_off': 'Bloom preview off',
+            'studio_render.composer.status.no_contribution': 'Bloom has no visible contribution',
+            'studio_render.composer.status.rim_off': 'Rim Halo off',
+            'studio_render.composer.status.rim_on': 'Rim Halo',
+            'studio_render.composer.status.grading_on': 'Color grading on',
+            'studio_render.composer.status.grading_off': 'Color grading off',
             'studio_render.composer.group.preview': 'Viewport Preview',
             'studio_render.composer.group.bloom': 'Bloom',
             'studio_render.composer.group.grading': 'Color Grading',
@@ -1046,6 +1058,9 @@
             'studio_render.workflow.guides': 'Regla de tercios',
             'studio_render.workflow.center': 'Centrar encuadre',
             'studio_render.workflow.fit': 'Ajustar a la vista',
+            'studio_render.workflow.reference': 'Ajustar a imagen de referencia',
+            'studio_render.workflow.reference_empty': 'No hay imágenes de referencia visibles',
+            'studio_render.workflow.reference_outside': 'La imagen de referencia debe caber dentro de la vista activa.',
             'studio_render.workflow.preview': 'Vista previa · hasta 960 px',
             'studio_render.workflow.move_hint': 'Arrastra para mover · Flechas: mover · Mayús + flechas: tamaño · Alt: 1 px · Intro / doble clic: ajustes',
             'studio_render.workflow.resize_hint': 'Cambiar tamaño · Mayús: alternar bloqueo · Alt: desde el centro · Ctrl: cuadrado',
@@ -1070,6 +1085,14 @@
             'studio_render.workflow.cancelling': 'Cancelando; restaurando la escena…',
             'studio_render.composer.summary': 'Postprocesado en tiempo real',
             'studio_render.composer.summary.desc': 'Coordina la previsualización del viewport y el acabado de Studio Render.',
+            'studio_render.composer.status.bloom_on': 'Bloom activo',
+            'studio_render.composer.status.bloom_off': 'Bloom apagado',
+            'studio_render.composer.status.preview_off': 'Vista de Bloom apagada',
+            'studio_render.composer.status.no_contribution': 'Bloom sin contribución visible',
+            'studio_render.composer.status.rim_off': 'Rim Halo apagado',
+            'studio_render.composer.status.rim_on': 'Rim Halo',
+            'studio_render.composer.status.grading_on': 'Color activo',
+            'studio_render.composer.status.grading_off': 'Color apagado',
             'studio_render.composer.group.preview': 'Previsualización',
             'studio_render.composer.group.bloom': 'Bloom',
             'studio_render.composer.group.grading': 'Corrección de color',
@@ -1822,10 +1845,10 @@
     function snapshotCameraSource(preview, fallbackWidth, fallbackHeight) {
         if (!preview) return null;
         return {
-            width: preview.width || fallbackWidth || 1,
-            height: preview.height || fallbackHeight || 1,
-            node: preview.node,
+            width: preview.width || preview.node?.clientWidth || fallbackWidth || 1,
+            height: preview.height || preview.node?.clientHeight || fallbackHeight || 1,
             isOrtho: preview.isOrtho,
+            get camera() { return this.isOrtho ? this.camOrtho : this.camPers; },
             controls: {
                 unlinked: preview.controls?.unlinked,
                 target: preview.controls?.target?.clone ? preview.controls.target.clone() : new THREE.Vector3()
@@ -2141,19 +2164,15 @@
             camera.updateProjectionMatrix?.();
         });
 
-        const defaultFov = Number(
+        const nativeFov = Number(
             typeof Settings !== 'undefined' && typeof Settings.get === 'function'
                 ? Settings.get('fov')
                 : window.settings?.fov?.value
         );
-        if (Number.isFinite(defaultFov) && defaultFov > 0) {
-            if (typeof preview.setFOV === 'function') {
-                preview.setFOV(defaultFov);
-            } else if (preview.camPers) {
-                preview.camPers.fov = defaultFov;
-                preview.camPers.updateProjectionMatrix?.();
-            }
-        }
+        const projectFov = Number(getActiveProject()?.lightflow_viewport_fov);
+        const defaultFov = Number.isFinite(projectFov) && projectFov > 0
+            ? clamp(projectFov, 1, 179)
+            : nativeFov;
 
         if (options.loadDefault && typeof DefaultCameraPresets !== 'undefined' && DefaultCameraPresets[0]) {
             preview.setProjectionMode?.(false);
@@ -2161,6 +2180,14 @@
         } else if (activeCamera && controls?.target) {
             activeCamera.lookAt?.(controls.target);
             activeCamera.updateMatrixWorld?.(true);
+        }
+        if (Number.isFinite(defaultFov) && defaultFov > 0) {
+            if (typeof preview.setFOV === 'function') {
+                preview.setFOV(defaultFov);
+            } else if (preview.camPers) {
+                preview.camPers.fov = defaultFov;
+                preview.camPers.updateProjectionMatrix?.();
+            }
         }
 
         currentSettings.camera_preset_id = '';
@@ -3045,6 +3072,7 @@
         copyPreviewCamera(renderPreview, sourcePreview, settings, baseWidth, baseHeight);
         // Projection changes replace the active camera, including on tile one.
         const camera = renderPreview.camera;
+        camera.userData.lightflowToonOutline = tile.toonOutline;
 
         // Camera shadows need the shifted full-frame projection before tile
         // cropping and sample jitter. Preserve it outside camera.userData so
@@ -3135,16 +3163,19 @@
         const rimScaleX = size.width / rimReferenceWidth;
         const rimScaleY = size.height / rimReferenceHeight;
 
-        const promotionalRimFrameScale = Math.max(
-            1.0,
-            Math.sqrt(rimScaleX * rimScaleY)
-        );
+        const frameScale = Math.sqrt(rimScaleX * rimScaleY);
+        const promotionalRimFrameScale = Math.max(1.0, frameScale);
 
         /*
             Shared tile bleed also acts as outer frame overscan. It is larger
             than the maximum rim radius so screen-space dilation has source data.
         */
         const bleed = resolveTileBleed(sampleFactor, tileSize);
+        // Both Toon modes use the full frame scale, with room for the alpha feather.
+        const toonOutline = {
+            scale: frameScale * sampleFactor,
+            maxRadius: Math.max(0, Math.min(bleed, PROMOTIONAL_RIM_MAX_RENDER_RADIUS) - 1)
+        };
 
         for (let y = 0; y < sampleHeight; y += tileSize) {
             const tileHeight = Math.min(
@@ -3271,6 +3302,7 @@
                     cropY,
 
                     promotionalRimFrameScale,
+                    toonOutline,
 
                     outputX: x / sampleFactor,
                     outputY: y / sampleFactor,
@@ -3354,7 +3386,7 @@
         if (typeof Blockbench !== 'undefined' && typeof Blockbench.dispatchEvent === 'function') {
             const event = {
                 preview: renderPreview,
-                source_preview: sourcePreview,
+                source_preview: renderSession?.sourcePreview || sourcePreview,
                 tile,
                 settings,
                 sampleIndex,
@@ -3768,12 +3800,40 @@
     }
 
     function disposeBloomDerivedResources() {
-        BLOOM_MASK_STATE.derivedResources.forEach(resource => resource?.dispose?.());
+        BLOOM_MASK_STATE.derivedResources.forEach(resource => {
+            const lifetime = resource?.userData?.saBloomSourceLifetime;
+            if (lifetime) {
+                lifetime.sourceRef.deref()?.removeEventListener?.('dispose', lifetime.retire);
+                delete resource.userData.saBloomSourceLifetime;
+            }
+            resource?.dispose?.();
+        });
         BLOOM_MASK_STATE.derivedResources.clear();
         BLOOM_MASK_STATE.emissiveMaterials = new WeakMap();
         BLOOM_MASK_STATE.occluderMaterials = new WeakMap();
         BLOOM_MASK_STATE.rendercraftMaterials = new WeakMap();
         BLOOM_MASK_STATE.rendercraftBloomSupport = new WeakMap();
+    }
+
+    function trackBloomDerivedSource(source, material, cache) {
+        if (!source || !material) return material;
+        const sourceRef = typeof WeakRef === 'function' ? new WeakRef(source) : { deref: () => source };
+        const retire = () => {
+            const owner = sourceRef.deref();
+            if (owner) {
+                cache.delete(owner);
+                owner.removeEventListener?.('dispose', retire);
+            }
+            BLOOM_MASK_STATE.derivedResources.delete(material);
+            if (material.userData?.saBloomSourceLifetime?.retire === retire) {
+                delete material.userData.saBloomSourceLifetime;
+            }
+            material.dispose?.();
+        };
+        material.userData = material.userData || {};
+        material.userData.saBloomSourceLifetime = { sourceRef, retire };
+        source.addEventListener?.('dispose', retire);
+        return material;
     }
 
     // Specialized Studio passes are derived from the immutable base shader
@@ -3869,6 +3929,7 @@
             }
             BLOOM_MASK_STATE.rendercraftMaterials.set(sourceMaterial, material);
             BLOOM_MASK_STATE.derivedResources.add(material);
+            trackBloomDerivedSource(sourceMaterial, material, BLOOM_MASK_STATE.rendercraftMaterials);
         }
 
         let programChanged = false;
@@ -4151,6 +4212,7 @@
             material.name = emissive ? 'StudioRender_EmissiveMask' : 'StudioRender_BloomOccluder';
             cache.set(sourceMaterial, material);
             BLOOM_MASK_STATE.derivedResources.add(material);
+            trackBloomDerivedSource(sourceMaterial, material, cache);
         }
 
         const whiteFallback = getBloomFallbackTexture(true);
@@ -4188,6 +4250,7 @@
         const changes = [];
         const visit = object => {
             if (!object || !object.visible || !(object.isMesh || object.isSprite) || !object.material) return;
+            if (object.userData?.saToonOutlinePass) return;
             const materials = Array.isArray(object.material) ? object.material : [object.material];
             if (!materials.some(material => material?.visible !== false)) return;
             changes.push({
@@ -4938,7 +5001,7 @@
                 : 0;
 
             const hdrSignal = geometryAlpha > 0.001
-                ? Math.max(sceneR, sceneG, sceneB)
+                ? sceneR * 0.2126 + sceneG * 0.7152 + sceneB * 0.0722
                 : 0;
             const emissiveSignal = Math.max(emissionR, emissionG, emissionB);
             const emissiveContribution = emissiveSignal > 0.000001 ? 1 : 0;
@@ -6377,8 +6440,8 @@
                         // applying it again erased dark-colored emitters.
                         float emissionSignal = max(emission.r, max(emission.g, emission.b));
                         float emissionContribution = step(0.000001, emissionSignal);
-                        float sceneSignalPeak = max(sceneSignal.r, max(sceneSignal.g, sceneSignal.b));
-                        float sceneContribution = bloomContribution(sceneSignalPeak);
+                        float sceneLuminance = dot(sceneSignal, vec3(0.2126, 0.7152, 0.0722));
+                        float sceneContribution = bloomContribution(sceneLuminance);
                         vec3 color = max(
                             emission * emissionContribution,
                             sceneSignal * sceneContribution
@@ -7918,7 +7981,9 @@
         const state = measureFirstDraw('get_state', () => getViewportComposerState(preview));
         if (!state || state.rendering || state.disposed) return;
         const now = performance.now();
-        const fpsLimit = clamp(toNumber(currentSettings.viewport_bloom_fps, 0), 0, 144);
+        // Bloom preview's FPS cap must never throttle Color Grading by itself.
+        // Without Bloom the grading pass should follow every viewport frame.
+        const fpsLimit = useBloom ? clamp(toNumber(currentSettings.viewport_bloom_fps, 0), 0, 144) : 0;
         const interval = fpsLimit > 0 ? 1000 / fpsLimit : 0;
         if (interval > 0 && now - state.lastRender < interval) return;
 
@@ -8617,8 +8682,14 @@
             // data URLs, while blob: URLs can be rejected by Electron.
             const dataUrl = await blobToDataUrl(imageBlob);
             if (settings.destination === 'texture' && window.Codecs?.image) {
-                Codecs.image.load(dataUrl, '', [size.width, size.height]);
-                if (Texture.all[0]) Texture.all[0].name = name;
+                const existingTextures = new Set(Texture.all || []);
+                const loaded = await Codecs.image.load(dataUrl, '', [size.width, size.height]);
+                const newTextures = (Texture.all || []).filter(texture => !existingTextures.has(texture));
+                // The codec may insert or return the imported texture. Never
+                // rename Texture.all[0], which might be an author's existing asset.
+                const imported = newTextures.includes(loaded) ? loaded
+                    : newTextures.length === 1 ? newTextures[0] : null;
+                if (imported) imported.name = name;
             } else if (window.LightManagerUI?.mediaViewer?.openImage) {
                 await openLastStudioRender(dataUrl);
             } else if (window.Screencam?.returnScreenshot) {
@@ -8823,6 +8894,9 @@
             return;
         }
 
+        // Capture the same viewport state used to resolve the crop, before
+        // checkpointing, global shading changes or user input between tiles.
+        let cameraSourcePreview = anglePreset ? null : snapshotCameraSource(sourcePreview);
         const checkpointProject = getActiveProject();
         const preflight = { project: checkpointProject, cancelled: false };
         studioRecoveryPreflight = preflight;
@@ -9078,7 +9152,6 @@
                 materialEngine.updateAllCubes('studio_render_classic_overrides', { scheduleWarmup: false });
             }
 
-            let cameraSourcePreview = sourcePreview;
             if (anglePreset) {
                 renderPreview.loadAnglePreset(anglePreset);
                 cameraSourcePreview = snapshotCameraSource(renderPreview, outputSize.width, outputSize.height);
@@ -10405,8 +10478,38 @@
             if (options.save !== false) this.saveState(true);
         },
 
+        matchReferenceImage(reference) {
+            if (!this.node || !this.preview || activeRenderSession || !reference?.node?.isConnected ||
+                !reference.visibility || reference.view_mode === 'plane' || !reference.resolveCondition()) return;
+            const viewport = this.preview.node.getBoundingClientRect();
+            const content = reference.is_video ? reference.video : reference.img;
+            const rect = (content || reference.node).getBoundingClientRect();
+            if (!(viewport.width > 0 && viewport.height > 0 && rect.width > 0 && rect.height > 0) ||
+                rect.left < viewport.left - 0.5 || rect.top < viewport.top - 0.5 ||
+                rect.right > viewport.right + 0.5 || rect.bottom > viewport.bottom + 0.5) {
+                Blockbench.showQuickMessage(translate('studio_render.workflow.reference_outside'));
+                return;
+            }
+            const x = clamp((rect.left - viewport.left) / viewport.width, 0, 1);
+            const y = clamp((rect.top - viewport.top) / viewport.height, 0, 1);
+            const width = Math.min(rect.width / viewport.width, 1 - x);
+            const height = Math.min(rect.height / viewport.height, 1 - y);
+            this.setAspect(rect.width / rect.height);
+            this.layoutReference = null;
+            this.state = stampFrameReferenceAspect({x, y, width, height}, this.preview);
+            this.updateNode();
+            this.saveState(true);
+        },
+
         openToolsMenu(event) {
             const workflow=frameWorkflows.get(this.stateOwner);
+            const references = (typeof ReferenceImage !== 'undefined' ? ReferenceImage.active : [])
+                .filter(ref => ref.visibility && ref.view_mode !== 'plane' && ref.node?.isConnected && ref.image_is_loaded);
+            const referenceItems = references.map((ref, index) => ({
+                name: ref.name || ('Reference ' + (index + 1)), icon: 'image',
+                click: () => this.matchReferenceImage(ref)
+            }));
+            if (!referenceItems.length) referenceItems.push({name: 'studio_render.workflow.reference_empty', icon: 'image', disabled: true});
             this.menu = new Menu('studio_frame_tools', [
                 {name:workflow?.reopen?.name || 'studio_render.action.reopen_last',icon:'history',condition:()=>workflow?.reopen?workflow.reopen.condition():!!lastRenderedImage,click:()=>workflow?.reopen?workflow.reopen.click():openLastStudioRender()},
                 {name: 'studio_render.workflow.preview', icon: 'preview', condition:()=>!workflow, click: () => this.renderDraft()},
@@ -10414,6 +10517,7 @@
                 {name: 'studio_render.workflow.guides', icon: currentSettings.frame_guides ? 'check_box' : 'check_box_outline_blank', click: () => {
                     currentSettings.frame_guides = !currentSettings.frame_guides; saveSettings(currentSettings); this.updateNode();
                 }},
+                {name: 'studio_render.workflow.reference', icon: 'image', children: referenceItems},
                 {name: 'studio_render.workflow.center', icon: 'center_focus_weak', click: () => {
                     this.layoutReference = null;
                     this.state.x = (1 - this.state.width) / 2; this.state.y = (1 - this.state.height) / 2;
@@ -12731,7 +12835,11 @@
         const modified = keys.some(key => Object.prototype.hasOwnProperty.call(DEFAULT_SETTINGS, key)
             && !sceneComposerValuesEqual(settings[key], DEFAULT_SETTINGS[key]));
         const enabledKey = keys.find(key => /_enabled$/.test(key));
-        const active = enabledKey ? settings[enabledKey] !== false : true;
+        // Rim Halo has no toggle: a radius of zero actually disables its
+        // visible contribution. The group state must reflect that fact.
+        const active = group.id === 'rim_halo'
+            ? Number(settings.rendercraft_halo_radius) > 0
+            : enabledKey ? settings[enabledKey] !== false : true;
         const summaries = {
             preview: `${translate('studio_render.field.viewport_bloom_quality')}: ${settings.viewport_bloom_quality || 'adaptive'}`,
             bloom: `${Number(settings.bloom_strength || 0).toFixed(2)} · Halo ${Number(settings.bloom_halo_strength || 0).toFixed(2)}`,
@@ -12739,6 +12847,22 @@
             grading: `Exp ${Number(settings.exposure || 0).toFixed(2)} · Sat ${Number(settings.saturation || 0).toFixed(2)}`
         };
         return { modified, active, summary: summaries[group.id] || '' };
+    }
+
+    function refreshSceneComposerGroupMetadata() {
+        // Group summaries must exist even when a section starts expanded: the
+        // user can collapse it later without rebuilding the form.
+        for (const group of SCENE_COMPOSER_PANEL_GROUPS) {
+            const element = sceneComposerPanel?.form?.form_data?.[SCENE_COMPOSER_PANEL_GROUP_PREFIX + group.id];
+            if (!element) continue;
+            const state = getSceneComposerGroupState(group, currentSettings);
+            element.node?.classList.toggle('light_manager_group_active', state.active);
+            if (element.summary_node) {
+                element.summary_node.textContent = state.summary;
+                element.summary_node.title = state.summary;
+                element.summary_node.style.display = element.getValue?.() === false ? '' : 'none';
+            }
+        }
     }
 
     function combineSceneComposerPanelCondition(groupKey, groupOpen, originalCondition) {
@@ -12760,7 +12884,9 @@
             default: DEFAULT_SETTINGS[key],
             modified: result => !sceneComposerValuesEqual(result?.[key] ?? source.value, DEFAULT_SETTINGS[key]),
             title: source.description || source.label,
-            description: source.description || source.label,
+            // A label is already visible; duplicating it as a description adds
+            // a meaningless question-mark help icon to every output row.
+            description: source.description,
             condition: combineSceneComposerPanelCondition(groupKey, groupOpen, source.condition)
         };
         const originalOnBefore = control.onBefore;
@@ -12801,6 +12927,31 @@
         return withUndo(control);
     }
 
+    function sceneComposerBloomStatusKey(settings) {
+        if (!settings.bloom_enabled) return 'studio_render.workflow.bloom_off';
+        if (!settings.viewport_bloom_enabled) return 'studio_render.workflow.preview_off';
+        return studioBloomHasVisibleContribution(resolveBloomSettings(settings))
+            ? 'studio_render.workflow.preview_on' : 'studio_render.workflow.no_contribution';
+    }
+
+    function sceneComposerViewportStatus(settings) {
+        const bloomKey = sceneComposerBloomStatusKey(settings);
+        const suffix = {
+            'studio_render.workflow.bloom_off': 'bloom_off',
+            'studio_render.workflow.preview_off': 'preview_off',
+            'studio_render.workflow.preview_on': 'bloom_on',
+            'studio_render.workflow.no_contribution': 'no_contribution'
+        }[bloomKey] || 'bloom_off';
+        const radius = Number(settings.rendercraft_halo_radius);
+        const rim = Number.isFinite(radius) && radius > 0
+            ? `${translate('studio_render.composer.status.rim_on')} ${radius.toFixed(2)}×`
+            : translate('studio_render.composer.status.rim_off');
+        const grading = translate(settings.color_grading_enabled
+            ? 'studio_render.composer.status.grading_on'
+            : 'studio_render.composer.status.grading_off');
+        return `${translate('studio_render.composer.status.' + suffix)} · ${rim} · ${grading}`;
+    }
+
     function createSceneComposerPanelForm(settings) {
         const design = window.LightManagerUI?.formDesign;
         if (!design?.tabs || !design?.search) {
@@ -12832,19 +12983,24 @@
             };
         }
         const source = createSceneComposerForm(settings);
+        const bloomStatusKey = sceneComposerBloomStatusKey(settings);
         const form = {
-            _composer_output: {type: 'action_button', semantic_button: true, icon: 'photo_camera', text: 'light_manager.ui.camera_output', background: 'var(--color-button)', search_ignore: true, click: () => StudioRender.open()},
+            _composer_status: {
+                type: 'bar_display', value: sceneComposerViewportStatus(settings), search_ignore: true,
+                paragraph: true, expand: true,
+                color: bloomStatusKey === 'studio_render.workflow.no_contribution'
+                    ? 'var(--color-warning)' : 'var(--color-subtle_text)', font_size: '12px'
+            },
             _composer_mode: design.tabs({
                 value: sceneComposerPanelMode,
-                description: 'Composer control level',
+                description: 'studio_render.workflow.technical',
                 options: {
                     essentials: { name: translate('studio_render.workflow.essentials') },
                     advanced: { name: translate('studio_render.workflow.advanced') }
                 }
             }),
             _composer_search: design.search({
-                placeholder: 'Find setting',
-                active_label: 'Active only',
+                placeholder: 'Find setting', active_label: 'Active only',
                 collapse_label: 'Collapse all'
             })
         };
@@ -12863,7 +13019,7 @@
                 icon_color_on: group.color,
                 icon_color_off: `color-mix(in srgb, ${group.color} 55%, var(--color-subtle_text))`,
                 description: group.label,
-                summary: groupOpen ? '' : groupState.summary,
+                summary: groupState.summary,
                 modified: form => group.entries.filter(entry => typeof entry === 'string').some(key => (
                     Object.prototype.hasOwnProperty.call(DEFAULT_SETTINGS, key) &&
                     !sceneComposerValuesEqual(
@@ -12889,7 +13045,12 @@
                         background: `color-mix(in srgb, ${group.color} 4%, transparent)`,
                         margin_left: '4px',
                         margin_right: '4px',
-                        condition: combineSceneComposerPanelCondition(groupKey, groupOpen)
+                        // Subheadings are presentation, not editable settings.
+                        // Do not leave orphaned headings when their effect is
+                        // switched off (verified in native Blockbench 5.2.2).
+                        condition: result => combineSceneComposerPanelCondition(groupKey, groupOpen)(result)
+                            && (group.id !== 'preview' && group.id !== 'bloom' || !!result.bloom_enabled)
+                            && (group.id !== 'grading' || !!result.color_grading_enabled)
                     });
                     return;
                 }
@@ -12903,26 +13064,7 @@
                 }
             });
         });
-        const modifiedCount = SCENE_COMPOSER_PANEL_GROUPS.reduce((count, group) => (
-            count + (getSceneComposerGroupState(group, settings).modified ? 1 : 0)
-        ), 0);
-        const bloomStatusKey = !settings.bloom_enabled
-            ? 'studio_render.workflow.bloom_off'
-            : !settings.viewport_bloom_enabled
-                ? 'studio_render.workflow.preview_off'
-                : !studioBloomHasVisibleContribution(resolveBloomSettings(settings))
-                    ? 'studio_render.workflow.no_contribution'
-                    : 'studio_render.workflow.preview_on';
-        const composerStatus = {
-            type: 'bar_display',
-            value: translate(bloomStatusKey),
-            search_ignore: true,
-            paragraph: true,
-            expand: true,
-            color: bloomStatusKey === 'studio_render.workflow.no_contribution' ? 'var(--color-warning)' : 'var(--color-subtle_text)',
-            font_size: '12px'
-        };
-        return {_composer_status: composerStatus, ...form};
+        return form;
     }
 
     function syncSceneComposerPanel() {
@@ -12932,6 +13074,7 @@
         const scrollTop = scrollContainer?.scrollTop || 0;
         sceneComposerPanel.form.form_config = (window.LightManagerUI?.prepareForm || (form => form))(createSceneComposerPanelForm(currentSettings));
         sceneComposerPanel.form.buildForm();
+        refreshSceneComposerGroupMetadata();
         const nextScrollContainer = sceneComposerPanel.node?.querySelector?.('.form');
         if (nextScrollContainer) nextScrollContainer.scrollTop = scrollTop;
         syncingSceneComposerPanel = false;
@@ -13752,6 +13895,7 @@
         min_version: '4.9.0',
         variant: 'both',
         onload() {
+            if(this.source==='file')this.new_repository_format=false;
             addTranslations();
             refreshLightflowAspectRatioIcons();
             registerSceneComposerUndoHooks();
@@ -13918,13 +14062,20 @@
                     }
                 });
                 const settingKeys = changedKeys.filter(key => Object.prototype.hasOwnProperty.call(DEFAULT_SETTINGS, key));
-                if (!settingKeys.length) return;
+                if (!settingKeys.length) {
+                    refreshSceneComposerGroupMetadata();
+                    return;
+                }
                 const panelResult = {};
                 settingKeys.forEach(key => {
                     if (result && Object.prototype.hasOwnProperty.call(result, key)) panelResult[key] = result[key];
                 });
                 applySceneComposerForm(panelResult, true);
+                sceneComposerPanel.form?.form_data?._composer_status?.setValue?.(
+                    sceneComposerViewportStatus(currentSettings));
+                refreshSceneComposerGroupMetadata();
             });
+            refreshSceneComposerGroupMetadata();
             sceneComposerPanelStyles = window.LightManagerUI?.addDesignedPanelStyles?.('lightflow_scene_composer_panel', {
                 scrollbar_width: 4,
                 row_padding: '3px 4px'

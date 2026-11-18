@@ -9,6 +9,7 @@
     const MAX_RAY_STEPS = 96;
     const STORAGE_KEY = 'lightflow_atmosphere.settings';
     const DEFAULT_SETTINGS = {
+        settings_version: 3,
         enabled: true,
         temporal_jitter: false,
         helper_mask: true,
@@ -56,12 +57,24 @@
         reference: 'lightflow_atmosphere.option.quality_reference'
     };
     const GLOBAL_FOG_OPTIONS = {
-        none: 'Off',
-        minecraft: 'Minecraft / Distance',
-        linear: 'Linear Distance',
-        exp: 'Exponential',
-        exp2: 'Exponential Squared',
-        height: 'Exponential Height'
+        none: 'lightflow_atmosphere.option.fog_none',
+        minecraft: 'lightflow_atmosphere.option.fog_minecraft',
+        linear: 'lightflow_atmosphere.option.fog_linear',
+        exp: 'lightflow_atmosphere.option.fog_exp',
+        exp2: 'lightflow_atmosphere.option.fog_exp2',
+        height: 'lightflow_atmosphere.option.fog_height'
+    };
+    const TEMPORAL_RESPONSE_OPTIONS = {
+        off: 'lightflow_atmosphere.option.temporal_off',
+        responsive: 'lightflow_atmosphere.option.temporal_responsive',
+        balanced: 'lightflow_atmosphere.option.temporal_balanced',
+        stable: 'lightflow_atmosphere.option.temporal_stable'
+    };
+    const VOLUMETRIC_SHADOW_OPTIONS = {
+        auto: 'lightflow_atmosphere.option.shadow_auto',
+        none: 'lightflow_atmosphere.option.shadow_none',
+        cheap: 'lightflow_atmosphere.option.shadow_cheap',
+        full: 'lightflow_atmosphere.option.shadow_full'
     };
 
     const VOLUME_PRESETS = {
@@ -143,7 +156,24 @@
         dream_fog: 'lightflow_atmosphere.preset.dream_fog'
     });
 
+    // One schema feeds persistence, validation and both production inspectors.
+    // Neutral defaults preserve projects saved before local art direction.
+    const VOLUME_CREATIVE_FIELDS = Object.freeze({
+        max_opacity: { type: 'number', default: 1, min: 0, max: 1, step: 0.01 },
+        saturation: { type: 'number', default: 1, min: 0, max: 2, step: 0.01 },
+        contrast: { type: 'number', default: 1, min: 0, max: 3, step: 0.01 },
+        emission: { type: 'number', default: 0, min: 0, max: 4, step: 0.01 },
+        color_gradient: { type: 'number', default: 0, min: 0, max: 1, step: 0.01 },
+        top_color: { type: 'color', default: [232, 240, 255] },
+        gradient_curve: { type: 'number', default: 1, min: 0.1, max: 8, step: 0.05 },
+        height_ceiling: { type: 'number', default: 1, min: 0, max: 1, step: 0.01 },
+        height_feather: { type: 'number', default: 0, min: 0, max: 1, step: 0.01 },
+        density_curve: { type: 'number', default: 1, min: 0.1, max: 4, step: 0.05 },
+        noise_stretch: { type: 'vector', default: [1, 1, 1], min: 0.1, max: 16, step: 0.1 },
+        noise_seed: { type: 'number', default: 0, min: 0, max: 1000, step: 1 }
+    });
     const VOLUME_DEFAULTS = Object.freeze({
+        ...Object.fromEntries(Object.entries(VOLUME_CREATIVE_FIELDS).map(([key, field]) => [key, field.default])),
         shape: 'box',
         density_mode: 'uniform',
         composite_mode: 'physical',
@@ -194,7 +224,13 @@
     let particlePanelSyncing = false;
     let particlePanelTab = 'emission';
     const particleEffectRecords = new Map();
+    const invalidParticleSources = new WeakMap();
+    const particleAnimatedValues = new Map();
     const retiredParticleConfigs = new Set();
+    // Keep a small grace window for Wintersky child emitters that may still be
+    // completing their final update. Repeated JSON/texture edits previously
+    // retained every obsolete config (and texture) for the entire project.
+    const MAX_RETIRED_PARTICLE_CONFIGS = 24;
     let atmospherePanel = null;
     let addVolumeAction = null;
     let editVolumeAction = null;
@@ -222,14 +258,8 @@
     };
     const publishedWindowBindings = new Map();
     const volumePanelGroupsOpen = {
-        look: true,
-        look_setup: false,
-        light_response: false,
-        shape: true,
-        height: false,
-        cloud: false,
-        motion: false,
-        quality: true,
+        look_advanced: false,
+        shape_advanced: false,
         quality_advanced: false
     };
 
@@ -493,8 +523,8 @@
             if ([Technique.SCREEN_SHAFTS, Technique.GEOMETRY_SHAFTS, Technique.SCREEN_ARTISTIC].includes(normalized)) return true;
             const densityMode = String(volume.density_mode || 'uniform').toLowerCase();
             const heterogeneous = ['cloud', 'custom', 'texture3d'].includes(densityMode);
-            if (RAYMARCH_TECHNIQUES.has(normalized)) return heterogeneous;
-            if ([Technique.ANALYTIC_LOCAL, Technique.ANALYTIC_LOCAL_QUADRATURE].includes(normalized)) return !heterogeneous;
+            if (RAYMARCH_TECHNIQUES.has(normalized)) return heterogeneous || densityMode === 'height' || volume.composite_mode === 'shafts';
+            if ([Technique.ANALYTIC_LOCAL, Technique.ANALYTIC_LOCAL_QUADRATURE].includes(normalized)) return !heterogeneous && volume.composite_mode !== 'shafts';
             return true;
         };
 
@@ -617,20 +647,16 @@
 
             const densityMode = String(volume.density_mode || 'uniform').toLowerCase();
             const compositeMode = String(volume.composite_mode || 'physical').toLowerCase();
+            const qualityTechnique = studio && ['ultra', 'reference'].includes(quality)
+                ? Technique.VOLUMETRIC_HQ
+                : Technique.VOLUMETRIC_RAYMARCH;
             if (compositeMode === 'shafts' || ['godray', 'god_rays', 'stage_beam'].includes(intent)) {
-                if (trueVolumetricShadows && studio && ['ultra', 'reference'].includes(quality)) return Technique.VOLUMETRIC_HQ;
-                const lightType = String(input.lightType || volume.light_type || '').toLowerCase();
-                return lightType === 'spot' ? Technique.GEOMETRY_SHAFTS : Technique.SCREEN_SHAFTS;
+                return qualityTechnique;
             }
-            if (densityMode === 'cloud' || densityMode === 'custom' || densityMode === 'texture3d') {
-                return studio && ['ultra', 'reference'].includes(quality)
-                    ? Technique.VOLUMETRIC_HQ
-                    : Technique.VOLUMETRIC_RAYMARCH;
-            }
-            if (densityMode === 'height') {
-                return Math.max(0, number(volume.edge_feather, 0)) > 1e-5
-                    ? Technique.ANALYTIC_LOCAL_QUADRATURE
-                    : Technique.ANALYTIC_LOCAL;
+            if (['height', 'cloud', 'custom', 'texture3d'].includes(densityMode) ||
+                (number(volume.scattering_strength, 1) > 0 &&
+                    (input.hasLocalLights || (input.hasShadowLights && volume.receive_shadows !== false)))) {
+                return qualityTechnique;
             }
             if (densityMode === 'screen' || volume.screen_space === true) return Technique.SCREEN_ARTISTIC;
             return Technique.ANALYTIC_LOCAL;
@@ -652,7 +678,8 @@
                     quality: input.quality,
                     studio: input.studio,
                     intent: volume?.intent,
-                    lightType: volume?.light_type,
+                    hasLocalLights: input.hasLocalLights,
+                    hasShadowLights: input.hasShadowLights,
                     trueVolumetricShadows: input.trueVolumetricShadows
                 })
             })).filter(route => route.technique !== Technique.NONE);
@@ -704,10 +731,24 @@
         resolveScene: input => AtmosphereV2Core.resolveScene(input)
     });
 
+    function normalizeAtmosphereSettings(saved) {
+        const source = saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {};
+        const settings = { ...DEFAULT_SETTINGS, ...source };
+        // Older volume recipes wrote these project-wide effects without recording
+        // whether the artist chose them. Start those files with smooth gradients.
+        if (finite(source.settings_version, 0) < 3) {
+            settings.art_posterize = 0;
+            settings.art_dither = 0;
+            settings.art_color_quantization = 0;
+        }
+        settings.settings_version = Math.max(3, finite(source.settings_version, 3));
+        return settings;
+    }
+
     function readSettings() {
         try {
             const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
-            return Object.assign({}, DEFAULT_SETTINGS, parsed && typeof parsed === 'object' ? parsed : {});
+            return normalizeAtmosphereSettings(parsed);
         } catch (error) {
             console.warn('[Lightflow Atmosphere] Saved settings are invalid; using defaults.', error);
             return Object.assign({}, DEFAULT_SETTINGS);
@@ -717,16 +758,22 @@
     function saveSettings(settings) {
         try {
             localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
-            if (window.Project && atmosphereProjectSettingsProperty) {
-                window.Project.lightflow_atmosphere_v2_settings_json = JSON.stringify({
-                    schema_version: 2,
-                    ...settings
-                });
-            }
         } catch (error) {
             if (!storageWriteFailureReported) {
-                console.warn('[Lightflow Atmosphere] Settings could not be persisted; project volumes remain usable.', error);
+                console.warn('[Lightflow Atmosphere] Preferences could not be saved to local storage.', error);
                 storageWriteFailureReported = true;
+            }
+        }
+        // Project data must still be saved when localStorage is unavailable.
+        if (window.Project && atmosphereProjectSettingsProperty) {
+            try {
+                const serialized = JSON.stringify({schema_version: 2, ...settings});
+                if (window.Project.lightflow_atmosphere_v2_settings_json !== serialized) {
+                    window.Project.lightflow_atmosphere_v2_settings_json = serialized;
+                    if (typeof window.Project.saved === 'boolean') window.Project.saved = false;
+                }
+            } catch (error) {
+                console.warn('[Lightflow Atmosphere] Project settings could not be saved.', error);
             }
         }
     }
@@ -737,7 +784,7 @@
         try {
             const parsed = JSON.parse(serialized);
             if (!parsed || typeof parsed !== 'object') return false;
-            AtmosphereManager.settings = { ...DEFAULT_SETTINGS, ...parsed };
+            AtmosphereManager.settings = normalizeAtmosphereSettings(parsed);
             AtmosphereManager.updateSurfaceFogUniforms?.();
             return true;
         } catch (error) {
@@ -783,6 +830,17 @@
         return target;
     }
 
+    function srgbToLinear(value) {
+        return value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
+    }
+
+    function getVolumeLightUUID(volume) {
+        if (volume?.light_uuid === 'environment_sun') {
+            return window.LightflowEnvironment?.getDirectionalLight?.()?.uuid || 'environment_sun';
+        }
+        return volume?.light_uuid || '';
+    }
+
     function getCubeMesh(cube) {
         if (!cube) return null;
         return cube.mesh || (window.Project && Project.nodes_3d ? Project.nodes_3d[cube.uuid] : null) || null;
@@ -791,7 +849,7 @@
     function getRenderElements() {
         const elements = [];
         const seen = new Set();
-        [window.Cube, window.Mesh, window.TextureMesh].forEach(Type => {
+        [window.Cube, window.Mesh, window.TextureMesh, window.Billboard, window.BedrockBlockElement].forEach(Type => {
             const list = Type && Array.isArray(Type.all) ? Type.all : [];
             list.forEach(element => {
                 if (!element || seen.has(element)) return;
@@ -880,6 +938,29 @@
         }
     `;
 
+    const POINT_SHADOW_ATLAS_GLSL = `
+            // Three r129 point-shadow atlas layout (cubeToUV, MIT).
+            vec2 rayCubeToUV(vec3 direction, float texelY) {
+                vec3 absolute = abs(direction);
+                float scale = 1.0 / max(max(absolute.x, absolute.y), max(absolute.z, 0.000001));
+                absolute *= scale;
+                vec3 v = direction * scale * (1.0 - 2.0 * texelY);
+                vec2 planar = v.xy;
+                float edge = 1.0 - 1.5 * texelY;
+                if (absolute.z >= edge) {
+                    if (v.z > 0.0) planar.x = 4.0 - v.x;
+                } else if (absolute.x >= edge) {
+                    float signX = sign(v.x);
+                    planar.x = v.z * signX + 2.0 * signX;
+                } else if (absolute.y >= edge) {
+                    float signY = sign(v.y);
+                    planar.x = v.x + 2.0 * signY + 2.0;
+                    planar.y = v.z * signY - 2.0;
+                }
+                return vec2(0.125, 0.25) * planar + vec2(0.375, 0.75);
+            }
+    `;
+
     const VOLUME_FRAGMENT_SHADER = `
         precision highp float;
         #define MAX_VOLUMES ${MAX_VOLUMES}
@@ -888,7 +969,7 @@
         #define PI 3.141592653589793
 
         uniform sampler2D tSceneDepth;
-        uniform sampler2D tCubeDepth;
+        uniform sampler2D tHelperDepth;
         uniform sampler2D uNoiseTexture;
         uniform sampler2D uShadowMap0;
         uniform sampler2D uShadowMap1;
@@ -902,7 +983,11 @@
         uniform vec4 uVolumeHeightNoise[MAX_VOLUMES];
         uniform vec4 uVolumeCloudWind[MAX_VOLUMES];
         uniform vec4 uVolumeFlags[MAX_VOLUMES];
+        uniform vec4 uVolumeProfile[MAX_VOLUMES];
+        uniform vec4 uVolumeNoiseTransform[MAX_VOLUMES];
+        uniform vec2 uVolumeArt[MAX_VOLUMES];
         uniform vec3 uVolumeColor[MAX_VOLUMES];
+        uniform vec3 uVolumeTopColor[MAX_VOLUMES];
         uniform vec3 uVolumeAbsorptionColor[MAX_VOLUMES];
         uniform vec4 uLightPositionType[MAX_LIGHTS];
         uniform vec4 uLightDirectionRange[MAX_LIGHTS];
@@ -910,6 +995,8 @@
         uniform vec4 uLightConeShadow[MAX_LIGHTS];
         uniform vec4 uShadowParams0;
         uniform vec4 uShadowParams1;
+        uniform vec4 uPointShadow0;
+        uniform vec4 uPointShadow1;
         uniform vec2 uResolution;
         uniform vec2 uFrameOrigin;
         uniform vec2 uFramePixelScale;
@@ -922,6 +1009,10 @@
         uniform int uLightCount;
         uniform int uSteps;
         uniform int uShadowSamples;
+        uniform int uShadowCount;
+        uniform int uCloudShadowSteps;
+        uniform bool uHasLocalLights;
+        uniform vec2 uVolumeShaft[MAX_VOLUMES];
         uniform bool uOrthographic;
         uniform bool uTemporalJitter;
         uniform bool uCheckerboard;
@@ -932,7 +1023,7 @@
         varying vec2 vUv;
 
         bool solidDepth(float depth) {
-            return depth > 0.000001 && depth < 0.999999;
+            return depth >= 0.0 && depth < 0.999999;
         }
 
         vec3 viewPosition(vec2 uv, float depth) {
@@ -944,18 +1035,22 @@
             return (uCameraWorld * vec4(viewPosition(uv, depth), 1.0)).xyz;
         }
 
-        float hash13(vec3 point) {
-            point = fract(point * 0.1031);
-            point += dot(point, point.yzx + 33.33);
-            return fract((point.x + point.y) * point.z);
+        float interleavedGradientNoise(vec2 pixel, float slice) {
+            return fract(52.9829189 * fract(dot(pixel + slice * 5.588238,
+                vec2(0.06711056, 0.00583715))));
         }
 
-        float projectedNoise3D(vec3 point) {
-            vec2 projectionA = point.xy + point.z * vec2(0.173, 0.317);
-            vec2 projectionB = point.yz + point.x * vec2(0.271, 0.119);
-            float first = texture2D(uNoiseTexture, projectionA).r;
-            float second = texture2D(uNoiseTexture, projectionB).g;
-            return mix(first, second, 0.5);
+        vec2 noiseAtlasUV(vec2 xy, float slice) {
+            vec2 tile = vec2(mod(slice, 8.0), floor(slice / 8.0));
+            return (tile * 34.0 + xy + 1.5) / vec2(272.0, 136.0);
+        }
+
+        float sampleNoise3D(vec3 point) {
+            vec3 cell = fract(point) * 32.0;
+            float slice = floor(cell.z);
+            float lower = texture2D(uNoiseTexture, noiseAtlasUV(cell.xy, slice)).r;
+            float upper = texture2D(uNoiseTexture, noiseAtlasUV(cell.xy, mod(slice + 1.0, 32.0))).r;
+            return mix(lower, upper, fract(cell.z));
         }
 
         float fbm(vec3 point, float detail) {
@@ -967,7 +1062,7 @@
                 // every later octave is disabled too. Stop instead of doing
                 // point/weight bookkeeping for samples that cannot contribute.
                 if (float(octave) > detail - 0.5) break;
-                result += projectedNoise3D(point) * weight;
+                result += sampleNoise3D(point) * weight;
                 normalization += weight;
                 point = point * 2.03 + vec3(17.1, 7.7, 13.4);
                 weight *= 0.5;
@@ -976,7 +1071,9 @@
         }
 
         bool volumeInterval(
-            int index,
+            mat4 inverseTransform,
+            vec4 shapeMode,
+            vec4 profile,
             vec3 rayOrigin,
             vec3 rayDirection,
             out vec2 interval,
@@ -987,9 +1084,9 @@
             // 2.5: Keep the ray in local volume space. Because the transform is
             // affine, localOrigin + localDirection * t is exactly the same
             // point as transforming the world-space ray sample every step.
-            localOrigin = (uVolumeInverse[index] * vec4(rayOrigin, 1.0)).xyz;
-            localDirection = (uVolumeInverse[index] * vec4(rayDirection, 0.0)).xyz;
-            if (uVolumeShapeMode[index].x < 0.5) {
+            localOrigin = (inverseTransform * vec4(rayOrigin, 1.0)).xyz;
+            localDirection = (inverseTransform * vec4(rayDirection, 0.0)).xyz;
+            if (shapeMode.x < 0.5) {
                 vec3 safeDirection = localDirection;
                 if (abs(safeDirection.x) < 0.000001) safeDirection.x = safeDirection.x < 0.0 ? -0.000001 : 0.000001;
                 if (abs(safeDirection.y) < 0.000001) safeDirection.y = safeDirection.y < 0.0 ? -0.000001 : 0.000001;
@@ -1008,46 +1105,79 @@
                 float root = sqrt(discriminant);
                 interval = vec2((-b - root) / (2.0 * a), (-b + root) / (2.0 * a));
             }
+            float ceiling = profile.x - 0.5;
+            if (abs(localDirection.y) < 0.000001) {
+                if (localOrigin.y > ceiling) return false;
+            } else {
+                float heightBoundary = (ceiling - localOrigin.y) / localDirection.y;
+                if (localDirection.y > 0.0) interval.y = min(interval.y, heightBoundary);
+                else interval.x = max(interval.x, heightBoundary);
+            }
             interval.x = max(interval.x, 0.0);
             return interval.y > interval.x;
         }
 
         float sampleVolumeDensityLocal(
-            int index,
+            vec4 shapeMode,
+            vec4 optics,
+            vec4 heightNoise,
+            vec4 cloudWind,
+            vec4 profile,
+            vec4 noiseTransform,
             vec3 local,
             vec2 windOffset
         ) {
-            float shape = uVolumeShapeMode[index].x;
-            float mode = uVolumeShapeMode[index].y;
-            float feather = max(uVolumeShapeMode[index].z, 0.0001);
+            float shape = shapeMode.x;
+            float mode = shapeMode.y;
+            float feather = max(shapeMode.z, 0.0001);
             float edgeDistance = shape < 0.5
                 ? 0.5 - max(abs(local.x), max(abs(local.y), abs(local.z)))
                 : 0.5 - length(local);
             if (edgeDistance <= 0.0) return 0.0;
             float edge = smoothstep(0.0, feather * 0.5, edgeDistance);
+            if (shape < 0.5) {
+                vec3 faceFade = smoothstep(vec3(0.0), vec3(feather * 0.5), vec3(0.5) - abs(local));
+                edge = faceFade.x * faceFade.y * faceFade.z;
+            }
             // Convert compact Blockbench units into a practical optical scale.
             // This prevents a normal 16-64 unit domain from flattening all
             // surface lighting while keeping density behavior predictable.
-            float density = uVolumeOptics[index].x * 0.12;
+            float density = optics.x * 0.12;
             if (density <= 0.0) return 0.0;
             float normalizedHeight = clamp(local.y + 0.5, 0.0, 1.0);
-            float heightFalloff = uVolumeHeightNoise[index].x;
-            float heightOffset = uVolumeHeightNoise[index].y;
+            if (profile.x < 1.0 || profile.y > 0.0) {
+                if (normalizedHeight >= profile.x) return 0.0;
+                if (profile.y > 0.0) density *= 1.0 - smoothstep(
+                    max(0.0, profile.x - profile.y), profile.x, normalizedHeight
+                );
+            }
+            float heightFalloff = heightNoise.x;
+            float heightOffset = heightNoise.y;
             if (mode > 0.5) {
                 density *= exp(-heightFalloff * max(normalizedHeight - heightOffset, 0.0));
             }
             if (mode > 1.5) {
-                float noiseScale = max(uVolumeHeightNoise[index].z, 0.01);
-                float detail = uVolumeHeightNoise[index].w;
+                float noiseScale = max(heightNoise.z, 0.01);
+                float detail = heightNoise.w;
                 // The per-volume time multiplication is prepared once per
                 // fragment before raymarching, rather than once per step.
                 vec3 wind = vec3(windOffset.x, 0.0, windOffset.y);
-                float cloudNoise = fbm((local + 0.5) * noiseScale + wind, detail);
-                float coverage = clamp(uVolumeCloudWind[index].x, 0.0, 0.99);
-                float erosion = max(uVolumeCloudWind[index].y, 0.01);
-                density *= smoothstep(coverage, min(1.0, coverage + erosion), cloudNoise);
+                vec3 noisePoint = (local + 0.5) * noiseScale * noiseTransform.xyz + wind;
+                noisePoint += noiseTransform.w * vec3(0.173, 0.317, 0.271);
+                float cloudNoise = fbm(noisePoint, detail);
+                float coverage = clamp(cloudWind.x, 0.0, 0.99);
+                float erosion = max(cloudWind.y, 0.01);
+                float cloudMask = smoothstep(coverage, min(1.0, coverage + erosion), cloudNoise);
+                if (abs(profile.z - 1.0) > 0.0001) cloudMask = pow(cloudMask, profile.z);
+                density *= cloudMask;
             }
             return max(density * edge, 0.0);
+        }
+
+        vec3 volumeScatteringColor(vec3 bottom, vec3 top, float curve, vec3 localPoint) {
+            float height = clamp(localPoint.y + 0.5, 0.0, 1.0);
+            if (abs(curve - 1.0) > 0.0001) height = pow(height, curve);
+            return mix(bottom, top, height);
         }
 
         float henyeyGreensteinPrepared(
@@ -1060,79 +1190,79 @@
                 1.0 + gSquared - 2.0 * g * cosTheta,
                 0.0001
             );
-            // Light Manager uses artist-facing intensity units. Relative HG
-            // normalization preserves the directional lobe without making an
-            // intensity of 1 almost invisible after the physical 1/(4*pi).
-            // x^1.5 == x * sqrt(x), avoiding a general pow() in the
-            // innermost volumetric-lighting path.
-            return numerator / (denominator * sqrt(denominator));
+            return (numerator * (0.25 / PI)) / (denominator * sqrt(denominator));
         }
 
-        float unpackDepth(vec4 packedDepth) {
-            const vec4 unpackFactors = vec4(
-                0.000000059371814728,
-                0.000015199184417725,
-                0.0038909912109375,
-                0.99609375
-            );
-            return dot(packedDepth, unpackFactors);
+        #include <packing>
+        ${POINT_SHADOW_ATLAS_GLSL}
+
+        float shadowTap(sampler2D shadowMap, vec2 uv, float depth, float vsm) {
+            vec4 texel = texture2D(shadowMap, uv);
+            if (vsm < 0.5) return step(depth, unpackRGBAToDepth(texel));
+            vec2 distribution = unpackRGBATo2Half(texel);
+            float delta = depth - distribution.x;
+            float variance = max(0.00002, distribution.y * distribution.y);
+            return max(step(depth, distribution.x),
+                clamp((variance / (variance + delta * delta) - 0.3) / 0.7, 0.0, 1.0));
         }
 
-        float shadowCompare0(vec3 worldPoint) {
-            vec4 projected = uShadowMatrix0 * vec4(worldPoint, 1.0);
-            vec3 coordinates = projected.xyz / max(projected.w, 0.000001);
-            if (coordinates.x <= 0.0 || coordinates.x >= 1.0 || coordinates.y <= 0.0 || coordinates.y >= 1.0 || coordinates.z <= 0.0 || coordinates.z >= 1.0) return 1.0;
-            vec2 offset = uShadowParams0.xy;
-            float bias = uShadowParams0.z;
-            float compareDepth = coordinates.z + bias;
-            if (uShadowSamples <= 1) return step(compareDepth, unpackDepth(texture2D(uShadowMap0, coordinates.xy)));
-            float visibility = 0.0;
-            visibility += step(compareDepth, unpackDepth(texture2D(uShadowMap0, coordinates.xy + vec2(-offset.x, -offset.y))));
-            visibility += step(compareDepth, unpackDepth(texture2D(uShadowMap0, coordinates.xy + vec2( offset.x, -offset.y))));
-            visibility += step(compareDepth, unpackDepth(texture2D(uShadowMap0, coordinates.xy + vec2(-offset.x,  offset.y))));
-            visibility += step(compareDepth, unpackDepth(texture2D(uShadowMap0, coordinates.xy + vec2( offset.x,  offset.y))));
-            return visibility * 0.25;
-        }
-
-        float shadowCompare1(vec3 worldPoint) {
-            vec4 projected = uShadowMatrix1 * vec4(worldPoint, 1.0);
-            vec3 coordinates = projected.xyz / max(projected.w, 0.000001);
-            if (coordinates.x <= 0.0 || coordinates.x >= 1.0 || coordinates.y <= 0.0 || coordinates.y >= 1.0 || coordinates.z <= 0.0 || coordinates.z >= 1.0) return 1.0;
-            vec2 offset = uShadowParams1.xy;
-            float bias = uShadowParams1.z;
-            float compareDepth = coordinates.z + bias;
-            if (uShadowSamples <= 1) return step(compareDepth, unpackDepth(texture2D(uShadowMap1, coordinates.xy)));
-            float visibility = 0.0;
-            visibility += step(compareDepth, unpackDepth(texture2D(uShadowMap1, coordinates.xy + vec2(-offset.x, -offset.y))));
-            visibility += step(compareDepth, unpackDepth(texture2D(uShadowMap1, coordinates.xy + vec2( offset.x, -offset.y))));
-            visibility += step(compareDepth, unpackDepth(texture2D(uShadowMap1, coordinates.xy + vec2(-offset.x,  offset.y))));
-            visibility += step(compareDepth, unpackDepth(texture2D(uShadowMap1, coordinates.xy + vec2( offset.x,  offset.y))));
-            return visibility * 0.25;
-        }
-
-        float lightShadow(int slot, vec3 worldPoint) {
-            float visibility = 1.0;
-            if (slot == 0) {
-                visibility = shadowCompare0(worldPoint);
-            } else if (slot == 1) {
-                visibility = shadowCompare1(worldPoint);
+        float compareShadow(sampler2D shadowMap, mat4 matrix, vec4 params, vec4 pointShadow, vec3 worldPoint, float jitter) {
+            vec4 projected = matrix * vec4(worldPoint, 1.0);
+            bool point = pointShadow.x > 0.0;
+            if (!point && projected.w <= 0.0) return 1.0;
+            vec3 coord = projected.xyz / max(projected.w, 0.000001);
+            float depth = coord.z;
+            vec3 direction = vec3(0.0);
+            vec3 tangent = vec3(0.0);
+            vec3 bitangent = vec3(0.0);
+            if (point) {
+                float distanceToLight = length(projected.xyz);
+                if (distanceToLight <= pointShadow.y || distanceToLight >= pointShadow.z) return 1.0;
+                depth = (distanceToLight - pointShadow.y) / (pointShadow.z - pointShadow.y);
+                direction = projected.xyz / distanceToLight;
+                tangent = normalize(cross(direction, abs(direction.y) > 0.9 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0)));
+                bitangent = cross(direction, tangent);
+            } else if (any(lessThanEqual(coord, vec3(0.0))) || any(greaterThanEqual(coord, vec3(1.0)))) {
+                return 1.0;
             }
-            return visibility;
+            float visibility = 0.0;
+            float angle = jitter * (2.0 * PI);
+            vec2 offset = vec2(cos(angle), sin(angle));
+            for (int tap = 0; tap < 4; tap++) {
+                if (tap >= uShadowSamples) break;
+                vec2 uv = point
+                    ? rayCubeToUV(direction + (tangent * offset.x + bitangent * offset.y) * pointShadow.w, pointShadow.x)
+                    : coord.xy + offset * params.xy;
+                visibility += shadowTap(shadowMap, uv, depth + params.z, params.w);
+                offset = vec2(-offset.y, offset.x);
+            }
+            return visibility / max(float(uShadowSamples), 1.0);
         }
 
-        vec3 volumeLighting(int volumeIndex, vec3 worldPoint, vec3 viewDirection) {
-            vec3 lighting = uAmbientColor * uVolumeFlags[volumeIndex].y;
+        float lightShadow(int slot, vec3 worldPoint, float jitter) {
+            if (slot == 0) return compareShadow(uShadowMap0, uShadowMatrix0, uShadowParams0, uPointShadow0, worldPoint, jitter);
+            if (slot == 1) return compareShadow(uShadowMap1, uShadowMatrix1, uShadowParams1, uPointShadow1, worldPoint, jitter);
+            return 1.0;
+        }
+
+        vec3 volumeLighting(
+            vec4 optics, vec4 flags, vec4 shapeMode, vec2 shaft,
+            mat3 worldToLocal, vec4 heightNoise, vec4 cloudWind, vec4 profile, vec4 noiseTransform,
+            vec3 worldPoint, vec3 localPoint, vec2 windOffset, float density, vec3 viewDirection, float jitter
+        ) {
+            vec3 lighting = flags.w > 0.5 ? vec3(0.0) : uAmbientColor * flags.y;
             float anisotropy = clamp(
-                uVolumeOptics[volumeIndex].w,
+                optics.w,
                 -0.92,
                 0.92
             );
             float anisotropySquared = anisotropy * anisotropy;
             float phaseNumerator = 1.0 - anisotropySquared;
-            float shadowFill = clamp(uVolumeShapeMode[volumeIndex].w, 0.0, 1.0);
-            bool receiveShadows = uVolumeFlags[volumeIndex].x > 0.5;
+            float shadowFill = clamp(shapeMode.w, 0.0, 1.0);
+            bool receiveShadows = flags.x > 0.5;
             for (int lightIndex = 0; lightIndex < MAX_LIGHTS; lightIndex++) {
                 if (lightIndex >= uLightCount) break;
+                if (shaft.x >= 0.0 && float(lightIndex) != shaft.x) continue;
                 #ifdef LF_DIRECTIONAL_ONLY
                     if (lightIndex > 0) break;
                 #endif
@@ -1170,27 +1300,46 @@
                     }
                 }
                 if (attenuation <= 0.00001) continue;
-                // viewDirection points from the camera into the scene, while
-                // the phase function needs the direction from the sample back
-                // to the camera. The old sign inverted forward scattering and
-                // made real camera-facing shafts almost disappear.
+                // Incident photons travel opposite toLight, and outgoing photons
+                // travel opposite viewDirection. Looking toward the source gives cos(theta) = 1.
                 float phase = henyeyGreensteinPrepared(
-                    dot(toLight, -viewDirection),
+                    dot(toLight, viewDirection),
                     anisotropy,
                     anisotropySquared,
                     phaseNumerator
                 );
                 int shadowSlot = int(floor(coneShadow.z + 0.5));
                 float visibility = (receiveShadows && shadowSlot >= 0)
-                    ? lightShadow(shadowSlot, worldPoint)
+                    ? lightShadow(shadowSlot, worldPoint, jitter)
                     : 1.0;
                 // A small fill approximates unresolved multiple scattering for
                 // fog and clouds. Light-shaft presets leave it at zero so a
                 // fully occluded sample contributes no visible medium.
                 visibility = mix(shadowFill, 1.0, visibility);
+                #ifndef LF_ANALYTIC_ONLY
+                    if (shapeMode.y > 1.5 && uCloudShadowSteps > 0 && visibility > 0.00001 &&
+                        lightIndex == int(max(shaft.x, 0.0))) {
+                        vec3 localStep = worldToLocal * toLight * 2.0;
+                        float opticalDepth = 0.0;
+                        vec3 samplePoint = localPoint;
+                        for (int cloudStep = 0; cloudStep < 3; cloudStep++) {
+                            if (cloudStep >= uCloudShadowSteps) break;
+                            samplePoint += localStep;
+                            opticalDepth += sampleVolumeDensityLocal(shapeMode, optics,
+                                heightNoise, cloudWind, profile, noiseTransform, samplePoint, windOffset);
+                        }
+                        float powder = 1.0 - exp(-2.0 * density);
+                        visibility *= exp(-2.0 * opticalDepth * max(optics.y + optics.z, 0.1)) * (0.8 + 0.4 * powder);
+                    }
+                #endif
                 lighting += colorIntensity.rgb * colorIntensity.w * attenuation * phase * visibility;
             }
-            return max(lighting, vec3(0.0));
+            return max(lighting, vec3(0.0)) * (flags.w > 0.5 ? shaft.y : 1.0);
+        }
+
+        bool volumeNeedsMarch(float mode, vec4 flags, float scattering) {
+            return mode > 0.5 || flags.w > 0.5 ||
+                (scattering > 0.0 && (uHasLocalLights || (flags.x > 0.5 && uShadowCount > 0)));
         }
 
         void main() {
@@ -1202,17 +1351,15 @@
                 }
             }
             float sceneDepth = texture2D(tSceneDepth, vUv).x;
-            float cubeDepth = texture2D(tCubeDepth, vUv).x;
-            if (uHelperMask && solidDepth(sceneDepth)) {
-                if (!solidDepth(cubeDepth)) {
-                    gl_FragColor = vec4(0.0);
-                    return;
-                }
-                float sceneZ = abs(viewPosition(vUv, sceneDepth).z);
-                float cubeZ = abs(viewPosition(vUv, cubeDepth).z);
-                if (abs(sceneZ - cubeZ) > max(0.012, cubeZ * 0.00045)) {
-                    gl_FragColor = vec4(0.0);
-                    return;
+            if (uHelperMask) {
+                float helperDepth = texture2D(tHelperDepth, vUv).x;
+                if (solidDepth(helperDepth)) {
+                    float sceneZ = abs(viewPosition(vUv, sceneDepth).z);
+                    float helperZ = abs(viewPosition(vUv, helperDepth).z);
+                    if (!solidDepth(sceneDepth) || helperZ <= sceneZ + max(0.012, sceneZ * 0.00045)) {
+                        gl_FragColor = vec4(0.0);
+                        return;
+                    }
                 }
             }
 
@@ -1223,12 +1370,10 @@
             vec3 rayOrigin = uOrthographic ? nearWorld : uCameraPosition;
             vec3 rayDirection = normalize(farWorld - rayOrigin);
             float sceneDistance = uCameraFar;
-            if (solidDepth(cubeDepth)) sceneDistance = length(worldPosition(vUv, cubeDepth) - rayOrigin);
+            if (solidDepth(sceneDepth)) sceneDistance = length(worldPosition(vUv, sceneDepth) - rayOrigin);
 
             float rayStart = 1.0e20;
             float rayEnd = -1.0;
-            float raymarchStart = 1.0e20;
-            float raymarchEnd = -1.0;
             vec3 volumeLocalOrigins[MAX_VOLUMES];
             vec3 volumeLocalDirections[MAX_VOLUMES];
             vec2 volumeIntervals[MAX_VOLUMES];
@@ -1246,7 +1391,7 @@
                 volumeWindOffsets[volumeIndex] =
                     uVolumeCloudWind[volumeIndex].zw * uTime;
                 if (volumeInterval(
-                    volumeIndex,
+                    uVolumeInverse[volumeIndex], uVolumeShapeMode[volumeIndex], uVolumeProfile[volumeIndex],
                     rayOrigin,
                     rayDirection,
                     interval,
@@ -1260,10 +1405,6 @@
                     volumeIntervals[volumeIndex] = clippedInterval;
                     rayStart = min(rayStart, clippedInterval.x);
                     rayEnd = max(rayEnd, clippedInterval.y);
-                    if (uVolumeShapeMode[volumeIndex].y > 1.5) {
-                        raymarchStart = min(raymarchStart, clippedInterval.x);
-                        raymarchEnd = max(raymarchEnd, clippedInterval.y);
-                    }
                 }
                 volumeLocalOrigins[volumeIndex] = localOrigin;
                 volumeLocalDirections[volumeIndex] = localDirection;
@@ -1275,169 +1416,162 @@
 
             rayStart = max(rayStart, 0.0);
             rayEnd = min(rayEnd, sceneDistance);
-            raymarchStart = max(raymarchStart, 0.0);
-            raymarchEnd = min(raymarchEnd, sceneDistance);
-            float stepLength = max(raymarchEnd - raymarchStart, 0.0) / float(max(uSteps, 1));
+            // Sweep the (at most eight) domain boundaries first. The sampling
+            // budget covers occupied march distance only, never the empty gaps.
+            // Analytic spans stay fixed-cost; mixed spans share one ordered
+            // extinction integral, independent of Outliner/influence order.
+            float occupiedMarchLength = 0.0;
+            #ifndef LF_ANALYTIC_ONLY
+            float boundaryCursor = rayStart;
+            for (int boundaryIndex = 0; boundaryIndex < MAX_VOLUMES * 2; boundaryIndex++) {
+                if (boundaryCursor >= rayEnd) break;
+                float nextBoundary = rayEnd;
+                bool marchActive = false;
+                for (int index = 0; index < MAX_VOLUMES; index++) {
+                    if (index >= uVolumeCount) break;
+                    vec2 interval = volumeIntervals[index];
+                    if (interval.y <= interval.x) continue;
+                    if (interval.x > boundaryCursor) nextBoundary = min(nextBoundary, interval.x);
+                    if (interval.y > boundaryCursor) nextBoundary = min(nextBoundary, interval.y);
+                    if (volumeNeedsMarch(uVolumeShapeMode[index].y, uVolumeFlags[index], uVolumeOptics[index].y) &&
+                        boundaryCursor >= interval.x && boundaryCursor < interval.y) marchActive = true;
+                }
+                if (marchActive) occupiedMarchLength += max(nextBoundary - boundaryCursor, 0.0);
+                boundaryCursor = nextBoundary;
+            }
+            #endif
+            float marchStepLength = max(0.00001, occupiedMarchLength / max(float(uSteps), 1.0));
             vec2 globalPixel = floor(gl_FragCoord.xy * uFramePixelScale + uFrameOrigin);
             float temporalSlice = uTemporalJitter ? floor(uJitterTime * 24.0) : 0.0;
-            float jitter = hash13(vec3(globalPixel, temporalSlice));
-            float distanceAlongRay = raymarchStart + stepLength * jitter;
+            float jitter = interleavedGradientNoise(globalPixel, temporalSlice);
+            float distanceAlongRay = rayStart;
             vec3 transmittance = vec3(1.0);
             vec3 accumulated = vec3(0.0);
-
-            // Uniform and height-local media are integrated without marching.
-            // Two-point Gauss-Legendre quadrature preserves smooth edge
-            // feathering and height falloff while replacing 24-96 samples
-            // with exactly two density evaluations per intersected volume.
+            float consumedOpticalDepth[MAX_VOLUMES];
+            for (int index = 0; index < MAX_VOLUMES; index++) consumedOpticalDepth[index] = 0.0;
             const float GAUSS_NODE = 0.5773502691896257;
-            for (int analyticIndex = 0; analyticIndex < MAX_VOLUMES; analyticIndex++) {
-                if (analyticIndex >= uVolumeCount) break;
-                if (uVolumeShapeMode[analyticIndex].y > 1.5) continue;
-                vec2 interval = volumeIntervals[analyticIndex];
-                float segmentStart = max(interval.x, 0.0);
-                float segmentEnd = min(interval.y, sceneDistance);
-                float segmentLength = max(segmentEnd - segmentStart, 0.0);
-                if (segmentLength <= 0.000001) continue;
-                float midpoint = (segmentStart + segmentEnd) * 0.5;
-                float halfLength = segmentLength * 0.5;
-                float sampleDistance0 = midpoint - halfLength * GAUSS_NODE;
-                float sampleDistance1 = midpoint + halfLength * GAUSS_NODE;
-                vec3 localPoint0 = volumeLocalOrigins[analyticIndex] +
-                    volumeLocalDirections[analyticIndex] * sampleDistance0;
-                vec3 localPoint1 = volumeLocalOrigins[analyticIndex] +
-                    volumeLocalDirections[analyticIndex] * sampleDistance1;
-                float integratedDensity = halfLength * (
-                    sampleVolumeDensityLocal(analyticIndex, localPoint0, vec2(0.0)) +
-                    sampleVolumeDensityLocal(analyticIndex, localPoint1, vec2(0.0))
-                );
-                if (integratedDensity <= 0.000001) continue;
-                float scattering = uVolumeOptics[analyticIndex].y;
-                float absorption = uVolumeOptics[analyticIndex].z;
-                bool lightShaft = uVolumeFlags[analyticIndex].w > 0.5;
-                vec3 integratedSigmaS = uVolumeColor[analyticIndex] * scattering * integratedDensity;
-                vec3 integratedSigmaA = uVolumeAbsorptionColor[analyticIndex] * absorption * integratedDensity;
-                vec3 worldMidpoint = rayOrigin + rayDirection * midpoint;
-                vec3 source = integratedSigmaS * volumeLighting(
-                    analyticIndex,
-                    worldMidpoint,
-                    rayDirection
-                );
-                if (lightShaft) {
-                    accumulated += transmittance * source;
-                    continue;
-                }
-                float opticalDepth = dot(
-                    integratedSigmaS + integratedSigmaA,
-                    vec3(0.2126, 0.7152, 0.0722)
-                );
-                float segmentTransmission = exp(-max(opticalDepth, 0.0));
-                float integrationScale = opticalDepth > 0.000001
-                    ? (1.0 - segmentTransmission) / opticalDepth
-                    : 1.0;
-                accumulated += transmittance * source * integrationScale;
-                transmittance *= segmentTransmission;
-            }
 
-            #ifndef LF_ANALYTIC_ONLY
-            for (int stepIndex = 0; stepIndex < MAX_STEPS; stepIndex++) {
-                if (stepIndex >= uSteps || distanceAlongRay >= raymarchEnd) break;
-                // The union of several local domains may contain long empty
-                // gaps. Jump directly to the next interval instead of burning
-                // ray steps where no volume can contribute. Occupied segments
-                // retain the exact same step length and visual integration.
+            // A boundary can split a march step once. Eight additional slots
+            // bound that overhead; no nested 96 x 8 march and no extra pass.
+            for (int stepIndex = 0; stepIndex < MAX_STEPS + MAX_VOLUMES * 2; stepIndex++) {
+                if (distanceAlongRay >= rayEnd) break;
+                float nextBoundary = rayEnd;
                 bool insideAnyVolume = false;
-                float nextVolumeStart = raymarchEnd;
-                for (int intervalIndex = 0; intervalIndex < MAX_VOLUMES; intervalIndex++) {
-                    if (intervalIndex >= uVolumeCount) break;
-                    if (uVolumeShapeMode[intervalIndex].y <= 1.5) continue;
-                    vec2 interval = volumeIntervals[intervalIndex];
-                    insideAnyVolume = insideAnyVolume || (
-                        distanceAlongRay >= interval.x && distanceAlongRay <= interval.y
-                    );
-                    if (interval.x > distanceAlongRay) {
-                        nextVolumeStart = min(nextVolumeStart, interval.x);
+                bool needsMarch = false;
+                for (int index = 0; index < MAX_VOLUMES; index++) {
+                    if (index >= uVolumeCount) break;
+                    // Once a volume reaches its own optical limit, its noise
+                    // and lights cannot contribute again along this ray.
+                    if (consumedOpticalDepth[index] >= uVolumeArt[index].x) continue;
+                    vec2 interval = volumeIntervals[index];
+                    if (interval.y <= interval.x) continue;
+                    if (interval.x > distanceAlongRay) nextBoundary = min(nextBoundary, interval.x);
+                    if (interval.y > distanceAlongRay) nextBoundary = min(nextBoundary, interval.y);
+                    if (distanceAlongRay >= interval.x && distanceAlongRay < interval.y) {
+                        insideAnyVolume = true;
+                        needsMarch = needsMarch || volumeNeedsMarch(uVolumeShapeMode[index].y, uVolumeFlags[index], uVolumeOptics[index].y);
                     }
                 }
                 if (!insideAnyVolume) {
-                    distanceAlongRay = max(distanceAlongRay + stepLength, nextVolumeStart);
+                    distanceAlongRay = nextBoundary;
                     continue;
                 }
-                vec3 worldPoint = rayOrigin + rayDirection * distanceAlongRay;
+                float segmentEnd = nextBoundary;
+                #ifndef LF_ANALYTIC_ONLY
+                    if (needsMarch) segmentEnd = min(nextBoundary, distanceAlongRay + marchStepLength);
+                #endif
+                float segmentLength = segmentEnd - distanceAlongRay;
+                if (segmentLength <= 0.0) break;
+                float midpoint = distanceAlongRay + segmentLength * 0.5;
+                float sampleDistance = distanceAlongRay + segmentLength * jitter;
                 vec3 scatteringSource = vec3(0.0);
-                vec3 extinctionColor = vec3(0.0);
+                vec3 extinction = vec3(0.0);
                 for (int volumeIndex = 0; volumeIndex < MAX_VOLUMES; volumeIndex++) {
                     if (volumeIndex >= uVolumeCount) break;
-                    if (uVolumeShapeMode[volumeIndex].y <= 1.5) continue;
-                    vec2 activeInterval = volumeIntervals[volumeIndex];
-                    if (
-                        distanceAlongRay < activeInterval.x ||
-                        distanceAlongRay > activeInterval.y
-                    ) continue;
+                    if (consumedOpticalDepth[volumeIndex] >= uVolumeArt[volumeIndex].x) continue;
+                    vec2 interval = volumeIntervals[volumeIndex];
+                    if (midpoint < interval.x || midpoint >= interval.y) continue;
                     float scattering = uVolumeOptics[volumeIndex].y;
                     float absorption = uVolumeOptics[volumeIndex].z;
                     bool lightShaft = uVolumeFlags[volumeIndex].w > 0.5;
+                    float emission = uVolumeArt[volumeIndex].y;
                     float bloomContribution = uVolumeFlags[volumeIndex].z;
-                    // A volume with neither scattering nor physical absorption
-                    // is optically empty; avoid density/noise work entirely.
-                    if (scattering <= 0.0 && (lightShaft || absorption <= 0.0)) continue;
-                    // Shaft media have no extinction. In a bloom-only pass a
-                    // zero bloom contribution therefore makes them fully inert.
+                    if (scattering <= 0.0 && emission <= 0.0 && (lightShaft || absorption <= 0.0)) continue;
                     if (uBloomPass && lightShaft && bloomContribution <= 0.0) continue;
-                    vec3 localPoint =
-                        volumeLocalOrigins[volumeIndex] +
-                        volumeLocalDirections[volumeIndex] * distanceAlongRay;
-                    float density = sampleVolumeDensityLocal(
-                        volumeIndex,
-                        localPoint,
-                        volumeWindOffsets[volumeIndex]
-                    );
-                    if (density <= 0.000001) continue;
-                    vec3 sigmaS = uVolumeColor[volumeIndex] * scattering * density;
-                    vec3 sigmaA = uVolumeAbsorptionColor[volumeIndex] * absorption * density;
-                    float sourceScale = uBloomPass ? bloomContribution : 1.0;
-                    // A black scattering carrier contributes exactly zero even
-                    // when scalar scattering is enabled. Avoid the full light
-                    // loop and its shadow/phase work in that case.
-                    if (
-                        scattering > 0.0 &&
-                        sourceScale > 0.0 &&
-                        max(sigmaS.r, max(sigmaS.g, sigmaS.b)) > 0.0
-                    ) {
-                        vec3 lightEnergy = volumeLighting(
-                            volumeIndex,
-                            worldPoint,
-                            rayDirection
+                    float density = 0.0;
+                    vec3 localPoint = volumeLocalOrigins[volumeIndex] +
+                        volumeLocalDirections[volumeIndex] * midpoint;
+                    if (uVolumeShapeMode[volumeIndex].y <= 1.5) {
+                        // Two-node Gauss quadrature for smooth media: no noise
+                        // fetches, even when sharing a segment with a cloud.
+                        vec3 delta = volumeLocalDirections[volumeIndex] * segmentLength * 0.5 * GAUSS_NODE;
+                        density = 0.5 * (
+                            sampleVolumeDensityLocal(uVolumeShapeMode[volumeIndex], uVolumeOptics[volumeIndex], uVolumeHeightNoise[volumeIndex], uVolumeCloudWind[volumeIndex], uVolumeProfile[volumeIndex], uVolumeNoiseTransform[volumeIndex], localPoint - delta, vec2(0.0)) +
+                            sampleVolumeDensityLocal(uVolumeShapeMode[volumeIndex], uVolumeOptics[volumeIndex], uVolumeHeightNoise[volumeIndex], uVolumeCloudWind[volumeIndex], uVolumeProfile[volumeIndex], uVolumeNoiseTransform[volumeIndex], localPoint + delta, vec2(0.0))
                         );
-                        scatteringSource += sigmaS * lightEnergy * sourceScale;
+                    } else {
+                        #ifndef LF_ANALYTIC_ONLY
+                            localPoint = volumeLocalOrigins[volumeIndex] +
+                                volumeLocalDirections[volumeIndex] * sampleDistance;
+                            density = sampleVolumeDensityLocal(uVolumeShapeMode[volumeIndex], uVolumeOptics[volumeIndex], uVolumeHeightNoise[volumeIndex], uVolumeCloudWind[volumeIndex], uVolumeProfile[volumeIndex], uVolumeNoiseTransform[volumeIndex], localPoint, volumeWindOffsets[volumeIndex]);
+                        #endif
                     }
-                    // Physical media attenuate the scene with Beer-Lambert.
-                    // Artistic God Rays are emissive shafts: applying the same
-                    // extinction in a shadow produced an opaque black volume.
-                    // Keeping their extinction at zero makes unlit samples
-                    // transparent while lit samples compose additively.
-                    if (!lightShaft) extinctionColor += sigmaS + sigmaA;
+                    if (density <= 0.000001) continue;
+                    vec3 carrier = volumeScatteringColor(uVolumeColor[volumeIndex], uVolumeTopColor[volumeIndex], uVolumeProfile[volumeIndex].w, localPoint);
+                    vec3 sigmaS = carrier * scattering * density;
+                    vec3 sigmaA = uVolumeAbsorptionColor[volumeIndex] * absorption * density;
+                    vec3 localExtinction = lightShaft ? vec3(0.0) : sigmaS + sigmaA;
+                    float localDepth = dot(localExtinction, vec3(0.2126, 0.7152, 0.0722)) * segmentLength;
+                    float remainingDepth = max(uVolumeArt[volumeIndex].x - consumedOpticalDepth[volumeIndex], 0.0);
+                    float opacityScale = localDepth > 0.000001 ? min(1.0, remainingDepth / localDepth) : 1.0;
+                    if (uVolumeArt[volumeIndex].x <= 0.0) opacityScale = 0.0;
+                    consumedOpticalDepth[volumeIndex] += localDepth * opacityScale;
+                    extinction += localExtinction * opacityScale;
+                    float sourceScale = (uBloomPass ? bloomContribution : 1.0) * opacityScale;
+                    if (sourceScale <= 0.0) continue;
+                    vec3 source = carrier * emission * density;
+                    if (scattering > 0.0 && max(sigmaS.r, max(sigmaS.g, sigmaS.b)) > 0.0) {
+                        float stepJitter = fract(jitter + float(stepIndex) * 0.61803398875 + 0.0001);
+                        float lightingDistance = needsMarch ? sampleDistance : midpoint;
+                        source += sigmaS * volumeLighting(
+                            uVolumeOptics[volumeIndex], uVolumeFlags[volumeIndex],
+                            uVolumeShapeMode[volumeIndex], uVolumeShaft[volumeIndex], mat3(uVolumeInverse[volumeIndex]),
+                            uVolumeHeightNoise[volumeIndex], uVolumeCloudWind[volumeIndex],
+                            uVolumeProfile[volumeIndex], uVolumeNoiseTransform[volumeIndex],
+                            rayOrigin + rayDirection * lightingDistance, localPoint, volumeWindOffsets[volumeIndex],
+                            density, rayDirection, stepJitter
+                        );
+                    }
+                    scatteringSource += source * sourceScale;
                 }
-                float extinction = dot(extinctionColor, vec3(0.2126, 0.7152, 0.0722));
-                if (extinction > 0.000001) {
-                    float stepTransmission = exp(-extinction * stepLength);
-                    vec3 integratedScatter = scatteringSource * ((1.0 - stepTransmission) / extinction);
-                    accumulated += transmittance * integratedScatter;
-                    transmittance *= stepTransmission;
-                } else {
-                    accumulated += transmittance * scatteringSource * stepLength;
-                }
+                vec3 opticalDepth = extinction * segmentLength;
+                vec3 stepTransmission = exp(-opticalDepth);
+                vec3 integral = mix(vec3(segmentLength),
+                    (1.0 - stepTransmission) / max(extinction, vec3(0.000001)),
+                    step(vec3(0.0001), opticalDepth));
+                accumulated += transmittance * scatteringSource * integral;
+                transmittance *= stepTransmission;
                 if (max(transmittance.r, max(transmittance.g, transmittance.b)) < 0.008) break;
-                distanceAlongRay += stepLength;
+                distanceAlongRay = segmentEnd;
             }
-            #endif
 
             float opacity = 1.0 - dot(transmittance, vec3(0.2126, 0.7152, 0.0722));
             if (uBloomPass) opacity = clamp(max(accumulated.r, max(accumulated.g, accumulated.b)), 0.0, 1.0);
             vec3 outputScattering = max(accumulated, vec3(0.0));
+            float outputOpacity = clamp(opacity, 0.0, 1.0);
             if (uLogEncode) {
-                outputScattering = log2(vec3(1.0) + clamp(outputScattering, vec3(0.0), vec3(16.0))) * 0.2446505421;
+                // Concentrate the byte fallback's precision near transparent
+                // media. Plain log RGB + linear 8-bit alpha made subtle fog
+                // collapse into broad contours before the final tone mapping.
+                outputScattering = sqrt(log2(vec3(1.0) + clamp(outputScattering, vec3(0.0), vec3(16.0))) * 0.2446505421);
+                outputOpacity = sqrt(outputOpacity);
+                // Static, tile-stable stochastic rounding; no redraw loop and
+                // no artist-facing posterization/dither setting is changed.
+                float quantizationNoise = (jitter - 0.5) / 255.0;
+                outputScattering = max(outputScattering + step(vec3(0.000001), outputScattering) * quantizationNoise, vec3(0.0));
+                if (outputOpacity > 0.0) outputOpacity = max(0.0, outputOpacity + quantizationNoise);
             }
-            gl_FragColor = vec4(outputScattering, clamp(opacity, 0.0, 1.0));
+            gl_FragColor = vec4(outputScattering, outputOpacity);
         }
     `;
 
@@ -1445,7 +1579,7 @@
         precision highp float;
         uniform sampler2D tVolume;
         uniform sampler2D tSceneDepth;
-        uniform sampler2D tCubeDepth;
+        uniform sampler2D tHelperDepth;
         uniform mat4 uInverseProjection;
         uniform vec2 uVolumeTexel;
         uniform bool uHelperMask;
@@ -1462,47 +1596,68 @@
         uniform float uCompositeCameraFar;
         varying vec2 vUv;
 
-        bool solidDepth(float depth) { return depth > 0.000001 && depth < 0.999999; }
+        bool solidDepth(float depth) { return depth >= 0.0 && depth < 0.999999; }
         float viewZ(vec2 uv, float depth) {
             vec4 point = uInverseProjection * vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
             return abs(point.z / max(abs(point.w), 0.000001));
         }
         float bilateralWeight(bool centerSolid, float centerViewDepth, vec2 uv) {
-            float sampleDepth = texture2D(tCubeDepth, uv).x;
+            float sampleDepth = texture2D(tSceneDepth, uv).x;
             bool sampleSolid = solidDepth(sampleDepth);
+            float sampleZ = sampleSolid ? viewZ(uv, sampleDepth) : 0.0;
+            if (uHelperMask) {
+                float helperDepth = texture2D(tHelperDepth, uv).r;
+                if (solidDepth(helperDepth) && (!sampleSolid ||
+                    viewZ(uv, helperDepth) <= sampleZ + max(0.012, sampleZ * 0.00045))) return 0.0;
+            }
             if (centerSolid != sampleSolid) return 0.002;
             if (!centerSolid) return 1.0;
-            float difference = abs(centerViewDepth - viewZ(uv, sampleDepth));
-            return exp(-difference * 7.5);
+            float difference = abs(centerViewDepth - sampleZ);
+            return max(0.0005, exp(-difference / max(centerViewDepth * 0.04, 0.02)));
         }
-        vec3 toneMapPhysicalMedium(vec3 premultipliedRadiance, float opacity) {
-            if (opacity <= 0.000001) return premultipliedRadiance;
-            // The composite material bypasses Three's tone mapping. Convert the
-            // integrated premultiplied scattering back to incident radiance,
-            // apply a bounded display mapping, then premultiply again. Without
-            // this step a low-opacity fog under an HDR sun becomes a flat white
-            // additive plate instead of a translucent participating medium.
-            vec3 radiance = max(premultipliedRadiance, vec3(0.0)) / opacity;
-            return (radiance / (vec3(1.0) + radiance)) * opacity;
+        vec3 encodeDisplay(vec3 color) {
+            return mix(color * 12.92, 1.055 * pow(color, vec3(1.0 / 2.4)) - 0.055,
+                step(vec3(0.0031308), color));
         }
-        vec4 finalizeVolume(vec4 color) {
+        vec3 toneMapMedium(vec3 radiance) {
+            return radiance / (vec3(1.0) + radiance);
+        }
+        vec3 quantizeLuminance(vec3 color, float levels) {
+            if (levels <= 1.5) return color;
+            float luminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
+            if (luminance <= 0.000001) return vec3(0.0);
+            float quantized = floor(luminance * levels + 0.5) / levels;
+            vec3 result = color * (quantized / luminance);
+            // Compress all channels together when rounding exceeds display gamut.
+            return result / max(1.0, max(result.r, max(result.g, result.b)));
+        }
+        vec4 finalizeVolume(vec4 color, bool sceneSolid) {
             if (uLogEncoded) {
-                color.rgb = max(exp2(color.rgb / 0.2446505421) - vec3(1.0), vec3(0.0));
+                color.rgb = max(exp2(color.rgb * color.rgb / 0.2446505421) - vec3(1.0), vec3(0.0));
+                color.a *= color.a;
             }
-            if (!uBloomComposite && color.a > 0.000001) {
-                color.rgb = toneMapPhysicalMedium(color.rgb, color.a);
+            if (color.a <= 0.000001 && max(color.r, max(color.g, color.b)) <= 0.000001) return vec4(0.0);
+            bool physicalMedium = color.a > 0.000001;
+            float coverage = physicalMedium ? color.a : 1.0;
+            color.rgb /= coverage;
+            if (!uBloomComposite) color.rgb = encodeDisplay(toneMapMedium(color.rgb));
+            float shaftCoverage = 1.0;
+            if (!physicalMedium) {
+                shaftCoverage = clamp(max(color.r, max(color.g, color.b)), 0.0, 1.0);
+                // Grade the shaft's straight color independently of its falloff.
+                color.rgb /= max(shaftCoverage, 0.000001);
             }
             float luminance = dot(color.rgb, vec3(0.2126, 0.7152, 0.0722));
             color.rgb = mix(vec3(luminance), color.rgb, uArtParams.y);
             color.rgb = max((color.rgb - vec3(0.5)) * uArtParams.z + vec3(0.5), vec3(0.0));
-            if (uArtParams.w > 1.5) color.rgb = floor(color.rgb * uArtParams.w + 0.5) / uArtParams.w;
-            if (uDitherQuantize.y > 1.5) color.rgb = floor(color.rgb * uDitherQuantize.y + 0.5) / uDitherQuantize.y;
+            color.rgb = quantizeLuminance(color.rgb, uArtParams.w);
+            color.rgb = quantizeLuminance(color.rgb, uDitherQuantize.y);
             if (uDitherQuantize.x > 0.0001) {
                 float dither = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453) - 0.5;
                 color.rgb = max(color.rgb + dither * uDitherQuantize.x / 255.0, vec3(0.0));
             }
             if (uRampParams.x > 0.0001) {
-                float rampDepth = texture2D(tCubeDepth, vUv).r;
+                float rampDepth = texture2D(tSceneDepth, vUv).r;
                 float rampDistance = solidDepth(rampDepth)
                     ? viewZ(vUv, rampDepth) / max(uCompositeCameraFar, 0.001)
                     : 1.0;
@@ -1510,7 +1665,17 @@
                 vec3 rampColor = mix(uRampNearColor, uRampFarColor, rampT);
                 color.rgb = mix(color.rgb, color.rgb * rampColor, uRampParams.x);
             }
-            color.a = min(color.a, uArtParams.x);
+            if (physicalMedium) {
+                color.a = min(color.a, uArtParams.x);
+                color.rgb *= color.a;
+            } else {
+                color.rgb *= shaftCoverage;
+                if (!uBloomComposite && !sceneSolid) {
+                    color.a = min(shaftCoverage, uArtParams.x);
+                    float peak = max(color.r, max(color.g, color.b));
+                    color.rgb *= min(1.0, color.a / max(peak, 0.000001));
+                }
+            }
             if (!uBloomComposite) return color;
             vec3 linearBloom = max(color.rgb * uBloomMultiplier, vec3(0.0));
             color.rgb = uBloomLinear
@@ -1527,38 +1692,38 @@
         }
         void main() {
             float sceneDepth = texture2D(tSceneDepth, vUv).x;
-            float cubeDepth = texture2D(tCubeDepth, vUv).x;
-            bool cubeSolid = solidDepth(cubeDepth);
-            // 2.5: The center cube view depth is invariant for all four
-            // bilateral neighbors. Reconstruct it once instead of 4-6 times.
-            float cubeViewDepth = cubeSolid ? viewZ(vUv, cubeDepth) : 0.0;
-            if (uHelperMask && solidDepth(sceneDepth)) {
-                float sceneViewDepth = viewZ(vUv, sceneDepth);
-                if (!cubeSolid || abs(sceneViewDepth - cubeViewDepth) > max(0.012, cubeViewDepth * 0.00045)) {
+            bool sceneSolid = solidDepth(sceneDepth);
+            float centerViewDepth = sceneSolid ? viewZ(vUv, sceneDepth) : 0.0;
+            if (uHelperMask) {
+                float helperDepth = texture2D(tHelperDepth, vUv).x;
+                if (solidDepth(helperDepth) && (!sceneSolid ||
+                    viewZ(vUv, helperDepth) <= centerViewDepth + max(0.012, centerViewDepth * 0.00045))) {
                     gl_FragColor = vec4(0.0);
                     return;
                 }
             }
             if (!uBilateralUpsample) {
-                gl_FragColor = finalizeVolume(texture2D(tVolume, vUv));
+                gl_FragColor = finalizeVolume(texture2D(tVolume, vUv), sceneSolid);
                 return;
             }
-            vec4 color = texture2D(tVolume, vUv) * 2.0;
-            float weight = 2.0;
-            vec2 uv0 = clamp(vUv + vec2(-uVolumeTexel.x, 0.0), vec2(0.0), vec2(1.0));
-            vec2 uv1 = clamp(vUv + vec2( uVolumeTexel.x, 0.0), vec2(0.0), vec2(1.0));
-            vec2 uv2 = clamp(vUv + vec2(0.0, -uVolumeTexel.y), vec2(0.0), vec2(1.0));
-            vec2 uv3 = clamp(vUv + vec2(0.0,  uVolumeTexel.y), vec2(0.0), vec2(1.0));
-            float weight0 = bilateralWeight(cubeSolid, cubeViewDepth, uv0);
-            float weight1 = bilateralWeight(cubeSolid, cubeViewDepth, uv1);
-            float weight2 = bilateralWeight(cubeSolid, cubeViewDepth, uv2);
-            float weight3 = bilateralWeight(cubeSolid, cubeViewDepth, uv3);
-            color += texture2D(tVolume, uv0) * weight0;
-            color += texture2D(tVolume, uv1) * weight1;
-            color += texture2D(tVolume, uv2) * weight2;
-            color += texture2D(tVolume, uv3) * weight3;
-            weight += weight0 + weight1 + weight2 + weight3;
-            gl_FragColor = finalizeVolume(color / max(weight, 0.0001));
+            vec2 texel = vUv / uVolumeTexel - 0.5;
+            vec2 base = (floor(texel) + 0.5) * uVolumeTexel;
+            vec2 fraction = fract(texel);
+            vec2 low = uVolumeTexel * 0.5;
+            vec2 high = vec2(1.0) - low;
+            vec4 color = vec4(0.0);
+            float totalWeight = 0.0;
+            for (int y = 0; y <= 1; y++) {
+                for (int x = 0; x <= 1; x++) {
+                    vec2 offset = vec2(float(x), float(y));
+                    vec2 uv = clamp(base + offset * uVolumeTexel, low, high);
+                    vec2 bilinear = mix(vec2(1.0) - fraction, fraction, offset);
+                    float weight = bilinear.x * bilinear.y * bilateralWeight(sceneSolid, centerViewDepth, uv);
+                    color += texture2D(tVolume, uv) * weight;
+                    totalWeight += weight;
+                }
+            }
+            gl_FragColor = finalizeVolume(color / max(totalWeight, 0.000001), sceneSolid);
         }
     `;
 
@@ -1576,6 +1741,9 @@
         uniform mat4 uInverseProjection;
         uniform mat4 uCameraWorld;
         uniform mat4 uPreviousViewProjection;
+        uniform mat4 uPreviousInverseProjection;
+        uniform vec4 uCurrentRect;
+        #include <packing>
         varying vec2 vUv;
 
         vec3 temporalWorldPosition(vec2 uv, float depth) {
@@ -1584,19 +1752,48 @@
             return (uCameraWorld * vec4(viewPoint.xyz, 1.0)).xyz;
         }
 
+        float temporalViewZ(mat4 inverseProjection, vec2 uv, float depth) {
+            vec4 point = inverseProjection * vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+            return abs(point.z / max(abs(point.w), 0.000001));
+        }
+
+        bool insideRect(vec2 uv) {
+            return all(greaterThanEqual(uv, uCurrentRect.xy)) && all(lessThan(uv, uCurrentRect.zw));
+        }
+
         void main() {
             vec4 current = texture2D(tCurrent, vUv);
-            if (uHistoryBlend <= 0.0) {
+            if (!insideRect(vUv) || uHistoryBlend <= 0.0) {
                 gl_FragColor = current;
                 return;
             }
-            vec4 left = texture2D(tCurrent, clamp(vUv - vec2(uTexelSize.x, 0.0), vec2(0.0), vec2(1.0)));
-            vec4 right = texture2D(tCurrent, clamp(vUv + vec2(uTexelSize.x, 0.0), vec2(0.0), vec2(1.0)));
-            vec4 down = texture2D(tCurrent, clamp(vUv - vec2(0.0, uTexelSize.y), vec2(0.0), vec2(1.0)));
-            vec4 up = texture2D(tCurrent, clamp(vUv + vec2(0.0, uTexelSize.y), vec2(0.0), vec2(1.0)));
-            vec4 lower = min(current, min(min(left, right), min(down, up)));
-            vec4 upper = max(current, max(max(left, right), max(down, up)));
             float currentDepth = texture2D(tCurrentDepth, vUv).r;
+            float parity = mod(floor(gl_FragCoord.x) + floor(gl_FragCoord.y) + uCheckerboardPhase, 2.0);
+            bool skipped = uCheckerboard && parity > 0.5;
+            vec4 lower = current;
+            vec4 upper = current;
+            vec4 spatial = vec4(0.0);
+            float spatialWeight = 0.0;
+            for (int i = 0; i < 4; i++) {
+                vec2 signXY = vec2(mod(float(i), 2.0), floor(float(i) * 0.5)) * 2.0 - 1.0;
+                vec2 offset = uCheckerboard && !skipped ? signXY
+                    : (i < 2 ? vec2(signXY.x, 0.0) : vec2(0.0, signXY.x));
+                vec2 uv = vUv + offset * uTexelSize;
+                if (!insideRect(uv)) continue;
+                vec4 neighbor = texture2D(tCurrent, uv);
+                if (skipped) {
+                    float sampleDepth = texture2D(tCurrentDepth, uv).r;
+                    float centerZ = temporalViewZ(uInverseProjection, vUv, currentDepth);
+                    float sampleZ = temporalViewZ(uInverseProjection, uv, sampleDepth);
+                    float weight = exp(-abs(centerZ - sampleZ) / max(centerZ * uDepthRejectThreshold, 0.02));
+                    spatial += neighbor * weight;
+                    spatialWeight += weight;
+                } else {
+                    lower = min(lower, neighbor);
+                    upper = max(upper, neighbor);
+                }
+            }
+            if (skipped) current = spatial / max(spatialWeight, 0.0001);
             vec3 worldPoint = temporalWorldPosition(vUv, currentDepth);
             vec4 previousClip = uPreviousViewProjection * vec4(worldPoint, 1.0);
             if (previousClip.w <= 0.000001) {
@@ -1604,20 +1801,21 @@
                 return;
             }
             vec3 previousNdc = previousClip.xyz / previousClip.w;
-            vec2 previousUv = previousNdc.xy * 0.5 + 0.5;
-            if (any(lessThan(previousUv, vec2(0.0))) || any(greaterThan(previousUv, vec2(1.0)))) {
+            if (any(greaterThan(abs(previousNdc), vec3(1.0)))) {
                 gl_FragColor = current;
                 return;
             }
+            vec2 previousUv = previousNdc.xy * 0.5 + 0.5;
             float expectedPreviousDepth = previousNdc.z * 0.5 + 0.5;
-            float storedPreviousDepth = texture2D(tHistoryDepth, previousUv).r;
-            if (abs(expectedPreviousDepth - storedPreviousDepth) > uDepthRejectThreshold) {
+            float storedPreviousDepth = unpackRGBAToDepth(texture2D(tHistoryDepth, previousUv));
+            float expectedZ = temporalViewZ(uPreviousInverseProjection, previousUv, expectedPreviousDepth);
+            float storedZ = temporalViewZ(uPreviousInverseProjection, previousUv, storedPreviousDepth);
+            if (abs(expectedZ - storedZ) > max(expectedZ * uDepthRejectThreshold, 0.02)) {
                 gl_FragColor = current;
                 return;
             }
             vec4 reprojectedHistory = texture2D(tHistory, previousUv);
-            float parity = mod(floor(gl_FragCoord.x) + floor(gl_FragCoord.y) + uCheckerboardPhase, 2.0);
-            if (uCheckerboard && parity > 0.5) {
+            if (skipped) {
                 gl_FragColor = reprojectedHistory;
                 return;
             }
@@ -1629,10 +1827,11 @@
     const DEPTH_HISTORY_FRAGMENT_SHADER = `
         precision highp float;
         uniform sampler2D tDepth;
+        #include <packing>
         varying vec2 vUv;
         void main() {
             float depth = texture2D(tDepth, vUv).r;
-            gl_FragColor = vec4(depth, depth, depth, 1.0);
+            gl_FragColor = depth >= 1.0 ? vec4(1.0) : packDepthToRGBA(depth);
         }
     `;
 
@@ -1761,58 +1960,73 @@
         return texture;
     }
 
-    function createNoiseTexture(size) {
-        const dimension = Math.max(32, Math.round(size || 128));
-        const data = new Uint8Array(dimension * dimension * 4);
-        const hash = (x, y, seed) => {
-            let value = (x * 374761393 + y * 668265263 + seed * 69069) | 0;
-            value = (value ^ (value >>> 13)) * 1274126177;
-            return ((value ^ (value >>> 16)) >>> 0) / 4294967295;
+    function createNoiseTexture() {
+        const size = 32;
+        const stride = size + 2;
+        const width = stride * 8;
+        const height = stride * 4;
+        const data = new Uint8Array(width * height * 4);
+        const cells = 4;
+        const wrap = index => (index + cells) % cells;
+        const hash = (x, y, z, seed) => {
+            let bits = Math.imul(wrap(x), 374761393) ^ Math.imul(wrap(y), 668265263) ^
+                Math.imul(wrap(z), 2246822519) ^ Math.imul(seed, 3266489917);
+            bits = Math.imul(bits ^ (bits >>> 13), 1274126177);
+            return ((bits ^ (bits >>> 16)) >>> 0) / 4294967295;
         };
-        const sampleGrid = (x, y, cells, seed) => {
-            const gx = x / dimension * cells;
-            const gy = y / dimension * cells;
-            const x0 = Math.floor(gx) % cells;
-            const y0 = Math.floor(gy) % cells;
-            const x1 = (x0 + 1) % cells;
-            const y1 = (y0 + 1) % cells;
-            let tx = gx - Math.floor(gx);
-            let ty = gy - Math.floor(gy);
-            tx = tx * tx * (3 - 2 * tx);
-            ty = ty * ty * (3 - 2 * ty);
-            const bottom = hash(x0, y0, seed) * (1 - tx) + hash(x1, y0, seed) * tx;
-            const top = hash(x0, y1, seed) * (1 - tx) + hash(x1, y1, seed) * tx;
-            return bottom * (1 - ty) + top * ty;
-        };
-        for (let y = 0; y < dimension; y++) {
-            for (let x = 0; x < dimension; x++) {
-                for (let channel = 0; channel < 3; channel++) {
-                    let value = 0;
-                    let amplitude = 0.56;
-                    let total = 0;
-                    for (let octave = 0; octave < 4; octave++) {
-                        value += sampleGrid(x, y, 4 << octave, 17 + channel * 37 + octave * 11) * amplitude;
-                        total += amplitude;
-                        amplitude *= 0.5;
+        const lerp = (a, b, t) => a + (b - a) * t;
+        const smooth = t => t * t * (3 - 2 * t);
+        const volume = new Uint8Array(size ** 3);
+        for (let z = 0; z < size; z++) {
+            for (let y = 0; y < size; y++) {
+                for (let x = 0; x < size; x++) {
+                    const gx = x * cells / size;
+                    const gy = y * cells / size;
+                    const gz = z * cells / size;
+                    const ix = Math.floor(gx), iy = Math.floor(gy), iz = Math.floor(gz);
+                    const fx = smooth(gx - ix), fy = smooth(gy - iy), fz = smooth(gz - iz);
+                    const slab = sz => lerp(
+                        lerp(hash(ix, iy, sz, 17), hash(ix + 1, iy, sz, 17), fx),
+                        lerp(hash(ix, iy + 1, sz, 17), hash(ix + 1, iy + 1, sz, 17), fx), fy
+                    );
+                    const smoothNoise = lerp(slab(iz), slab(iz + 1), fz);
+                    let closest = 4;
+                    for (let cz = iz - 1; cz <= iz + 1; cz++) {
+                        for (let cy = iy - 1; cy <= iy + 1; cy++) {
+                            for (let cx = ix - 1; cx <= ix + 1; cx++) {
+                                const dx = cx + hash(cx, cy, cz, 31) - gx;
+                                const dy = cy + hash(cx, cy, cz, 37) - gy;
+                                const dz = cz + hash(cx, cy, cz, 41) - gz;
+                                closest = Math.min(closest, dx * dx + dy * dy + dz * dz);
+                            }
+                        }
                     }
-                    data[(y * dimension + x) * 4 + channel] = Math.round(clamp(value / total, 0, 1) * 255);
+                    const cellular = 1 - clamp(Math.sqrt(closest), 0, 1);
+                    volume[(z * size + y) * size + x] = Math.round(255 * lerp(smoothNoise, cellular, 0.28));
                 }
-                data[(y * dimension + x) * 4 + 3] = 255;
             }
         }
-        const texture = new THREE.DataTexture(data, dimension, dimension, THREE.RGBAFormat);
-        texture.wrapS = THREE.RepeatWrapping;
-        texture.wrapT = THREE.RepeatWrapping;
-        texture.minFilter = THREE.LinearMipmapLinearFilter || THREE.LinearFilter;
-        texture.magFilter = THREE.LinearFilter;
-        texture.generateMipmaps = true;
+        // One wrapped texel on each side lets bilinear filtering stay inside each slice.
+        for (let z = 0; z < size; z++) {
+            const tileX = z % 8 * stride, tileY = Math.floor(z / 8) * stride;
+            for (let y = 0; y < stride; y++) {
+                for (let x = 0; x < stride; x++) {
+                    const source = (z * size + (y + size - 1) % size) * size + (x + size - 1) % size;
+                    const dest = ((tileY + y) * width + tileX + x) * 4;
+                    data[dest] = volume[source];
+                    data[dest + 3] = 255;
+                }
+            }
+        }
+        const texture = new THREE.DataTexture(data, width, height, THREE.RGBAFormat);
+        texture.minFilter = texture.magFilter = THREE.LinearFilter;
         texture.needsUpdate = true;
         return texture;
     }
 
     /* LIGHTFLOW_GOD_RAY_CORE_START */
     // A separate scene element: no volume routing, depth capture or raymarch.
-    function createGodRayRuntime(THREE, onTopologyChange = () => {}) {
+    function createGodRayRuntime(THREE, onTopologyChange = () => {}, pointShadowAtlas = POINT_SHADOW_ATLAS_GLSL) {
         const fields = {
             length: { default: 48, min: 0.01, max: 100000, label: 'Length', es: 'Longitud' },
             width: { default: 4, min: 0, max: 100000, label: 'Source width', es: 'Ancho inicial' },
@@ -1879,16 +2093,19 @@
         const fragmentShader = `
             #include <packing>
             uniform vec3 uColor, uEndColor, uCamera;
-            uniform vec4 uFade, uLook, uDistance;
+            uniform vec4 uFade, uLook, uDistance, uShape;
             uniform sampler2D uShadowMap;
             uniform mat4 uShadowMatrix;
             uniform vec4 uShadow;
             uniform vec2 uShadowTexel;
+            uniform vec3 uPointShadow; // atlas texel Y, camera near, camera far
             uniform sampler2D uSceneDepth;
-            uniform vec2 uSceneViewport;
+            uniform vec4 uSceneViewport;
+            uniform mat4 uSceneInverseProjection;
             uniform float uSceneDepthActive, uBloomEncoded;
             varying vec2 vRayUv;
             varying vec3 vWorld;
+            ${pointShadowAtlas}
             float shadowSample(vec2 uv, float depth) {
                 vec4 sampleValue = texture2D(uShadowMap, uv);
                 if (uShadow.w > 0.5) {
@@ -1901,11 +2118,26 @@
                 }
                 return step(depth, unpackRGBAToDepth(sampleValue));
             }
+            float rayViewZ(vec2 uv, float depth) {
+                vec4 viewPoint = uSceneInverseProjection * vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+                return abs(viewPoint.z / max(abs(viewPoint.w), 0.000001));
+            }
             void main() {
-                if (uSceneDepthActive > 0.5 && gl_FragCoord.z > texture2D(uSceneDepth, gl_FragCoord.xy / uSceneViewport).r + 0.0000002) discard;
+                float depthFade = 1.0;
+                if (uSceneDepthActive > 0.5) {
+                    vec2 uv = (gl_FragCoord.xy - uSceneViewport.xy) / uSceneViewport.zw;
+                    float sceneDepth = texture2D(uSceneDepth, uv).r;
+                    if (sceneDepth < 0.999999) {
+                        float gap = rayViewZ(uv, sceneDepth) - rayViewZ(uv, gl_FragCoord.z);
+                        float beamWidth = mix(uShape.y, uShape.z, pow(vRayUv.y, uShape.w));
+                        depthFade = smoothstep(0.0, clamp(beamWidth * 0.12, 0.035, 3.0), gap);
+                        if (depthFade <= 0.0) discard;
+                    }
+                }
                 float x = abs(vRayUv.x * 2.0 - 1.0);
                 float aa = max(fwidth(x), 0.00001);
-                float edge = 1.0 - smoothstep(1.0 - max(uFade.x, aa), 1.0, x);
+                float curve = mix(0.35, 2.5, uFade.x);
+                float edge = pow(max(1.0 - x * x, 0.0), curve) * (1.0 - smoothstep(1.0 - aa, 1.0, x));
                 float start = uFade.y > 0.0 ? smoothstep(0.0, uFade.y, vRayUv.y) : 1.0;
                 float end = uFade.z > 0.0 ? 1.0 - smoothstep(1.0 - uFade.z, 1.0, vRayUv.y) : 1.0;
                 float distanceToCamera = length(uCamera - vWorld);
@@ -1914,18 +2146,36 @@
                 float shadow = 1.0;
                 if (uShadow.x > 0.5) {
                     vec4 projected = uShadowMatrix * vec4(vWorld, 1.0);
-                    vec3 coord = projected.xyz / max(projected.w, 0.00001);
-                    if (projected.w > 0.0 && all(greaterThanEqual(coord, vec3(0.0))) && all(lessThanEqual(coord, vec3(1.0)))) {
-                        float depth = coord.z + uShadow.y;
-                        float visibility = shadowSample(coord.xy, depth);
-                        visibility += shadowSample(coord.xy + vec2(uShadowTexel.x, 0.0), depth);
-                        visibility += shadowSample(coord.xy - vec2(uShadowTexel.x, 0.0), depth);
-                        visibility += shadowSample(coord.xy + vec2(0.0, uShadowTexel.y), depth);
-                        visibility += shadowSample(coord.xy - vec2(0.0, uShadowTexel.y), depth);
-                        shadow = mix(1.0, visibility * 0.2, uShadow.z);
+                    if (uPointShadow.x > 0.0) {
+                        // PointLightShadow.matrix stores light-relative world
+                        // position, not a perspective shadow projection.
+                        float distanceToLight = length(projected.xyz);
+                        if (distanceToLight > 0.00001 && uPointShadow.z > uPointShadow.y) {
+                            float depth = (distanceToLight - uPointShadow.y) /
+                                max(uPointShadow.z - uPointShadow.y, 0.00001) + uShadow.y;
+                            vec3 direction = projected.xyz / max(distanceToLight, 0.00001);
+                            float tap = uPointShadow.x;
+                            float visibility = shadowSample(rayCubeToUV(direction, tap), depth);
+                            visibility += shadowSample(rayCubeToUV(direction + vec3(tap, 0.0, 0.0), tap), depth);
+                            visibility += shadowSample(rayCubeToUV(direction - vec3(tap, 0.0, 0.0), tap), depth);
+                            visibility += shadowSample(rayCubeToUV(direction + vec3(0.0, tap, 0.0), tap), depth);
+                            visibility += shadowSample(rayCubeToUV(direction - vec3(0.0, tap, 0.0), tap), depth);
+                            shadow = mix(1.0, visibility * 0.2, uShadow.z);
+                        }
+                    } else {
+                        vec3 coord = projected.xyz / max(projected.w, 0.00001);
+                        if (projected.w > 0.0 && all(greaterThanEqual(coord, vec3(0.0))) && all(lessThanEqual(coord, vec3(1.0)))) {
+                            float depth = coord.z + uShadow.y;
+                            float visibility = shadowSample(coord.xy, depth);
+                            visibility += shadowSample(coord.xy + vec2(uShadowTexel.x, 0.0), depth);
+                            visibility += shadowSample(coord.xy - vec2(uShadowTexel.x, 0.0), depth);
+                            visibility += shadowSample(coord.xy + vec2(0.0, uShadowTexel.y), depth);
+                            visibility += shadowSample(coord.xy - vec2(0.0, uShadowTexel.y), depth);
+                            shadow = mix(1.0, visibility * 0.2, uShadow.z);
+                        }
                     }
                 }
-                float alpha = clamp(edge * pow(max(start * end, 0.0), uFade.w) * uLook.x * distanceFade * shadow, 0.0, 1.0);
+                float alpha = clamp(edge * pow(max(start * end, 0.0), uFade.w) * uLook.x * distanceFade * shadow * depthFade, 0.0, 1.0);
                 if (alpha < 0.00001) discard;
                 vec3 color = mix(uColor, uEndColor, pow(vRayUv.y, uLook.z)) * uLook.y;
                 #ifdef LIGHTFLOW_GOD_RAY_BLOOM
@@ -1933,15 +2183,23 @@
                     if (uBloomEncoded > 0.5) emission = clamp(log2(vec3(1.0) + max(emission, vec3(0.0))) / 4.0874628413, 0.0, 1.0);
                     gl_FragColor = vec4(emission, 0.0);
                 #else
-                    gl_FragColor = vec4(color, alpha);
-                    #include <tonemapping_fragment>
-                    #include <encodings_fragment>
-                    gl_FragColor.rgb *= alpha;
+                    gl_FragColor = vec4(max(color, vec3(0.0)), alpha);
+                    #ifdef TONE_MAPPING
+                        #include <tonemapping_fragment>
+                    #else
+                        float peak = max(color.r, max(color.g, color.b));
+                        if (peak > 0.8) gl_FragColor.rgb *= (1.0 - 0.2 * exp(-(peak - 0.8) / 0.2)) / peak;
+                    #endif
+                    vec3 linearColor = max(gl_FragColor.rgb, vec3(0.0));
+                    gl_FragColor.rgb = mix(linearColor * 12.92,
+                        1.055 * pow(linearColor, vec3(1.0 / 2.4)) - 0.055,
+                        step(vec3(0.0031308), linearColor)) * alpha;
                 #endif
             }
         `;
         const resources = new Map();
         const bloomScene = new THREE.Scene();
+        const beautyScene = new THREE.Scene();
         const group = new THREE.Group();
         group.name = 'Lightflow God Rays';
         group.userData.lightflowNoShadow = true;
@@ -1958,8 +2216,11 @@
                 uFade: { value: new THREE.Vector4() }, uLook: { value: new THREE.Vector4() },
                 uDistance: { value: new THREE.Vector4() }, uShadow: { value: new THREE.Vector4() },
                 uShadowTexel: { value: new THREE.Vector2() }, uShadowMatrix: { value: new THREE.Matrix4() },
+                uPointShadow: { value: new THREE.Vector3() },
                 uShadowMap: { value: fallback }, uSceneDepth: { value: fallback },
-                uSceneViewport: { value: new THREE.Vector2(1, 1) }, uSceneDepthActive: { value: 0 }, uBloomEncoded: { value: 1 }
+                uSceneViewport: { value: new THREE.Vector4(0, 0, 1, 1) },
+                uSceneInverseProjection: { value: new THREE.Matrix4() },
+                uSceneDepthActive: { value: 0 }, uBloomEncoded: { value: 1 }
             };
             const material = new THREE.ShaderMaterial({ uniforms, vertexShader, fragmentShader,
                 transparent: true, depthWrite: false, depthTest: true, side: THREE.DoubleSide,
@@ -1983,13 +2244,17 @@
             mesh.raycast = () => {};
             mesh.onBeforeRender = (renderer, scene, camera) => {
                 camera.getWorldPosition(uniforms.uCamera.value);
+                if (uniforms.uSceneDepthActive.value > 0) uniforms.uSceneInverseProjection.value.copy(camera.projectionMatrixInverse);
                 uniforms.uCameraBack.value.setFromMatrixColumn(camera.matrixWorld, 2).normalize();
                 uniforms.uOrtho.value = camera.isOrthographicCamera ? 1 : 0;
                 const light = mesh.userData.linkedLight;
                 const shadow = light?.shadow;
                 const available = mesh.userData.shadowRequested && light?.visible !== false && light?.castShadow && shadow?.map?.texture;
                 uniforms.uShadow.value.set(available ? 1 : 0, shadow?.bias || 0, mesh.userData.shadowStrength || 0,
-                    renderer.shadowMap?.type === THREE.VSMShadowMap ? 1 : 0);
+                    !light?.isPointLight && renderer.shadowMap?.type === THREE.VSMShadowMap ? 1 : 0);
+                // r129 point maps retain packed radial depth even with VSM.
+                uniforms.uPointShadow.value.set(available && light.isPointLight ? 1 / shadow.map.height : 0,
+                    shadow?.camera?.near || 0, shadow?.camera?.far || 1);
                 uniforms.uShadowMap.value = available ? shadow.map.texture : fallback;
                 if (available) {
                     uniforms.uShadowMatrix.value.copy(shadow.matrix);
@@ -2004,12 +2269,18 @@
             bloomMesh.onBeforeRender = mesh.onBeforeRender;
             bloomScene.add(bloomMesh);
             mesh.userData.bloomMesh = bloomMesh;
+            const beautyMesh = new THREE.Mesh(mesh.geometry, material);
+            beautyMesh.frustumCulled = false;
+            beautyMesh.onBeforeRender = mesh.onBeforeRender;
+            beautyScene.add(beautyMesh);
+            mesh.userData.beautyMesh = beautyMesh;
             onTopologyChange();
             return mesh;
         }
         function remove(key, mesh) {
             mesh.parent?.remove(mesh);
             bloomScene.remove(mesh.userData.bloomMesh);
+            beautyScene.remove(mesh.userData.beautyMesh);
             mesh.geometry.dispose();
             mesh.material.userData.lightflowBloomMaterial.dispose();
             mesh.material.dispose();
@@ -2062,7 +2333,12 @@
                 u.uDistance.value.set(element.near_fade, element.far_start, element.far_end, 0);
                 u.uColor.value.fromArray(element.color.map(v => v / 255)).convertSRGBToLinear();
                 u.uEndColor.value.fromArray(element.end_color.map(v => v / 255)).convertSRGBToLinear();
-                if (element.inherit_color && light?.color) { u.uColor.value.copy(light.color); u.uEndColor.value.copy(light.color); }
+                if (element.inherit_color && light?.color) {
+                    // Light Manager r129 keeps authored sRGB in its shared light
+                    // packet. Match the explicit color path without mutating it.
+                    u.uColor.value.copy(light.color).convertSRGBToLinear();
+                    u.uEndColor.value.copy(u.uColor.value);
+                }
                 mesh.material.blendDst = element.blend === 'normal' ? THREE.OneMinusSrcAlphaFactor : THREE.OneFactor;
                 mesh.material.depthTest = element.occlusion !== 'none';
                 mesh.material.userData.lightflowBloomMaterial.depthTest = mesh.material.depthTest;
@@ -2073,6 +2349,7 @@
                 mesh.position.copy(u.uOrigin.value).addScaledVector(u.uAxis.value, element.length * scratch.scale.y * 0.5);
                 mesh.updateMatrixWorld(true);
                 mesh.userData.bloomMesh.position.copy(mesh.position);
+                mesh.userData.beautyMesh.position.copy(mesh.position);
             }
             for (const [key, mesh] of resources) if (!active.has(key)) remove(key, mesh);
         }
@@ -2087,7 +2364,7 @@
                 for (const mesh of resources.values()) {
                     const u = mesh.material.uniforms;
                     u.uSceneDepth.value = depthTexture;
-                    u.uSceneViewport.value.set(target.width, target.height);
+                    u.uSceneViewport.value.set(0, 0, target.width, target.height);
                     u.uSceneDepthActive.value = mesh.material.depthTest ? 1 : 0;
                     u.uBloomEncoded.value = 0;
                     mesh.userData.bloomMesh.visible = mesh.visible;
@@ -2106,8 +2383,61 @@
                 renderer.autoClear = autoClear;
             }
         }
+        function hasSoftDepthRays() {
+            for (const mesh of resources.values()) {
+                if (mesh.visible && mesh.material.depthTest) return true;
+            }
+            return false;
+        }
+        function withDeferredBeauty(draw) {
+            const hidden = [];
+            try {
+                for (const mesh of resources.values()) {
+                    if (!mesh.visible || !mesh.material.depthTest) continue;
+                    mesh.visible = false;
+                    hidden.push(mesh);
+                }
+                return draw();
+            } finally {
+                for (const mesh of hidden) mesh.visible = true;
+            }
+        }
+        function renderBeauty(preview, depthTexture, viewport) {
+            const renderer = preview.renderer;
+            if (!depthTexture || renderer.getRenderTarget()?.depthTexture === depthTexture) return false;
+            const active = [];
+            const oldAutoClear = renderer.autoClear;
+            try {
+                for (const mesh of resources.values()) {
+                    const material = mesh.material;
+                    const proxy = mesh.userData.beautyMesh;
+                    proxy.visible = mesh.visible && material.depthTest;
+                    if (!proxy.visible) continue;
+                    active.push(material);
+                    const u = material.uniforms;
+                    u.uSceneDepth.value = depthTexture;
+                    u.uSceneViewport.value.copy(viewport);
+                    u.uSceneDepthActive.value = 1;
+                    material.depthTest = false;
+                }
+                if (!active.length) return false;
+                renderer.autoClear = false;
+                renderer.render(beautyScene, preview.camera);
+                return true;
+            } finally {
+                renderer.autoClear = oldAutoClear;
+                for (const material of active) {
+                    material.depthTest = true;
+                    material.uniforms.uSceneDepthActive.value = 0;
+                    material.uniforms.uSceneDepth.value = fallback;
+                }
+            }
+        }
         function dispose() { clear(); group.parent?.remove(group); fallback.dispose(); }
-        return { fields, sanitize, sync, clear, dispose, hasBloom, renderBloomContribution, group, resources, vertexShader, fragmentShader };
+        return {
+            fields, sanitize, sync, clear, dispose, hasBloom, renderBloomContribution,
+            hasSoftDepthRays, withDeferredBeauty, renderBeauty, group, resources, vertexShader, fragmentShader
+        };
     }
     /* LIGHTFLOW_GOD_RAY_CORE_END */
 
@@ -2123,13 +2453,12 @@
         studioTime: null,
         studioSampleIndex: 0,
         sceneRevision: 1,
-        scenePartitionCache: null,
-        depthMaterialCache: new WeakMap(),
-        depthMaterialResources: new Set(),
         activeVolumeCandidates: [],
         activeVolumes: [],
         activeVolumeScratch: null,
         framePipelineRegistration: null,
+        godRayBeautyRegistration: null,
+        techniqueFrames: new WeakMap(),
         framePipelineResources: [],
         lastTechniqueResolution: null,
         surfaceFogUniforms: null,
@@ -2176,7 +2505,7 @@
                 frustum: new THREE.Frustum()
             };
             this.whiteTexture = createWhiteTexture();
-            this.noiseTexture = createNoiseTexture(128);
+            this.noiseTexture = createNoiseTexture();
             this.geometryShaftGroup = new THREE.Group();
             this.geometryShaftGroup.name = 'Lightflow Atmosphere Geometry Shafts';
             this.geometryShaftGroup.userData.lightflowAtmosphereProxy = true;
@@ -2204,9 +2533,6 @@
                 });
             });
             this.states.clear();
-            this.depthMaterialResources.forEach(material => material?.dispose?.());
-            this.depthMaterialResources.clear();
-            this.depthMaterialCache = new WeakMap();
             this.invalidateSceneCache();
             this.activeVolumeCandidates.length = 0;
             this.activeVolumes.length = 0;
@@ -2220,9 +2546,6 @@
         },
 
         releaseProjectResources() {
-            this.depthMaterialResources.forEach(material => material?.dispose?.());
-            this.depthMaterialResources.clear();
-            this.depthMaterialCache = new WeakMap();
             this.states.forEach(state => {
                 const capabilities = this.getRendererCapabilities(state?.renderer);
                 this.disposeState(state, {
@@ -2259,18 +2582,24 @@
                 preview?.sa_studio_render_active ||
                 window.LightManagerStudioRenderSession
             );
-            const activeVolumes = Array.isArray(volumes)
-                ? volumes
-                : this.getActiveVolumes(preview?.camera);
+            const frame = !volumes && preview ? this.techniqueFrames.get(preview) : null;
+            if (frame?.studio === studio && frame.resolution) return frame.resolution;
+            const activeVolumes = volumes || (this.settings.enabled ? this.getActiveVolumes(preview?.camera) : []);
             const quality = studio ? this.settings.render_quality : this.settings.preview_quality;
+            const lights = Object.values(window.three_lights || {}).filter(light => (
+                light?.visible !== false && Number(light?.intensity) > 0 &&
+                (light.isDirectionalLight || light.isPointLight || light.isSpotLight)
+            ));
             const resolution = AtmosphereTechniqueRouter.resolveScene({
                 globalFog: this.getGlobalFogConfig(),
                 volumes: activeVolumes,
                 quality,
                 studio,
-                trueVolumetricShadows: ['ultra', 'reference'].includes(quality)
+                hasLocalLights: lights.some(light => light.isPointLight || light.isSpotLight),
+                hasShadowLights: this.settings.volumetric_shadow_mode !== 'none' && lights.some(light => light.castShadow)
             });
             this.lastTechniqueResolution = resolution;
+            if (frame) Object.assign(frame, { studio, resolution });
             return resolution;
         },
 
@@ -2526,29 +2855,47 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         ));
     }
 `;
-            // The unlit texture path returns before the shared surface epilogue.
-            // Apply the same atmosphere there, while leaving emission/data passes
-            // untouched and preserving the unlit alpha and MRT emission export.
+            // The lit epilogue and the early-returning unlit path use the same
+            // atmosphere equations. Emit them once instead of duplicating the
+            // large fog/grade block into both paths of every surface shader.
+            const atmosphereFunction = `
+vec3 lfApplySurfaceAtmosphere(vec3 lfAtmosphereSurfaceColor) {
+${surfaceAtmosphereFragment.replace(/gl_FragColor\.rgb/g, 'lfAtmosphereSurfaceColor')}
+    return lfAtmosphereSurfaceColor;
+}
+`;
+            // Preserve the unlit hook and conditional guards: emission and
+            // specialized Glow passes must never receive visible fog color.
             const surfaceBody = fragmentShader.slice(0, fragmentEnd).replace(
                 '// SA_UNLIT_EMISSION_EXPORT',
                 `// SA_UNLIT_EMISSION_EXPORT
 #if !defined(SA_RENDERCRAFT_RIM_GLOW) && !defined(SA_RENDERCRAFT_GLOW_BLOOM) && !defined(SA_RENDERCRAFT_STUDIO_BLOOM)
-        {${surfaceAtmosphereFragment.replace(
-                    '    // Interpolate position, then measure distance.',
-                    '    // Unlit atmosphere uses the same interpolated position.'
-                )}}
+        // Unlit atmosphere uses the same interpolated position.
+        gl_FragColor.rgb = lfApplySurfaceAtmosphere(gl_FragColor.rgb);
 #endif`
             );
-            const decoratedFragment = surfaceBody + surfaceAtmosphereFragment + fragmentShader.slice(fragmentEnd);
+            const decoratedFragment = surfaceBody +
+                '\n    // SA_LIGHTFLOW_ATMOSPHERE_LIT_EPILOGUE\n' +
+                '#if !defined(SA_RENDERCRAFT_RIM_GLOW) && !defined(SA_RENDERCRAFT_GLOW_BLOOM) && !defined(SA_RENDERCRAFT_STUDIO_BLOOM)\n' +
+                '    gl_FragColor.rgb = lfApplySurfaceAtmosphere(gl_FragColor.rgb);\n' +
+                '#endif\n' +
+                fragmentShader.slice(fragmentEnd);
             return {
                 vertexShader: prependPreamble(decoratedVertex, vertexPreamble),
-                fragmentShader: prependPreamble(decoratedFragment, fragmentPreamble),
+                fragmentShader: prependPreamble(decoratedFragment, fragmentPreamble + atmosphereFunction),
                 uniforms: this.surfaceFogUniforms,
-                family: 'lightflow_surface_fog_v7'
+                family: 'lightflow_surface_fog_v8'
             };
         },
 
         prepareSurfaceFog(preview, options = {}) {
+            if (preview && options.frameScoped) {
+                const frame = {};
+                this.techniqueFrames.set(preview, frame);
+                queueMicrotask(() => {
+                    if (this.techniqueFrames.get(preview) === frame) this.techniqueFrames.delete(preview);
+                });
+            }
             godRayRuntime?.sync(GodRayElement?.all, window.Canvas?.scene, window.three_lights || {});
             syncParticleEffects(preview?.camera);
             if (options.uniformsReady !== true) this.updateSurfaceFogUniforms();
@@ -2625,8 +2972,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
 
         syncGeometryShafts(preview) {
             if (!this.geometryShaftGroup || !preview?.camera) return;
-            const volumes = this.settings.enabled ? this.getActiveVolumes(preview.camera) : [];
-            const resolution = this.getTechniqueResolution(preview, {}, volumes);
+            const resolution = this.getTechniqueResolution(preview);
             const routes = resolution.volumeRoutes.filter(route => (
                 route.technique === AtmosphereV2Core.Technique.GEOMETRY_SHAFTS
             ));
@@ -2634,7 +2980,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             const lights = window.three_lights || {};
             routes.forEach(route => {
                 const volume = route.volume;
-                const light = (volume.light_uuid && lights[volume.light_uuid]) ||
+                const light = (volume.light_uuid && lights[getVolumeLightUUID(volume)]) ||
                     Object.values(lights).find(candidate => candidate?.isSpotLight && candidate.visible !== false);
                 if (!light?.isSpotLight) return;
                 const key = volume.uuid;
@@ -2684,7 +3030,6 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                     mesh.userData.lightflowNoShadow = true;
                     this.geometryShaftMeshes.set(key, mesh);
                     this.geometryShaftGroup.add(mesh);
-                    this.scenePartitionCache = null;
                 }
                 light.getWorldPosition?.(mesh.position);
                 const target = new THREE.Vector3();
@@ -2706,7 +3051,6 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 mesh.geometry?.dispose?.();
                 mesh.material?.dispose?.();
                 this.geometryShaftMeshes.delete(key);
-                this.scenePartitionCache = null;
             });
         },
 
@@ -2726,14 +3070,15 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             const activeBounds = [];
             this.states.forEach(state => {
                 [
-                    'sceneTarget', 'cubeTarget', 'volumeTarget',
+                    'sceneTarget', 'helperDepthTarget', 'volumeTarget',
                     'volumeHistoryTarget', 'volumeResolveTarget', 'historyDepthTarget'
                 ].forEach(name => {
                     const target = state?.[name];
                     if (!target) return;
                     renderTargets += 1;
+                    const bytesPerChannel = target.texture?.type === THREE.HalfFloatType ? 2 : 1;
                     const colorBytes = Math.max(1, target.width || 1) *
-                        Math.max(1, target.height || 1) * 4;
+                        Math.max(1, target.height || 1) * 4 * bytesPerChannel;
                     const depthBytes = target.depthTexture
                         ? Math.max(1, target.width || 1) * Math.max(1, target.height || 1) * 4
                         : 0;
@@ -2782,6 +3127,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 shadowSamples: shadowedLights * performance.raymarches,
                 canonicalDepthHits: performance.canonicalDepthHits,
                 legacyDepthHits: performance.legacyDepthHits,
+                helperDepthCaptures: performance.helperDepthCaptures,
                 depthFallbackCaptures: performance.depthFallbackCaptures,
                 historyAcceptanceRate: performance.temporalResolves
                     ? performance.temporalHistoryHits / performance.temporalResolves
@@ -2794,7 +3140,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 avoidedRaymarches: resolution.avoidedRaymarches + performance.avoidedRaymarches,
                 states: this.states.size,
                 patchedPreviews: this.patchedPreviews.size,
-                depthDerivedMaterials: this.depthMaterialResources.size,
+                depthDerivedMaterials: 0,
                 renderTargets,
                 estimatedBytes,
                 renderTargetBytes: estimatedBytes,
@@ -2827,6 +3173,19 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             registerResource('atmosphereHistory', {
                 owner: 'atmosphere', format: 'rgba8', scale: 0.5, persistent: true
             });
+            this.godRayBeautyRegistration = window.LightflowFramePipeline.registerPass?.('atmosphere_god_ray_beauty', {
+                priority: 99,
+                reads: ['sceneDepth'],
+                writes: ['framebuffer'],
+                dependsOn: ['main_scene'],
+                enabled: () => !this.disposed && godRayRuntime?.hasSoftDepthRays(),
+                execute: (preview, context) => {
+                    if (!context.deferredGodRayBeauty) return false;
+                    const depth = this.getCanonicalSceneDepth(context);
+                    return godRayRuntime?.renderBeauty(preview, depth?.sceneDepth,
+                        getPhysicalFramebufferViewport(preview.renderer, preview));
+                }
+            }) || null;
             this.framePipelineRegistration = window.LightflowFramePipeline.registerPass?.('atmosphere', {
                 priority: 100,
                 reads: ['sceneDepth'],
@@ -2844,6 +3203,8 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         },
 
         detachFramePipeline() {
+            this.godRayBeautyRegistration?.delete?.();
+            this.godRayBeautyRegistration = null;
             this.framePipelineRegistration?.delete?.();
             this.framePipelineRegistration = null;
             this.framePipelineResources.forEach(registration => registration?.delete?.());
@@ -2857,7 +3218,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         disposeState(state, options = {}) {
             if (!state) return;
             if (options.contextLost === true) return;
-            [state.sceneTarget, state.cubeTarget].forEach(target => {
+            [state.sceneTarget, state.helperDepthTarget].forEach(target => {
                 const depthTexture = target?.depthTexture || null;
                 target?.dispose?.();
                 depthTexture?.dispose?.();
@@ -2885,7 +3246,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             if (!state) return false;
 
             state.sceneTarget?.setSize?.(2, 2);
-            state.cubeTarget?.setSize?.(2, 2);
+            state.helperDepthTarget?.setSize?.(2, 2);
             state.volumeTarget?.setSize?.(2, 2);
             state.volumeHistoryTarget?.setSize?.(2, 2);
             state.volumeResolveTarget?.setSize?.(2, 2);
@@ -2936,11 +3297,11 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         },
 
         invalidateSceneCache() {
-            this.scenePartitionCache = null;
             this.invalidateDepthCache();
         },
 
         invalidateDepthCache() {
+            this.techniqueFrames = new WeakMap();
             this.sceneRevision = (this.sceneRevision + 1) >>> 0;
             this.states.forEach(state => {
                 state.lastFrameSignature = null;
@@ -2976,6 +3337,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             for (let index = 0; index < VolumeElement.all.length; index++) {
                 const volume = VolumeElement.all[index];
                 if (!volume || volume.visibility === false || volume.enabled === false || !volume.mesh || finite(volume.density, 0) <= 0) continue;
+                if (volume.composite_mode !== 'shafts' && (finite(volume.max_opacity, 1) <= 0 || finite(volume.height_ceiling, 1) <= 0)) continue;
                 // Only the volume and its ancestors are needed here. Updating
                 // descendants also walks every gizmo attached to the volume.
                 if (volume.mesh.updateWorldMatrix) volume.mesh.updateWorldMatrix(true, false);
@@ -3106,7 +3468,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             const renderer = preview?.renderer;
             if (!renderer || !THREE.WebGLRenderTarget || !THREE.DepthTexture) return null;
             const sceneTarget = createDepthTarget();
-            const cubeTarget = createDepthTarget();
+            const helperDepthTarget = createDepthTarget();
             const volumeTarget = new THREE.WebGLRenderTarget(1, 1, {
                 minFilter: THREE.LinearFilter,
                 magFilter: THREE.LinearFilter,
@@ -3141,7 +3503,11 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             const volumeHeightNoise = Array.from({ length: MAX_VOLUMES }, () => new THREE.Vector4());
             const volumeCloudWind = Array.from({ length: MAX_VOLUMES }, () => new THREE.Vector4());
             const volumeFlags = Array.from({ length: MAX_VOLUMES }, () => new THREE.Vector4());
+            const volumeProfile = Array.from({ length: MAX_VOLUMES }, () => new THREE.Vector4());
+            const volumeNoiseTransform = Array.from({ length: MAX_VOLUMES }, () => new THREE.Vector4());
+            const volumeArt = Array.from({ length: MAX_VOLUMES }, () => new THREE.Vector2());
             const volumeColor = Array.from({ length: MAX_VOLUMES }, () => new THREE.Vector3());
+            const volumeTopColor = Array.from({ length: MAX_VOLUMES }, () => new THREE.Vector3());
             const volumeAbsorptionColor = Array.from({ length: MAX_VOLUMES }, () => new THREE.Vector3());
             const lightPositionType = Array.from({ length: MAX_LIGHTS }, () => new THREE.Vector4());
             const lightDirectionRange = Array.from({ length: MAX_LIGHTS }, () => new THREE.Vector4());
@@ -3149,7 +3515,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             const lightConeShadow = Array.from({ length: MAX_LIGHTS }, () => new THREE.Vector4());
             const volumeUniforms = {
                 tSceneDepth: { value: sceneTarget.depthTexture },
-                tCubeDepth: { value: cubeTarget.depthTexture },
+                tHelperDepth: { value: helperDepthTarget.depthTexture },
                 uNoiseTexture: { value: this.noiseTexture },
                 uShadowMap0: { value: this.whiteTexture },
                 uShadowMap1: { value: this.whiteTexture },
@@ -3163,7 +3529,11 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 uVolumeHeightNoise: { value: volumeHeightNoise },
                 uVolumeCloudWind: { value: volumeCloudWind },
                 uVolumeFlags: { value: volumeFlags },
+                uVolumeProfile: { value: volumeProfile },
+                uVolumeNoiseTransform: { value: volumeNoiseTransform },
+                uVolumeArt: { value: volumeArt },
                 uVolumeColor: { value: volumeColor },
+                uVolumeTopColor: { value: volumeTopColor },
                 uVolumeAbsorptionColor: { value: volumeAbsorptionColor },
                 uLightPositionType: { value: lightPositionType },
                 uLightDirectionRange: { value: lightDirectionRange },
@@ -3171,6 +3541,8 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 uLightConeShadow: { value: lightConeShadow },
                 uShadowParams0: { value: new THREE.Vector4(1, 1, 0.0005, 1) },
                 uShadowParams1: { value: new THREE.Vector4(1, 1, 0.0005, 1) },
+                uPointShadow0: { value: new THREE.Vector4() },
+                uPointShadow1: { value: new THREE.Vector4() },
                 uResolution: { value: new THREE.Vector2(1, 1) },
                 uFrameOrigin: { value: new THREE.Vector2() },
                 uFramePixelScale: { value: new THREE.Vector2(1, 1) },
@@ -3183,6 +3555,10 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 uLightCount: { value: 0 },
                 uSteps: { value: 40 },
                 uShadowSamples: { value: 1 },
+                uShadowCount: { value: 0 },
+                uCloudShadowSteps: { value: 0 },
+                uHasLocalLights: { value: false },
+                uVolumeShaft: { value: Array.from({ length: MAX_VOLUMES }, () => new THREE.Vector2(-1, 1)) },
                 uOrthographic: { value: false },
                 uTemporalJitter: { value: true },
                 uCheckerboard: { value: false },
@@ -3208,7 +3584,9 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 tHistoryDepth: { value: historyDepthTarget.texture },
                 uTexelSize: { value: new THREE.Vector2(1, 1) },
                 uHistoryBlend: { value: 0 },
-                uDepthRejectThreshold: { value: 0.004 },
+                uDepthRejectThreshold: { value: 0.04 },
+                uPreviousInverseProjection: { value: new THREE.Matrix4() },
+                uCurrentRect: { value: new THREE.Vector4(0, 0, 1, 1) },
                 uCheckerboard: { value: false },
                 uCheckerboardPhase: { value: 0 },
                 uInverseProjection: { value: new THREE.Matrix4() },
@@ -3259,7 +3637,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             const compositeUniforms = {
                 tVolume: { value: volumeTarget.texture },
                 tSceneDepth: { value: sceneTarget.depthTexture },
-                tCubeDepth: { value: cubeTarget.depthTexture },
+                tHelperDepth: { value: helperDepthTarget.depthTexture },
                 uInverseProjection: { value: new THREE.Matrix4() },
                 uVolumeTexel: { value: new THREE.Vector2(1, 1) },
                 uHelperMask: { value: true },
@@ -3312,7 +3690,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             shaftScene.add(shaftQuad);
             compositeScene.add(compositeQuad);
             const state = {
-                preview, renderer, sceneTarget, cubeTarget, volumeTarget,
+                preview, renderer, sceneTarget, helperDepthTarget, volumeTarget,
                 volumeHistoryTarget, volumeResolveTarget, historyDepthTarget,
                 generation: Number(
                     options.generation ?? this.getRendererCapabilities(renderer)?.generation
@@ -3326,7 +3704,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 sceneWidth: 1, sceneHeight: 1, volumeWidth: 1, volumeHeight: 1,
                 framebufferViewport: new THREE.Vector4(0, 0, 1, 1),
                 depthWidth: 1, depthHeight: 1,
-                rendering: false, ownDepthStamp: 0,
+                rendering: false,
                 lastNormalVolumeReady: false,
                 lastNormalStudio: false,
                 lastBloomMultiplier: 1,
@@ -3336,6 +3714,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 temporalHistoryValid: false,
                 temporalHistorySignature: null,
                 previousViewProjection: new THREE.Matrix4(),
+                previousInverseProjection: new THREE.Matrix4(),
                 previousCameraPosition: new THREE.Vector3(),
                 previousCameraQuaternion: new THREE.Quaternion(),
                 previousCameraValid: false,
@@ -3357,6 +3736,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                     boundsView: new THREE.Vector3(),
                     boundsProjected: new THREE.Vector3(),
                     boundsLocalCamera: new THREE.Vector3(),
+                    ambient: new THREE.Vector3(1, 1, 1),
                     quaternion: new THREE.Quaternion()
                 },
                 stats: {
@@ -3366,6 +3746,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                     depthCaptures: 0,
                     sceneDepthCaptures: 0,
                     geometryDepthCaptures: 0,
+                    helperDepthCaptures: 0,
                     canonicalDepthHits: 0,
                     legacyDepthHits: 0,
                     depthFallbackCaptures: 0,
@@ -3440,55 +3821,16 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 state.temporalHistorySignature = null;
                 state.previousCameraValid = false;
             }
-            if (state.depthWidth !== volumeWidth || state.depthHeight !== volumeHeight) {
-                state.depthWidth = volumeWidth;
-                state.depthHeight = volumeHeight;
-                state.sceneTarget.setSize(volumeWidth, volumeHeight);
-                state.cubeTarget.setSize(volumeWidth, volumeHeight);
-                configureRenderTarget(state.sceneTarget, volumeWidth, volumeHeight);
-                configureRenderTarget(state.cubeTarget, volumeWidth, volumeHeight);
+            if (state.depthWidth !== sceneWidth || state.depthHeight !== sceneHeight) {
+                state.depthWidth = sceneWidth;
+                state.depthHeight = sceneHeight;
                 state.lastFrameSignature = null;
                 state.lastDepthSignature = null;
             }
             state.compositeUniforms.uBilateralUpsample.value = volumeWidth < sceneWidth || volumeHeight < sceneHeight;
         },
 
-        findFreshSharedSceneDepth(preview, state) {
-            const manager = window.LightflowAmbientOcclusion;
-            const shared = manager?.states?.get?.(preview);
-            // SceneDepth belongs to the coordinated frame even when AO itself
-            // is disabled; only cubeTarget below depends on an AO geometry pass.
-            if (!shared || !shared.sceneTarget?.depthTexture) return null;
-            const stamp = finite(shared.lightflowDepthStamp, 0);
-            if (!stamp || performance.now() - stamp > 80) return null;
-            if (shared.sceneWidth !== state.sceneWidth || shared.sceneHeight !== state.sceneHeight) return null;
-            return shared.sceneTarget.depthTexture;
-        },
-
-        findFreshSharedDepthSources(preview, state) {
-            const manager = window.LightflowAmbientOcclusion;
-            const shared = manager?.states?.get?.(preview);
-            if (!manager?.settings?.enabled || !shared?.sceneTarget?.depthTexture || !shared?.cubeTarget?.depthTexture) return null;
-            const stamp = finite(shared.lightflowDepthStamp, 0);
-            if (!stamp || performance.now() - stamp > 80) return null;
-            if (shared.sceneWidth !== state.sceneWidth || shared.sceneHeight !== state.sceneHeight) return null;
-            if (shared.width < state.depthWidth || shared.height < state.depthHeight) return null;
-
-            const allVisibleCubesCovered = getRenderElements().every(cube => {
-                const mesh = getCubeMesh(cube);
-                if (!mesh || mesh.visible === false) return true;
-                const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-                return materials.some(material => manager.materialReceivesAO?.(material));
-            });
-            if (!allVisibleCubesCovered) return null;
-            return {
-                sceneDepth: this.settings.helper_mask ? shared.sceneTarget.depthTexture : shared.cubeTarget.depthTexture,
-                cubeDepth: shared.cubeTarget.depthTexture,
-                source: 'legacy_shared'
-            };
-        },
-
-        getCanonicalSceneDepth(frameContext, state) {
+        getCanonicalSceneDepth(frameContext) {
             const bundle = frameContext?.resources;
             const resource = bundle?.resources?.sceneDepth;
             const contracts = frameContext?.resourceContracts ||
@@ -3512,160 +3854,65 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             };
         },
 
-        getScenePartition() {
-            if (this.scenePartitionCache) return this.scenePartitionCache;
-            const cubeObjects = new WeakSet();
-            const cubeMeshes = [];
-            const nonCubeObjects = [];
-            getRenderElements().forEach(element => {
-                const mesh = getCubeMesh(element);
-                if (!mesh) return;
-                const addObject = object => {
-                    if (!object || cubeObjects.has(object)) return;
-                    cubeObjects.add(object);
-                    if (object.isMesh && object.material) cubeMeshes.push(object);
-                };
-                if (mesh.traverse) mesh.traverse(addObject);
-                else addObject(mesh);
-            });
-            window.Canvas?.scene?.traverse?.(object => {
-                const renderable = object?.isMesh || object?.isSprite || object?.isLine || object?.isLineSegments || object?.isPoints;
-                if (renderable && !cubeObjects.has(object)) nonCubeObjects.push(object);
-            });
-            this.scenePartitionCache = { cubeObjects, cubeMeshes, nonCubeObjects };
-            return this.scenePartitionCache;
+        shouldMaskHelpers(studio) {
+            return !studio && this.settings.helper_mask && window.Canvas?.show_gizmos !== false;
         },
 
-        collectCubeObjects() {
-            return this.getScenePartition().cubeObjects;
-        },
-
-        collectNonCubeVisibilityChanges(cubeObjects) {
-            const changes = [];
-            this.getScenePartition().nonCubeObjects.forEach(object => {
-                if (object?.visible) {
-                    changes.push(object);
-                    object.visible = false;
-                }
-            });
-            return changes;
-        },
-
-        forceDepthWriting(scene, predicate) {
-            const changes = [];
-            scene?.traverse?.(object => {
-                if (!object?.visible || !predicate(object) || !object.material) return;
-                const materials = Array.isArray(object.material) ? object.material : [object.material];
-                materials.forEach(material => {
-                    if (!material || material.depthWrite === true) return;
-                    changes.push({ material, depthWrite: material.depthWrite });
-                    material.depthWrite = true;
-                });
-            });
-            return changes;
-        },
-
-        hasVisibleHelpers(scene, cubeObjects) {
-            let found = false;
-            this.getScenePartition().nonCubeObjects.forEach(object => {
-                if (found || !object?.visible) return;
-                let ancestor = object.parent;
-                while (ancestor && ancestor !== scene) {
-                    if (ancestor.visible === false) return;
-                    ancestor = ancestor.parent;
-                }
-                if (object.isLine || object.isLineSegments || object.isSprite || object.isPoints) found = true;
-            });
-            return found;
-        },
-
-        getDepthOnlyMaterial(sourceMaterial) {
-            if (!sourceMaterial) return sourceMaterial;
-            const sharedManager = window.LightflowAmbientOcclusion;
-            if (sharedManager?.getDepthOnlyMaterial) {
-                const sharedMaterial = sharedManager.getDepthOnlyMaterial(sourceMaterial);
-                if (sharedMaterial) sharedMaterial.depthWrite = true;
-                return sharedMaterial;
+        getScenePartition(scene, camera) {
+            const geometry = new Set(window.ShaderEngine?.externalIntegratedMeshes || []);
+            for (const element of getRenderElements()) {
+                const root = getCubeMesh(element);
+                if (root) geometry.add(root);
             }
-            let material = this.depthMaterialCache.get(sourceMaterial);
-            if (!material) {
-                material = new THREE.ShaderMaterial({
-                    uniforms: {
-                        map: { value: null },
-                        uHasMap: { value: false },
-                        uOpacity: { value: 1 },
-                        uAlphaTest: { value: 0.01 }
-                    },
-                    vertexShader: `
-                        varying vec2 vUv;
-                        void main() {
-                            vUv = uv;
-                            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-                        }
-                    `,
-                    fragmentShader: `
-                        precision highp float;
-                        uniform sampler2D map;
-                        uniform bool uHasMap;
-                        uniform float uOpacity;
-                        uniform float uAlphaTest;
-                        varying vec2 vUv;
-                        void main() {
-                            float alpha = uOpacity;
-                            if (uHasMap) alpha *= texture2D(map, vUv).a;
-                            if (alpha < uAlphaTest) discard;
-                            gl_FragColor = vec4(1.0);
-                        }
-                    `,
-                    depthTest: true,
-                    depthWrite: true,
-                    colorWrite: false,
-                    transparent: false,
-                    blending: THREE.NoBlending,
-                    side: sourceMaterial.shadowSide !== undefined
-                        ? sourceMaterial.shadowSide
-                        : (sourceMaterial.side !== undefined ? sourceMaterial.side : THREE.FrontSide)
-                });
-                material.name = 'LightflowAtmosphere_DepthOnly';
-                this.depthMaterialCache.set(sourceMaterial, material);
-                this.depthMaterialResources.add(material);
-            }
-            const map = sourceMaterial.uniforms?.map?.value || sourceMaterial.map || null;
-            const baseAlpha = sourceMaterial.uniforms?.uBaseAlpha?.value;
-            material.uniforms.map.value = map;
-            material.uniforms.uHasMap.value = !!map;
-            material.uniforms.uOpacity.value = Number.isFinite(Number(baseAlpha))
-                ? clamp(Number(baseAlpha), 0, 1)
-                : clamp(finite(sourceMaterial.opacity, 1), 0, 1);
-            material.uniforms.uAlphaTest.value = Math.max(0.001, finite(sourceMaterial.alphaTest, 0.01));
-            material.side = sourceMaterial.shadowSide !== undefined
-                ? sourceMaterial.shadowSide
-                : (sourceMaterial.side !== undefined ? sourceMaterial.side : THREE.FrontSide);
-            return material;
-        },
-
-        useDepthOnlyCubeMaterials() {
-            const changes = [];
-            this.getScenePartition().cubeMeshes.forEach(mesh => {
-                if (!mesh?.material) return;
-                const original = mesh.material;
-                mesh.material = Array.isArray(original)
-                    ? original.map(material => this.getDepthOnlyMaterial(material))
-                    : this.getDepthOnlyMaterial(original);
-                changes.push({ mesh, material: original });
+            const belongsToGeometry = object => {
+                for (let node = object; node && node !== scene; node = node.parent) {
+                    if (geometry.has(node)) return true;
+                }
+                return false;
+            };
+            const helpers = new Set();
+            const renderables = [];
+            scene.traverseVisible(object => {
+                if (!object.layers.test(camera.layers)) return;
+                if (!(object.isMesh || object.isLine || object.isPoints || object.isSprite)) return;
+                renderables.push(object);
+                if (!object.userData?.lightflowVolumeSelectionProxy && (object.isLine || object.isPoints || object.isSprite) &&
+                    !belongsToGeometry(object)) helpers.add(object);
             });
-            return changes;
+            return { renderables, helpers, belongsToGeometry };
         },
 
-        restoreCubeMaterials(changes) {
-            (changes || []).forEach(entry => {
-                if (entry?.mesh) entry.mesh.material = entry.material;
-            });
-        },
-
-        restoreMaterialChanges(changes) {
-            for (let index = changes.length - 1; index >= 0; index--) {
-                changes[index].material.depthWrite = changes[index].depthWrite;
+        renderDepthObjects(state, scene, camera, target, objects, includes, forceDepthWrite = false) {
+            const renderer = state.renderer;
+            const excluded = [];
+            const materials = new Set();
+            const background = scene.background;
+            try {
+                scene.background = null;
+                for (const object of objects) {
+                    if (!includes(object)) {
+                        excluded.push([object, object.layers.mask]);
+                        object.layers.mask = 0;
+                    } else if (forceDepthWrite) {
+                        for (const material of Array.isArray(object.material) ? object.material : [object.material]) {
+                            if (!material || material.depthWrite !== false) continue;
+                            materials.add(material);
+                            material.depthWrite = true;
+                        }
+                    }
+                }
+                if (target.width !== state.depthWidth || target.height !== state.depthHeight) {
+                    target.setSize(state.depthWidth, state.depthHeight);
+                }
+                configureRenderTarget(target, state.depthWidth, state.depthHeight);
+                renderer.setRenderTarget(target);
+                renderer.setClearColor?.(0x000000, 0);
+                renderer.clear?.(true, true, true);
+                renderer.render(scene, camera);
+            } finally {
+                scene.background = background;
+                for (const [object, mask] of excluded) object.layers.mask = mask;
+                for (const material of materials) material.depthWrite = false;
             }
         },
 
@@ -3682,49 +3929,40 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             const previousViewport = renderer.getViewport?.(new THREE.Vector4()) || null;
             const previousScissor = renderer.getScissor?.(new THREE.Vector4()) || null;
             const previousScissorTest = renderer.getScissorTest?.() ?? false;
-            const previousShadowAutoUpdate = renderer.shadowMap ? renderer.shadowMap.autoUpdate : undefined;
+            const previousShadowAutoUpdate = renderer.shadowMap?.autoUpdate;
+            const previousShadowNeedsUpdate = renderer.shadowMap?.needsUpdate;
             const clearColor = new THREE.Color();
             const clearAlpha = renderer.getClearAlpha?.() ?? 1;
             renderer.getClearColor?.(clearColor);
-            const sharedSceneDepth = options.sceneDepth || this.findFreshSharedSceneDepth(preview, state);
+            const includeHelpers = this.shouldMaskHelpers(options.studio);
+            const sharedSceneDepth = options.sceneDepth;
+            if (sharedSceneDepth && !includeHelpers) return { sceneDepth: sharedSceneDepth, source: 'canonical' };
+            const { renderables, helpers, belongsToGeometry } = this.getScenePartition(scene, camera);
+            if (sharedSceneDepth && !helpers.size) return { sceneDepth: sharedSceneDepth, source: 'canonical' };
             try {
-                renderer.autoClear = true;
+                renderer.autoClear = false;
                 renderer.setScissorTest?.(false);
-                if (renderer.shadowMap) renderer.shadowMap.autoUpdate = false;
-                const cubeObjects = this.collectCubeObjects();
-                const needsHelperDepth = !!this.settings.helper_mask && this.hasVisibleHelpers(scene, cubeObjects);
-                if (needsHelperDepth && !sharedSceneDepth) {
-                    const helperDepthChanges = this.forceDepthWriting(scene, object => {
-                        return !cubeObjects.has(object) && (object.isLine || object.isLineSegments || object.isSprite || object.isPoints);
+                if (renderer.shadowMap) {
+                    renderer.shadowMap.autoUpdate = false;
+                    renderer.shadowMap.needsUpdate = false;
+                }
+                if (!sharedSceneDepth) {
+                    this.renderDepthObjects(state, scene, camera, state.sceneTarget, renderables, object => {
+                        const data = object.userData;
+                        if (data?.lightflowVolumeSelectionProxy || data?.lightflowAtmosphereProxy || data?.lightflowGodRay) return false;
+                        return object.isMesh || belongsToGeometry(object);
                     });
-                    renderer.setRenderTarget(state.sceneTarget);
-                    renderer.setClearColor?.(0x000000, 0);
-                    renderer.clear?.(true, true, true);
-                    try {
-                        renderer.render(scene, camera);
-                        state.stats.sceneDepthCaptures++;
-                    } finally {
-                        this.restoreMaterialChanges(helperDepthChanges);
-                    }
+                    state.stats.sceneDepthCaptures++;
                 }
-                const hidden = this.collectNonCubeVisibilityChanges(cubeObjects);
-                const cubeMaterialChanges = this.useDepthOnlyCubeMaterials();
-                renderer.setRenderTarget(state.cubeTarget);
-                renderer.setClearColor?.(0x000000, 0);
-                renderer.clear?.(true, true, true);
-                try {
-                    renderer.render(scene, camera);
-                    state.stats.geometryDepthCaptures++;
-                } finally {
-                    this.restoreCubeMaterials(cubeMaterialChanges);
-                    hidden.forEach(object => { object.visible = true; });
+                if (includeHelpers && helpers.size) {
+                    this.renderDepthObjects(state, scene, camera, state.helperDepthTarget, renderables, object => helpers.has(object), true);
+                    state.stats.helperDepthCaptures++;
                 }
-                state.ownDepthStamp = performance.now();
                 state.stats.depthCaptures++;
                 return {
-                    sceneDepth: needsHelperDepth ? (sharedSceneDepth || state.sceneTarget.depthTexture) : state.cubeTarget.depthTexture,
-                    cubeDepth: state.cubeTarget.depthTexture,
-                    source: options.source || (sharedSceneDepth ? 'legacy_scene_plus_geometry' : 'own_fallback')
+                    sceneDepth: sharedSceneDepth || state.sceneTarget.depthTexture,
+                    helperDepth: includeHelpers && helpers.size ? state.helperDepthTarget.depthTexture : null,
+                    source: sharedSceneDepth ? 'canonical' : 'own_fallback'
                 };
             } finally {
                 if (previousTarget) {
@@ -3740,7 +3978,10 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 }
                 renderer.autoClear = previousAutoClear;
                 renderer.setClearColor?.(clearColor, clearAlpha);
-                if (renderer.shadowMap && previousShadowAutoUpdate !== undefined) renderer.shadowMap.autoUpdate = previousShadowAutoUpdate;
+                if (renderer.shadowMap && previousShadowAutoUpdate !== undefined) {
+                    renderer.shadowMap.autoUpdate = previousShadowAutoUpdate;
+                    renderer.shadowMap.needsUpdate = previousShadowNeedsUpdate;
+                }
             }
         },
 
@@ -3757,7 +3998,11 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                     uniforms.uVolumeHeightNoise.value[index].set(0, 0, 1, 1);
                     uniforms.uVolumeCloudWind.value[index].set(0.5, 0.2, 0, 0);
                     uniforms.uVolumeFlags.value[index].set(0, 0, 0, 0);
+                    uniforms.uVolumeProfile.value[index].set(1, 0, 1, 1);
+                    uniforms.uVolumeNoiseTransform.value[index].set(1, 1, 1, 0);
+                    uniforms.uVolumeArt.value[index].set(32, 0);
                     uniforms.uVolumeColor.value[index].set(1, 1, 1);
+                    uniforms.uVolumeTopColor.value[index].set(1, 1, 1);
                     uniforms.uVolumeAbsorptionColor.value[index].set(1, 1, 1);
                     continue;
                 }
@@ -3813,9 +4058,62 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                     volume.composite_mode === 'shafts' ? 1 : 0
                 );
                 colorArrayToVector(volume.scattering_color, uniforms.uVolumeColor.value[index]);
-                colorArrayToVector(volume.absorption_color, uniforms.uVolumeAbsorptionColor.value[index]);
+                colorArrayToVector(volume.top_color || volume.scattering_color, uniforms.uVolumeTopColor.value[index]);
+                const bottom = uniforms.uVolumeColor.value[index];
+                const top = uniforms.uVolumeTopColor.value[index];
+                const gradient = clamp(finite(volume.color_gradient, 0), 0, 1);
+                top.x = bottom.x + (top.x - bottom.x) * gradient;
+                top.y = bottom.y + (top.y - bottom.y) * gradient;
+                top.z = bottom.z + (top.z - bottom.z) * gradient;
+                // Grade once on upload rather than per pixel, light or step.
+                const saturation = clamp(finite(volume.saturation, 1), 0, 2);
+                const contrast = clamp(finite(volume.contrast, 1), 0, 3);
+                for (const color of [bottom, top]) {
+                    const luminance = color.x * 0.2126 + color.y * 0.7152 + color.z * 0.0722;
+                    for (const channel of ['x', 'y', 'z']) {
+                        const saturated = luminance + (color[channel] - luminance) * saturation;
+                        color[channel] = srgbToLinear(clamp((saturated - 0.5) * contrast + 0.5, 0, 1));
+                    }
+                }
+                const stretch = volume.noise_stretch || [1, 1, 1];
+                const matrix = worldMatrix.elements;
+                uniforms.uVolumeNoiseTransform.value[index].set(
+                    Math.hypot(matrix[0], matrix[1], matrix[2]) / 16 * clamp(finite(stretch[0], 1), 0.1, 16),
+                    Math.hypot(matrix[4], matrix[5], matrix[6]) / 16 * clamp(finite(stretch[1], 1), 0.1, 16),
+                    Math.hypot(matrix[8], matrix[9], matrix[10]) / 16 * clamp(finite(stretch[2], 1), 0.1, 16),
+                    clamp(finite(volume.noise_seed, 0), 0, 1000)
+                );
+                uniforms.uVolumeProfile.value[index].set(
+                    clamp(finite(volume.height_ceiling, 1), 0, 1), clamp(finite(volume.height_feather, 0), 0, 1),
+                    clamp(finite(volume.density_curve, 1), 0.1, 4), clamp(finite(volume.gradient_curve, 1), 0.1, 8)
+                );
+                const opacity = clamp(finite(volume.max_opacity, 1), 0, 1);
+                uniforms.uVolumeArt.value[index].set(opacity >= 1 ? 32 : -Math.log(Math.max(1e-8, 1 - opacity)), clamp(finite(volume.emission, 0), 0, 4));
+                const absorptionColor = colorArrayToVector(volume.absorption_color, uniforms.uVolumeAbsorptionColor.value[index]);
+                absorptionColor.set(srgbToLinear(absorptionColor.x), srgbToLinear(absorptionColor.y), srgbToLinear(absorptionColor.z));
             }
             uniforms.uVolumeCount.value = volumeRoutes.length;
+        },
+
+        getVolumeAmbient(target) {
+            const native = window.Canvas?.global_light_color;
+            const brightness = Math.max(0, finite(window.settings?.brightness?.value, 50) / 50);
+            target.set(
+                srgbToLinear(finite(native?.r, 1)) * brightness,
+                srgbToLinear(finite(native?.g, 1)) * brightness,
+                srgbToLinear(finite(native?.b, 1)) * brightness
+            );
+            const environment = window.LightflowEnvironment?.getLightingState?.();
+            if (environment?.enabled && Array.isArray(environment.ambientColor)) {
+                const [red, green, blue] = environment.ambientColor;
+                const intensity = Math.max(0, finite(environment.ambientIntensity, 0));
+                target.set(
+                    srgbToLinear(red) * (target.x + intensity),
+                    srgbToLinear(green) * (target.y + intensity),
+                    srgbToLinear(blue) * (target.z + intensity)
+                );
+            }
+            return target;
         },
 
         updateLightUniforms(state, volumes = []) {
@@ -3847,7 +4145,8 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             for (const uuid in lights) {
                 if (!Object.prototype.hasOwnProperty.call(lights, uuid)) continue;
                 const light = lights[uuid];
-                if (!light || light.visible === false || finite(light.intensity, 0) <= 0) continue;
+                if (light?.visible === false || finite(light?.intensity, 0) <= 0 ||
+                    !(light.isDirectionalLight || light.isPointLight || light.isSpotLight)) continue;
                 const candidate = candidates[candidateCount] || (candidates[candidateCount] = {});
                 candidate.uuid = uuid;
                 candidate.light = light;
@@ -3894,7 +4193,11 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 candidateCount++;
             }
             candidates.length = candidateCount;
-            candidates.sort((first, second) => second.score - first.score);
+            const linkedLights = new Set(volumes.filter(volume => volume.composite_mode === 'shafts' && volume.light_uuid)
+                .map(getVolumeLightUUID));
+            candidates.sort((first, second) => (
+                Number(linkedLights.has(second.uuid)) - Number(linkedLights.has(first.uuid)) || second.score - first.score
+            ));
             const lightCount = Math.min(MAX_LIGHTS, candidateCount);
             const position = state.scratch.position;
             const targetPosition = state.scratch.targetPosition;
@@ -3928,7 +4231,9 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 uniforms.uLightPositionType.value[index].set(position.x, position.y, position.z, type);
                 uniforms.uLightDirectionRange.value[index].set(direction.x, direction.y, direction.z, range);
                 uniforms.uLightColorIntensity.value[index].set(
-                    finite(light.color?.r, 1), finite(light.color?.g, 1), finite(light.color?.b, 1),
+                    srgbToLinear(finite(light.color?.r, 1)),
+                    srgbToLinear(finite(light.color?.g, 1)),
+                    srgbToLinear(finite(light.color?.b, 1)),
                     clamp(finite(light.intensity, finite(element?.render_intensity, 1)), 0, 100000)
                 );
                 const angle = clamp(finite(light.angle, THREE.MathUtils.degToRad(finite(element?.angle, 45))), 0.001, Math.PI * 0.499);
@@ -3936,7 +4241,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 const outerCos = Math.cos(angle);
                 const innerCos = Math.cos(angle * (1 - penumbra));
                 let shadowSlot = -1;
-                const mayShadow = state.shadowMode !== 'none' && type !== 1 &&
+                const mayShadow = state.shadowMode !== 'none' &&
                     element?.has_shadow !== false && light.castShadow !== false &&
                     light.shadow?.map?.texture && shadowCount < MAX_SHADOWS;
                 if (mayShadow) {
@@ -3944,6 +4249,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                     const textureUniform = shadowSlot === 0 ? uniforms.uShadowMap0 : uniforms.uShadowMap1;
                     const matrixUniform = shadowSlot === 0 ? uniforms.uShadowMatrix0 : uniforms.uShadowMatrix1;
                     const paramsUniform = shadowSlot === 0 ? uniforms.uShadowParams0 : uniforms.uShadowParams1;
+                    const pointUniform = shadowSlot === 0 ? uniforms.uPointShadow0 : uniforms.uPointShadow1;
                     textureUniform.value = light.shadow.map.texture;
                     matrixUniform.value.copy(light.shadow.matrix);
                     const mapWidth = finite(light.shadow.map.width, finite(light.shadow.mapSize?.x, 1024));
@@ -3956,8 +4262,14 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                         shadowRadius / Math.max(1, mapWidth),
                         shadowRadius / Math.max(1, mapHeight),
                         finite(light.shadow.bias, finite(element?.shadow_bias, -0.0005)),
-                        0
+                        type !== 1 && state.renderer.shadowMap?.type === THREE.VSMShadowMap ? 1 : 0
                     );
+                    if (type === 1) {
+                        pointUniform.value.set(1 / Math.max(1, mapHeight), light.shadow.camera.near,
+                            light.shadow.camera.far, shadowRadius / Math.max(1, mapHeight));
+                    } else {
+                        pointUniform.value.set(0, 0, 0, 0);
+                    }
                 }
                 uniforms.uLightConeShadow.value[index].set(outerCos, innerCos, shadowSlot, 0);
             }
@@ -3972,6 +4284,19 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 uniforms.uShadowParams1.value.set(0, 0, 0, 0);
             }
             uniforms.uLightCount.value = lightCount;
+            uniforms.uShadowCount.value = shadowCount;
+            uniforms.uHasLocalLights.value = false;
+            for (let index = 0; index < lightCount; index++) {
+                if (!candidates[index].light.isDirectionalLight) uniforms.uHasLocalLights.value = true;
+            }
+            volumes.forEach((volume, index) => {
+                const uuid = volume.composite_mode === 'shafts' ? getVolumeLightUUID(volume) : '';
+                const linkedIndex = uuid ? candidates.findIndex(entry => entry.uuid === uuid) : -1;
+                uniforms.uVolumeShaft.value[index].set(
+                    uuid && (linkedIndex < 0 || linkedIndex >= lightCount) ? MAX_LIGHTS : linkedIndex,
+                    clamp(finite(volume.shaft_exposure, 1), 0, 8)
+                );
+            });
             state.directionalOnlyLights = lightCount === 1 && !!candidates[0].light?.isDirectionalLight;
             state.stats.lastCandidateLights = candidateCount;
             state.stats.lastActiveLights = lightCount;
@@ -3980,7 +4305,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
 
         updateScreenShaftUniforms(state, preview, volume, depthSources) {
             const lights = window.three_lights || {};
-            const requestedLight = volume?.light_uuid ? lights[volume.light_uuid] : null;
+            const requestedLight = volume?.light_uuid ? lights[getVolumeLightUUID(volume)] : null;
             const light = requestedLight || Object.values(lights).find(candidate => (
                 candidate?.visible !== false && finite(candidate?.intensity, 0) > 0 &&
                 (candidate.isDirectionalLight || candidate.isSpotLight || candidate.isPointLight)
@@ -4052,7 +4377,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             hash = this.hashNumber(hash, state.volumeWidth);
             hash = this.hashNumber(hash, state.volumeHeight);
             hash = this.hashString(hash, studio ? this.settings.render_quality : this.settings.preview_quality);
-            hash = this.hashNumber(hash, this.settings.helper_mask ? 1 : 0);
+            hash = this.hashNumber(hash, this.shouldMaskHelpers(studio) ? 1 : 0);
             hash = this.hashNumber(hash, this.settings.temporal_jitter ? 1 : 0);
             const camera = preview.camera;
             let animated = !!this.settings.temporal_jitter;
@@ -4083,6 +4408,12 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 hash = this.hashArray(hash, volume.scattering_color);
                 hash = this.hashArray(hash, volume.absorption_color);
                 hash = this.hashNumber(hash, volume.receive_shadows === false ? 0 : 1);
+                hash = this.hashString(hash, volume.light_uuid || '');
+                hash = this.hashNumber(hash, volume.shaft_exposure);
+                for (const key in VOLUME_CREATIVE_FIELDS) {
+                    const value = volume[key] ?? VOLUME_CREATIVE_FIELDS[key].default;
+                    hash = Array.isArray(value) ? this.hashArray(hash, value) : this.hashNumber(hash, value);
+                }
                 if (volume.density_mode === 'cloud' && Math.abs(finite(volume.wind_speed, 0)) > 0.00001) animated = true;
             });
 
@@ -4104,7 +4435,12 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 hash = this.hashNumber(hash, light.castShadow === false ? 0 : 1);
                 hash = this.hashArray(hash, light.shadow?.matrix?.elements);
                 hash = this.hashNumber(hash, light.shadow?.bias);
+                hash = this.hashNumber(hash, light.shadow?.map?.width);
+                hash = this.hashNumber(hash, light.shadow?.map?.height);
+                hash = this.hashNumber(hash, light.shadow?.camera?.near);
+                hash = this.hashNumber(hash, light.shadow?.camera?.far);
             }
+            hash = this.hashNumber(hash, state.renderer?.shadowMap?.type);
             const tile = studio && this.studioTile?.preview === preview ? this.studioTile.tile : null;
             if (tile) {
                 hash = this.hashNumber(hash, tile.viewX);
@@ -4117,6 +4453,11 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             // The temporal/uniform key shares all content with the beauty key.
             // Save it before camera and time instead of hashing every light and
             // volume a second time during the same composite.
+            if (state.scratch?.ambient) {
+                hash = this.hashNumber(hash, state.scratch.ambient.x);
+                hash = this.hashNumber(hash, state.scratch.ambient.y);
+                hash = this.hashNumber(hash, state.scratch.ambient.z);
+            }
             if (options.captureTemporal) state.currentTemporalSignature = hash >>> 0;
             if (options.includeCamera !== false) {
                 hash = this.hashArray(hash, camera?.matrixWorld?.elements);
@@ -4142,7 +4483,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             hash = this.hashNumber(hash, window.LightflowAnimationRuntime?.getSceneMotionEpoch?.() || 0);
             hash = this.hashNumber(hash, state.depthWidth);
             hash = this.hashNumber(hash, state.depthHeight);
-            hash = this.hashNumber(hash, this.settings.helper_mask ? 1 : 0);
+            hash = this.hashNumber(hash, this.shouldMaskHelpers(studio) ? 1 : 0);
             const camera = preview.camera;
             hash = this.hashArray(hash, camera?.matrixWorld?.elements);
             hash = this.hashArray(hash, camera?.projectionMatrix?.elements);
@@ -4169,6 +4510,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 depthCaptures: 0,
                 sceneDepthCaptures: 0,
                 geometryDepthCaptures: 0,
+                helperDepthCaptures: 0,
                 canonicalDepthHits: 0,
                 legacyDepthHits: 0,
                 depthFallbackCaptures: 0,
@@ -4188,6 +4530,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 result.depthCaptures += state.stats.depthCaptures;
                 result.sceneDepthCaptures += state.stats.sceneDepthCaptures || 0;
                 result.geometryDepthCaptures += state.stats.geometryDepthCaptures || 0;
+                result.helperDepthCaptures += state.stats.helperDepthCaptures || 0;
                 result.canonicalDepthHits += state.stats.canonicalDepthHits || 0;
                 result.legacyDepthHits += state.stats.legacyDepthHits || 0;
                 result.depthFallbackCaptures += state.stats.depthFallbackCaptures || 0;
@@ -4213,11 +4556,12 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             else if (inverseProjection.invert) inverseProjection.copy(camera.projectionMatrix).invert();
             else inverseProjection.getInverse(camera.projectionMatrix);
             state.volumeUniforms.uCameraWorld.value.copy(camera.matrixWorld);
+            state.volumeUniforms.uAmbientColor.value.copy(state.scratch.ambient);
             camera.getWorldPosition?.(state.volumeUniforms.uCameraPosition.value);
             state.volumeUniforms.uCameraFar.value = Math.max(1, finite(camera.far, 1000));
             state.volumeUniforms.uOrthographic.value = !!camera.isOrthographicCamera;
-            state.volumeUniforms.uTemporalJitter.value = !!this.settings.temporal_jitter;
-            state.volumeUniforms.uHelperMask.value = !!this.settings.helper_mask;
+            state.volumeUniforms.uTemporalJitter.value = studio || !!this.settings.temporal_jitter;
+            state.volumeUniforms.uHelperMask.value = !!depthSources.helperDepth;
             state.volumeUniforms.uBloomPass.value = !!bloomPass;
             const quality = studio ? this.settings.render_quality : this.settings.preview_quality;
             const table = studio ? RENDER_STEPS : PREVIEW_STEPS;
@@ -4264,7 +4608,9 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                     Math.abs(finite(size[1], 16)),
                     Math.abs(finite(size[2], 16))
                 );
-                const noiseFrequency = Math.sqrt(Math.max(1, finite(volume?.noise_scale, 3.2) / 3.2));
+                const stretch = volume?.noise_stretch || [1, 1, 1];
+                const maximumStretch = Math.max(...stretch.map(value => clamp(finite(value, 1), 0.1, 16)));
+                const noiseFrequency = Math.sqrt(Math.max(1, finite(volume?.noise_scale, 3.2) * maximumStretch / 3.2));
                 const opticalDepth = Math.max(0.5, Math.sqrt(1 + finite(volume?.density, 0.04) * pathLength));
                 pathDrivenSteps = Math.max(
                     pathDrivenSteps,
@@ -4296,6 +4642,9 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 ? (studio && ['ultra', 'reference'].includes(quality) ? 'full' : 'cheap')
                 : (['none', 'cheap', 'full'].includes(requestedShadowMode) ? requestedShadowMode : 'cheap');
             state.volumeUniforms.uShadowSamples.value = state.shadowMode === 'full' ? 4 : 1;
+            state.volumeUniforms.uCloudShadowSteps.value = state.shadowMode === 'none' || quality === 'draft'
+                ? 0
+                : (['ultra', 'reference'].includes(quality) ? 3 : 2);
             const cinematicFrame = window.LightflowCinematicFrameContext;
             if (cinematicFrame?.deterministic && Number.isFinite(cinematicFrame.timeSeconds)) {
                 state.volumeUniforms.uTime.value = cinematicFrame.timeSeconds;
@@ -4303,8 +4652,10 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                     (studio ? this.studioSampleIndex * 0.61803398875 : 0);
             } else if (studio) {
                 if (this.studioTime === null) this.studioTime = performance.now() * 0.001;
-                state.volumeUniforms.uTime.value = this.studioTime + this.studioSampleIndex * 0.61803398875;
-                state.volumeUniforms.uJitterTime.value = state.volumeUniforms.uTime.value;
+                // AA samples move the sampling pattern, never the medium.
+                // Every Studio tile shares the same frozen wind time.
+                state.volumeUniforms.uTime.value = this.studioTime;
+                state.volumeUniforms.uJitterTime.value = this.studioTime + this.studioSampleIndex * 0.61803398875;
             } else {
                 this.studioTime = null;
                 state.volumeUniforms.uTime.value = performance.now() * 0.001;
@@ -4324,11 +4675,11 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 volumeToRenderY * viewScaleY
             );
             state.volumeUniforms.tSceneDepth.value = depthSources.sceneDepth;
-            state.volumeUniforms.tCubeDepth.value = depthSources.cubeDepth;
+            state.volumeUniforms.tHelperDepth.value = depthSources.helperDepth || this.whiteTexture;
             state.compositeUniforms.tSceneDepth.value = depthSources.sceneDepth;
-            state.compositeUniforms.tCubeDepth.value = depthSources.cubeDepth;
+            state.compositeUniforms.tHelperDepth.value = depthSources.helperDepth || this.whiteTexture;
             state.compositeUniforms.uInverseProjection.value.copy(inverseProjection);
-            state.compositeUniforms.uHelperMask.value = !!this.settings.helper_mask;
+            state.compositeUniforms.uHelperMask.value = !!depthSources.helperDepth;
             const artSource = this.settings;
             state.compositeUniforms.uArtParams.value.set(
                 clamp(finite(artSource.art_max_opacity, 1), 0, 1),
@@ -4371,6 +4722,35 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             }
         },
 
+        configureVolumePrecision(state) {
+            // Precision is independent of the ray budget. Even a draft or
+            // analytic preview needs smooth low-density color and opacity.
+            if (state.halfFloatSupported === undefined) {
+                const renderer = state.renderer;
+                const capabilities = renderer.capabilities?.isWebGL2
+                    ? window.LightflowRenderer?.getCapabilities?.(renderer, { probeHalfFloat: true })
+                    : null;
+                state.halfFloatSupported = !!(THREE.HalfFloatType && renderer.capabilities?.isWebGL2 && (
+                    capabilities?.halfFloatRenderable ?? renderer.getContext?.()?.getExtension?.('EXT_color_buffer_float')
+                ));
+            }
+            const targetType = state.halfFloatSupported ? THREE.HalfFloatType : THREE.UnsignedByteType;
+            if (state.atmosphereTargetType !== targetType) {
+                state.atmosphereTargetType = targetType;
+                [state.volumeTarget, state.volumeHistoryTarget, state.volumeResolveTarget].forEach(target => {
+                    target.texture.type = targetType;
+                    target.dispose?.();
+                });
+                state.lastNormalVolumeReady = false;
+                state.lastFrameSignature = null;
+                state.temporalHistoryValid = false;
+            }
+            state.useLogEncoding = !state.halfFloatSupported;
+            state.volumeUniforms.uLogEncode.value = state.useLogEncoding;
+            state.compositeUniforms.uLogEncoded.value = state.useLogEncoding;
+            state.stats.lastHdrFormat = state.halfFloatSupported ? 'rgba16f' : 'rgba8_log';
+        },
+
         composite(preview, options) {
             const settings = options || {};
             if (
@@ -4381,35 +4761,14 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 window.ShaderEngine?.shouldDeferProjectPreviewEffect?.(3, preview)
             ) return false;
             if (this.disposed || !this.settings.enabled || !preview?.renderer || !window.Canvas?.scene) return false;
-            const volumes = this.getActiveVolumes(preview.camera);
+            const studio = this.isStudioPass(preview, settings);
+            const techniqueResolution = this.getTechniqueResolution(preview, { studio });
+            const volumes = techniqueResolution.volumeRoutes.map(route => route.volume);
             if (!volumes.length) return false;
             const state = this.getPreviewState(preview);
             if (!state || state.rendering) return false;
             const renderer = state.renderer;
-            const studio = this.isStudioPass(preview, settings);
-            const quality = studio ? this.settings.render_quality : this.settings.preview_quality;
-            const gl = renderer.getContext?.();
-            const floatColorSupported = !!(
-                renderer.capabilities?.isWebGL2 &&
-                gl?.getExtension?.('EXT_color_buffer_float') &&
-                THREE.HalfFloatType
-            );
-            const useHalfFloat = !!(studio && ['high', 'ultra', 'reference'].includes(quality) && floatColorSupported);
-            const targetType = useHalfFloat ? THREE.HalfFloatType : THREE.UnsignedByteType;
-            if (state.atmosphereTargetType !== targetType) {
-                state.atmosphereTargetType = targetType;
-                [state.volumeTarget, state.volumeHistoryTarget, state.volumeResolveTarget].forEach(target => {
-                    target.texture.type = targetType;
-                    target.dispose?.();
-                });
-                state.lastNormalVolumeReady = false;
-                state.temporalHistoryValid = false;
-            }
-            state.useLogEncoding = !useHalfFloat;
-            state.volumeUniforms.uLogEncode.value = state.useLogEncoding;
-            state.compositeUniforms.uLogEncoded.value = state.useLogEncoding;
-            state.stats.lastHdrFormat = useHalfFloat ? 'rgba16f' : 'rgba8_log';
-            const techniqueResolution = this.getTechniqueResolution(preview, { studio }, volumes);
+            this.configureVolumePrecision(state);
             state.lastTechniqueResolution = techniqueResolution;
             const screenShaftVolumes = techniqueResolution.volumeRoutes
                 .filter(route => route.technique === AtmosphereV2Core.Technique.SCREEN_SHAFTS)
@@ -4436,6 +4795,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             // raymarch again on every frame. Keep beauty's normalized texture
             // and depth mapping when the scene/camera signature still matches.
             const outputViewport = getPhysicalFramebufferViewport(renderer, preview);
+            this.getVolumeAmbient(state.scratch.ambient);
             if (!this.canReuseBeautyIntegration(state, preview, volumes, studio, settings)) {
                 this.resize(state, studio);
             }
@@ -4492,45 +4852,24 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 const useCachedBloom = !!settings.bloomMask && sameNormalFrame;
                 const useCachedNormal = !settings.bloomMask && !!this.settings.static_cache && sameNormalFrame;
                 if (!useCachedBloom && !useCachedNormal) {
-                    // The frame graph owns SceneDepth. Atmosphere consumes its
-                    // typed canonical resource first, then a compatible legacy
-                    // AO pair, and captures its own depth only as a final
-                    // fallback. Cube depth remains a separate helper/geometry
-                    // mask until the frame graph exposes that contract too.
-                    const canonicalDepth = this.getCanonicalSceneDepth(settings.frameContext, state);
-                    const sharedDepth = canonicalDepth
-                        ? null
-                        : this.findFreshSharedDepthSources(preview, state);
-                    const cachedDepth = state.lastDepthSignature === depthSignature
-                        ? state.lastDepthSources
-                        : null;
-                    let depthSources = null;
+                    const canonicalDepth = this.getCanonicalSceneDepth(settings.frameContext);
+                    const cachedDepth = state.lastDepthSignature === depthSignature ? state.lastDepthSources : null;
+                    let depthSources;
                     if (canonicalDepth) {
                         state.stats.canonicalDepthHits++;
-                        if (cachedDepth?.cubeDepth) {
-                            depthSources = {
-                                sceneDepth: this.settings.helper_mask
-                                    ? canonicalDepth.sceneDepth
-                                    : cachedDepth.cubeDepth,
-                                cubeDepth: cachedDepth.cubeDepth,
-                                source: 'canonical_plus_cached_geometry',
-                                frameId: canonicalDepth.frameId
-                            };
+                        if (!this.shouldMaskHelpers(studio)) {
+                            depthSources = canonicalDepth;
                         } else {
-                            depthSources = this.captureDepth(state, preview, {
-                                sceneDepth: canonicalDepth.sceneDepth,
-                                source: 'canonical_plus_geometry'
-                            });
-                            if (depthSources) depthSources.frameId = canonicalDepth.frameId;
+                            const helperDepth = cachedDepth
+                                ? cachedDepth.helperDepth
+                                : this.captureDepth(state, preview, { studio, sceneDepth: canonicalDepth.sceneDepth })?.helperDepth;
+                            depthSources = { ...canonicalDepth, helperDepth };
                         }
-                    } else if (sharedDepth) {
-                        state.stats.legacyDepthHits++;
-                        depthSources = sharedDepth;
-                    } else if (cachedDepth) {
+                    } else if (cachedDepth?.source === 'own_fallback') {
                         depthSources = cachedDepth;
                     } else {
                         state.stats.depthFallbackCaptures++;
-                        depthSources = this.captureDepth(state, preview, { source: 'own_fallback' });
+                        depthSources = this.captureDepth(state, preview, { studio });
                     }
                     if (!depthSources) return false;
                     state.lastDepthSources = depthSources;
@@ -4581,6 +4920,12 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                             state.temporalUniforms.uInverseProjection.value.copy(state.volumeUniforms.uInverseProjection.value);
                             state.temporalUniforms.uCameraWorld.value.copy(preview.camera.matrixWorld);
                             state.temporalUniforms.uPreviousViewProjection.value.copy(state.previousViewProjection);
+                            state.temporalUniforms.uPreviousInverseProjection.value.copy(state.previousInverseProjection);
+                            const { x, y, width, height } = projectedBounds.volumeRect;
+                            state.temporalUniforms.uCurrentRect.value.set(
+                                x / state.volumeWidth, y / state.volumeHeight,
+                                (x + width) / state.volumeWidth, (y + height) / state.volumeHeight
+                            );
                             state.temporalUniforms.uCheckerboard.value = checkerboardEnabled;
                             state.temporalUniforms.uCheckerboardPhase.value = state.volumeUniforms.uCheckerboardPhase.value;
                             const historyWeights = { stable: 0.9, balanced: 0.82, responsive: 0.58, off: 0 };
@@ -4613,6 +4958,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                                 preview.camera.projectionMatrix,
                                 preview.camera.matrixWorldInverse
                             );
+                            state.previousInverseProjection.copy(state.volumeUniforms.uInverseProjection.value);
                             state.previousCameraPosition.copy(state.scratch.cameraPosition);
                             state.previousCameraQuaternion.copy(state.scratch.quaternion);
                             state.previousCameraValid = true;
@@ -4702,7 +5048,8 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                     Blockbench.showQuickMessage?.(tr('lightflow_atmosphere.message.render_failed', 'Atmosphere disabled after a GPU render error'), 3200);
                 }
                 this.settings.enabled = false;
-                saveSettings(this.settings);
+                // A transient GPU error must not permanently overwrite the
+                // project's saved settings or the user's default preferences.
                 return false;
             } finally {
                 if (previousTarget) {
@@ -4770,7 +5117,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 }
                 let result;
                 try {
-                    manager.prepareSurfaceFog(this);
+                    manager.prepareSurfaceFog(this, { frameScoped: true });
                     result = originalRender.apply(this, arguments);
                     if (!hostOwnsPipeline && !this.lightflow_atmosphere_done) manager.composite(this);
                 } finally {
@@ -4791,6 +5138,18 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             activePreviews.forEach(preview => this.patchPreview(preview));
         }
     };
+
+    function normalizeVolumeCreativeValue(key, value) {
+        const field = VOLUME_CREATIVE_FIELDS[key];
+        if (field.type === 'color') {
+            const color = typeof value === 'string' ? hexToColorArray(value, field.default) : value;
+            return field.default.map((fallback, axis) => clamp(finite(color?.[axis], fallback), 0, 255));
+        }
+        if (field.type === 'vector') {
+            return field.default.map((fallback, axis) => clamp(finite(value?.[axis], fallback), field.min, field.max));
+        }
+        return clamp(finite(value, field.default), field.min, field.max);
+    }
 
     function sanitizeVolume(volume) {
         if (!volume) return volume;
@@ -4823,6 +5182,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         volume.wind_speed = clamp(finite(volume.wind_speed, 0), -8, 8);
         volume.ambient = clamp(finite(volume.ambient, 0.12), 0, 4);
         volume.shadow_fill = clamp(finite(volume.shadow_fill, 0.1), 0, 1);
+        for (const key in VOLUME_CREATIVE_FIELDS) volume[key] = normalizeVolumeCreativeValue(key, volume[key]);
         return volume;
     }
 
@@ -5033,9 +5393,9 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         const cancel=()=>finish(true);
         const key=event=>{if(drag&&event.key==='Escape'){stop(event);finish(true);}};
         document.addEventListener('pointerdown',down,true);document.addEventListener('pointermove',move,true);document.addEventListener('pointerup',up,true);document.addEventListener('pointercancel',cancel,true);document.addEventListener('keydown',key,true);window.addEventListener('blur',cancel);
-        const tool=new Tool('lightflow_god_ray_gizmos',{name:'lightflow_atmosphere.ui.ray_gizmos',icon:'control_camera',modes:['edit','render'],selectElements:false,condition:()=>!!(Modes.edit||Modes.render)&&!!GodRayElement?.selected?.some(ray=>ray.selected),onSelect(){GodRayElement.all.forEach(updateGodRayHelper);},onUnselect(){cancel();restoreStatus();GodRayElement?.all.forEach(updateGodRayHelper);}});
+        const tool=new Tool('lightflow_god_ray_gizmos',{name:'lightflow_atmosphere.ui.ray_gizmos',icon:'control_camera',modes:['edit','render'],selectElements:false,condition:()=>!!(Modes.edit||Modes.render)&&!!GodRayElement?.selected?.some(ray=>ray.selected),onSelect(){GodRayElement.all.forEach(element => updateGodRayHelper(element));},onUnselect(){cancel();restoreStatus();GodRayElement?.all.forEach(element => updateGodRayHelper(element));}});
         window.LightManagerUI?.removeToolbarAction?.(tool);
-        deletables.push(tool,Blockbench.on('unselect_project',cancel),Blockbench.on('select_project',cancel),Blockbench.on('update_selection',()=>{if(drag&&!drag.element.selected)cancel();GodRayElement?.all.forEach(updateGodRayHelper);}),{delete(){cancel();restoreStatus();document.removeEventListener('pointerdown',down,true);document.removeEventListener('pointermove',move,true);document.removeEventListener('pointerup',up,true);document.removeEventListener('pointercancel',cancel,true);document.removeEventListener('keydown',key,true);window.removeEventListener('blur',cancel);}});
+        deletables.push(tool,Blockbench.on('unselect_project',cancel),Blockbench.on('select_project',cancel),Blockbench.on('update_selection',()=>{if(drag&&!drag.element.selected)cancel();GodRayElement?.all.forEach(element => updateGodRayHelper(element));}),{delete(){cancel();restoreStatus();document.removeEventListener('pointerdown',down,true);document.removeEventListener('pointermove',move,true);document.removeEventListener('pointerup',up,true);document.removeEventListener('pointercancel',cancel,true);document.removeEventListener('keydown',key,true);window.removeEventListener('blur',cancel);}});
     }
 
     let godRayTab = 'look';
@@ -5099,7 +5459,9 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         if (changed) Undo.finishEdit('Edit God Ray');
         else Undo.cancelEdit(false);
     }
-    const godRayGroupsOpen = { color:false, finish:false, direction:false, softness:false, shadows:false, depth:false };
+    // One optional detail drawer per task. The beam's day-to-day controls
+    // remain editable immediately beneath the main task tabs.
+    const godRayGroupsOpen = { look_detail:false, shape_detail:false, light_detail:false };
     function godRayForm(element, dialog = false) {
         if (!element) return emptyEffectForm(GodRayElement, 'add_lightflow_god_ray', tr('lightflow_atmosphere.action.add_god_ray','Add God Ray'));
         const design = window.LightManagerUI.formDesign;
@@ -5108,9 +5470,8 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             _ray_search: design.search()
         };
         if (dialog) {delete form._ray_tab; delete form._ray_search;form.name={type:'text',label:'generic.name',value:element.name};form.enabled={type:'checkbox',label:'lightflow_atmosphere.field.enabled',value:element.enabled};}
-        else if(element.enabled===false)form._activate=effectAction(uiText('activate_effect'),'visibility',()=>{
-            Undo.initEdit({elements:[element]});element.extend({enabled:true,visibility:true});Undo.finishEdit(uiText('activate_effect'));syncGodRayPanel();requestPreviewRender();
-        });
+        else form.enabled=design.checkbox({label:'lightflow_atmosphere.field.enabled',value:element.enabled!==false,
+            onBefore:beginGodRayUndo,onAfter:finishGodRayUndo});
         const tabs = {
             look: ['intensity', 'opacity', 'color', 'end_color', 'gradient_curve', 'blend', 'bloom'],
             shape: ['length', 'width', 'end_width', 'taper', 'orientation', 'roll', 'edge_softness', 'fade_start', 'fade_end', 'falloff'],
@@ -5133,7 +5494,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                     : { '': uiText('ray_free_direction') };
                 if (key === 'light_uuid') {
                     for (const light of window.LightElement?.all || []) {
-                        if (['directional', 'spot'].includes(light.light_type)) options[light.uuid] = light.name;
+                        if (['directional', 'spot', 'point'].includes(light.light_type)) options[light.uuid] = light.name;
                     }
                     if (element.light_uuid && !options[element.light_uuid]) options[element.light_uuid] = uiText('ray_missing_light');
                 }
@@ -5148,20 +5509,30 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         }
         form._shadow_help = {
             panel_category_visible: dialog || godRayTab==='light',
-            type: 'info', text: tr('lightflow_god_ray.shadow_help', 'Light shadows require a linked Directional or Spot light with shadows enabled. The ray stays at its own position. No linked shadow map: scene occlusion only.')
+            type: 'info', text: tr('lightflow_god_ray.shadow_help', 'Light shadows require a linked Directional, Spot or Point light with shadows enabled. The ray stays at its own position. No linked shadow map: scene occlusion only.')
         };
         form.light_attached = {type:'checkbox',label:uiText('ray_attached'),value:element.light_attached,condition:result=>!!result.light_uuid,panel_category_visible:dialog||godRayTab==='light'};
         form._attachment_help = {type:'info',text:uiText('ray_attachment_help'),condition:result=>result.light_attached,panel_category_visible:dialog||godRayTab==='light'};
         // Keep the shared native control grammar, including slider transactions.
         const enhanced = identifyEffectControls(enhanceAtmosphereDialogForm(form));
         if (!dialog) {
+            const detailsLabel = tr('lightflow_atmosphere.panel.advanced', 'Advanced');
             const sections = {
-                look:[['intensity','opacity','color','end_color'],['color',uiText('ray_color_detail'),'gradient',['gradient_curve']],['finish',uiText('ray_compositing'),'flare',['blend','bloom']]],
-                shape:[['length','width','end_width','taper'],['direction',uiText('ray_plane'),'rotate_right',['orientation','roll']],['softness',uiText('ray_soft_edges'),'blur_on',['edge_softness','fade_start','fade_end','falloff']]],
-                light:[['light_uuid','light_attached','_attachment_help','inherit_color','occlusion'],['shadows',uiText('ray_shadow_detail'),'tonality',['shadow_strength','_shadow_help']],['depth',uiText('ray_camera_fade'),'distance',['near_fade','far_start','far_end']]]
+                look: [
+                    ['intensity','opacity','color','end_color','bloom'],
+                    ['look_detail',detailsLabel,'tune',['gradient_curve','blend']]
+                ],
+                shape: [
+                    ['length','width','end_width','taper'],
+                    ['shape_detail',detailsLabel,'tune',['orientation','roll','edge_softness','fade_start','fade_end','falloff']]
+                ],
+                light: [
+                    ['light_uuid','light_attached','_attachment_help','inherit_color','occlusion'],
+                    ['light_detail',detailsLabel,'tune',['shadow_strength','_shadow_help','near_fade','far_start','far_end']]
+                ]
             };
             const ordered = {_ray_tab:enhanced._ray_tab,_ray_search:enhanced._ray_search};
-            if (enhanced._activate) ordered._activate = enhanced._activate;
+            ordered.enabled = enhanced.enabled;
             for (const [category, groups] of Object.entries(sections)) {
                 for (const spec of groups) {
                     if (spec.length===4 && Array.isArray(spec[3])) {
@@ -5258,8 +5629,8 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             en['lightflow_god_ray.' + key] = field.label;
             es['lightflow_god_ray.' + key] = field.es;
         }
-        en['lightflow_god_ray.shadow_help'] = 'Light shadows require a linked Directional or Spot light with shadows enabled. The ray stays at its own position. No linked shadow map: scene occlusion only.';
-        es['lightflow_god_ray.shadow_help'] = 'Las sombras requieren una luz Directional o Spot vinculada, con sombras activadas. El rayo conserva su posición; sin mapa de sombras solo se usa la oclusión de la escena.';
+        en['lightflow_god_ray.shadow_help'] = 'Light shadows require a linked Directional, Spot or Point light with shadows enabled. The ray stays at its own position. No linked shadow map: scene occlusion only.';
+        es['lightflow_god_ray.shadow_help'] = 'Las sombras requieren una luz Directional, Spot o Point vinculada, con sombras activadas. El rayo conserva su posición; sin mapa de sombras solo se usa la oclusión de la escena.';
         Language.addTranslations('en', en); Language.addTranslations('es', es);
         allowAnimationModeInspection(GodRayElement);
         const reloadedGodRayElements = prepareReloadedAtmosphereElements(GodRayElement, 'lightflow_god_ray');
@@ -5327,9 +5698,9 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         rebuildReloadedAtmosphereElementPreviews(reloadedGodRayElements, godRayController);
         installGodRayGizmoControls();
         const createAttached = new Action('lightflow_god_ray_from_light', {name:'lightflow_atmosphere.ui.ray_from_light',icon:'lightflow:godray',category:'edit',
-            condition:()=>window.LightElement?.selected?.some(light=>['spot','directional'].includes(light.light_type)),
+            condition:()=>window.LightElement?.selected?.some(light=>['spot','directional','point'].includes(light.light_type)),
             click(){
-                const light=window.LightElement.selected.find(light=>['spot','directional'].includes(light.light_type));if(!light)return;
+                const light=window.LightElement.selected.find(light=>['spot','directional','point'].includes(light.light_type));if(!light)return;
                 Undo.initEdit({outliner:true,elements:[],selection:true});
                 const ray=new GodRayElement({name:light.name+' Ray',light_uuid:light.uuid,light_attached:true,position:[0,0,0],inherit_color:true,occlusion:light.has_shadow?'shadow':'scene'}).addTo(light).init();
                 light.isOpen=true;light.preview_controller.updateSelection(light);
@@ -5381,11 +5752,13 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             godRayUndo.changed = applyGodRayValues(godRayUndo.elements, result, keys) || godRayUndo.changed;
             if (direct) finishGodRayUndo();
         });
-        deletables.push(change, godRayPanel, window.LightManagerUI.addDesignedPanelStyles('lightflow_god_ray_properties', { row_padding: '3px 4px' }));
+        deletables.push(change, godRayPanel, window.LightManagerUI.addDesignedPanelStyles('lightflow_god_ray_properties', {
+            scrollbar_width: 4, row_padding: '3px 4px'
+        }));
         window.LightManagerUI.workspace?.register(godRayPanel);
         deletables.push(Blockbench.on('update_selection', syncGodRayPanel));
-        deletables.push(Blockbench.on('update_view', () => GodRayElement.all.forEach(updateGodRayHelper)));
-        const gizmos = () => GodRayElement.all.forEach(updateGodRayHelper);
+        deletables.push(Blockbench.on('update_view', () => GodRayElement.all.forEach(element => updateGodRayHelper(element))));
+        const gizmos = () => GodRayElement.all.forEach(element => updateGodRayHelper(element));
         window.addEventListener('lightflow_gizmo_visibility_changed', gizmos);
         deletables.push({ delete() { window.removeEventListener('lightflow_gizmo_visibility_changed', gizmos); } });
     }
@@ -5423,6 +5796,214 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         deletables.push({delete(){if(prototype.delete === remove) prototype.delete = previous;}});
     }
 
+    const PARTICLE_PROPERTY_CHANNELS = {
+        lightflow_particle_size: {property: 'particle_size', label: 'scene_scale', fallback: 1},
+        lightflow_particle_bloom: {property: 'particle_bloom', label: 'bloom', fallback: 0},
+        lightflow_particle_enabled: {property: 'enabled', label: 'particle_emission_enabled', fallback: 1}
+    };
+    const PARTICLE_VARIABLE_PREFIX = 'lightflow_particle_var:';
+
+    function particleVariableName(value) {
+        const name = String(value ?? '').trim().toLowerCase().replace(/^(?:v|variable)\./, '');
+        if (!/^[a-z_][a-z0-9_.]{0,63}$/.test(name) || name.endsWith('.') || name.includes('..') ||
+            ['__proto__', 'constructor', 'prototype'].includes(name) ||
+            /^(?:entity_scale|(?:emitter|particle)_(?:age|lifetime|random_[1-4]))$/.test(name)) return '';
+        return name;
+    }
+
+    function particleChannelDefinition(channel) {
+        if (typeof channel !== 'string') return null;
+        if (Object.hasOwn(PARTICLE_PROPERTY_CHANNELS, channel)) return PARTICLE_PROPERTY_CHANNELS[channel];
+        if (!channel.startsWith(PARTICLE_VARIABLE_PREFIX)) return null;
+        const variable = channel.slice(PARTICLE_VARIABLE_PREFIX.length);
+        return variable && particleVariableName(variable) === variable ? {variable} : null;
+    }
+
+    function particleChannelBase(element, definition) {
+        if (definition.variable) {
+            const variables = element?.particle_animation_variables;
+            return variables && Object.hasOwn(variables, definition.variable) ? finite(variables[definition.variable], 0) : 0;
+        }
+        return finite(element?.[definition.property], definition.fallback);
+    }
+
+    function particleAnimatedProperty(element, channel) {
+        return particleAnimatedValues.get(element.uuid)?.get(channel) ?? particleChannelBase(element, PARTICLE_PROPERTY_CHANNELS[channel]);
+    }
+
+    function sameParticleVariables(previous, current) {
+        if (previous === current) return true;
+        for (const [channel, value] of previous || []) {
+            if (channel.startsWith(PARTICLE_VARIABLE_PREFIX) && current?.get(channel) !== value) return false;
+        }
+        for (const [channel, value] of current || []) {
+            if (channel.startsWith(PARTICLE_VARIABLE_PREFIX) && previous?.get(channel) !== value) return false;
+        }
+        return true;
+    }
+
+    function registerParticleAnimator(ElementType) {
+        class ParticleAnimator extends BoneAnimator {
+            constructor(...args) {
+                super(...args);
+                this.particleChannels = {...BoneAnimator.prototype.channels};
+            }
+            get channels() { return this.particleChannels || BoneAnimator.prototype.channels; }
+            doRender() { return !!this.getGroup()?.mesh; }
+            prepareKeyframeChannel(channel, keys = []) {
+                if (Object.hasOwn(this.channels, channel)) return true;
+                const definition = particleChannelDefinition(channel);
+                if (!definition) return false;
+                const set = window.Vue?.set || ((object, key, value) => { object[key] = value; });
+                set(this, channel, keys);
+                set(this.muted, channel, this.muted[channel] ?? false);
+                set(this.particleChannels, channel, {
+                    name: definition.variable ? 'v.' + definition.variable : uiText(definition.label),
+                    mutable: true, transform: true, max_data_points: 2, lightflowScalar: true,
+                    defaultValue: animator => particleChannelBase(animator.getGroup(), definition)
+                });
+                return true;
+            }
+            addKeyframe(data, uuid) {
+                this.prepareKeyframeChannel(data.channel);
+                return super.addKeyframe(data, uuid);
+            }
+            createKeyframe(value, time, channel, undo, select) {
+                if (!this.prepareKeyframeChannel(channel)) return;
+                return super.createKeyframe(value, time, channel, undo, select);
+            }
+            fillValues(keyframe, value, allowExpression, round) {
+                const config = this.channels[keyframe.channel];
+                if (config?.lightflowScalar && value == null && !this[keyframe.channel].length) {
+                    value = config.defaultValue(this);
+                }
+                return super.fillValues(keyframe, value, allowExpression, round);
+            }
+            displayFrame(multiplier = 1) {
+                if (!atmosphereRuntimeLoaded) return;
+                super.displayFrame(multiplier);
+                const element = this.group;
+                if (!element?.mesh || !multiplier) return;
+                let values = particleAnimatedValues.get(this.uuid);
+                for (const channel in this.channels) {
+                    const config = this.channels[channel];
+                    if (!config.lightflowScalar || this.muted[channel] || !this[channel].length) continue;
+                    const value = this.interpolate(channel, false, 'x');
+                    if (!Number.isFinite(value)) continue;
+                    if (!values) particleAnimatedValues.set(this.uuid, values = new Map());
+                    const base = config.defaultValue(this);
+                    const previous = this.animation.override ? base : values.get(channel) ?? base;
+                    values.set(channel, previous + (value - base) * multiplier);
+                }
+            }
+        }
+        ParticleAnimator.prototype.type = 'lightflow_particle_animation';
+        ParticleAnimator.prototype.menu = new Menu('lightflow_particle_animator', [
+            {name: 'lightflow_atmosphere.ui.particle_add_property_key', icon: 'add', click: animator => editParticleVariable(animator.getGroup(), animator)},
+            {name: 'light_manager.scalar_animation.remove_track', icon: 'delete',
+                condition: animator => Object.values(animator.channels).some(channel => channel.lightflowScalar),
+                click: animator => window.LightflowScalarChannels?.selectChannelToRemove(animator)},
+            ...BoneAnimator.prototype.menu.structure
+        ]);
+        ElementType.animator = ParticleAnimator;
+
+        const upgrade = () => {
+            for (const element of ElementType.all) {
+                for (const animation of window.Project?.animations || []) {
+                    const previous = animation.animators[element.uuid];
+                    if (!previous || previous instanceof ParticleAnimator) continue;
+                    if (previous.type !== 'lightflow_inspection' && previous.type !== ParticleAnimator.prototype.type) continue;
+                    const channels = Object.keys(previous.channels);
+                    Object.setPrototypeOf(previous, ParticleAnimator.prototype);
+                    Vue.set(previous, 'particleChannels', {...BoneAnimator.prototype.channels});
+                    for (const channel of channels) previous.prepareKeyframeChannel(channel, previous[channel]);
+                }
+            }
+        };
+        return upgrade;
+    }
+
+    function editParticleVariable(element, animator = null) {
+        if (!element || element.locked) return;
+        const variables = element.particle_animation_variables || {};
+        const names = new Set(Object.keys(variables).filter(name => particleVariableName(name) === name));
+        const animators = animator ? [animator] : Animation.all.map(animation => animation.animators[element.uuid]).filter(Boolean);
+        for (const candidate of animators) {
+            for (const channel of Object.keys(candidate.channels)) {
+                const variable = particleChannelDefinition(channel)?.variable;
+                if (variable) names.add(variable);
+            }
+        }
+        const options = {};
+        if (animator) {
+            for (const [channel, definition] of Object.entries(PARTICLE_PROPERTY_CHANNELS)) options[channel] = uiText(definition.label);
+        }
+        for (const name of Array.from(names).sort()) options[PARTICLE_VARIABLE_PREFIX + name] = 'v.' + name;
+        options.new_variable = uiText('particle_new_variable');
+        const time = window.Timeline?.time;
+        let displayedVariable = 'new_variable';
+        let dialog;
+        dialog = showEffectDialog('lightflow_particle_variable', {
+            title: uiText(animator ? 'particle_add_property_key' : 'particle_define_variable'),
+            width: 400,
+            form: {
+                channel: window.LightManagerUI.formDesign.enum({label: uiText('particle_property'), options,
+                    value: animator ? Object.keys(options)[0] : 'new_variable'}),
+                variable: {type: 'text', label: uiText('particle_variable_name'), placeholder: 'v.density',
+                    condition: data => data.channel === 'new_variable'},
+                value: {type: 'number', label: uiText('particle_variable_value'), value: 0,
+                    condition: data => !animator || data.channel === 'new_variable'},
+                ...(!animator && names.size ? {remove: effectAction(uiText('particle_delete_variable'), 'delete', () => {
+                    const channel = dialog.form.getResult().channel;
+                    if (removeParticleVariable(element, channel)) dialog.cancel();
+                }, {condition: data => data.channel !== 'new_variable'})} : {})
+            },
+            onFormChange(result) {
+                if (animator || !dialog || result.channel === displayedVariable) return;
+                displayedVariable = result.channel;
+                const definition = particleChannelDefinition(result.channel);
+                dialog.form.form_data.value.setValue(definition ? particleChannelBase(element, definition) : 0);
+            },
+            onConfirm(result) {
+                if (!ParticleEffectElement?.all.includes(element) || (animator && animator.animation !== Animation.selected)) return;
+                const creating = result.channel === 'new_variable';
+                const name = creating ? particleVariableName(result.variable) : particleChannelDefinition(result.channel)?.variable;
+                if (creating ? !name || names.has(name) : !particleChannelDefinition(result.channel)) {
+                    Blockbench.showQuickMessage(uiText('particle_variable_invalid'));
+                    return false;
+                }
+                if (!animator) {
+                    Undo.initEdit({elements: [element]});
+                    element.extend({particle_animation_variables: {...variables, [name]: finite(result.value, 0)}});
+                    Undo.finishEdit(uiText('particle_define_variable'));
+                } else {
+                    const channel = creating ? PARTICLE_VARIABLE_PREFIX + name : result.channel;
+                    animator.addToTimeline();
+                    animator.createKeyframe(creating ? {data_points: [{x: finite(result.value, 0)}]} : null, time, channel, true);
+                    Animator.preview();
+                }
+                requestPreviewRender();
+            }
+        });
+        return dialog;
+    }
+
+    function removeParticleVariable(element, channel) {
+        const variable = particleChannelDefinition(channel)?.variable;
+        const removal = window.LightflowScalarChannels?.removeChannel;
+        if (!variable || !removal || !ParticleEffectElement.all.includes(element) || element.locked) return false;
+        const animations = Animation.all.filter(animation => animation.animators[element.uuid]?.channels[channel]?.lightflowScalar);
+        const variables = {...element.particle_animation_variables};
+        delete variables[variable];
+        Undo.initEdit({elements: [element], animations});
+        for (const animation of animations) removal(animation.animators[element.uuid], channel, false);
+        element.extend({particle_animation_variables: variables});
+        Undo.finishEdit(uiText('particle_delete_variable'));
+        if (Modes.animate) Animator.preview();
+        requestPreviewRender();
+        return true;
+    }
+
     function particleEffectRecordForIdentifier(identifier) {
         for (const record of particleEffectRecords.values()) {
             if (record.config.identifier === identifier) return record;
@@ -5446,6 +6027,10 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             particleEffectScene.global_options.scale = 16;
             particleEffectScene.global_options.loop_mode = 'auto';
             particleEffectScene.global_options.parent_mode = 'entity';
+            particleEffectScene.updateFacingRotation = function(camera) {
+                camera.updateWorldMatrix(true, false);
+                for (const emitter of this.emitters) prepareParticleDraw(emitter, camera);
+            };
             publishWindowBinding('LightflowParticleScene', particleEffectScene);
             publishWindowBinding('LightflowParticleBloom', { hasBloom: hasParticleBloom, renderBloomContribution: renderParticleBloomContribution });
         }
@@ -5457,6 +6042,160 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             canvasScene.add(particleEffectScene.space);
         }
         return particleEffectScene;
+    }
+
+    function prepareParticleDraw(emitter, camera) {
+        const particles = emitter.particles, first = particles[0]?.mesh;
+        // Event emitters that were created before Lightflow observed them still
+        // use the native path.
+        const state = emitter.lightflowParticleDraw;
+        if (!state) {
+            if (first) emitter.updateFacingRotation(camera);
+            return;
+        }
+        if (!first) {
+            if (state.mesh) state.mesh.visible = false;
+            return;
+        }
+        const parent = first.parent;
+        if (!parent?.visible) return;
+        parent.updateWorldMatrix(true, false);
+        // Keep small effects on the native path. Once allocated, retain the batch
+        // through the tail of a burst so it can be reused for the next burst.
+        const batchable = (state.batched || particles.length >= 8) && emitter.material.uniforms.materialType.value >= 0 &&
+            emitter.material.uniforms.materialType.value < 2;
+        if (state.drawRevision === state.revision && state.camera.equals(camera.matrixWorld) &&
+            state.parent.equals(parent.matrixWorld) && state.batchable === batchable) return;
+        state.drawRevision = state.revision;
+        state.camera.copy(camera.matrixWorld);
+        state.parent.copy(parent.matrixWorld);
+        state.batchable = batchable;
+        emitter.updateFacingRotation(camera);
+        if (batchable && updateParticleBatch(state, emitter, parent)) return;
+        if (state.mesh) state.mesh.visible = false;
+        for (const particle of particles) particle.mesh.visible = true;
+        setParticleDrawBatched(state, false);
+    }
+
+    function setParticleDrawBatched(state, batched) {
+        if (state.batched === batched) return;
+        state.batched = batched;
+        window.LightflowAmbientOcclusion?.invalidateSceneCache?.();
+    }
+
+    function updateParticleBatch(state, emitter, parent) {
+        const particles = emitter.particles;
+        for (const {mesh, geometry} of particles) {
+            if (mesh.parent !== parent || geometry.attributes.position.count !== 4 || geometry.index?.count !== 6) return false;
+        }
+        if (!state.mesh) {
+            state.mesh = new THREE.Mesh(new THREE.BufferGeometry(), emitter.material);
+            state.mesh.name = 'lightflow_particle_batch';
+            state.mesh.frustumCulled = false;
+            state.mesh.raycast = () => {};
+        }
+        const batch = state.mesh;
+        if (batch.parent !== parent) parent.add(batch);
+        if (particles.length > state.capacity) {
+            state.capacity = Math.max(16, state.capacity * 2, particles.length);
+            batch.geometry.dispose();
+            const geometry = batch.geometry = new THREE.BufferGeometry();
+            for (const [name, width] of [['position', 3], ['uv', 2], ['clr', 4]]) {
+                geometry.setAttribute(name, new THREE.BufferAttribute(new Float32Array(state.capacity * 4 * width), width)
+                    .setUsage(THREE.DynamicDrawUsage));
+            }
+            const indices = state.capacity * 4 <= 65536 ? new Uint16Array(state.capacity * 6) : new Uint32Array(state.capacity * 6);
+            const quad = particles[0].geometry.index.array;
+            for (let i = 0; i < state.capacity; i++) {
+                for (let j = 0; j < 6; j++) indices[i * 6 + j] = i * 4 + quad[j];
+            }
+            geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+        }
+        const {position, uv, clr} = batch.geometry.attributes;
+        let vertex = 0;
+        for (const {mesh, geometry} of particles) {
+            mesh.visible = false;
+            mesh.updateMatrix();
+            const local = geometry.attributes;
+            for (let i = 0; i < 4; i++, vertex++) {
+                state.vertex.fromBufferAttribute(local.position, i).applyMatrix4(mesh.matrix);
+                position.setXYZ(vertex, state.vertex.x, state.vertex.y, state.vertex.z);
+                uv.setXY(vertex, local.uv.getX(i), local.uv.getY(i));
+                clr.setXYZW(vertex, local.clr.getX(i), local.clr.getY(i), local.clr.getZ(i), local.clr.getW(i));
+            }
+        }
+        for (const attribute of [position, uv, clr]) {
+            if (attribute.clearUpdateRanges) {
+                attribute.clearUpdateRanges();
+                attribute.addUpdateRange(0, vertex * attribute.itemSize);
+            } else if (attribute.updateRange) {
+                attribute.updateRange.offset = 0;
+                attribute.updateRange.count = vertex * attribute.itemSize;
+            }
+            attribute.needsUpdate = true;
+        }
+        batch.geometry.setDrawRange(0, particles.length * 6);
+        batch.visible = true;
+        setParticleDrawBatched(state, true);
+        return true;
+    }
+
+    function observeParticleEmitter(emitter, record = null) {
+        if (emitter.lightflowParticleDraw) return;
+        const state = emitter.lightflowParticleDraw = {
+            revision: 0, drawRevision: -1, camera: new THREE.Matrix4(), parent: new THREE.Matrix4(),
+            capacity: 0, vertex: new THREE.Vector3(), batched: false
+        };
+        const dirty = () => { state.revision++; };
+        emitter.on('start', dirty);
+        emitter.on('stop', dirty);
+        emitter.on('ticked', dirty);
+        emitter.on('play_child_particle', ({child_emitter: child}) => {
+            if (!child) return;
+            observeParticleEmitter(child, record);
+            syncParticleEmitterBloom(child, particleEffectRecordForIdentifier(child.config.identifier)?.element);
+            setParticleEmitterVisibility(child, emitter.global_space.visible);
+        });
+        for (const child of emitter.child_emitters) observeParticleEmitter(child, record);
+        const oldVariableHandler = emitter.Molang?.variableHandler;
+        if (typeof oldVariableHandler === 'function') {
+            emitter.Molang.variableHandler = (key, params) => {
+                const variable = key.startsWith('variable.');
+                const element = record?.emitter === emitter ? record.element : null;
+                if (variable && element) {
+                    const name = key.slice(9);
+                    const animated = particleAnimatedValues.get(element.uuid)?.get(PARTICLE_VARIABLE_PREFIX + name);
+                    if (animated !== undefined) return animated;
+                    const variables = element.particle_animation_variables;
+                    if (variables && Object.hasOwn(variables, name)) return finite(variables[name], 0);
+                }
+                const value = oldVariableHandler.call(emitter, key, params);
+                if (value !== undefined) return value;
+                const globalValue = window.Animator?.MolangParser?.variableHandler?.(key, params);
+                if (variable && record) {
+                    const inputs = record.globalVariables ||= new Map();
+                    const input = inputs.get(key);
+                    if (input) {
+                        input.params = params;
+                        input.value = globalValue;
+                    } else inputs.set(key, {params, value: globalValue});
+                }
+                return globalValue;
+            };
+        }
+        const originalSpawn = emitter.spawnParticles;
+        emitter.spawnParticles = function(...args) {
+            const result = originalSpawn.apply(this, args);
+            if (result > 0) dirty();
+            return result;
+        };
+        const originalDelete = emitter.delete;
+        emitter.delete = function(...args) {
+            state.mesh?.removeFromParent();
+            state.mesh?.geometry.dispose();
+            state.mesh = null;
+            return originalDelete.apply(this, args);
+        };
     }
 
     function ensureParticleBloomMaterial(emitter) {
@@ -5498,13 +6237,13 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         // Wintersky changes its meshes outside Blockbench's element events.
         // Refresh native MRT routing only when that topology changes; otherwise
         // a newly spawned single-output shader can inherit MRT draw buffers.
-        let particleMeshes = new Set();
+        let particleMeshes = [];
         const syncTopology = () => {
-            const next = new Set((emitter.particles || []).map(particle => particle.mesh));
-            if (next.size !== particleMeshes.size || [...next].some(mesh => !particleMeshes.has(mesh))) {
-                particleMeshes = next;
-                window.LightflowAmbientOcclusion?.invalidateSceneCache?.();
-            }
+            if (emitter.lightflowParticleDraw?.batched) return;
+            const particles = emitter.particles || [];
+            if (particles.length === particleMeshes.length && particles.every((particle, index) => particle.mesh === particleMeshes[index])) return;
+            particleMeshes = particles.map(particle => particle.mesh);
+            window.LightflowAmbientOcclusion?.invalidateSceneCache?.();
         };
         const originalSpawn = emitter.spawnParticles;
         if (typeof originalSpawn === 'function') emitter.spawnParticles = function(...args) {
@@ -5517,7 +6256,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         emitter.delete = function(...args) {
             if (!disposed) {
                 emitter.removeEventListener?.('ticked', syncTopology);
-                particleMeshes.clear();
+                particleMeshes.length = 0;
                 bloomMaterial.dispose(); disposed = true;
                 window.LightflowAmbientOcclusion?.invalidateSceneCache?.();
             }
@@ -5578,12 +6317,12 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         }
     }
 
-    function syncParticleEmitterBloom(emitter, element) {
+    function syncParticleEmitterBloom(emitter, element, strength = finite(element?.particle_bloom, 0)) {
         const bloomMaterial = ensureParticleBloomMaterial(emitter);
         if (bloomMaterial) {
             emitter.material.depthWrite = emitter.material.uniforms.materialType.value < 2;
             bloomMaterial.depthWrite = emitter.material.depthWrite;
-            bloomMaterial.uniforms.uBloom.value = Math.max(0, finite(element?.particle_bloom, 0));
+            bloomMaterial.uniforms.uBloom.value = Math.max(0, strength);
             bloomMaterial.side = emitter.material.side;
             emitter.material.userData.lightflowParticleBloom = bloomMaterial.uniforms.uBloom.value;
         }
@@ -5601,12 +6340,20 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         record.config?.texture?.dispose?.();
         if (record.config?.identifier && particleEffectScene?.child_configs) {
             const childConfig = particleEffectScene.child_configs[record.config.identifier];
-            if (childConfig) retiredParticleConfigs.add(childConfig);
+            if (childConfig && childConfig !== record.config) {
+                retiredParticleConfigs.add(childConfig);
+                while (retiredParticleConfigs.size > MAX_RETIRED_PARTICLE_CONFIGS) {
+                    const oldest = retiredParticleConfigs.values().next().value;
+                    retiredParticleConfigs.delete(oldest);
+                    oldest.texture?.dispose?.();
+                }
+            }
             delete particleEffectScene.child_configs[record.config.identifier];
         }
     }
 
     function clearParticleEffects() {
+        particleAnimatedValues.clear();
         for (const uuid of particleEffectRecords.keys()) releaseParticleEffect(uuid);
         for (const config of Object.values(particleEffectScene?.child_configs || {})) retiredParticleConfigs.add(config);
         for (const config of retiredParticleConfigs) config.texture?.dispose?.();
@@ -5622,22 +6369,27 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
     }
 
     function syncParticleEffect(element) {
-        if (!element?.mesh || !element.particle_json) {
+        const node = element?.mesh;
+        if (!node || !element.particle_json) {
             if (element?.uuid) releaseParticleEffect(element.uuid);
             return;
         }
-        const scene = ensureParticleEffectScene();
-        if (!scene) return;
         let record = particleEffectRecords.get(element.uuid);
         if (record && (record.json !== element.particle_json || record.path !== element.particle_path ||
-            record.texture !== element.particle_texture || record.node !== element.mesh)) {
+            record.texture !== element.particle_texture || record.node !== node)) {
             releaseParticleEffect(element.uuid);
             record = null;
         }
+        if (invalidParticleSources.get(element) === element.particle_json) return;
+        const scene = particleEffectScene || ensureParticleEffectScene();
+        if (!scene) return;
         if (!record) {
             try {
                 const json = JSON.parse(element.particle_json);
-                if (!json?.particle_effect) return;
+                if (!json?.particle_effect) {
+                    invalidParticleSources.set(element, element.particle_json);
+                    return;
+                }
                 const config = new window.Wintersky.Config(scene, json, { path: element.particle_path || '' });
                 const textureSource = getParticlePreviewTexture(element, json);
                 if (textureSource) {
@@ -5645,38 +6397,108 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                     config.updateTexture();
                 }
                 const emitter = new window.Wintersky.Emitter(scene, config);
-                ensureParticleBloomMaterial(emitter);
-                const oldVariableHandler = emitter.Molang?.variableHandler;
-                if (typeof oldVariableHandler === 'function') {
-                    emitter.Molang.variableHandler = (key, params) => {
-                        const value = oldVariableHandler.call(emitter, key, params);
-                        return value !== undefined ? value : window.Animator?.MolangParser?.variableHandler?.(key);
-                    };
-                }
                 emitter.parent_mode = 'entity';
                 record = { json: element.particle_json, path: element.particle_path,
-                    texture: element.particle_texture, node: element.mesh, element, config, emitter,
+                    texture: element.particle_texture, node, element, config, emitter,
+                    matrix: new THREE.Matrix4(), position: new THREE.Vector3(),
+                    rotation: new THREE.Quaternion(), scale: new THREE.Vector3(),
                     previewTime: null, previewAge: null, valid:!!json?.particle_effect?.components };
+                observeParticleEmitter(emitter, record);
+                ensureParticleBloomMaterial(emitter);
                 particleEffectRecords.set(element.uuid, record);
+                invalidParticleSources.delete(element);
             } catch (error) {
+                invalidParticleSources.set(element, element.particle_json);
                 console.warn('[Lightflow Atmosphere] Invalid Bedrock particle effect.', error);
                 return;
             }
         }
-        const node = element.mesh;
         const emitter = record.emitter;
         // A one-shot Bedrock effect should still be useful as a looping art
         // element. Keep the source JSON intact and override only the preview
         // emitter's loop mode; artists can switch back to native behavior.
         const loopMode=['once','looping'].includes(element.particle_preview_mode) ? element.particle_preview_mode : element.particle_loop ? 'looping' : 'auto';
-        if(emitter.loop_mode!==loopMode)record.previewTime=null;
-        emitter.loop_mode=loopMode;
-        node.updateWorldMatrix?.(true, false);
-        const worldPosition = node.getWorldPosition(new THREE.Vector3());
-        const worldRotation = node.getWorldQuaternion(new THREE.Quaternion());
-        const worldScale = node.getWorldScale(new THREE.Vector3());
-        const size = Math.max(0.01, finite(element.particle_size, 1));
-        syncParticleEmitterBloom(emitter, element);
+        if (emitter.loop_mode !== loopMode) {
+            record.previewTime = null;
+            emitter.loop_mode = loopMode;
+        }
+        const size = Math.max(0.01, particleAnimatedProperty(element, 'lightflow_particle_size'));
+        const bloom = particleAnimatedProperty(element, 'lightflow_particle_bloom');
+        if (record.bloom !== bloom) {
+            record.bloom = bloom;
+            syncParticleEmitterBloom(emitter, element, bloom);
+            for (const child of scene.emitters) {
+                if (child.parent_emitter && child.config.identifier === record.config.identifier) syncParticleEmitterBloom(child, element, bloom);
+            }
+        }
+        node.updateWorldMatrix(true, false);
+        if (record.size !== size || !record.matrix.equals(node.matrixWorld)) {
+            record.size = size;
+            record.matrix.copy(node.matrixWorld).decompose(record.position, record.rotation, record.scale);
+            syncParticleTransform(record, scene);
+        }
+        let visible = particleAnimatedProperty(element, 'lightflow_particle_enabled') >= .5;
+        for (let parent = element; visible && parent && parent !== 'root'; parent = parent.parent) {
+            visible = parent.visibility !== false;
+        }
+        if (record.visible !== visible) {
+            record.visible = visible;
+            setParticleEmitterVisibility(emitter, visible);
+        }
+        const cinematic = window.LightflowCinematicFrameContext;
+        const offline = cinematic?.source === 'lightflow_cinematic_render';
+        const scrubbing = window.Modes?.animate && !window.Timeline?.playing && window.Animation?.selected &&
+            particleAnimatedValues.has(element.uuid);
+        const playing = !offline && !scrubbing && visible && element.particle_playing !== false;
+        if (playing && !emitter.tick_interval) emitter.playLoop();
+        // Pausing a timer preserves the native simulation and its event children.
+        if (!playing && emitter.tick_interval) emitter.toggleLoop();
+        if (!playing && visible && !window.LightManagerStudioRenderSession) {
+            const previewTime = Math.max(0, element.particle_playing === false ? finite(element.particle_time, 0)
+                : offline ? finite(cinematic.timeSeconds, 0) : scrubbing ? finite(Timeline.time, 0) : finite(element.particle_time, 0));
+            const values = particleAnimatedValues.get(element.uuid);
+            const defaults = element.particle_animation_variables;
+            const refreshPose = record.previewTime === previewTime &&
+                (record.previewDefaults !== defaults || !sameParticleVariables(record.previewValues, values) ||
+                    particleGlobalVariablesChanged(record));
+            if (refreshPose) {
+                record.globalVariables?.clear();
+                emitter.stop(true).start();
+            }
+            if (refreshPose || record.previewTime !== previewTime || record.previewAge !== emitter.age) {
+                emitter.jumpTo(previewTime);
+                record.previewTime = previewTime;
+                record.previewAge = emitter.age;
+            }
+            record.previewDefaults = defaults;
+            record.previewValues = values;
+        } else if (playing || !visible) {
+            record.previewTime = record.previewAge = null;
+        }
+        const showHelper = canShowVolumeGizmos() && element.visibility !== false;
+        if (record.showHelper !== showHelper || record.helperSelected !== !!element.selected || record.helperSize !== size) {
+            record.showHelper = showHelper;
+            record.helperSelected = !!element.selected;
+            record.helperSize = size;
+            updateParticleHelper(element, record);
+        }
+    }
+
+    function particleGlobalVariablesChanged(record) {
+        for (const [key, {params, value}] of record.globalVariables || []) {
+            if (!Object.is(value, window.Animator?.MolangParser?.variableHandler?.(key, params))) return true;
+        }
+        return false;
+    }
+
+    function setParticleEmitterVisibility(emitter, visible) {
+        emitter.global_space.visible = visible;
+        emitter.local_space.visible = visible;
+        for (const child of emitter.child_emitters) setParticleEmitterVisibility(child, visible);
+    }
+
+    function syncParticleTransform(record, scene) {
+        const {node, emitter, position, rotation, scale, size} = record;
         // Wintersky adds local_space's world origin to global particles and
         // again when spawning a child event. Parenting local_space to this
         // element for global effects applies the element position twice (or
@@ -5690,39 +6512,13 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         } else {
             if (emitter.local_space.parent !== scene.space) scene.space.add(emitter.local_space);
             emitter.local_space.position.set(0, 0, 0);
-            emitter.local_space.quaternion.copy(worldRotation);
+            emitter.local_space.quaternion.copy(rotation);
             emitter.local_space.scale.set(1, 1, 1);
         }
-        emitter.global_space.position.copy(worldPosition);
-        if (emitter.config.space_local_position) emitter.global_space.quaternion.copy(worldRotation);
+        emitter.global_space.position.copy(position);
+        if (emitter.config.space_local_position) emitter.global_space.quaternion.copy(rotation);
         else emitter.global_space.quaternion.identity();
-        emitter.global_space.scale.set(16 * size * worldScale.x, 16 * size * worldScale.y, 16 * size * worldScale.z);
-        const visible = element.visibility !== false && element.enabled !== false;
-        emitter.global_space.visible = visible;
-        emitter.local_space.visible = visible;
-        const cinematic = window.LightflowCinematicFrameContext;
-        const offline = cinematic?.source === 'lightflow_cinematic_render';
-        const playing = !offline && element.enabled !== false && element.particle_playing !== false;
-        if (playing && !emitter.tick_interval) emitter.playLoop();
-        // toggleLoop pauses in place; stopLoop clears particles and age while
-        // leaving view_age intact, which breaks jumpTo at the saved pose.
-        if (!playing && emitter.tick_interval) emitter.toggleLoop();
-        if (!playing && element.enabled !== false) {
-            const previewTime = Math.max(0, offline && element.particle_playing !== false
-                ? finite(cinematic.timeSeconds, 0) : finite(element.particle_time, 0));
-            // Undo/Redo and native emitter resets can rewind age without
-            // changing the requested still-frame time.
-            if (record.previewTime !== previewTime ||
-                Math.abs(finite(emitter.age, -1) - finite(record.previewAge, -2)) > 0.0001) {
-                emitter.jumpTo(previewTime);
-                record.previewTime = previewTime;
-                record.previewAge = emitter.age;
-            }
-        } else {
-            record.previewTime = null;
-            record.previewAge = null;
-        }
-        updateParticleHelper(element, record);
+        emitter.global_space.scale.set(16 * size * scale.x, 16 * size * scale.y, 16 * size * scale.z);
     }
 
     function updateParticleHelper(element, record, camera = Preview.selected?.camera || window.main_preview?.camera, renderer) {
@@ -5732,6 +6528,11 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         const marker=show && (workspace?.helperVisible({selected:!!element.selected,kind:'marker'})??true);
         const bounds=show && (workspace?.helperVisible({selected:!!element.selected})??true);
         node.particleOrigin.visible=marker;
+        node.particleSelection.visible=marker;
+        if (!marker && !bounds) {
+            node.particleGizmo.visible = false;
+            return;
+        }
         const origin=node.getWorldPosition(new THREE.Vector3()), preview=Preview.all.find(p=>p.camera===camera)||Preview.selected;
         const scale=window.LightManagerUI?.gizmos?.screenWorldSize?.(node, camera, renderer, 6)
             ?? Math.max(.08,(preview?.calculateControlScale?.(origin)||.5)*.65);
@@ -5754,10 +6555,11 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         if(dynamic)return;
         node.particleGizmo.material.color.set(element.selected?0x5ba7ff:0x78ddff);node.particleGizmo.material.opacity=element.selected ? .65 : .18;
         window.LightManagerUI?.gizmos?.style?.(node.particleGizmo, 'outline', !!element.selected);
-        const signature=JSON.stringify([mode,offset,half,radius,config?.emitter_shape_plane_normal,element.particle_size,element.selected,mode==='point'?scale:0]);
+        const size = particleAnimatedProperty(element, 'lightflow_particle_size');
+        const signature=JSON.stringify([mode,offset,half,radius,config?.emitter_shape_plane_normal,size,element.selected,mode==='point'?scale:0]);
         if(node.userData.particleShapeSignature===signature)return;
         node.userData.particleShapeSignature=signature;
-        const unit=16*Math.max(.01,finite(element.particle_size,1)),center=new THREE.Vector3().fromArray(offset).multiplyScalar(unit),points=[];
+        const unit=16*Math.max(.01,size),center=new THREE.Vector3().fromArray(offset).multiplyScalar(unit),points=[];
         const line=(a,b)=>points.push(a,b);
         if(mode==='box'||mode==='entity_aabb') {
             // The imported entity AABB is unavailable in a standalone scene.
@@ -5785,12 +6587,20 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         points.forEach((point,index)=>attribute.setXYZ(index,point.x,point.y,point.z));attribute.needsUpdate=true;node.particleGizmo.geometry.computeBoundingSphere();
     }
 
-    function syncParticleEffects(camera) {
+    function syncParticleEffects(camera, discover = false) {
         if (!ParticleEffectElement) return;
-        const elements = ParticleEffectElement.all || [];
-        const active = new Set(elements.map(element => element.uuid));
-        for (const uuid of particleEffectRecords.keys()) if (!active.has(uuid)) releaseParticleEffect(uuid);
-        elements.forEach(syncParticleEffect);
+        if (discover) {
+            for (const element of ParticleEffectElement.all) syncParticleEffect(element);
+        }
+        if (!particleEffectRecords.size) return;
+        if (particleEffectScene?.space.parent !== window.Canvas?.scene) ensureParticleEffectScene();
+        if (particleEffectScene && window.settings?.particle_tick_rate?.value) {
+            particleEffectScene.global_options.tick_rate = window.settings.particle_tick_rate.value;
+        }
+        for (const [uuid, record] of particleEffectRecords) {
+            if (OutlinerNode.uuids[uuid] !== record.element) releaseParticleEffect(uuid);
+            else if (!discover) syncParticleEffect(record.element);
+        }
         if (camera) particleEffectScene?.updateFacingRotation?.(camera);
     }
 
@@ -6122,7 +6932,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
     }
 
     let particleSourceOpen = false;
-    let particleDistributionOpen=false,particleMotionOpen=false,particleBehaviourOpen=false;
+    let particleMotionOpen=false,particleBehaviourOpen=false;
     let particlePanelUndo = null;
     function beginParticlePanelUndo() {
         if (particlePanelUndo || particlePanelSyncing) return false;
@@ -6150,9 +6960,13 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             options: { emission: { name: uiText('emission') }, look: { name: uiText('look') }, playback: { name: uiText('preview') } } });
         const form = { _particle_tab: tabs, _particle_search:design.search(),
             _setup:effectAction('','auto_awesome',event=>particlePresetMenu(element,event),{semantic_button:false,aria_label:uiText('particle_setup'),description:uiText('particle_setup')}) };
-        if(element.enabled===false)form._activate=effectAction(uiText('activate_effect'),'visibility',()=>{
-            Undo.initEdit({elements:[element]});element.extend({enabled:true,visibility:true});Undo.finishEdit(uiText('activate_effect'));syncParticleEffect(element);syncParticlePanel();requestPreviewRender();
-        });
+        form.enabled=design.checkbox({label:'lightflow_atmosphere.field.enabled',value:element.enabled!==false,
+            onBefore:beginParticlePanelUndo,onAfter() {
+                finishParticlePanelUndo();
+                // The disabled-state message is derived when the form is built.
+                // Rebuild after the checkbox has committed its Undo transaction.
+                setTimeout(syncParticlePanel, 0);
+            }});
         const { json, values } = particleJSONControls(element);
         const slider = (key, label, min, max, step, value, allow_higher=false) => ({type:'combo_slider', full_track:true, label, min,max,step,value,allow_higher, onBefore:beginParticlePanelUndo,onAfter:finishParticlePanelUndo});
         if (!json?.particle_effect?.components) form._invalid = {type:'bar_display',paragraph:true,expand:true,icon:'warning',color:'var(--color-warning)',value:uiText('invalid_json')};
@@ -6180,18 +6994,20 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 if (Object.prototype.hasOwnProperty.call(values, key)) form[key] = slider(key,label,min,max,step,values[key],true);
             }
             form._emission_help = {type:'bar_display',paragraph:true,expand:true,font_size:'12px',color:'var(--color-subtle_text)',value:uiText('numeric_help'),condition:()=>!['spawn_rate','lifetime','speed'].every(key=>values[key]!==undefined)};
+            // Shape belongs to the first emission workflow, not inside a
+            // separate drawer that must be opened before every adjustment.
+            const shapeOptions={point:uiText('emitter_point'),box:uiText('emitter_box'),sphere:uiText('emitter_sphere')};
+            if(!shapeOptions[values.emitter_shape])shapeOptions[values.emitter_shape]=values.emitter_shape;
+            form.emitter_shape=design.enum({label:uiText('emitter_shape'),value:values.emitter_shape,options:shapeOptions});
+            if(values.emitter_dimensions)form.emitter_dimensions=design.vector({label:uiText('emitter_size'),value:values.emitter_dimensions,dimensions:3,min:.001,step:.1,onBefore:beginParticlePanelUndo,onAfter:finishParticlePanelUndo,condition:result=>result.emitter_shape!=='point'});
+            if(values.emitter_radius!==undefined)form.emitter_radius={...slider('emitter_radius',uiText('emitter_radius'),.01,20,.1,values.emitter_radius,true),condition:result=>result.emitter_shape==='sphere'};
             form._behaviour=design.group({label:uiText('behaviour'),label_icon:'repeat',value:particleBehaviourOpen,condition:()=>!!json?.particle_effect?.components});
             const behaviourVisible=result=>!!json?.particle_effect?.components&&result._behaviour===true;
             if(values.max_particles!==undefined)form.max_particles={...slider('max_particles',uiText('particle_limit'),1,500,1,values.max_particles,true),condition:behaviourVisible};
             form.emitter_cycle=design.enum({label:uiText('cycle'),value:values.emitter_cycle,options:{once:uiText('cycle_once'),looping:uiText('cycle_loop'),expression:uiText('cycle_expression')},condition:behaviourVisible});
             for(const[key,label,min]of[['active_time','duration',.01],['sleep_time','sleep_time',0]])if(values[key]!==undefined)form[key]={...slider(key,uiText(label),min,10,.1,values[key],true),condition:behaviourVisible};
             form._variables=effectAction(uiText('variables'),'functions',()=>editParticleExpressions(element),{condition:behaviourVisible});
-            form._distribution=design.group({label:uiText('particle_distribution'),label_icon:'select_all',value:particleDistributionOpen});
-            const shapeOptions={point:uiText('emitter_point'),box:uiText('emitter_box'),sphere:uiText('emitter_sphere')};
-            if(!shapeOptions[values.emitter_shape])shapeOptions[values.emitter_shape]=values.emitter_shape;
-            form.emitter_shape=design.enum({label:uiText('emitter_shape'),value:values.emitter_shape,options:shapeOptions,condition:result=>result._distribution===true});
-            if(values.emitter_dimensions)form.emitter_dimensions=design.vector({label:uiText('emitter_size'),value:values.emitter_dimensions,dimensions:3,min:.001,step:.1,onBefore:beginParticlePanelUndo,onAfter:finishParticlePanelUndo,condition:result=>result._distribution===true});
-            if(values.emitter_radius!==undefined)form.emitter_radius={...slider('emitter_radius',uiText('emitter_radius'),.01,20,.1,values.emitter_radius,true),condition:result=>result._distribution===true};
+            form._define_variable = effectAction(uiText('particle_define_variable'), 'add', () => editParticleVariable(element), {condition: behaviourVisible});
             form._motion=design.group({label:uiText('particle_motion'),label_icon:'air',value:particleMotionOpen});
             if(values.acceleration)form.acceleration=design.vector({label:uiText('acceleration'),value:values.acceleration,dimensions:3,step:.1,onBefore:beginParticlePanelUndo,onAfter:finishParticlePanelUndo,condition:result=>result._motion===true});
             if(values.drag!==undefined)form.drag={...slider('drag',uiText('drag'),0,5,.1,values.drag,true),condition:result=>result._motion===true};
@@ -6207,9 +7023,15 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             if (values.color) form.color = design.color({label:uiText('tint'),value:values.color,onBefore:beginParticlePanelUndo,onAfter:finishParticlePanelUndo});
             form.particle_bloom = slider('particle_bloom',uiText('bloom'),0,8,.1,element.particle_bloom);
         }
-        const categories = {playback:['_play','_restart','particle_time','particle_loop','_playback_help'],emission:['spawn_rate','max_particles','lifetime','speed','_emission_help','_behaviour','emitter_cycle','active_time','sleep_time','_variables','_distribution','emitter_shape','emitter_dimensions','emitter_radius','_motion','acceleration','drag'],look:['particle_texture','particle_size','particle_bloom','size_x','size_y','color']};
+        const categories = {
+            playback:['_play','_restart','particle_time','particle_loop','_playback_help'],
+            emission:['spawn_rate','lifetime','speed','emitter_shape','emitter_dimensions','emitter_radius',
+                '_emission_help','_behaviour','max_particles','emitter_cycle','active_time','sleep_time',
+                '_variables','_define_variable','_motion','acceleration','drag'],
+            look:['particle_texture','particle_size','size_x','size_y','color','particle_bloom']
+        };
         Object.entries(categories).forEach(([category,keys])=>keys.forEach(key=>{if(form[key])form[key].panel_category_visible=category===particlePanelTab;}));
-        form._particle_source = design.group({label:uiText('source'),label_icon:'code',value:particleSourceOpen});
+        form._particle_source = design.group({label:uiText('source'),label_icon:'code',value:particleSourceOpen,panel_category_visible:particlePanelTab==='emission'});
         const sourceVisible = result=>result._particle_source===true;
         form._source_info = {type:'bar_display',paragraph:true,expand:true,font_size:'12px',color:'var(--color-subtle_text)',value:json?.particle_effect?.description?.identifier || uiText('invalid_json'),condition:sourceVisible};
         form._json = effectAction(uiText('edit_json'),'code',()=>editParticleJSON(element),{condition:sourceVisible});
@@ -6220,6 +7042,15 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         for (const [index, identifier] of particleChildIdentifiers(json).entries()) {
             const child = particleEffectRecordForIdentifier(identifier)?.element;
             form['_child_'+index] = effectAction((child?uiText('select_child'):uiText('import_child'))+': '+identifier,'account_tree',()=>child?child.select():importParticleJSON(),{condition:sourceVisible});
+        }
+        // Source operations are reachable from Emission; they do not repeat
+        // beneath Appearance and Preview when the user switches tasks.
+        for (const key of Object.keys(form)) {
+            if (key === '_particle_source' || key === '_source_info' || key === '_json' ||
+                key === '_snowstorm' || key === '_export' || key === '_roundtrip_help' ||
+                key === '_replace' || key.startsWith('_child_')) {
+                form[key].panel_category_visible = particlePanelTab === 'emission';
+            }
         }
         return identifyEffectControls(form);
     }
@@ -6252,7 +7083,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             extend(data) {
                 for (const prop of Object.values(LightflowParticleEffectElement.properties)) prop.merge(this, data);
                 this.sanitizeName();
-                if (particleEffectRecords.get(this.uuid)?.element === this) syncParticleEffect(this);
+                if (OutlinerNode.uuids[this.uuid] === this) syncParticleEffect(this);
                 return this;
             }
             getUndoCopy() { const copy = new LightflowParticleEffectElement(this, this.uuid); delete copy.parent; return copy; }
@@ -6282,11 +7113,11 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             ['export', 'boolean', true], ['locked', 'boolean', false], ['particle_size', 'number', 1],
             ['particle_playing', 'boolean', true], ['particle_loop', 'boolean', true], ['particle_time', 'number', 0.5],
             ['particle_preview_mode','string','auto'],
-            ['particle_bloom', 'number', 0],
+            ['particle_bloom', 'number', 0], ['particle_animation_variables', 'object', {}],
             ['particle_json', 'string', ''], ['particle_path', 'string', ''], ['particle_texture', 'string', '']]) {
             deletables.push(new Property(ParticleEffectElement, type, key, { default: value }));
         }
-        allowAnimationModeInspection(ParticleEffectElement);
+        const upgradeParticleAnimators = registerParticleAnimator(ParticleEffectElement);
         const reloadedParticleElements = prepareReloadedAtmosphereElements(ParticleEffectElement, 'lightflow_particle_effect');
         OutlinerElement.registerType(ParticleEffectElement, 'lightflow_particle_effect');
         publishWindowBinding('LightflowParticleEffectElement', ParticleEffectElement);
@@ -6367,6 +7198,9 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             },
             updateTransform(element) {
                 NodePreviewController.prototype.updateTransform.call(this, element);
+                const node = element.mesh;
+                (node.fix_position ||= new THREE.Vector3()).copy(node.position);
+                (node.fix_rotation ||= new THREE.Euler()).copy(node.rotation);
                 syncParticleEffect(element);
                 requestPreviewRender();
                 this.dispatchEvent('update_transform', { element });
@@ -6385,6 +7219,32 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             updateSelection(element) { syncParticleEffect(element); this.dispatchEvent('update_selection', { element }); }
         });
         rebuildReloadedAtmosphereElementPreviews(reloadedParticleElements, particleEffectController);
+        upgradeParticleAnimators();
+        const propertyKey = new Action('lightflow_particle_property_key', {
+            name: 'lightflow_atmosphere.ui.particle_add_property_key',
+            icon: 'add',
+            category: 'animation',
+            condition: () => !!Modes.animate && !!Animation.selected &&
+                ParticleEffectElement.selected.length === 1 && !ParticleEffectElement.selected[0].locked,
+            click() {
+                const element = ParticleEffectElement.selected[0];
+                const animator = element && Animation.selected?.getBoneAnimator(element);
+                if (animator) editParticleVariable(element, animator);
+            }
+        });
+        deletables.push(propertyKey,
+            Blockbench.on('select_project', upgradeParticleAnimators),
+            Blockbench.on('display_default_pose', () => particleAnimatedValues.clear()),
+            Blockbench.on('display_animation_frame', () => syncParticleEffects()),
+            Blockbench.on('select_mode', () => {
+                if (Modes.animate) return;
+                particleAnimatedValues.clear();
+                for (const element of ParticleEffectElement.all) {
+                    if (!element.mesh) continue;
+                    element.mesh.scale.setScalar(1);
+                    particleEffectController.updateTransform(element);
+                }
+            }));
         const addAction = new Action('lightflow_particle_import', { name: 'lightflow_atmosphere.action.add_particle',
             icon: 'ac_unit', category: 'edit', condition: () => !!window.Project && !!(Modes.edit || Modes.render), click: () => importParticleJSON() });
         deletables.push(Blockbench.on('lightflow_resource_packs_changed', event => {
@@ -6424,7 +7284,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         const jsonAction = new Action('lightflow_particle_edit_json', { name: 'Edit Particle JSON / Molang', icon: 'code',
             category: 'edit', condition: () => !!ParticleEffectElement.selected.length,
             click: () => editParticleJSON(ParticleEffectElement.selected[0]) });
-        const createAction=new Action('lightflow_particle_create',{name:'lightflow_atmosphere.action.add_particle',icon:'ac_unit',category:'edit',condition:()=>!!Project && !!(Modes.edit || Modes.render),children:()=>particlePresetItems(null)});
+        const createAction=new Action('lightflow_particle_create',{name:'lightflow_atmosphere.action.add_particle',icon:'ac_unit',category:'edit',condition:()=>!!Project && !!(Modes.edit || Modes.render),children:()=>particlePresetItems(null),click:event=>particlePresetMenu(null,event)});
         const reloadAction = new Action('lightflow_particle_reload', {name:uiText('reload'),icon:'refresh',category:'edit',
             condition:()=>!!ParticleEffectElement.selected.length,click:()=>{
                 for(const element of ParticleEffectElement.selected.slice())reloadParticleEffect(element);
@@ -6433,7 +7293,8 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         deletables.push(reloadAction);
         const snowstormAction=new Action('lightflow_particle_snowstorm',{name:'lightflow_atmosphere.ui.snowstorm',icon:'open_in_new',category:'edit',condition:()=>!!ParticleEffectElement.selected.length,click:()=>openParticleSnowstorm(ParticleEffectElement.selected[0])});
         ParticleEffectElement.prototype.menu = new Menu(['lightflow_particle_snowstorm', 'lightflow_particle_settings', 'lightflow_particle_edit_json',
-            'lightflow_particle_replace', 'lightflow_particle_reload', 'lightflow_particle_texture', '_', ...Outliner.control_menu_group, '_', 'rename', 'delete']);
+            'lightflow_particle_replace', 'lightflow_particle_reload', 'lightflow_particle_texture', 'lightflow_particle_property_key',
+            '_', ...Outliner.control_menu_group, '_', 'rename', 'delete']);
         deletables.push(addAction, replaceAction, textureAction, settingsAction, jsonAction,createAction,snowstormAction);
         particleEffectPanel = new Panel('lightflow_particle_properties', { name: 'lightflow_atmosphere.ui.particles', icon: 'ac_unit',
             growable: true, resizable: true,
@@ -6445,7 +7306,6 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             const keys = changed_keys?.length ? changed_keys : Object.keys(result);
             if (keys.includes('_particle_tab')) { particlePanelTab = result._particle_tab; syncParticlePanel(); return; }
             if (keys.includes('_particle_source')) particleSourceOpen = result._particle_source===true;
-            if(keys.includes('_distribution'))particleDistributionOpen=result._distribution===true;
             if(keys.includes('_motion'))particleMotionOpen=result._motion===true;
             if(keys.includes('_behaviour'))particleBehaviourOpen=result._behaviour===true;
             const element = ParticleEffectElement.selected[0];
@@ -6479,9 +7339,10 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         window.LightManagerUI.workspace?.register(particleEffectPanel);
         deletables.push(Blockbench.on('update_selection', syncParticlePanel));
         deletables.push(Blockbench.on('update_view', () => ParticleEffectElement.all.forEach(syncParticleEffect)));
-        const refreshHelpers = () => ParticleEffectElement.all.forEach(syncParticleEffect);
+        const refreshHelpers = () => ParticleEffectElement.all.forEach(element => updateParticleHelper(element, particleEffectRecords.get(element.uuid)));
         window.addEventListener('lightflow_gizmo_visibility_changed', refreshHelpers);
         deletables.push({ delete() { window.removeEventListener('lightflow_gizmo_visibility_changed', refreshHelpers); } });
+        return upgradeParticleAnimators;
     }
 
     function disposeParticleEffectElement() {
@@ -6616,6 +7477,10 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         VolumeElement.prototype.buttons = [Outliner.buttons.export, Outliner.buttons.locked, Outliner.buttons.visibility];
 
         const volumeProperties = [
+            ...Object.entries(VOLUME_CREATIVE_FIELDS).map(([key, field]) => new Property(
+                VolumeElement, field.type === 'color' ? 'vector' : field.type, key,
+                { default: Array.isArray(field.default) ? field.default.slice() : field.default, min: field.min }
+            )),
             new Property(VolumeElement, 'string', 'name', { default: 'Volume Domain' }),
             new Property(VolumeElement, 'string', 'shape', { default: 'box' }),
             new Property(VolumeElement, 'string', 'density_mode', { default: 'uniform' }),
@@ -6802,28 +7667,16 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         VolumeElement.preview_controller?.updateSelection(volume);
     }
 
-    function applyPresetArtDirection(preset) {
-        if (!preset) return false;
-        const mapping = {
-            max_opacity: 'art_max_opacity', saturation: 'art_saturation', contrast: 'art_contrast',
-            posterize: 'art_posterize', dither: 'art_dither', color_quantization: 'art_color_quantization',
-            near_color: 'art_near_color', far_color: 'art_far_color',
-            fog_ramp_strength: 'art_ramp_strength', fog_ramp_curve: 'art_ramp_curve',
-            bloom_contribution: 'art_bloom_response'
-        };
-        let changed = false;
-        const next = { ...AtmosphereManager.settings };
-        Object.entries(mapping).forEach(([presetKey, settingKey]) => {
-            if (!Object.prototype.hasOwnProperty.call(preset, presetKey)) return;
-            next[settingKey] = Array.isArray(preset[presetKey]) ? preset[presetKey].slice() : preset[presetKey];
-            changed = true;
-        });
-        if (!changed) return false;
-        AtmosphereManager.settings = next;
-        saveSettings(next);
-        persistProjectSettings();
-        AtmosphereManager.invalidateSceneCache();
-        return true;
+    function volumePresetConfig(preset) {
+        const { shape, position, rotation, size, visibility, enabled, ...recipeDefaults } = VOLUME_DEFAULTS;
+        const config = { ...recipeDefaults, ...preset };
+        if (preset.fog_ramp_strength > 0) {
+            config.scattering_color = preset.near_color || config.scattering_color;
+            config.top_color = preset.far_color || config.scattering_color;
+            config.color_gradient = preset.fog_ramp_strength;
+            config.gradient_curve = preset.fog_ramp_curve || 1;
+        }
+        return config;
     }
 
     function nextLocalizedVolumeName() {
@@ -6846,8 +7699,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         Undo.initEdit({ outliner: true, elements: [], selection: true });
         const volume = new VolumeElement({ name: nextLocalizedVolumeName() }).addTo().init();
         const preset = VOLUME_PRESETS[presetKey] || VOLUME_PRESETS.soft_mist;
-        applyVolumeConfig(volume, preset);
-        applyPresetArtDirection(preset);
+        applyVolumeConfig(volume, volumePresetConfig(preset));
         // Capture the model selection before selecting the new domain. Reuse
         // the existing fit operation inside this creation's single Undo entry.
         const fitted = fitVolumeToSelection(volume, 2);
@@ -6959,7 +7811,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 return;
             }
             if (original.type === 'range') {
-                const resetValue = DEFAULT_SETTINGS[key];
+                const resetValue = VOLUME_CREATIVE_FIELDS[key]?.default ?? DEFAULT_SETTINGS[key];
                 enhanced[key] = {
                     ...original,
                     type: 'combo_slider',
@@ -7013,8 +7865,27 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         deletables.push(style);
     }
 
+    function createVolumeCreativeForm(volume) {
+        return Object.fromEntries(Object.entries(VOLUME_CREATIVE_FIELDS).map(([key, field]) => {
+            const cloudOnly = ['density_curve', 'noise_stretch', 'noise_seed'].includes(key);
+            const gradientOnly = ['top_color', 'gradient_curve'].includes(key);
+            return [key, {
+                type: field.type === 'number' ? 'range' : field.type,
+                label: `lightflow_atmosphere.field.${key}`,
+                description: `lightflow_atmosphere.help.${key}`,
+                value: field.type === 'color' ? colorArrayToHex(volume[key] || field.default) : (volume[key] ?? field.default),
+                dimensions: field.type === 'vector' ? 3 : undefined,
+                min: field.min, max: field.max, step: field.step,
+                condition: form => form.composite_mode !== 'shafts' &&
+                    (!cloudOnly || form.density_mode === 'cloud') &&
+                    (!gradientOnly || finite(form.color_gradient, 0) > 0)
+            }];
+        }));
+    }
+
     function volumeDialogForm(volume) {
         return enhanceAtmosphereDialogForm({
+            ...createVolumeCreativeForm(volume),
             _domain: '_',
             preset: {
                 type: 'select',
@@ -7100,12 +7971,13 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             shaft_length: { type: 'range', label: 'lightflow_atmosphere.field.shaft_length', value: volume.shaft_length, min: 0.05, max: 1.5, step: 0.01, condition: form => form.composite_mode === 'shafts' },
             shaft_decay: { type: 'range', label: 'lightflow_atmosphere.field.shaft_decay', value: volume.shaft_decay, min: 0.5, max: 0.999, step: 0.001, condition: form => form.composite_mode === 'shafts' },
             shaft_radius: { type: 'range', label: 'lightflow_atmosphere.field.shaft_radius', value: volume.shaft_radius, min: 0.05, max: 2, step: 0.01, condition: form => form.composite_mode === 'shafts' },
-            shaft_exposure: { type: 'range', label: 'lightflow_atmosphere.field.shaft_exposure', value: volume.shaft_exposure, min: 0, max: 8, step: 0.05, condition: form => form.composite_mode === 'shafts' }
+            ...volumeShaftControls(volume)
         });
     }
 
     function normalizeDialogResult(result, volume) {
         return {
+            ...Object.fromEntries(Object.keys(VOLUME_CREATIVE_FIELDS).map(key => [key, normalizeVolumeCreativeValue(key, result[key] ?? volume[key])])),
             name: String(result.name || volume.name || 'Volume Domain'),
             enabled: !!result.enabled,
             shape: result.shape === 'sphere' ? 'sphere' : 'box',
@@ -7134,6 +8006,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             shaft_length: finite(result.shaft_length, volume.shaft_length),
             shaft_decay: finite(result.shaft_decay, volume.shaft_decay),
             shaft_radius: finite(result.shaft_radius, volume.shaft_radius),
+            light_uuid: typeof result.light_uuid === 'string' ? result.light_uuid : volume.light_uuid,
             shaft_exposure: finite(result.shaft_exposure, volume.shaft_exposure)
         };
     }
@@ -7151,10 +8024,9 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             onConfirm(result) {
                 const preset = VOLUME_PRESETS[result.preset];
                 const normalized = normalizeDialogResult(result, volume);
-                if (preset) applyPresetArtDirection(preset);
                 Undo.initEdit({ elements: selected });
                 selected.forEach((target, index) => {
-                    if (preset) applyVolumeConfig(target, preset);
+                    if (preset) applyVolumeConfig(target, volumePresetConfig(preset));
                     const config = preset
                         ? { enabled: normalized.enabled, shape: normalized.shape, size: normalized.size }
                         : normalized;
@@ -7166,10 +8038,10 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 requestPreviewRender();
             }
         }, [
-            {id:'look',label:uiText('look'),entries:['preset','density','scattering_color','composite_mode','scattering_strength']},
-            {id:'shape',label:uiText('shape'),entries:['shape','size','density_mode','edge_feather','height_falloff','height_offset','noise_scale','noise_detail','coverage','erosion','wind_direction','wind_speed']},
-            {id:'light',label:uiText('light'),entries:['anisotropy','absorption_color','absorption','ambient','receive_shadows','shadow_fill']},
-            {id:'advanced',label:tr('lightflow_atmosphere.panel.quality_advanced','Advanced'),entries:['technique_override','shaft_length','shaft_decay','shaft_radius','shaft_exposure']}
+            {id:'look',label:uiText('look'),entries:['preset','density','scattering_color','composite_mode','scattering_strength','max_opacity','color_gradient','top_color','gradient_curve','saturation','contrast']},
+            {id:'shape',label:uiText('shape'),entries:['shape','size','density_mode','edge_feather','height_ceiling','height_feather','height_falloff','height_offset','noise_scale','noise_detail','coverage','erosion','density_curve','noise_stretch','noise_seed','wind_direction','wind_speed']},
+            {id:'light',label:uiText('light'),entries:['anisotropy','absorption_color','absorption','ambient','emission','receive_shadows','shadow_fill']},
+            {id:'advanced',label:tr('lightflow_atmosphere.panel.quality_advanced','Advanced'),entries:['technique_override','shaft_length','shaft_decay','shaft_radius','light_uuid','shaft_exposure']}
         ]);
     }
 
@@ -7177,27 +8049,29 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
     const VOLUME_PANEL_SETTING_PREFIX = 'quality_';
     const VOLUME_PANEL_GROUPS = [
         {
-            id: 'look', label: 'lightflow_atmosphere.panel.look', icon: 'blur_on', color: '#67D7E8',
-            entries: ['density', 'scattering_color', 'scattering_strength']
-        },
-        {id:'look_setup',label:'lightflow_atmosphere.ui.volume_recipe',icon:'auto_awesome',color:'#C5AFE9',entries:['preset','composite_mode']},
-        {
-            id: 'light_response', label: 'lightflow_atmosphere.panel.light_response', icon: 'light_mode', color: '#F1D27D',
-            entries: ['anisotropy', 'absorption_color', 'absorption', 'ambient', 'receive_shadows', 'shadow_fill']
+            id: 'look', inline: true,
+            entries: ['preset','composite_mode','light_uuid','shaft_exposure','density','scattering_color','scattering_strength','max_opacity']
         },
         {
-            id: 'shape', label: 'lightflow_atmosphere.panel.shape_distribution', icon: 'gradient', color: '#67D7E8',
+            id: 'look_advanced', label: 'lightflow_atmosphere.panel.advanced', icon: 'tune', color: '#C5AFE9',
             entries: [
-                'shape', 'size', 'density_mode', 'edge_feather'
+                'color_gradient','top_color','gradient_curve','saturation','contrast',
+                'anisotropy','absorption_color','absorption','ambient','emission','receive_shadows','shadow_fill'
             ]
         },
-        {id:'height',label:'lightflow_atmosphere.ui.height_distribution',icon:'height',color:'#A6DCB5',condition:form=>['height','cloud'].includes(form.density_mode),entries:['height_falloff','height_offset']},
-        { id:'cloud', label:'lightflow_atmosphere.ui.cloud_detail', icon:'cloud', color:'#67D7E8', condition:form=>form.density_mode==='cloud', entries:['noise_scale','noise_detail','coverage','erosion'] },
-        { id:'motion', label:'lightflow_atmosphere.ui.motion', icon:'air', color:'#67D7E8', condition:form=>form.density_mode==='cloud', entries:['wind_direction','wind_speed'] },
         {
-            id: 'quality', label: 'lightflow_atmosphere.panel.quality', icon: 'speed', color: '#67D7E8',
-            quality: true,
-            entries: ['quality_enabled', 'quality_preview_quality', 'quality_render_quality']
+            id: 'shape', inline: true,
+            entries: ['shape','size','density_mode','edge_feather','height_falloff','height_offset',
+                'noise_scale','coverage','wind_direction','wind_speed']
+        },
+        {
+            id: 'shape_advanced', label: 'lightflow_atmosphere.panel.advanced', icon: 'tune', color: '#67D7E8',
+            entries: ['height_ceiling','height_feather','noise_detail','erosion',
+                'density_curve','noise_stretch','noise_seed']
+        },
+        {
+            id: 'quality', inline: true, quality: true,
+            entries: ['quality_enabled', 'quality_preview_quality', 'quality_render_quality', 'quality_volumetric_shadow_mode']
         },
         {
             id: 'quality_advanced', label: 'lightflow_atmosphere.panel.quality_advanced', icon: 'tune', color: '#67D7E8',
@@ -7210,10 +8084,9 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
     ];
 
     const VOLUME_PANEL_MODE_GROUPS = Object.freeze({
-        basic: new Set(['look','look_setup','light_response']),
-        shape: new Set(['shape','height','cloud','motion']),
+        basic: new Set(['look','look_advanced']),
+        shape: new Set(['shape','shape_advanced']),
         quality: new Set(['quality','quality_advanced']),
-        advanced: new Set(['light_response', 'quality_advanced'])
     });
 
     function volumePanelValuesEqual(left, right) {
@@ -7249,6 +8122,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
     }
 
     function normalizeVolumePanelValue(volume, key, value) {
+        if (VOLUME_CREATIVE_FIELDS[key]) return normalizeVolumeCreativeValue(key, value);
         switch (key) {
             case 'name': return String(value || volume.name || 'Volume Domain');
             case 'enabled':
@@ -7257,6 +8131,10 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             case 'shape': return value === 'sphere' ? 'sphere' : 'box';
             case 'density_mode': return ['uniform', 'height', 'cloud'].includes(value) ? value : 'uniform';
             case 'composite_mode': return value === 'shafts' ? 'shafts' : 'physical';
+            case 'technique_override': return AtmosphereV2Core.normalizeTechnique(value) || 'auto';
+            case 'intent':
+            case 'light_uuid':
+            case 'light_type': return String(value || '');
             case 'position':
             case 'rotation':
             case 'size': {
@@ -7302,6 +8180,9 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 case 'helper_mask':
                 case 'static_cache':
                 case 'frustum_culling': next[key] = !!value; break;
+                case 'volumetric_shadow_mode':
+                    next[key] = Object.hasOwn(VOLUMETRIC_SHADOW_OPTIONS, value) ? value : 'auto';
+                    break;
                 case 'preview_quality': next[key] = PREVIEW_STEPS[value] ? value : 'balanced'; break;
                 case 'render_quality': next[key] = RENDER_STEPS[value] ? value : 'high'; break;
                 case 'preview_scale': next[key] = clamp(finite(value, current.preview_scale), 0.25, 1); break;
@@ -7383,7 +8264,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             return withVolumePanelUndo(Object.assign(base, {
                 type: 'combo_slider',
                 full_track: true,
-                max: key === 'density' ? 0.15 : base.max,
+                max: key === 'density' ? Math.max(0.2, Math.min(4, finite(base.value, 0.2))) : base.max,
                 resettable: Number.isFinite(defaultValue),
                 reset_value: Number.isFinite(defaultValue) ? defaultValue : base.value,
                 allow_higher: key === 'density' || !Number.isFinite(base.max),
@@ -7393,8 +8274,31 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         return base;
     }
 
+    function volumeShaftControls(volume) {
+        const options = { '': tr('lightflow_atmosphere.field.light_auto', 'Automatic') };
+        for (const light of window.LightElement?.all || []) {
+            if (light?.uuid) options[light.uuid] = light.name;
+        }
+        if (window.LightflowEnvironment?.getDirectionalLight?.()) {
+            options.environment_sun = tr('lightflow_atmosphere.field.light_environment_sun', 'Environment Sun');
+        }
+        if (volume.light_uuid && !Object.hasOwn(options, volume.light_uuid)) {
+            options[volume.light_uuid] = uiText('ray_missing_light');
+        }
+        const condition = form => form.composite_mode === 'shafts';
+        return {
+            light_uuid: { type: 'select', label: 'lightflow_atmosphere.field.light_uuid', value: volume.light_uuid, options, condition },
+            shaft_exposure: {
+                type: 'range', label: 'lightflow_atmosphere.field.shaft_exposure', value: volume.shaft_exposure,
+                min: 0, max: 8, step: 0.05, condition
+            }
+        };
+    }
+
     function createVolumePanelSource(volume) {
         return {
+            ...volumeShaftControls(volume),
+            ...createVolumeCreativeForm(volume),
             size: {type:'vector', dimensions:3, label:'lightflow_atmosphere.field.size', value:volume.size.slice(), min:0.01},
             preset: {
                 type: 'select', label: 'lightflow_atmosphere.field.preset', value: 'custom', default: 'custom',
@@ -7484,6 +8388,10 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 type: 'range', label: 'lightflow_atmosphere.settings.render_scale', value: settings.render_scale,
                 min: 0.5, max: 1, step: 0.05, reset_value: DEFAULT_SETTINGS.render_scale
             },
+            quality_volumetric_shadow_mode: {
+                type: 'select', label: 'lightflow_atmosphere.settings.shadow_mode', value: settings.volumetric_shadow_mode || 'auto',
+                options: VOLUMETRIC_SHADOW_OPTIONS
+            },
             quality_temporal_jitter: { type: 'checkbox', label: 'lightflow_atmosphere.settings.jitter', value: !!settings.temporal_jitter },
             quality_helper_mask: { type: 'checkbox', label: 'lightflow_atmosphere.settings.helper_mask', value: settings.helper_mask !== false },
             quality_static_cache: { type: 'checkbox', label: 'lightflow_atmosphere.settings.static_cache', value: settings.static_cache !== false },
@@ -7525,7 +8433,6 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         if (!volume) return emptyEffectForm(VolumeElement,'add_lightflow_volume',tr('lightflow_atmosphere.action.add','Add Volume Domain'));
         if (volume) {
             form.summary = {
-                condition:()=>selected.length>1,
                 type: 'bar_display',
                 value: selected.length > 1
                     ? tr('lightflow_atmosphere.panel.multiple', 'Volume Domains') + ` (${selected.length})`
@@ -7552,6 +8459,18 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         const source = volume ? createVolumePanelSource(volume) : {};
         const qualitySource = createVolumeQualityPanelSource();
         if (volume) {
+            // The overview's Enabled/Visible controls must be real form fields.
+            // They edit the selected element(s) through the same Undo pipeline.
+            for (const key of ['enabled', 'visibility']) {
+                const control = createVolumePanelControl(key, source[key], '', true);
+                const after = control.onAfter;
+                control.onAfter = event => {
+                    after?.(event);
+                    // The status hint must reflect the new renderable state.
+                    setTimeout(syncAtmospherePanel, 0);
+                };
+                form[key] = control;
+            }
             const inactive = volume.enabled === false || volume.visibility === false || AtmosphereManager.settings.enabled === false;
             form._volume_effective_state = {
                 type: 'bar_display', search_ignore: true, paragraph: true, expand: true, font_size: '12px',
@@ -7559,9 +8478,6 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 value: tr('lightflow_atmosphere.panel.inactive_reason', 'Not rendered: check Enabled, Visible and global Atmosphere.'),
                 color: 'var(--color-warning)'
             };
-            form._activate_volume = effectAction(uiText('activate_effect'),'visibility',()=>{
-                beginVolumePanelUndo();applyVolumePanelConfig({enabled:true,visibility:true});finishVolumePanelUndo();syncAtmospherePanel();
-            },{condition:()=>volume.enabled===false});
         }
         form._volume_mode = design.tabs({
             value: volumePanelMode,
@@ -7579,15 +8495,9 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             if (!volume && !group.quality) return;
             const categoryVisible = !!VOLUME_PANEL_MODE_GROUPS[volumePanelMode]?.has(group.id);
             const groupKey = VOLUME_PANEL_GROUP_PREFIX + group.id;
-            const isTabHeading = group.id === 'look' || group.id === 'shape';
-            const groupOpen = isTabHeading || volumePanelGroupsOpen[group.id] !== false;
+            const groupOpen = group.inline || volumePanelGroupsOpen[group.id] !== false;
             const groupSource = group.quality ? qualitySource : source;
-            const modified = group.entries.filter(entry => typeof entry === 'string').some(key => {
-                const settingKey = group.quality ? key.replace(VOLUME_PANEL_SETTING_PREFIX, '') : key;
-                const defaultValue = group.quality ? DEFAULT_SETTINGS[settingKey] : VOLUME_DEFAULTS[key];
-                return defaultValue !== undefined && !volumePanelValuesEqual(groupSource[key]?.value, defaultValue);
-            });
-            form[groupKey] = design.group({
+            if (!group.inline) form[groupKey] = design.group({
                 panel_category_visible: categoryVisible,
                 label: group.label,
                 label_icon: group.icon,
@@ -7597,7 +8507,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 icon_color_on: group.color,
                 icon_color_off: `color-mix(in srgb, ${group.color} 55%, var(--color-subtle_text))`,
                 description: group.label,
-                condition: isTabHeading ? false : group.condition,
+                condition: group.condition,
                 modified: formResult => group.entries.filter(entry => typeof entry === 'string').some(key => {
                     const settingKey = group.quality ? key.replace(VOLUME_PANEL_SETTING_PREFIX, '') : key;
                     const defaultValue = group.quality ? DEFAULT_SETTINGS[settingKey] : VOLUME_DEFAULTS[key];
@@ -7611,28 +8521,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 active: group.id === 'look' ? volume?.enabled !== false : true
             });
 
-            let subsectionIndex = 0;
             group.entries.forEach(entry => {
-                if (group.id === 'look' && (entry === 'enabled' || entry === 'visibility')) return;
-                if (entry && typeof entry === 'object' && entry.subsection) {
-                    const subsectionKey = `_volume_subsection_${group.id}_${subsectionIndex++}`;
-                    const subsectionCondition = (group.condition || entry.condition)
-                        ? form => (!group.condition || group.condition(form)) && (!entry.condition || entry.condition(form))
-                        : null;
-                    form[subsectionKey] = design.subsection({
-                        panel_category_visible: categoryVisible,
-                        value: tr(entry.subsection, entry.subsection),
-                        icon: entry.icon,
-                        icon_color: group.color,
-                        separator_color: `color-mix(in srgb, ${group.color} 58%, var(--color-border))`,
-                        border_left: `1px solid color-mix(in srgb, ${group.color} 72%, var(--color-border))`,
-                        background: `color-mix(in srgb, ${group.color} 4%, transparent)`,
-                        margin_left: '4px',
-                        margin_right: '4px',
-                        condition: combineVolumePanelCondition(groupKey, groupOpen, subsectionCondition)
-                    });
-                    return;
-                }
                 const control = group.quality ? qualitySource[entry] : source[entry];
                 if (!control) return;
                 form[entry] = group.quality
@@ -7728,8 +8617,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             if (!volumes.length) return;
             if (keys.includes('preset') && result.preset !== 'custom' && VOLUME_PRESETS[result.preset]) {
                 const directUndo = !activeVolumePanelUndo && beginVolumePanelUndo();
-                applyPresetArtDirection(VOLUME_PRESETS[result.preset]);
-                applyVolumePanelConfig(VOLUME_PRESETS[result.preset]);
+                applyVolumePanelConfig(volumePresetConfig(VOLUME_PRESETS[result.preset]));
                 if (directUndo) finishVolumePanelUndo();
                 setTimeout(() => syncAtmospherePanel({ preserveScroll: true }), 0);
                 return;
@@ -7805,10 +8693,10 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         const diagnostics = AtmosphereManager.getResourceDiagnostics?.(window.Preview?.selected || null) || {};
         const resolutionSummary = [
             diagnostics.resolvedTechnique || 'NONE',
-            `${diagnostics.activeRaymarchVolumes || 0} raymarched`,
-            `${diagnostics.activeAnalyticVolumes || 0} analytic`,
-            `${diagnostics.effectiveSteps || 0} steps`,
-            diagnostics.hdrFormat || 'not allocated'
+            `${diagnostics.activeRaymarchVolumes || 0} ${tr('lightflow_atmosphere.diagnostics.raymarched', 'raymarched')}`,
+            `${diagnostics.activeAnalyticVolumes || 0} ${tr('lightflow_atmosphere.diagnostics.analytic', 'analytic')}`,
+            `${diagnostics.effectiveSteps || 0} ${tr('lightflow_atmosphere.diagnostics.steps', 'steps')}`,
+            diagnostics.hdrFormat || tr('lightflow_atmosphere.diagnostics.unallocated', 'not allocated')
         ].join(' · ');
         const qualityDialog = {
             title: tr('lightflow_atmosphere.settings.title', 'Atmosphere Quality'),
@@ -7847,11 +8735,11 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                 render_quality: { type: 'select', label: 'lightflow_atmosphere.settings.render_quality', value: settings.render_quality, options: QUALITY_OPTIONS },
                 render_scale: { type: 'range', label: 'lightflow_atmosphere.settings.render_scale', value: settings.render_scale, min: 0.5, max: 1, step: 0.05 },
                 _advanced: '_',
-                resolved_technique: { type: 'bar_display', icon: 'route', label: 'Resolved as', value: resolutionSummary, color: 'var(--color-text)' },
+                resolved_technique: { type: 'bar_display', icon: 'route', label: 'lightflow_atmosphere.diagnostics.resolved_as', value: resolutionSummary, color: 'var(--color-text)' },
                 temporal_jitter: { type: 'checkbox', label: 'lightflow_atmosphere.settings.jitter', value: settings.temporal_jitter },
-                temporal_response: { type: 'select', label: 'lightflow_atmosphere.settings.temporal_response', value: settings.temporal_response || 'balanced', options: { off: 'Off', responsive: 'Responsive', balanced: 'Balanced', stable: 'Stable' } },
+                temporal_response: { type: 'select', label: 'lightflow_atmosphere.settings.temporal_response', value: settings.temporal_response || 'balanced', options: TEMPORAL_RESPONSE_OPTIONS },
                 temporal_interleave: { type: 'checkbox', label: 'lightflow_atmosphere.settings.temporal_interleave', value: !!settings.temporal_interleave },
-                volumetric_shadow_mode: { type: 'select', label: 'lightflow_atmosphere.settings.shadow_mode', value: settings.volumetric_shadow_mode || 'auto', options: { auto: 'Auto', none: 'None', cheap: 'Cheap', full: 'Full' } },
+                volumetric_shadow_mode: { type: 'select', label: 'lightflow_atmosphere.settings.shadow_mode', value: settings.volumetric_shadow_mode || 'auto', options: VOLUMETRIC_SHADOW_OPTIONS },
                 helper_mask: { type: 'checkbox', label: 'lightflow_atmosphere.settings.helper_mask', value: settings.helper_mask },
                 static_cache: { type: 'checkbox', label: 'lightflow_atmosphere.settings.static_cache', value: settings.static_cache !== false },
                 frustum_culling: { type: 'checkbox', label: 'lightflow_atmosphere.settings.frustum_culling', value: settings.frustum_culling !== false }
@@ -7967,6 +8855,44 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
     }
 
     function installTranslations() {
+        const creativeTranslations = {
+            en: {
+                max_opacity: ['Opacity limit', 'Maximum extinction of this physical volume. Overlapping volumes can add more opacity. Zero hides this volume.'],
+                saturation: ['Saturation', 'Color saturation of this volume only. Zero gives neutral gray.'],
+                contrast: ['Color contrast', 'Contrast of the scattering colors before lighting; does not grade the model or other volumes.'],
+                emission: ['Self illumination', 'Adds light inside this medium without another lamp. Uses the volume colors and the existing Bloom response.'],
+                color_gradient: ['Vertical color blend', 'Blend toward the top color along the local height of this volume.'],
+                top_color: ['Top color', 'Scattering color at the top of the domain. The main color remains at the bottom.'],
+                gradient_curve: ['Color transition', 'Shapes the vertical color transition. One is linear.'],
+                height_ceiling: ['Layer ceiling', 'Top of the fog layer, relative to the domain height. Rotates with the volume. Zero hides the layer.'],
+                height_feather: ['Layer softness', 'Fades density below the layer ceiling. Zero keeps a sharp ceiling.'],
+                density_curve: ['Cloud density contrast', 'Shapes the noise mask after coverage. Above one isolates dense wisps; below one fills the gaps.'],
+                noise_stretch: ['Noise frequency XYZ', 'Frequency multiplier on each local axis. Higher values make finer structures; can require higher quality.'],
+                noise_seed: ['Noise variation', 'Changes the cloud pattern without moving the domain or starting animation.']
+            },
+            es: {
+                max_opacity: ['Límite de opacidad', 'Extinción máxima de este volumen físico. Los volúmenes superpuestos pueden sumar más opacidad. Cero oculta este volumen.'],
+                saturation: ['Saturación', 'Saturación del color de este volumen. Cero produce gris neutro.'],
+                contrast: ['Contraste del color', 'Contraste de los colores de dispersión antes de iluminarlos; afecta sólo a este volumen.'],
+                emission: ['Iluminación propia', 'Añade luz al medio sin otra lámpara. Usa los colores del volumen y la respuesta de Bloom existente.'],
+                color_gradient: ['Mezcla vertical de color', 'Mezcla hacia el color superior a lo largo de la altura local del volumen.'],
+                top_color: ['Color superior', 'Color de dispersión arriba del dominio. El color principal se conserva abajo.'],
+                gradient_curve: ['Transición de color', 'Moldea la transición vertical del color. Uno es lineal.'],
+                height_ceiling: ['Techo de la capa', 'Altura superior de la niebla respecto al dominio. Gira con el volumen. Cero oculta la capa.'],
+                height_feather: ['Suavidad de la capa', 'Desvanece la densidad bajo el techo. Cero mantiene un corte definido.'],
+                density_curve: ['Contraste de densidad', 'Moldea el ruido tras la cobertura. Mayor que uno aísla filamentos; menor que uno rellena huecos.'],
+                noise_stretch: ['Frecuencia de ruido XYZ', 'Multiplicador de frecuencia por eje local. Un valor mayor crea estructuras más finas y puede exigir más calidad.'],
+                noise_seed: ['Variación del ruido', 'Cambia el patrón de nubes sin mover el dominio ni activar animación.']
+            }
+        };
+        for (const [language, fields] of Object.entries(creativeTranslations)) {
+            const entries = { 'lightflow_atmosphere.panel.local_color': language === 'es' ? 'Color del volumen' : 'Volume color' };
+            for (const [key, [label, help]] of Object.entries(fields)) {
+                entries[`lightflow_atmosphere.field.${key}`] = label;
+                entries[`lightflow_atmosphere.help.${key}`] = help;
+            }
+            Language.addTranslations(language, entries);
+        }
         Language.addTranslations('en', {
             'lightflow_atmosphere.ui.look':'Look', 'lightflow_atmosphere.ui.shape':'Shape', 'lightflow_atmosphere.ui.light':'Lighting',
             'lightflow_atmosphere.ui.ray_gizmos':'Edit ray shape', 'lightflow_atmosphere.ui.edit_ray':'Edit God Ray',
@@ -7988,6 +8914,15 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             'lightflow_atmosphere.ui.snowstorm_export_help':'This effect is too large for a link. Export its .particle.json and open it in Snowstorm.',
             'lightflow_atmosphere.ui.snowstorm_texture_help':'Import this texture separately in Snowstorm; the link includes compact PNG images.',
             'lightflow_atmosphere.ui.particle_distribution':'Emitter shape', 'lightflow_atmosphere.ui.particle_motion':'Motion',
+            'lightflow_atmosphere.ui.particle_add_property_key':'Add Particle Property Keyframe…',
+            'lightflow_atmosphere.ui.particle_define_variable':'Particle Variable Defaults…',
+            'lightflow_atmosphere.ui.particle_delete_variable':'Delete Variable and Tracks',
+            'lightflow_atmosphere.ui.particle_property':'Property',
+            'lightflow_atmosphere.ui.particle_new_variable':'New MoLang variable',
+            'lightflow_atmosphere.ui.particle_variable_name':'Variable name',
+            'lightflow_atmosphere.ui.particle_variable_value':'Value',
+            'lightflow_atmosphere.ui.particle_variable_invalid':'Enter an unused MoLang variable name.',
+            'lightflow_atmosphere.ui.particle_emission_enabled':'Emission Enabled',
             'lightflow_atmosphere.ui.emitter_point':'Point', 'lightflow_atmosphere.ui.emitter_box':'Box', 'lightflow_atmosphere.ui.emitter_sphere':'Sphere',
             'lightflow_atmosphere.ui.emitter_shape':'Shape', 'lightflow_atmosphere.ui.emitter_size':'Emitter size', 'lightflow_atmosphere.ui.emitter_radius':'Emitter radius',
             'lightflow_atmosphere.ui.acceleration':'Acceleration', 'lightflow_atmosphere.ui.drag':'Air drag',
@@ -8122,6 +9057,9 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             'lightflow_atmosphere.field.shaft_length': 'Shaft Length',
             'lightflow_atmosphere.field.shaft_decay': 'Shaft Decay',
             'lightflow_atmosphere.field.shaft_radius': 'Shaft Radius',
+            'lightflow_atmosphere.field.light_uuid': 'Linked Light',
+            'lightflow_atmosphere.field.light_auto': 'Automatic',
+            'lightflow_atmosphere.field.light_environment_sun': 'Environment Sun',
             'lightflow_atmosphere.field.shaft_exposure': 'Shaft Exposure',
             'lightflow_atmosphere.field.max_opacity': 'Maximum Opacity',
             'lightflow_atmosphere.field.saturation': 'Saturation',
@@ -8165,6 +9103,25 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             'lightflow_atmosphere.settings.title': 'Atmosphere Quality',
             'lightflow_atmosphere.settings.global_fog_enabled': 'Global fog',
             'lightflow_atmosphere.settings.global_fog_mode': 'Global fog model',
+            'lightflow_atmosphere.option.fog_none': 'Off',
+            'lightflow_atmosphere.option.fog_minecraft': 'Minecraft / Distance',
+            'lightflow_atmosphere.option.fog_linear': 'Linear Distance',
+            'lightflow_atmosphere.option.fog_exp': 'Exponential',
+            'lightflow_atmosphere.option.fog_exp2': 'Exponential Squared',
+            'lightflow_atmosphere.option.fog_height': 'Exponential Height',
+            'lightflow_atmosphere.option.temporal_off': 'Off',
+            'lightflow_atmosphere.option.temporal_responsive': 'Responsive',
+            'lightflow_atmosphere.option.temporal_balanced': 'Balanced',
+            'lightflow_atmosphere.option.temporal_stable': 'Stable',
+            'lightflow_atmosphere.option.shadow_auto': 'Auto',
+            'lightflow_atmosphere.option.shadow_none': 'None',
+            'lightflow_atmosphere.option.shadow_cheap': 'Cheap',
+            'lightflow_atmosphere.option.shadow_full': 'Full',
+            'lightflow_atmosphere.diagnostics.resolved_as': 'Resolved as',
+            'lightflow_atmosphere.diagnostics.raymarched': 'raymarched',
+            'lightflow_atmosphere.diagnostics.analytic': 'analytic',
+            'lightflow_atmosphere.diagnostics.steps': 'steps',
+            'lightflow_atmosphere.diagnostics.unallocated': 'not allocated',
             'lightflow_atmosphere.settings.global_fog_color': 'Fog color',
             'lightflow_atmosphere.settings.global_fog_start': 'Start / clear zone',
             'lightflow_atmosphere.settings.global_fog_end': 'End distance',
@@ -8214,6 +9171,15 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             'lightflow_atmosphere.ui.snowstorm_export_help':'Este efecto es demasiado grande para un enlace. Exporta su .particle.json y ábrelo en Snowstorm.',
             'lightflow_atmosphere.ui.snowstorm_texture_help':'Importa esta textura por separado en Snowstorm; el enlace incluye imágenes PNG compactas.',
             'lightflow_atmosphere.ui.particle_distribution':'Forma del emisor', 'lightflow_atmosphere.ui.particle_motion':'Movimiento',
+            'lightflow_atmosphere.ui.particle_add_property_key':'Añadir fotograma clave de partícula…',
+            'lightflow_atmosphere.ui.particle_define_variable':'Valores base de variables…',
+            'lightflow_atmosphere.ui.particle_delete_variable':'Eliminar variable y sus pistas',
+            'lightflow_atmosphere.ui.particle_property':'Propiedad',
+            'lightflow_atmosphere.ui.particle_new_variable':'Nueva variable MoLang',
+            'lightflow_atmosphere.ui.particle_variable_name':'Nombre de la variable',
+            'lightflow_atmosphere.ui.particle_variable_value':'Valor',
+            'lightflow_atmosphere.ui.particle_variable_invalid':'Introduce un nombre de variable MoLang que no esté en uso.',
+            'lightflow_atmosphere.ui.particle_emission_enabled':'Emisión activa',
             'lightflow_atmosphere.ui.emitter_point':'Punto', 'lightflow_atmosphere.ui.emitter_box':'Caja', 'lightflow_atmosphere.ui.emitter_sphere':'Esfera',
             'lightflow_atmosphere.ui.emitter_shape':'Forma', 'lightflow_atmosphere.ui.emitter_size':'Tamaño del emisor', 'lightflow_atmosphere.ui.emitter_radius':'Radio del emisor',
             'lightflow_atmosphere.ui.acceleration':'Aceleración', 'lightflow_atmosphere.ui.drag':'Resistencia del aire',
@@ -8341,6 +9307,9 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             'lightflow_atmosphere.field.shaft_length': 'Longitud del haz',
             'lightflow_atmosphere.field.shaft_decay': 'Decaimiento del haz',
             'lightflow_atmosphere.field.shaft_radius': 'Radio del haz',
+            'lightflow_atmosphere.field.light_uuid': 'Luz vinculada',
+            'lightflow_atmosphere.field.light_auto': 'Selecci\u00f3n autom\u00e1tica',
+            'lightflow_atmosphere.field.light_environment_sun': 'Sol de Environment',
             'lightflow_atmosphere.field.shaft_exposure': 'Exposición del haz',
             'lightflow_atmosphere.field.max_opacity': 'Opacidad máxima',
             'lightflow_atmosphere.field.saturation': 'Saturación',
@@ -8384,6 +9353,25 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             'lightflow_atmosphere.settings.title': 'Calidad de atmósfera',
             'lightflow_atmosphere.settings.global_fog_enabled': 'Niebla global',
             'lightflow_atmosphere.settings.global_fog_mode': 'Modelo de niebla global',
+            'lightflow_atmosphere.option.fog_none': 'Desactivado',
+            'lightflow_atmosphere.option.fog_minecraft': 'Minecraft / Distancia',
+            'lightflow_atmosphere.option.fog_linear': 'Distancia lineal',
+            'lightflow_atmosphere.option.fog_exp': 'Exponencial',
+            'lightflow_atmosphere.option.fog_exp2': 'Exponencial al cuadrado',
+            'lightflow_atmosphere.option.fog_height': 'Altura exponencial',
+            'lightflow_atmosphere.option.temporal_off': 'Desactivada',
+            'lightflow_atmosphere.option.temporal_responsive': 'Reactiva',
+            'lightflow_atmosphere.option.temporal_balanced': 'Equilibrada',
+            'lightflow_atmosphere.option.temporal_stable': 'Estable',
+            'lightflow_atmosphere.option.shadow_auto': 'Automático',
+            'lightflow_atmosphere.option.shadow_none': 'Sin sombras',
+            'lightflow_atmosphere.option.shadow_cheap': 'Rápidas',
+            'lightflow_atmosphere.option.shadow_full': 'Completas',
+            'lightflow_atmosphere.diagnostics.resolved_as': 'Técnica seleccionada',
+            'lightflow_atmosphere.diagnostics.raymarched': 'por trazado de rayos',
+            'lightflow_atmosphere.diagnostics.analytic': 'analíticos',
+            'lightflow_atmosphere.diagnostics.steps': 'pasos',
+            'lightflow_atmosphere.diagnostics.unallocated': 'sin asignar',
             'lightflow_atmosphere.settings.global_fog_color': 'Color de niebla',
             'lightflow_atmosphere.settings.global_fog_start': 'Inicio / zona despejada',
             'lightflow_atmosphere.settings.global_fog_end': 'Distancia final',
@@ -8439,6 +9427,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             }
             const animated = AtmosphereManager.settings.enabled && VolumeElement?.all?.some?.(volume => {
                 return volume?.enabled !== false && volume?.visibility !== false && finite(volume?.density, 0) > 0 &&
+                    (volume.composite_mode === 'shafts' || (finite(volume.max_opacity, 1) > 0 && finite(volume.height_ceiling, 1) > 0)) &&
                     volume?.density_mode === 'cloud' && Math.abs(finite(volume.wind_speed, 0)) > 0.00001;
             });
             const shouldAnimate = animated && !window.LightManagerStudioRenderSession;
@@ -8484,6 +9473,8 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
         dependencies: ['light_manager'],
 
         onload: function loadLightflowAtmosphere() {
+            const pluginContext = this;
+            if(this.source==='file')this.new_repository_format=false;
             if (atmosphereRuntimeLoaded) return;
             if (!atmosphereDependenciesReady()) {
                 if (!deferredAtmosphereLightManagerInit) {
@@ -8491,7 +9482,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                         if (!atmosphereDependenciesReady()) return;
                         window.removeEventListener('light_manager_initialized', deferredAtmosphereLightManagerInit);
                         deferredAtmosphereLightManagerInit = null;
-                        loadLightflowAtmosphere();
+                        loadLightflowAtmosphere.call(pluginContext);
                     };
                     window.addEventListener('light_manager_initialized', deferredAtmosphereLightManagerInit);
                 }
@@ -8515,7 +9506,7 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
             registerVolumeElement();
             registerGodRayElement();
             installParticleEmitterLifecycle();
-            registerParticleEffectElement();
+            const upgradeParticleAnimators = registerParticleEffectElement();
             if (window.ModelProject && window.Property) {
                 atmosphereProjectSettingsProperty = new Property(
                     ModelProject,
@@ -8564,19 +9555,25 @@ float lfAtmosphereFogFactor(float distanceToCamera, float worldHeight) {
                     }
                     window.LightflowLifecycle.restoreCustomElements(model, 'lightflow_volume', VolumeElement);
                     window.LightflowLifecycle.restoreCustomElements(model, 'lightflow_god_ray', GodRayElement);
+                    const reloadedParticles = prepareReloadedAtmosphereElements(ParticleEffectElement, 'lightflow_particle_effect');
+                    rebuildReloadedAtmosphereElementPreviews(reloadedParticles, particleEffectController);
                     window.LightflowLifecycle.restoreCustomElements(model, 'lightflow_particle_effect', ParticleEffectElement);
                     if (!isCurrent()) return;
+                    upgradeParticleAnimators();
                     const projectSettingsHydrated = hydrateProjectSettings(project);
                     if (projectSettingsHydrated) window.Canvas?.updateAllFaces?.();
                     AtmosphereManager.invalidateSceneCache();
                     AtmosphereManager.patchAllPreviews();
-                    syncParticleEffects(window.Preview?.selected?.camera);
+                    syncParticleEffects(window.Preview?.selected?.camera, true);
                     syncAtmospherePanel();
                     requestPreviewRender();
                 }
             );
             if (lifecycleHydrator) deletables.push(lifecycleHydrator);
-            else beginAtmosphereProject(window.Project || null);
+            else {
+                beginAtmosphereProject(window.Project || null);
+                syncParticleEffects(window.Preview?.selected?.camera, true);
+            }
             const lightManagerListener = () => {
                 AtmosphereManager.invalidateSceneCache();
                 AtmosphereManager.patchAllPreviews();

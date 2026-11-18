@@ -8943,6 +8943,7 @@
             variant: 'both',
             dependencies: ['light_manager', 'shader_architect'],
             onload() {
+                if(this.source==='file')this.new_repository_format=false;
                 root.LightflowTestLab = api;
                 installProjectLoadAutomation();
                 if (root.Action) {

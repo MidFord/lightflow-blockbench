@@ -233,8 +233,8 @@
             const type=String(element.type||'cube');
             elementTypes[type]=(elementTypes[type]||0)+1;
         }
-        const visualCount=(elementTypes.cube||0)+(elementTypes.mesh||0)+(elementTypes.billboard||0);
-        const ignoredTypes=Object.fromEntries(Object.entries(elementTypes).filter(([type])=>!['cube','mesh','billboard'].includes(type)));
+        const visualCount=(elementTypes.cube||0)+(elementTypes.mesh||0)+(elementTypes.billboard||0)+(elementTypes.texture_mesh||0);
+        const ignoredTypes=Object.fromEntries(Object.entries(elementTypes).filter(([type])=>!['cube','mesh','billboard','texture_mesh'].includes(type)));
         // Names are presentation text; the canonical file path identifies a source.
         const sourceId=String(model.model_identifier || model.meta?.model_identifier || '');
         const blockingCodes=new Set(['duplicate_element_ids','duplicate_group_id','group_without_uuid']);
@@ -272,11 +272,71 @@
         return element?.sa_material_id ? {id:String(element.sa_material_id),baseMaterialId:String(element.sa_material_id),uniforms:{}} : null;
     }
 
-    function linkedTextureReferences(model) {
+    // Mirror Light Manager's per-element texture_name assignment resolver.
+    // Only unassigned/missing references fall back to the source default;
+    // the receiver's selected texture must never influence linked geometry.
+    function textureMeshTexture(model, element) {
+        const records=model.textures||[];
+        const reference=element?.texture_name?String(element.texture_name):'';
+        let record=reference?['uuid','id','name','path'].map(key=>records.find(texture=>texture[key]===reference)).find(Boolean):null;
+        record||=records.find(texture=>texture.use_as_default);
+        if(!record)record=records.some(texture=>texture.render_mode==='layered')
+            ? [...records].reverse().find(texture=>texture.visible!==false):records[0];
+        if(record&&record.pbr_channel&&record.pbr_channel!=='color'&&record.group)
+            record=records.find(texture=>texture.group===record.group&&texture.pbr_channel==='color')||record;
+        return record||null;
+    }
+
+    function updateTextureMeshGeometry(geometry, record, model, textureRecord, pixels, THREE) {
+        const width=Number(textureRecord?.uv_width||model.resolution?.width)||16;
+        const height=Number(textureRecord?.uv_height||model.resolution?.height)||16;
+        const positions=[],uvs=[],normals=[],indices=[],ranges=[];
+        const scale=vector(record.scale,[1,1,1]),pivot=vector(record.local_pivot,[0,0,0]);
+        const quad=(points,coords,normal,reverse=false)=>{
+            const start=positions.length/3,indexStart=indices.length;
+            for(let i=0;i<4;i++){
+                positions.push(...points[i].map((value,axis)=>value*scale[axis]+pivot[axis]));
+                uvs.push(...coords[i]);normals.push(...normal);
+            }
+            indices.push(...(reverse?[0,2,1,0,3,2]:[0,1,2,0,2,3]).map(i=>start+i));
+            ranges.push({start:indexStart,count:6,faceKey:String(ranges.length),materialIndex:0,textureSize:[width,height]});
+        };
+        const corners=[[-width,0,0],[-width,0,height],[0,0,height],[0,0,0]];
+        const frontUv=[[1,1],[1,0],[0,0],[0,1]];
+        quad(corners,frontUv,[0,1,0]);
+        quad(corners.map(([x,y,z])=>[x,-1,z]),frontUv,[0,-1,0],true);
+        if(pixels?.width&&pixels?.height){
+            const w=pixels.width,h=pixels.height;
+            const solid=(x,y)=>x>=0&&x<w&&y>=0&&y<h&&pixels.data[(y*w+x)*4+3]>140;
+            const edge=(sx,sy,ex,ey,dir)=>{
+                const points=[[-sx*width/w,0,sy*height/h],[-sx*width/w,-1,sy*height/h],[-ex*width/w,-1,ey*height/h],[-ex*width/w,0,ey*height/h]];
+                const vertical=sx===ex;
+                if(vertical){sx-=.1*dir;ex-=.4*dir;sy+=.1;ey-=.1;}
+                else{sy+=.1*dir;ey+=.4*dir;sx+=.1;ex-=.1;}
+                quad(points,[[ex/w,1-sy/h],[ex/w,1-ey/h],[sx/w,1-ey/h],[sx/w,1-sy/h]],vertical?[-dir,0,0]:[0,0,-dir],dir!==1);
+            };
+            for(let y=0;y<h;y++)for(let x=0;x<=w;x++)if(solid(x-1,y)!==solid(x,y))edge(x,y,x,y+1,solid(x-1,y)?1:-1);
+            for(let x=0;x<w;x++)for(let y=0;y<=h;y++)if(solid(x,y-1)!==solid(x,y))edge(x,y,x+1,y,solid(x,y-1)?-1:1);
+        }
+        geometry.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));
+        geometry.setAttribute('uv',new THREE.Float32BufferAttribute(uvs,2));
+        geometry.setAttribute('normal',new THREE.Float32BufferAttribute(normals,3));
+        geometry.setIndex(indices);
+        geometry.userData.saLogicalFaceRanges=ranges;
+        geometry.computeBoundingBox();geometry.computeBoundingSphere();
+        return geometry;
+    }
+
+    function linkedTextureReferences(model, defaultTextureKey) {
         const records=[...(model.textures||[]),...(model.lightflow_terrain?.textures||[])];
         const references=new Set(terrainSections(model).flatMap(section=>section.terrain_materials.map(material=>String(material.map??'')).filter(Boolean)));
+        if(defaultTextureKey!==undefined)references.add(defaultTextureKey);
         for(const element of model.elements||[])if(['cube','mesh','billboard'].includes(element.type||'cube'))for(const face of Object.values(element.faces||{})){
             if(face?.texture!==null&&face?.texture!==false&&face?.texture!==undefined)references.add(String(face.texture));
+        }
+        for(const element of model.elements||[])if(element.type==='texture_mesh'){
+            const texture=textureMeshTexture(model,element);
+            if(texture)references.add(String(records.indexOf(texture)));
         }
         const definitions=sourceMaterialDefinitions(model),usedDefinitions=new Set();
         for(const element of model.elements||[]){
@@ -347,9 +407,9 @@
         const splitRoot = input => {
             const path=String(input||'').replace(/\\/g,'/');
             const drive=/^[A-Za-z]:\//.exec(path);
-            const unc=/^\/\/[^/]+\/[^/]+\//.exec(path);
+            const unc=/^\/\/[^/]+\/[^/]+(?:\/|$)/.exec(path);
             const root=drive?.[0]||unc?.[0]||(path.startsWith('/')?'/':'');
-            return {root,parts:path.slice(root.length).split('/').filter(Boolean)};
+            return {root:unc&&!root.endsWith('/')?root+'/':root,parts:path.slice(root.length).split('/').filter(Boolean)};
         };
         const normalize=input=>{
             const {root,parts}=splitRoot(input),stack=[];
@@ -358,7 +418,7 @@
         };
         const resolve=(...items)=>{
             let current='';
-            for(const item of items){const value=String(item||'').replace(/\\/g,'/');if(!value)continue;current=splitRoot(value).root?value:(current.replace(/\/$/,'')+'/'+value);}
+            for(const item of items){const value=String(item||'').replace(/\\/g,'/');if(!value)continue;current=splitRoot(value).root||!current?value:(current.replace(/\/$/,'')+'/'+value);}
             if(!splitRoot(current).root)throw new Error('An absolute .bbmodel path is required.');
             return normalize(current);
         };
@@ -409,6 +469,21 @@
         };
     }
 
+    function normalizePoseSnapshot(value) {
+        if(!plain(value)||value.version!==1||!plain(value.groups)||Object.keys(value.groups).length>512)throw new Error('Invalid linked pose snapshot');
+        const groups={};
+        for(const[id,pose]of Object.entries(value.groups)){
+            if(!id||id.length>128||['__proto__','constructor','prototype'].includes(id)||!plain(pose))throw new Error('Invalid pose bone');
+            const entry={};
+            for(const channel of ['position','rotation','scale']){
+                const data=pose[channel];
+                if(!Array.isArray(data)||data.length!==3||!data.every(v=>typeof v==='number'&&Number.isFinite(v)&&Math.abs(v)<=1e9))throw new Error('Invalid pose transform');
+                entry[channel]=data.slice();
+            }
+            groups[id]=entry;
+        }
+        return {version:1,groups};
+    }
     const animationSupport=new WeakMap();
     function animationSupported(animation) {
         if(!plain(animation))return false;
@@ -505,9 +580,11 @@
 
     function makeLinkReference(sourcePath, receiverPath, pathAPI) {
         if (!pathAPI?.resolve || !pathAPI?.relative || !pathAPI?.dirname || !pathAPI?.parse) throw new Error('A native path adapter is required.');
-        const absolute=pathAPI.resolve(String(sourcePath||''));
-        if (!/\.bbmodel$/i.test(absolute)) throw new Error('Choose a saved .bbmodel project.');
+        const source=String(sourcePath||'');
+        if (!/\.bbmodel$/i.test(source)) throw new Error('Choose a saved .bbmodel project.');
         const receiver=String(receiverPath||'');
+        if(!pathAPI.parse(source).root&&!receiver)throw new Error('Save the receiving project before using a relative source path.');
+        const absolute=receiver?pathAPI.resolve(pathAPI.dirname(pathAPI.resolve(receiver)),source):pathAPI.resolve(source);
         const sameRoot=receiver&&pathAPI.parse(absolute).root.toLowerCase()===pathAPI.parse(pathAPI.resolve(receiver)).root.toLowerCase();
         const relative=sameRoot?pathAPI.relative(pathAPI.dirname(pathAPI.resolve(receiver)),absolute):'';
         return {version:VERSION,sourcePath:relative&&relative!==absolute?relative.replace(/\\/g,'/'):null,absoluteFallback:absolute,portable:!!relative};
@@ -528,26 +605,41 @@
         return canonicalPathKey(resolveLinkReference(link,receiverPath,pathAPI),pathAPI);
     }
 
-    async function readLinkedSource(link, receiverPath, pathAPI, io, hash) {
+    function rebaseLinkReference(link, receiverPath, destination, pathAPI, confirmedPath) {
+        if(!destination)return link;
+        const directoryKey=file=>file&&canonicalPathKey(pathAPI.dirname(file),pathAPI);
+        if(link.sourcePath&&directoryKey(receiverPath)===directoryKey(destination))return link;
+        const source=confirmedPath||resolveLinkReference(link,receiverPath,pathAPI);
+        if(!source)return link;
+        const rebased=makeLinkReference(source,destination,pathAPI);
+        if(!confirmedPath&&rebased.sourcePath&&link.absoluteFallback)rebased.absoluteFallback=link.absoluteFallback;
+        return {...link,...rebased};
+    }
+
+    async function readLinkedFile(link, receiverPath, pathAPI, readFile) {
         const resolved=resolveLinkReference(link,receiverPath,pathAPI);
         if(!resolved)return {status:'missing',path:null};
-        if(typeof io?.readFile!=='function'||typeof hash!=='function') throw new Error('File and revision adapters are required.');
-        let bytes,actualPath=resolved,usedFallback=false,readError;
+        let readError;
         const candidates=[resolved];
         if(link.absoluteFallback&&canonicalPathKey(link.absoluteFallback,pathAPI)!==canonicalPathKey(resolved,pathAPI))candidates.push(link.absoluteFallback);
         for(const candidate of candidates){
-            try{bytes=await io.readFile(candidate);actualPath=candidate;usedFallback=candidate!==resolved;break;}
+            try{return {status:'ready',path:candidate,bytes:await readFile(candidate),usedFallback:candidate!==resolved};}
             catch(error){
                 // A stale relative path may be a directory or inaccessible while
                 // the original absolute source remains readable. Try both paths.
                 if(!readError||['ENOENT','ENOTDIR'].includes(readError.error?.code))readError={error,path:candidate};
             }
         }
-        if(bytes===undefined){
-            const error=readError?.error;
-            if(['ENOENT','ENOTDIR'].includes(error?.code))return {status:'missing',path:resolved};
-            return {status:'read_error',path:readError?.path||resolved,message:String(error?.message||error)};
-        }
+        const error=readError?.error;
+        if(['ENOENT','ENOTDIR'].includes(error?.code))return {status:'missing',path:resolved};
+        return {status:'read_error',path:readError?.path||resolved,message:String(error?.message||error)};
+    }
+
+    async function readLinkedSource(link, receiverPath, pathAPI, io, hash) {
+        if(typeof io?.readFile!=='function'||typeof hash!=='function') throw new Error('File and revision adapters are required.');
+        const file=await readLinkedFile(link,receiverPath,pathAPI,io.readFile);
+        if(file.status!=='ready')return file;
+        const {bytes,path:actualPath,usedFallback}=file;
         const text=typeof bytes==='string'?bytes:new TextDecoder().decode(bytes);
         try {
             let model=parseBBModel(text);
@@ -558,6 +650,97 @@
         } catch(error) {
             return {status:'incompatible',path:actualPath,message:String(error?.message||error)};
         }
+    }
+
+    function bundleFileName(name) {
+        let clean=String(name||'').split(/[\\/]/).pop().replace(/[<>:"|?*\x00-\x1f]/g,'_')
+            .trim().replace(/[. ]+$/g,'');
+        if(clean.length>120){
+            const extension=clean.match(/\.[a-z0-9]{1,12}$/i)?.[0]||'';
+            clean=clean.slice(0,120-extension.length)+extension;
+        }
+        return !clean||/^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/i.test(clean)
+            ? '_'+(clean||'Scene') : clean;
+    }
+
+    async function buildSceneBundle(rootModel, rootPath, rootName, paths, {readProject,readAsset,prepareModel,checkActive=()=>{}}) {
+        const entries=new Map(),projects=new Map(),assets=new Map();
+        const root={model:parseBBModel(JSON.parse(JSON.stringify(rootModel))),source:rootPath,
+            path:bundleFileName(String(rootName||'Scene').replace(/\.bbmodel$/i,''))+'.bbmodel'};
+        const queue=[root];
+        if(rootPath)projects.set(canonicalPathKey(rootPath,paths),root);
+        const archivePaths=portablePathAPI();
+        const relative=(from,to)=>archivePaths.relative(archivePaths.dirname('/'+from),'/'+to);
+        const read=async path=>{
+            checkActive();
+            return projects.get(canonicalPathKey(path,paths))||{text:await readProject(path)};
+        };
+        for(const project of queue){
+            checkActive();
+            for(const node of project.model.elements||[]){
+                if(node.type!=='lightflow_scene_instance'||!node.source_link)continue;
+                try{
+                    const result=await readLinkedFile(JSON.parse(node.source_link),project.source,paths,read);
+                    if(result.status!=='ready')throw new Error(result.path||node.name||node.uuid);
+                    const key=canonicalPathKey(result.path,paths);
+                    let target=projects.get(key);
+                    if(!target){
+                        const model=parseBBModel(result.bytes.text);
+                        // Skin presets need reconstructed geometry for validation.
+                        // Archive the native source so Blockbench can still edit it as a Skin.
+                        const inspectionModel=prepareModel?await prepareModel(model):model;
+                        if(!inspectBBModel(inspectionModel).canLink)throw new Error(result.path);
+                        target={model,source:result.path,path:`scene-links/${queue.length}-${bundleFileName(result.path)}`};
+                        projects.set(key,target);
+                        queue.push(target);
+                    }
+                    node.source_link=JSON.stringify({version:VERSION,sourcePath:relative(project.path,target.path),absoluteFallback:null,portable:true});
+                }catch(error){
+                    checkActive();
+                    throw new Error(`${project.path} → ${node.name||node.uuid||'Scene Link'}\n${error.message}`);
+                }
+            }
+            const textures=project.model.textures||[],textureNames=new Set(),texturePaths=new Map();
+            for(const texture of textures){
+                for(const key of ['uuid','id','name'])if(texture[key])textureNames.add(texture[key]);
+                if(texture.path&&!texturePaths.has(texture.path))texturePaths.set(texture.path,texture.uuid||texture.id||texture.name);
+            }
+            for(const node of project.model.elements||[]){
+                const name=node.texture_name;
+                if(node.type==='texture_mesh'&&!textureNames.has(name)&&texturePaths.get(name))node.texture_name=texturePaths.get(name);
+            }
+            for(const texture of textures){
+                const pathsToTry=[texture.relative_path,texture.path,texture.source]
+                    .filter(value=>typeof value==='string'&&value&&!/^(?:data:|blob:|https?:)/i.test(value));
+                const embedded=typeof texture.source==='string'&&texture.source.startsWith('data:');
+                if(!embedded&&pathsToTry.length){
+                    let packed;
+                    for(const candidate of pathsToTry){
+                        checkActive();
+                        try{
+                            const file=project.source?paths.resolve(paths.dirname(project.source),candidate):paths.resolve(candidate);
+                            const key=canonicalPathKey(file,paths);
+                            packed=assets.get(key);
+                            if(!packed){
+                                const bytes=await readAsset(file);
+                                packed=`textures/${assets.size+1}-${bundleFileName(file)}`;
+                                assets.set(key,packed);entries.set(packed,bytes);
+                            }
+                            break;
+                        }catch(_){/* Try the original absolute texture path. */}
+                    }
+                    checkActive();
+                    if(!packed)throw new Error(`${project.path} → ${texture.name||pathsToTry[0]}`);
+                    texture.relative_path=relative(project.path,packed);
+                    delete texture.source;
+                }else if(!embedded&&texture.source){
+                    throw new Error(`${project.path} → ${texture.name||'Texture'}`);
+                }else delete texture.relative_path;
+                delete texture.path;
+            }
+            entries.set(project.path,JSON.stringify(project.model));
+        }
+        return {entries,root:root.path,projectCount:queue.length};
     }
 
     function sourceDisplayStatus(previousRevision, readResult) {
@@ -578,7 +761,7 @@
         return walk(start);
     }
 
-    return {VERSION,patchTerrainMapSamples,terrainGridOffset,terrainFaceRanges,createTerrainInstanceGeometry,createTerrainBufferOwnerGeometry,parseBBModel,terrainSections,inspectBBModel,sourceMaterialDefinitions,linkedMaterialDefinition,linkedTextureReferences,linkedTextureBindings,normalizePose,portablePathAPI,quaternionFromDegrees,resolveGroupPose,animationSupported,normalizeLinkedAnimations,sampleAnimationChannel,linkedAnimationTime,reconcilePoses,makeLinkReference,resolveLinkReference,sourceCacheKey,readLinkedSource,sourceDisplayStatus,detectReferenceCycle};
+    return {VERSION,textureMeshTexture,updateTextureMeshGeometry,patchTerrainMapSamples,terrainGridOffset,terrainFaceRanges,createTerrainInstanceGeometry,createTerrainBufferOwnerGeometry,parseBBModel,terrainSections,inspectBBModel,sourceMaterialDefinitions,linkedMaterialDefinition,linkedTextureReferences,linkedTextureBindings,normalizePose,portablePathAPI,quaternionFromDegrees,resolveGroupPose,normalizePoseSnapshot,animationSupported,normalizeLinkedAnimations,sampleAnimationChannel,linkedAnimationTime,reconcilePoses,makeLinkReference,resolveLinkReference,rebaseLinkReference,canonicalPathKey,sourceCacheKey,readLinkedFile,readLinkedSource,buildSceneBundle,sourceDisplayStatus,detectReferenceCycle};
 });
 
 if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
@@ -598,6 +781,18 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
             const core=window.LightflowSceneLinksCore, paths=core.portablePathAPI();
             const owned=[];
             const assetCache=new Map();
+            const receiverBaseKey=Symbol.for('lightflow.sceneLinks.receiverBase'),confirmedSources=new WeakMap();
+            // Save As changes Project.save_path before compile. Keep live
+            // references (including Undo snapshots) in their original frame.
+            const receiverBase=project=>{
+                if(!project)return '';
+                return project[receiverBaseKey]??=(project.save_path||'');
+            };
+            const confirmedSource=element=>{
+                const confirmed=confirmedSources.get(element);
+                return confirmed&&confirmed.reference===element.source_link?confirmed.path:null;
+            };
+            const poseTrackFrames=new WeakMap();
             const mountedCubes=new WeakMap();
             const sourceForPose=new WeakMap();
             let disposed=false;
@@ -611,6 +806,15 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
             // UI copy stays local so this plugin can load independently.
             const SCENE_LINK_UI_TEXT = {
                 "scene_animation": ["Scene animation","Animación de escena"],
+                "pose_keyframes": ["Pose → bone keyframes…","Pose → keyframes de huesos…"],
+                "pose_keyframe": ["Add pose keyframe…","Añadir keyframe de pose…"],
+                "choose_key_pose": ["Choose pose for keyframe…","Elegir pose del keyframe…"],
+                "pose_channel": ["Pose","Pose"],
+                "select_local_animation": ["Select or create a local animation first.","Selecciona o crea primero una animación local."],
+                "pose_source_changed": ["The linked skin changed. Select the pose again.","La skin vinculada cambió. Selecciona la pose de nuevo."],
+                "pose_zero_scale": ["This bone has a zero-scale base. Use the Pose channel instead.","Este hueso tiene una escala base cero. Usa el canal Pose."],
+                "pose_current": ["Current pose","Pose actual"],
+                "multiple_poses": ["Multiple poses","Varias poses"],
                 "connected": ["Connected","Conectada"],
                 "changes_available": ["Changes available","Hay cambios"],
                 "updating": ["Updating…","Actualizando…"],
@@ -650,13 +854,13 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 "a_project_cannot_contain_a_linked_instance_of_itself": ["A project cannot contain a linked instance of itself.","Un proyecto no puede contener una instancia vinculada de sí mismo."],
                 "cannot_link_this_scene": ["Cannot link this scene","No se puede vincular esta escena"],
                 "no_supported_geometry": ["No supported geometry","Sin geometría compatible"],
-                "choose_a_project_with_cubes_meshes_or_billboards_effects_and_loc": ["Choose a project with cubes, meshes or billboards. Effects and locators are not imported.","Elige un proyecto con cubos, mallas o billboards. Los efectos y localizadores no se importan."],
+                "choose_a_project_with_cubes_meshes_or_billboards_effects_and_loc": ["Choose a project with cubes, meshes, texture meshes or billboards. Effects and locators are not imported.","Elige un proyecto con cubos, mallas, Texture Meshes o billboards. Los efectos y localizadores no se importan."],
                 "add_linked_scene": ["Add linked scene","Añadir escena vinculada"],
                 "link_a_scene": ["Link a scene","Vincular una escena"],
                 "choose_what_this_instance_includes_textures_follow_the_selected": ["Choose what this instance includes. Textures follow the selected geometry.","Elige qué incluye esta instancia. Las texturas acompañan a la geometría elegida."],
                 "instance_name": ["Instance name","Nombre de instancia"],
                 "geometry": ["Geometry","Geometría"],
-                "cubes_and_meshes_from_the_source_project": ["Cubes and meshes from the source project.","Cubos y mallas del proyecto de origen."],
+                "cubes_and_meshes_from_the_source_project": ["Cubes, meshes and texture meshes from the source project.","Cubos, mallas y Texture Meshes del proyecto de origen."],
                 "sprite_elements_from_the_source_project": ["Sprite elements from the source project.","Elementos sprite del proyecto de origen."],
                 "excluded_from_this_version": ["Excluded from this version: ","Se excluyen en esta versión: "],
                 "source_animations_available_in_the_instance_inspector_group_tran": ["source animations available in the instance inspector. Group transforms only; effect tracks are excluded.","animaciones del origen disponibles en el inspector de la instancia. Solo transformaciones de grupos; las pistas de efectos se excluyen."],
@@ -674,6 +878,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 "choose_bbmodel": ["Choose .bbmodel…","Elegir .bbmodel…"],
                 "create_skin": ["Create skin…","Crear skin…"],
                 "find_a_project": ["Find a project","Buscar proyecto"],
+                "project": ["project","proyecto"],
                 "projects": ["projects","proyectos"],
                 "current_scene": ["Current scene","Escena actual"],
                 "open": ["Open","Abierto"],
@@ -686,6 +891,9 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 "skin_pose": ["Skin pose","Pose de skin"],
                 "cannot_apply_pose": ["Cannot apply pose","No se puede aplicar la pose"],
                 "saved_poses": ["Saved poses","Poses guardadas"],
+                "project_skin_poses": ["Project poses","Poses del proyecto"],
+                "source_skin_poses": ["Source file poses…","Poses del archivo de origen…"],
+                "source_skin_poses_empty": ["The source has no saved poses","El origen no tiene poses guardadas"],
                 "restore_source_pose": ["Restore source pose","Restaurar pose del origen"],
                 "reset_local_pose": ["Reset local pose","Restablecer pose local"],
                 "instance_settings": ["Instance settings","Ajustes de instancia"],
@@ -709,6 +917,14 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 "groups": ["groups","grupos"],
                 "elements": ["elements","elementos"],
                 "textures": ["textures","texturas"],
+                "instance_texture": ["Instance texture","Textura de la instancia"],
+                "secondary_skin_layer": ["Secondary skin layer","Segunda capa de la skin"],
+                "toggle_skin_layer": ["Toggle linked skin layer","Cambiar segunda capa de la skin vinculada"],
+                "source_default_texture": ["Source default","Predeterminada del origen"],
+                "linked_project_textures": ["Linked project","Proyecto vinculado"],
+                "current_project_textures": ["Current project","Proyecto actual"],
+                "missing_instance_texture": ["Texture missing · using source","Textura ausente · usando origen"],
+                "change_instance_texture": ["Change linked instance texture","Cambiar textura de la instancia vinculada"],
                 "source_material_overrides_are_not_linked_yet": ["Source material overrides are not linked yet","Los materiales personalizados del origen aún no se vinculan"],
                 "textures_only": ["Textures only","Solo texturas"],
                 "read_the_latest_saved_source": ["Read the latest saved source","Leer la última versión guardada del origen"],
@@ -717,6 +933,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 "open_2": ["Open","Abrir"],
                 "find_a_moved_source": ["Find a moved source","Buscar un origen movido"],
                 "find": ["Find","Buscar"],
+                "source_actions": ["Source project actions","Acciones del proyecto de origen"],
                 "pose_this_group": ["Pose this group","Posar este grupo"],
                 "place_the_instance": ["Place the instance","Colocar la instancia"],
                 "posed": ["posed","con pose"],
@@ -733,6 +950,10 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 "change_linked_loop": ["Change linked loop","Cambiar repetición vinculada"],
                 "evaluated_clip_time": ["Evaluated clip time","Tiempo evaluado del clip"],
                 "animation_clock": ["Animation clock","Reloj de animación"],
+                "linked_clips": ["Linked clips","Clips vinculados"],
+                "time_offset": ["Time offset","Desfase temporal"],
+                "offset_all_linked_clips": ["Time offset for all linked clips (seconds)","Desfase temporal para todos los clips vinculados (segundos)"],
+                "default_clip_loop": ["Default loop for clips without an individual override","Repetición predeterminada de clips sin ajuste individual"],
                 "follow_the_native_timeline_plus_offset": ["Follow the native timeline plus Offset","Seguir el timeline nativo más Offset"],
                 "keep_the_pose_at_the_current_timeline_time": ["Keep the pose at the current timeline time","Conservar la pose en el instante actual del timeline"],
                 "clip_time_offset": ["Clip time offset","Desfase de tiempo del clip"],
@@ -749,23 +970,54 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 'lightflow_links.name':'Scene instance', 'lightflow_links.pose':'Local pose',
                 'lightflow_links.add':'Linked scene…','lightflow_links.inspector':'Scene Links',
                 'lightflow_links.open':'Open source','lightflow_links.refresh':'Update from source',
-                'lightflow_links.relocate':'Find source…','lightflow_links.reset':'Reset local pose'
+                'lightflow_links.relocate':'Find source…','lightflow_links.reset':'Reset local pose',
+                'lightflow_links.export_bundle':'Export project with Scene Links…'
             });
             Language.addTranslations('es',{
                 'lightflow_links.name':'Instancia de escena', 'lightflow_links.pose':'Pose local',
                 'lightflow_links.add':'Escena vinculada…','lightflow_links.inspector':'Escenas vinculadas',
                 'lightflow_links.open':'Abrir origen','lightflow_links.refresh':'Actualizar desde origen',
-                'lightflow_links.relocate':'Buscar origen…','lightflow_links.reset':'Restablecer pose local'
+                'lightflow_links.relocate':'Buscar origen…','lightflow_links.reset':'Restablecer pose local',
+                'lightflow_links.export_bundle':'Exportar proyecto con escenas vinculadas…'
             });
             const hash=async text=>{
                 const bytes=new TextEncoder().encode(text);
                 const digest=await crypto.subtle.digest('SHA-256',bytes);
                 return [...new Uint8Array(digest)].map(byte=>byte.toString(16).padStart(2,'0')).join('');
             };
-            // Blockbench.read can log an error without invoking its callback.
-            // Native async reads always settle and retain ENOENT/EACCES for recovery.
-            const sourceFiles=require('fs').promises;
-            const readFile=path=>sourceFiles.readFile(path,'utf8');
+            // A bare require('fs') triggers Blockbench's broad filesystem
+            // permission dialog. In an automated or unattended import that
+            // synchronous prompt freezes the renderer/DevTools indefinitely.
+            // Attempt only previously granted, *file-scoped* silent access;
+            // otherwise use Blockbench's own path reader, bounded because it
+            // does not guarantee a callback for failed reads.
+            const readFile=async(path,readtype='text')=>{
+                if(disposed)throw new Error('Scene Links unloaded');
+                const files=require('node:fs',{scope:path,optional:true,show_permission_dialog:false});
+                if(files?.promises?.readFile)return files.promises.readFile(path,readtype==='text'?'utf8':undefined);
+                return new Promise((resolve,reject)=>{
+                    let settled=false;
+                    const finish=(error,content)=>{
+                        if(settled)return;
+                        settled=true;clearTimeout(timer);
+                        if(error)reject(error);else resolve(content);
+                    };
+                    const timer=setTimeout(()=>{
+                        const error=new Error('The source read did not complete. Choose the saved .bbmodel file again.');
+                        error.code='ETIMEDOUT';finish(error);
+                    },4000);
+                    try{
+                        // The host reports failed reads with console.error and
+                        // can omit the callback; its default errorbox would
+                        // also obscure Scene Links' own recovery UI.
+                        Blockbench.read([path],{readtype,errorbox:false},entries=>{
+                            const content=entries?.[0]?.content;
+                            if(readtype==='text'?typeof content==='string':content instanceof ArrayBuffer)finish(null,content);
+                            else finish(new Error('Blockbench did not return the requested file contents.'));
+                        });
+                    }catch(error){finish(error);}
+                });
+            };
             // Read the installed native preset without creating or selecting a project.
             let skinReadQueue=Promise.resolve();
             const skinSnapshots=new Map();
@@ -821,6 +1073,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                             }
                         }
                         const element={uuid:id(index++),type:'cube',name:cube.name||bone.name,from:from.map((value,i)=>value+offset[i]),to:to.map((value,i)=>value+offset[i]),origin:pivot.map((value,i)=>value+offset[i]),rotation,inflate:cube.inflate||0,visibility:cube.visibility!==false,faces};
+                        if(cube.layer===true)element.layer=true;
                         elements.push(element);group.children.push(element.uuid);
                     }
                     const parent=byName.get(bone.parent);if(parent)parent.children.push(group);
@@ -838,10 +1091,10 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
             };
             owned.push({delete(){skinSnapshots.clear();}});
             const readSource=async(element,force=false)=>{
-                const receiver=element._lightflowProject?.save_path||window.Project?.save_path||'';
+                const receiver=receiverBase(element._lightflowProject||window.Project);
                 if(!element.source_link)return {status:'empty',path:null};
                 let link;
-                try{link=JSON.parse(element.source_link||'{}');}catch(_){return {status:'incompatible'};}
+                try{link=JSON.parse(element.source_link);if(!link||typeof link!=='object'||Array.isArray(link))return {status:'incompatible'};}catch(_){return {status:'incompatible'};}
                 const key=core.sourceCacheKey(link,receiver,paths);
                 if(!force&&key&&assetCache.has(key))return assetCache.get(key);
                 const result=await core.readLinkedSource(link,receiver,paths,{readFile,prepareModel:prepareSourceModel},hash);
@@ -865,17 +1118,36 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 project.model_3d?.add(mesh);
             };
 
+            const scenePropertySchemas=new Map();
+            const sceneProperties=Type=>{
+                const current=Object.values(Type.properties||{});
+                if(!disposed){scenePropertySchemas.set(Type,current);return current;}
+                return [...new Map([...(scenePropertySchemas.get(Type)||[]),...current].map(prop=>[prop.name,prop])).values()];
+            };
+            const sceneChildTypes=['lightflow_pose_group','group','cube'];
             class SceneInstanceElement extends OutlinerElement {
-                constructor(data,uuid){super(data,uuid);this.children=[];this.isOpen=false;for(const prop of Object.values(SceneInstanceElement.properties))prop.reset(this);if(data)this.extend(data);}
+                constructor(data,uuid){super(data,uuid);this.children=[];this.isOpen=false;for(const prop of sceneProperties(SceneInstanceElement))prop.reset(this);if(data)this.extend(data);}
                 duplicate(){
                     const copy=super.duplicate();copy._lightflowProject=this._lightflowProject||Project;
                     refreshInstance(copy);return copy;
                 }
                 get origin(){return this.position;}
                 getWorldCenter(){return this.mesh?.getWorldPosition(new THREE.Vector3())||new THREE.Vector3().fromArray(this.position);}
-                extend(data){for(const prop of Object.values(SceneInstanceElement.properties))prop.merge(this,data);this.sanitizeName();return this;}
+                extend(data){for(const prop of sceneProperties(SceneInstanceElement))prop.merge(this,data);this.sanitizeName();return this;}
                 getUndoCopy(){const copy=new SceneInstanceElement(this,this.uuid);delete copy.parent;return copy;}
-                getSaveCopy(){const copy={type:'lightflow_scene_instance',uuid:this.uuid};for(const prop of Object.values(SceneInstanceElement.properties))prop.copy(this,copy);return copy;}
+                getSaveCopy(meta){
+                    const copy={type:'lightflow_scene_instance',uuid:this.uuid};
+                    for(const prop of sceneProperties(SceneInstanceElement))prop.copy(this,copy);
+                    const project=this._lightflowProject||window.Project,destination=project?.save_path;
+                    if(copy.source_link&&destination&&(meta?.model_format||Blockbench.hasFlag?.('compiling_bbmodel'))){
+                        try{
+                            const link=JSON.parse(copy.source_link);
+                            const rebased=core.rebaseLinkReference(link,receiverBase(project),destination,paths,confirmedSource(this));
+                            if(rebased!==link)copy.source_link=JSON.stringify(rebased);
+                        }catch(_){/* Preserve malformed legacy references for manual recovery. */}
+                    }
+                    return copy;
+                }
                 setColor(index){
                     this.color=index;
                     const row=document.getElementById(this.uuid)?.querySelector('.outliner_object');
@@ -883,15 +1155,18 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                     window.updateSelection?.();
                     return this;
                 }
-                forEachChild(callback,type=OutlinerElement,includeSelf=false){if(includeSelf&&this instanceof type)callback(this);const visit=child=>{if(child instanceof type)callback(child);for(const nested of child.children||[])visit(nested);};this.children.forEach(visit);}
+                forEachChild(callback,type,includeSelf=false){if(includeSelf)callback(this);const visit=child=>{if(!type||(Array.isArray(type)?type.some(nodeType=>child instanceof nodeType):child instanceof type))callback(child);for(const nested of child.children||[])visit(nested);};this.children.forEach(visit);}
                 openUp(){this.isOpen=true;this.parent?.openUp?.();return this;}
                 select(...args){const changed=Outliner.selected[0]!==this;super.select(...args);arrangeInspector();syncPanel();if(Modes.animate){ensureTimeline();Animation.selected?.getBoneAnimator(this)?.select(true);}else if(changed&&Modes.edit)Panels.transform?.getHostPanel?.()?.selectTab?.(Panels.transform);return this;}
                 unselect(...args){super.unselect(...args);syncPanel();}
-                static behavior={parent:true,child_types:['lightflow_pose_group'],select_children:'self_first',unique_name:true,movable:true,rotatable:true,scalable:true,use_absolute_position:true,marker_color:true,parent_types:['root','group','armature_bone']};
+                static behavior={parent:true,child_types:sceneChildTypes,select_children:'self_first',unique_name:true,movable:true,rotatable:true,scalable:true,use_absolute_position:true,marker_color:true,parent_types:['root','group','armature_bone']};
             }
             Object.assign(SceneInstanceElement.prototype,{type:'lightflow_scene_instance',title:'Scene instance',icon:'kid_star',movable:true,rotatable:true,scalable:true,needsUniqueName:true});
-            SceneInstanceElement.prototype.buttons=[Outliner.buttons.visibility,Outliner.buttons.locked];
+            SceneInstanceElement.prototype.buttons=[Outliner.buttons.locked,Outliner.buttons.visibility];
+            owned.push(new Property(SceneInstanceElement,'string','texture_override',{default:''}));
+            owned.push(new Property(SceneInstanceElement,'boolean','secondary_skin_layer',{default:false}));
             for(const[key,type,value]of[['name','string','Scene instance'],['source_link','string',''],['source_revision','string',''],['include_geometry','boolean',true],['include_billboards','boolean',true],['animation_id','string',''],['animation_ids','array',[]],['animation_layers','array',[]],['animation_locked','boolean',false],['animation_offset','number',0],['animation_time','number',0],['animation_loop','boolean',true],['animation_loop_override','boolean',false],['position','vector',[0,0,0]],['rotation','vector',[0,0,0]],['scale','vector',[1,1,1]],['color','number',-1],['visibility','boolean',true],['locked','boolean',false]])owned.push(new Property(SceneInstanceElement,type,key,{default:value}));
+            owned.push(new Property(SceneInstanceElement,'string','source_model_format',{default:''}));
             const migratedRoots=[];
             for(const project of window.ModelProject?.all||[]){for(const element of project.elements||[]){
                 if(element?.type!=='lightflow_scene_instance'||element instanceof SceneInstanceElement)continue;
@@ -904,20 +1179,20 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
             window.LightflowSceneInstanceElement=SceneInstanceElement;
 
             class ScenePoseElement extends OutlinerElement {
-                constructor(data,uuid){super(data,uuid);this.children=[];this.isOpen=false;for(const prop of Object.values(ScenePoseElement.properties))prop.reset(this);if(data)this.extend(data);}
+                constructor(data,uuid){super(data,uuid);this.children=[];this.isOpen=false;for(const prop of sceneProperties(ScenePoseElement))prop.reset(this);if(data)this.extend(data);}
                 get origin(){return this.position;}
                 getWorldCenter(){return this.mesh?.getWorldPosition(new THREE.Vector3())||new THREE.Vector3().fromArray(this.position);}
-                extend(data){for(const prop of Object.values(ScenePoseElement.properties))prop.merge(this,data);this.sanitizeName();return this;}
+                extend(data){for(const prop of sceneProperties(ScenePoseElement))prop.merge(this,data);this.sanitizeName();return this;}
                 getUndoCopy(){const copy=new ScenePoseElement(this,this.uuid);delete copy.parent;return copy;}
-                getSaveCopy(){const copy={type:'lightflow_pose_group',uuid:this.uuid};for(const prop of Object.values(ScenePoseElement.properties))prop.copy(this,copy);return copy;}
-                forEachChild(callback,type=OutlinerElement,includeSelf=false){if(includeSelf&&this instanceof type)callback(this);const visit=child=>{if(child instanceof type)callback(child);for(const nested of child.children||[])visit(nested);};this.children.forEach(visit);}
+                getSaveCopy(){const copy={type:'lightflow_pose_group',uuid:this.uuid};for(const prop of sceneProperties(ScenePoseElement))prop.copy(this,copy);return copy;}
+                forEachChild(callback,type,includeSelf=false){if(includeSelf)callback(this);const visit=child=>{if(!type||(Array.isArray(type)?type.some(nodeType=>child instanceof nodeType):child instanceof type))callback(child);for(const nested of child.children||[])visit(nested);};this.children.forEach(visit);}
                 openUp(){this.isOpen=true;this.parent?.openUp?.();return this;}
                 select(...args){const changed=Outliner.selected[0]!==this;super.select(...args);arrangeInspector();syncPanel();if(Modes.animate){ensureTimeline();Animation.selected?.getBoneAnimator(this)?.select(true);}else if(changed&&Modes.edit)Panels.transform?.getHostPanel?.()?.selectTab?.(Panels.transform);return this;}
                 unselect(...args){super.unselect(...args);syncPanel();}
-                static behavior={parent:true,child_types:['lightflow_pose_group'],select_children:'self_first',unique_name:true,movable:true,rotatable:true,scalable:true,use_absolute_position:true,parent_types:['lightflow_scene_instance','lightflow_pose_group']};
+                static behavior={parent:true,child_types:sceneChildTypes,select_children:'self_first',unique_name:true,movable:true,rotatable:true,scalable:true,use_absolute_position:true,parent_types:['lightflow_scene_instance','lightflow_pose_group']};
             }
             Object.assign(ScenePoseElement.prototype,{type:'lightflow_pose_group',title:'Local pose',icon:'accessibility_new',movable:true,rotatable:true,scalable:true,needsUniqueName:true});
-            ScenePoseElement.prototype.buttons=[Outliner.buttons.visibility,Outliner.buttons.locked];
+            ScenePoseElement.prototype.buttons=[Outliner.buttons.locked,Outliner.buttons.visibility];
             for(const[key,type,value]of[['name','string','Group'],['source_group_id','string',''],['pose_mode','string','additive'],['position','vector',[0,0,0]],['rotation','vector',[0,0,0]],['scale','vector',[1,1,1]],['visibility','boolean',true],['locked','boolean',false]])owned.push(new Property(ScenePoseElement,type,key,{default:value}));
             const migratedPoses=[];
             for(const project of window.ModelProject?.all||[]){for(const element of project.elements||[]){
@@ -931,6 +1206,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
             OutlinerElement.registerType(ScenePoseElement,'lightflow_pose_group');
             window.LightflowScenePoseElement=ScenePoseElement;
             const rootOf=element=>{let node=element;while(node&&node!=='root'){if(node.type==='lightflow_scene_instance')return node;node=node.parent;}return null;};
+            const isSkinRoot=root=>root?.type==='lightflow_scene_instance'&&(root._lightflowManifest?.format||root.source_model_format)==='skin';
             const recordFor=element=>sourceForPose.get(element)||null;
             const setupNode=(element,controller)=>{
                 const node=new THREE.Group();node.name=element.uuid;node.type=element.type;node.isElement=true;
@@ -950,8 +1226,50 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                     return super.createKeyframe(...args);
                 }
             }
-            SceneInstanceElement.animator=LinkedNodeAnimator;
+            LinkedNodeAnimator.prototype.type='lightflow_scene_pose_animation';
+            const poseChannel='lightflow_pose';
+            const skinChannels={...BoneAnimator.prototype.channels,[poseChannel]:{name:t('pose_channel'),mutable:true,transform:true,max_data_points:1}};
+            class LinkedInstanceAnimator extends LinkedNodeAnimator {
+                constructor(...args){super(...args);this[poseChannel]||=[];this.muted[poseChannel]??=false;}
+                get channels(){return isSkinRoot(OutlinerNode.uuids[this.uuid])?skinChannels:BoneAnimator.prototype.channels;}
+                displayFrame(multiplier=1){if(disposed)return;this._lightflowPoseWeight=multiplier;return super.displayFrame(multiplier);}
+                createKeyframe(value,time,channel,undo,select){
+                    if(channel===poseChannel){
+                        if(!isSkinRoot(this.getGroup()))return;
+                        if(!value?.lightflow_pose_snapshot){
+                            if(!activeMounts.has(this.getGroup())){Blockbench.showQuickMessage(t('source_unavailable'));return;}
+                            value={lightflow_pose_snapshot:captureLinkedPose(this.getGroup()),lightflow_pose_label:t('pose_current')};
+                        }
+                    }
+                    return super.createKeyframe(value,time,channel,undo,select);
+                }
+                getUndoCopy(options={}){
+                    const copy=super.getUndoCopy(options),keys=this[poseChannel]||[];
+                    // Keep authored snapshots serializable even after owned global Property definitions unload.
+                    copy.keyframes||=[];
+                    for(const key of keys){let saved=copy.keyframes.find(item=>item.uuid===key.uuid);if(!saved){saved=key.getUndoCopy(true);copy.keyframes.push(saved);}
+                        for(const field of ['lightflow_pose_snapshot','lightflow_pose_label'])if(key[field]!==undefined)saved[field]=JSON.parse(JSON.stringify(key[field]));}
+                    return copy;
+                }
+            }
+            LinkedInstanceAnimator.prototype.type='lightflow_scene_instance_animation';
+            for(const [type,key,value]of [['object','lightflow_pose_snapshot',{}],['string','lightflow_pose_label','']])owned.push(new Property(Keyframe,type,key,{default:value,exposed:false,condition:key=>key.channel===poseChannel}));
+            SceneInstanceElement.animator=LinkedInstanceAnimator;
             ScenePoseElement.animator=LinkedNodeAnimator;
+            const upgradeLinkedAnimators=()=>{
+                for(const project of window.ModelProject?.all||[])for(const animation of project.animations||[])for(const[id,animator]of Object.entries(animation.animators||{})){
+                    const element=(project.elements||[]).find(node=>node.uuid===id);
+                    if(!element||!['lightflow_scene_instance','lightflow_pose_group'].includes(element.type))continue;
+                    Object.setPrototypeOf(animator,element.type==='lightflow_scene_instance'?LinkedInstanceAnimator.prototype:LinkedNodeAnimator.prototype);
+                    if(element.type==='lightflow_scene_instance'){animator[poseChannel]||=[];animator.muted[poseChannel]??=false;for(const key of animator[poseChannel])key.transform=true;}
+                }
+            };
+            upgradeLinkedAnimators();
+            function captureLinkedPose(root){
+                const groups={};
+                for(const pose of treeFor(root).values())if(pose.mesh)groups[pose.source_group_id]=pose.mesh.userData.lightflowPoseBase||{position:pose.mesh.position.toArray(),rotation:[pose.mesh.rotation.x,pose.mesh.rotation.y,pose.mesh.rotation.z].map(Math.radToDeg),scale:pose.mesh.scale.toArray()};
+                return core.normalizePoseSnapshot({version:1,groups});
+            }
             for(const Type of [SceneInstanceElement,ScenePoseElement]){
                 Type.behavior.has_pivot=true;Type.behavior.resizable=true;
                 Type.prototype.size=function(axis){
@@ -1000,9 +1318,20 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                     element.mesh.position.fromArray(base?base.position.map((value,i)=>value-(parentSource?.origin?.[i]||0)):element.position);
                     if(base)element.mesh.quaternion.fromArray(base.quaternion);else element.mesh.rotation.fromArray(element.rotation.map(Math.degToRad));
                     element.mesh.scale.fromArray(base?.scale||element.scale);
+                    const frames=poseTrackFrames.get(owner)||[];
+                    if(frames.length){const position=element.mesh.position.clone(),rotation=element.mesh.quaternion.clone(),scale=element.mesh.scale.clone();
+                        for(const frame of frames){const target=frame.groups[element.source_group_id];if(!target)continue;
+                            if(frame.override){element.mesh.position.copy(position);element.mesh.quaternion.copy(rotation);element.mesh.scale.copy(scale);}
+                            element.mesh.position.lerp(new THREE.Vector3().fromArray(target.position),frame.weight);
+                            element.mesh.quaternion.slerp(new THREE.Quaternion().fromArray(target.quaternion),frame.weight);
+                            element.mesh.scale.lerp(new THREE.Vector3().fromArray(target.scale),frame.weight);
+                        }
+                    }
+                    element.mesh.userData.lightflowPoseBase={position:element.mesh.position.toArray(),rotation:[element.mesh.rotation.x,element.mesh.rotation.y,element.mesh.rotation.z].map(Math.radToDeg),scale:element.mesh.scale.toArray()};
                     element.mesh.visible=element.visibility!==false&&source?.visible!==false;
                     applyPoseAnimation(element);
                     element.mesh.fix_position=element.mesh.position.clone();element.mesh.fix_rotation=element.mesh.rotation.clone();
+                    element.mesh.fix_scale=element.mesh.scale.clone();
                     this.dispatchEvent('update_transform',{element});
                     if(!updatingAnimatedTree)window.ShaderEngine?.refreshExternalMeshTransforms?.(element.mesh);
                     if(!updatingAnimatedTree)updateOutline();
@@ -1058,9 +1387,13 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
             const getTextureSource=(texture,sourcePath)=>{
                 const source=String(texture?.source||'');
                 if(source.startsWith('data:')||source.startsWith('blob:'))return source;
-                const file=String(texture?.path||source||'');
+                const file=String(texture?.path||texture?.relative_path||source||'');
                 if(!file)return '';
-                try{return new URL('file:///'+paths.resolve(paths.dirname(sourcePath),file).replace(/\\/g,'/')).href;}
+                try{
+                    const absolute=paths.resolve(paths.dirname(sourcePath),file);
+                    const url=absolute.split('/').map((part,i)=>i===0&&/^[a-z]:$/i.test(part)?part:encodeURIComponent(part)).join('/');
+                    return new URL((absolute.startsWith('//')?'file:':absolute.startsWith('/')?'file://':'file:///')+url).href;
+                }
                 catch(_){return '';}
             };
             const decodeTerrainArray=descriptor=>{
@@ -1123,26 +1456,47 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
             const createRenderResources=result=>{
                 const existing=renderResources.get(result.cacheKey);
                 if(existing?.revision===result.revision){result.model=existing.result.model;result.manifest=existing.result.manifest;return existing;}
-                const resources={result,revision:result.revision,textures:new Map(),materials:new Map(),cubes:new Map(),owned:new Set(),users:new Set(),retired:false,batchVersion:0,batchCache:null};
+                const resources={result,revision:result.revision,textures:new Map(),materials:new Map(),cubes:new Map(),owned:new Set(),users:new Set(),retired:false,batchVersion:0,batchCache:null,textureMeshes:[]};
                 const terrain=core.terrainSections(result.model);
-                const referencedTextures=core.linkedTextureReferences(result.model);
+                const format=window.Formats?.[result.manifest.format];
+                const usesDefaultTexture=face=>face&&face.texture!==null&&
+                    (format?.single_texture||format?.single_texture_default&&!format.per_group_texture&&!face.texture&&face.texture!==0);
+                resources.hasDefaultTextureFaces=(result.model.elements||[]).some(element=>
+                    ['cube','mesh'].includes(element.type||'cube')&&Object.values(element.faces||{}).some(usesDefaultTexture));
+                const defaultRecord=resources.hasDefaultTextureFaces?core.textureMeshTexture(result.model,null):null;
+                const defaultTextureKey=defaultRecord?String(result.model.textures.indexOf(defaultRecord)):undefined;
+                const referencedTextures=core.linkedTextureReferences(result.model,defaultTextureKey);
                 const sourceTextures=[...(result.model.textures||[]),...(result.model.lightflow_terrain?.textures||[])];
-                for(const [index,record] of sourceTextures.entries()){
-                    if(!referencedTextures.has(String(index))&&!referencedTextures.has(String(record.uuid||record.id)))continue;
+                const loadTexture=(record,index,usedByTemplate)=>{
+                    if(resources.textures.has(String(index)))return;
                     const url=getTextureSource(record,result.path);
-                    if(!url)continue;
+                    if(!url)return;
                     const texture=new THREE.TextureLoader().load(url,()=>{
-                        if(disposed)return;
+                        if(disposed||resources.retired)return;
                         texture.userData||={};
                         try{
                             const image=texture.image,canvas=document.createElement('canvas');canvas.width=image.width;canvas.height=image.height;
                             const context=canvas.getContext('2d',{willReadFrequently:true});context.drawImage(image,0,0);
-                            const pixels=context.getImageData(0,0,canvas.width,canvas.height).data;
-                            let opaque=true,cutout=true;for(let i=3;i<pixels.length;i+=4){if(pixels[i]!==255)opaque=false;if(pixels[i]!==255&&pixels[i]/255>=.05)cutout=false;}
+                            const imageData=context.getImageData(0,0,canvas.width,canvas.height),pixels=imageData.data;
+                            for(const entry of resources.textureMeshes)if(entry.textureRecord===record)
+                                core.updateTextureMeshGeometry(entry.geometry,entry.record,result.model,record,imageData,THREE);
+                            let opaque=true,cutout=true;for(let i=3;i<pixels.length;i+=4){if(pixels[i]!==255)opaque=false;if(pixels[i]>1&&pixels[i]<254)cutout=false;}
                             texture.userData.lightflowOpaque=opaque;texture.userData.lightflowCutout=cutout;
                         }catch(_){texture.userData.lightflowOpaque=false;}
-                        resources.batchVersion++;
-                        if(!disposed&&!resources.retired)for(const owner of [...resources.users])if(owner._lightflowProject===Project)mountResult(owner,result);
+                        if(usedByTemplate){
+                            resources.batchVersion++;
+                            for(const owner of [...resources.users])if(owner._lightflowProject===Project)mountResult(owner,result);
+                        }else{
+                            // Shader Architect chooses its alpha mode when the
+                            // mesh is integrated. Rebind only current users of
+                            // this lazy texture or its linked PBR group.
+                            for(const owner of [...resources.users]){
+                                if(owner._lightflowProject!==Project||activeMounts.get(owner)!==resources||
+                                    !owner.texture_override?.startsWith('source:'))continue;
+                                const choice=instanceTexture(owner,resources);
+                                if(choice&&(choice===record||record.group&&record.group===choice.group))syncInstanceTexture(owner,true);
+                            }
+                        }
                         for(const owner of resources.users)window.ShaderEngine?.requestPreviewRender?.({cause:'scene_link_texture'});
                     });
                     texture.magFilter=THREE.NearestFilter;texture.minFilter=THREE.NearestFilter;
@@ -1162,29 +1516,41 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                     resources.textures.set(String(record.uuid||record.id||''),info);
                     resources.textures.set(String(index),info);
                     resources.owned.add(texture);
+                };
+                for(const [index,record] of sourceTextures.entries()){
+                    if(referencedTextures.has(String(index))||referencedTextures.has(String(record.uuid||record.id)))loadTexture(record,index,true);
                 }
+                resources.loadTextureChoice=index=>{
+                    const references=core.linkedTextureReferences(result.model,String(index));
+                    sourceTextures.forEach((record,i)=>{if(references.has(String(i)))loadTexture(record,i,false);});
+                    return core.linkedTextureBindings(result.model,resources.textures).get(String(index));
+                };
                 const textureBindings=core.linkedTextureBindings(result.model,resources.textures);
                 const definitions=core.sourceMaterialDefinitions(result.model);
-                const materialFor=(face,index=0,element=null,faceName=null)=>{
+                const materialFor=(face,index=0,element=null,faceName=null,implicit=false)=>{
                     if(!face||face.texture===null)return hiddenFaceMaterial;
                     const definition=core.linkedMaterialDefinition(element,faceName,definitions);
-                    const info=resources.textures.get(String(face.texture??''));
+                    const textureKey=implicit?defaultTextureKey:String(face.texture??'');
+                    const info=resources.textures.get(textureKey);
+                    const prefix=implicit?'source-default|':'';
                     if(!info){
-                        if(!definition)return fallbackMaterials[index%fallbackMaterials.length];
-                        const key='fallback-'+index+'|'+definition.id;
+                        if(!definition&&!implicit)return fallbackMaterials[index%fallbackMaterials.length];
+                        const key=prefix+'fallback-'+index+'|'+(definition?.id||'');
                         if(!resources.materials.has(key)){
                             const material=fallbackMaterials[index%fallbackMaterials.length].clone();
                             material.sa_linked_material_definition=definition;
+                            material.sa_linked_default_texture=implicit;
                             resources.materials.set(key,material);resources.owned.add(material);
                         }
                         return resources.materials.get(key);
                     }
-                    const key=info.texture.uuid+'|'+(definition?.id||'');
+                    const key=prefix+info.texture.uuid+'|'+(definition?.id||'');
                     if(!resources.materials.has(key)){
                         const material=new THREE.MeshBasicMaterial({map:info.texture,transparent:true,alphaTest:.05,side:THREE.DoubleSide});
                         material.sa_source_render_mode=info.record.render_mode||'default';
-                        material.sa_source_blockbench_texture=textureBindings.get(String(face.texture));
+                        material.sa_source_blockbench_texture=textureBindings.get(textureKey);
                         material.sa_linked_material_definition=definition;
+                        material.sa_linked_default_texture=implicit;
                         resources.materials.set(key,material);resources.owned.add(material);
                     }
                     return resources.materials.get(key);
@@ -1208,7 +1574,8 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                     const materials=sides.map((side,index)=>{
                         const face=cube.faces?.[side];
                         if(!face)return hiddenFaceMaterial;
-                        const textureInfo=resources.textures.get(String(face.texture??''));
+                        const implicit=usesDefaultTexture(face);
+                        const textureInfo=resources.textures.get(implicit?defaultTextureKey:String(face.texture??''));
                         if(Array.isArray(face.uv)&&face.uv.length===4){
                             const w=Number(textureInfo?.record.uv_width||result.model.resolution?.width||16)||16;
                             const h=Number(textureInfo?.record.uv_height||result.model.resolution?.height||16)||16;
@@ -1220,7 +1587,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                             while(rotation>=90){const first=coords[0];coords[0]=coords[2];coords[2]=coords[3];coords[3]=coords[1];coords[1]=first;rotation-=90;}
                             coords.forEach(([u,v],corner)=>uv.setXY(index*4+corner,u,v));
                         }
-                        return materialFor(face,index,cube,sides[index]);
+                        return materialFor(face,index,cube,sides[index],implicit);
                     });
                     uv.needsUpdate=true;
                     // Preserve the triangle order for picking, but collapse identical
@@ -1230,7 +1597,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                     // texture resolution even after native draw groups collapse.
                     const faceRanges=visibleGroups.map(group=>{
                         const face=cube.faces?.[sides[group.materialIndex]];
-                        const info=resources.textures.get(String(face?.texture??''));
+                        const info=resources.textures.get(usesDefaultTexture(face)?defaultTextureKey:String(face?.texture??''));
                         return {start:group.start,count:group.count,faceKey:sides[group.materialIndex],materialIndex:group.materialIndex,textureSize:[
                             Number(info?.record.uv_width||result.model.resolution?.width||16)||16,
                             Number(info?.record.uv_height||result.model.resolution?.height||16)||16
@@ -1255,15 +1622,25 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                     holder.position.fromArray(origin);
                     holder.rotation.fromArray((cube.rotation||[0,0,0]).map(value=>Number(value)*Math.PI/180));
                     holder.visible=cube.visibility!==false;holder.userData.lightflowKind='geometry';
+                    if(result.manifest.format==='skin'&&cube.layer===true){
+                        holder.userData.lightflowSkinLayer=true;
+                        resources.hasSecondarySkinLayer=true;
+                    }
                     resources.cubes.set(cube.uuid,holder);
                 }
                 for(const record of result.model.elements||[]){
-                    if(!['mesh','billboard'].includes(record.type))continue;
+                    if(!['mesh','billboard','texture_mesh'].includes(record.type))continue;
                     const holder=new THREE.Group();holder.rotation.order=window.Formats?.[result.manifest.format]?.euler_order||'ZYX';
                     holder.position.fromArray(record.type==='billboard'?record.position||record.origin||[0,0,0]:record.origin||[0,0,0]);
                     holder.rotation.fromArray((record.rotation||[0,0,0]).map(value=>Number(value)*Math.PI/180));
                     holder.visible=record.visibility!==false;holder.userData.lightflowKind=record.type==='billboard'?'billboards':'geometry';
-                    if(record.type==='billboard'){
+                    if(record.type==='texture_mesh'){
+                        const textureRecord=core.textureMeshTexture(result.model,record);
+                        const textureKey=String((result.model.textures||[]).indexOf(textureRecord));
+                        const geometry=core.updateTextureMeshGeometry(new THREE.BufferGeometry(),record,result.model,textureRecord,null,THREE);
+                        resources.owned.add(geometry);resources.textureMeshes.push({geometry,record,textureRecord});
+                        holder.add(new THREE.Mesh(geometry,materialFor({texture:textureKey},0,record)));
+                    }else if(record.type==='billboard'){
                         const face=record.faces?.front,info=resources.textures.get(String(face?.texture??''));
                         const geometry=new THREE.PlaneGeometry(Number(record.size?.[0])||1,Number(record.size?.[1])||1);resources.owned.add(geometry);
                         const uv=face?.uv||[0,0,16,16],w=Number(info?.record.uv_width||result.model.resolution?.width)||16,h=Number(info?.record.uv_height||result.model.resolution?.height)||16;
@@ -1275,7 +1652,8 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                     }else{
                         for(const [faceIndex,face] of Object.values(record.faces||{}).entries()){
                             const ids=face.vertices||[];if(ids.length<3||ids.some(id=>!Array.isArray(record.vertices?.[id])))continue;
-                            const positions=[],uvs=[],info=resources.textures.get(String(face.texture??''));
+                            const implicit=usesDefaultTexture(face);
+                            const positions=[],uvs=[],info=resources.textures.get(implicit?defaultTextureKey:String(face.texture??''));
                             const w=Number(info?.record.uv_width||result.model.resolution?.width)||16,h=Number(info?.record.uv_height||result.model.resolution?.height)||16;
                             const vertices=ids.map(id=>new THREE.Vector3().fromArray(record.vertices[id]));
                             const normal=new THREE.Vector3().crossVectors(vertices[1].clone().sub(vertices[0]),vertices[2].clone().sub(vertices[0]));
@@ -1287,7 +1665,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                             }
                             const geometry=new THREE.BufferGeometry();geometry.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));geometry.setAttribute('uv',new THREE.Float32BufferAttribute(uvs,2));geometry.computeVertexNormals();resources.owned.add(geometry);
                             geometry.userData.saLogicalFaceRanges=[{start:0,count:positions.length/3,faceKey:Object.keys(record.faces||{})[faceIndex],materialIndex:0,textureSize:[w,h]}];
-                            holder.add(new THREE.Mesh(geometry,materialFor(face,faceIndex,record,Object.keys(record.faces||{})[faceIndex])));
+                            holder.add(new THREE.Mesh(geometry,materialFor(face,faceIndex,record,Object.keys(record.faces||{})[faceIndex],implicit)));
                         }
                     }
                     holder.traverse(mesh=>{if(mesh.isMesh){mesh.castShadow=record.sa_cast_shadow!==false;mesh.receiveShadow=true;mesh.userData.lightflowSourceElement={sa_auto_tile:record.sa_auto_tile,sa_mesh_face_auto_tile:record.sa_mesh_face_auto_tile,faces:record.faces,sa_lighting_normal:record.sa_lighting_normal,sa_cast_shadow:record.sa_cast_shadow};mesh.userData.lightflowSourceMaterialDefinitions=(Array.isArray(mesh.material)?mesh.material:[mesh.material]).map(material=>material.sa_linked_material_definition||null);}});
@@ -1348,19 +1726,38 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 return resources;
             };
             const terrainInstanceStates=new WeakMap();
+            const mountedTextureMaterials=new WeakMap();
+            const updateSecondarySkinLayer=element=>{
+                const visible=element.secondary_skin_layer===true;
+                let changed=false;
+                for(const holder of mountedCubes.get(element)||[]){
+                    if(holder.userData.lightflowSkinLayer&&holder.visible!==visible){
+                        holder.visible=visible;changed=true;
+                    }
+                }
+                return changed;
+            };
             const clearMounted=(element,preserveResources=false)=>{
                 let released=false;
-                for(const mesh of mountedCubes.get(element)||[]){mesh.traverse(object=>{if(object.isMesh){
-                    if(object.userData.lightflowTerrainBufferOwner)return;
-                    // Retire private GPU streams before Shader Architect removes
-                    // their attributes. Shared terrain streams belong to resources.
-                    const terrain=terrainInstanceStates.has(object);
-                    if(terrain&&object.userData.lightflowOwnedGeometry)object.geometry?.dispose();
-                    window.ShaderEngine?.releaseMeshIntegration?.({mesh:object},object,{deferCacheInvalidation:true});released=true;
-                    if(object.userData.lightflowOwnedGeometry){if(!terrain)object.geometry?.dispose();delete object.userData.lightflowOwnedGeometry;}
-                    terrainInstanceStates.delete(object);
-                }});mesh.parent?.remove(mesh);}
+                for(const holder of mountedCubes.get(element)||[]){
+                    const meshes=[];
+                    holder.traverse(object=>{
+                        if(object.isMesh&&!object.userData.lightflowTerrainBufferOwner&&
+                            !object.userData.saOpaqueCoveragePass&&!object.userData.saToonOutlinePass)meshes.push(object);
+                    });
+                    // Releasing an integration can remove its child passes.
+                    for(const object of meshes){
+                        const terrain=terrainInstanceStates.has(object);
+                        if(terrain&&object.userData.lightflowOwnedGeometry)object.geometry?.dispose();
+                        window.ShaderEngine?.releaseMeshIntegration?.({mesh:object},object,{deferCacheInvalidation:true});released=true;
+                        if(object.userData.lightflowOwnedGeometry){if(!terrain)object.geometry?.dispose();delete object.userData.lightflowOwnedGeometry;}
+                        terrainInstanceStates.delete(object);
+                    }
+                    holder.parent?.remove(holder);
+                }
                 mountedCubes.delete(element);
+                mountedTextureMaterials.get(element)?.forEach(material=>material.dispose());
+                mountedTextureMaterials.delete(element);
                 const old=activeMounts.get(element);
                 if(old){
                     old.users.delete(element);
@@ -1437,7 +1834,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 const budget=terrainBudget(),lightflow=!!(engine&&manager&&Project?.view_mode==='lightflow');
                 let restored=false;
                 for(const holder of mountedCubes.get(root)||[])holder.traverse(mesh=>{
-                    if(!mesh.isMesh||mesh.userData.saOpaqueCoveragePass||mesh.userData.lightflowTerrainBufferOwner)return;
+                    if(!mesh.isMesh||mesh.userData.saOpaqueCoveragePass||mesh.userData.saToonOutlinePass||mesh.userData.lightflowTerrainBufferOwner)return;
                     if(mesh.userData.lightflowTerrainSection){
                         const state=terrainInstanceStates.get(mesh);
                         const allowed=budget.estimatedDecoratedBytes<=budget.maxGeometryBytes;
@@ -1474,7 +1871,14 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
             owned.push({delete(){clearInterval(materialWatch);}},Blockbench.on('shader_architect_material_instances_changed',refreshLinkedMaterials),Blockbench.on('change_view_mode',refreshLinkedMaterials));
             const treeFor=element=>{
                 const map=new Map();
-                element.forEachChild(child=>{if(child.type==='lightflow_pose_group')map.set(child.source_group_id,child);});
+                const visit=parent=>{
+                    for(const child of parent.children){
+                        if(child.type!=='lightflow_pose_group')continue;
+                        map.set(child.source_group_id,child);
+                        visit(child);
+                    }
+                };
+                visit(element);
                 return map;
             };
             const synchronizeTree=(element,result)=>{
@@ -1496,12 +1900,33 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
             };
             let rigidBatchingEnabled=true;
             const mountedInstanceStates=new WeakMap();
+            const sourceTextureId=(record,index)=>'source:'+(record.uuid||record.id||index);
+            const instanceTexture=(element,resources)=>{
+                if(!resources?.hasDefaultTextureFaces||element.include_geometry===false||!element.texture_override)return;
+                const id=element.texture_override;
+                if(id.startsWith('source:'))return resources.result.model.textures?.find((record,index)=>sourceTextureId(record,index)===id);
+                return Project.textures?.find(texture=>'project:'+texture.uuid===id);
+            };
+            const instanceTextureMap=(element,resources,texture)=>{
+                if(element.texture_override?.startsWith('source:')){
+                    const index=resources?.result.model.textures?.indexOf(texture);
+                    const map=resources?.textures.get(String(index))?.texture;
+                    return map?.image?map:undefined;
+                }
+                return texture?.getOwnMaterial()?.map;
+            };
+            const hasSameMountedTexture=(element,resources,state)=>{
+                const texture=instanceTexture(element,resources);
+                return state?.texture===texture&&state?.map===instanceTextureMap(element,resources,texture)&&state?.renderMode===texture?.render_mode;
+            };
             const mountOptionsKey=element=>[element.include_geometry!==false,element.include_billboards!==false,!!Format.centered_grid,rigidBatchingEnabled].join('|');
-            const rememberMountedInstance=element=>mountedInstanceStates.set(element,{mesh:element.mesh,options:mountOptionsKey(element)});
+            const rememberMountedInstance=(element,texture,map)=>mountedInstanceStates.set(element,{
+                mesh:element.mesh,options:mountOptionsKey(element),texture,map,renderMode:texture?.render_mode
+            });
             const canReuseMountedInstance=(element,result)=>{
                 const resources=activeMounts.get(element),state=mountedInstanceStates.get(element),mounted=mountedCubes.get(element);
                 if(!resources||resources.retired||resources.revision!==result.revision||resources.result.cacheKey!==result.cacheKey
-                    ||!state||state.mesh!==element.mesh||state.options!==mountOptionsKey(element)||!mounted)return false;
+                    ||!state||state.mesh!==element.mesh||state.options!==mountOptionsKey(element)||!mounted||!hasSameMountedTexture(element,resources,state))return false;
                 const poses=treeFor(element);
                 if(result.manifest.groups.some(group=>!poses.has(group.id)))return false;
                 return mounted.every(mesh=>{
@@ -1521,7 +1946,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 const templates=new Map(resources.cubes),parentIds=new Map(),buckets=new Map();
                 for(const group of manifest.groups)for(const id of group.elementIds)parentIds.set(id,group.id);
                 for(const [id,holder] of resources.cubes){
-                    if(!holder.visible||holder.userData.lightflowKind!=='geometry')continue;
+                    if(!holder.visible||holder.userData.lightflowKind!=='geometry'||holder.userData.lightflowSkinLayer)continue;
                     holder.updateMatrixWorld(true);
                     const meshes=[];holder.traverseVisible(object=>{if(object.isMesh)meshes.push(object);});
                     if(meshes.length!==1)continue;
@@ -1567,6 +1992,24 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 clearMounted(element,true);
                 const poses=synchronizeTree(element,result);
                 const resources=createRenderResources(result);
+                const texture=instanceTexture(element,resources);
+                const binding=texture&&element.texture_override.startsWith('source:')
+                    ? resources.loadTextureChoice(result.model.textures.indexOf(texture)):texture;
+                const map=instanceTextureMap(element,resources,texture);
+                const textureMaterials=new Map();
+                const replaceTexture=material=>{
+                    if(!material?.sa_linked_default_texture)return material;
+                    if(!textureMaterials.has(material)){
+                        const alpha=map.userData;
+                        const replacement=new THREE.MeshBasicMaterial({map,transparent:true,alphaTest:1/255,
+                            depthWrite:!!(alpha?.lightflowOpaque||alpha?.lightflowCutout),side:THREE.DoubleSide});
+                        replacement.sa_source_render_mode=texture.render_mode||'default';
+                        replacement.sa_source_blockbench_texture=binding;
+                        replacement.sa_linked_material_definition=material.sa_linked_material_definition;
+                        textureMaterials.set(material,replacement);
+                    }
+                    return textureMaterials.get(material);
+                };
                 const mounted=[];
                 const parentForCube=new Map();
                 for(const group of result.manifest.groups)for(const uuid of group.elementIds)parentForCube.set(uuid,group);
@@ -1578,6 +2021,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                     if(mesh.userData.lightflowTerrainCoordinates){const offset=core.terrainGridOffset(result.model,Format.centered_grid);mesh.position.x+=offset;mesh.position.z+=offset;}
                     mesh.traverse(object=>{if(object.isMesh){object.name=pose?.uuid||element.uuid;object.userData.lightflowSceneInstance=element.uuid;object.userData.lightflowPose=pose?.uuid||'';
                         linkedSourceResources.set(object,resources);
+                        if(map)object.material=Array.isArray(object.material)?object.material.map(replaceTexture):replaceTexture(object.material);
                         // Shader face dimensions and join attributes depend on
                         // this instance's transform; never mutate a shared template.
                         if(object.geometry){
@@ -1600,6 +2044,8 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                     mounted.push(mesh);
                 }
                 mountedCubes.set(element,mounted);
+                updateSecondarySkinLayer(element);
+                if(textureMaterials.size)mountedTextureMaterials.set(element,textureMaterials);
                 if(resources.terrainBufferOwner&&element.include_geometry!==false){
                     const owner=new THREE.Mesh(resources.terrainBufferOwner,[]);
                     owner.name='Terrain shared buffer owner';owner.frustumCulled=false;owner.matrixAutoUpdate=false;
@@ -1609,12 +2055,13 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 }
                 resources.users.add(element);
                 activeMounts.set(element,resources);
-                rememberMountedInstance(element);
+                rememberMountedInstance(element,texture,map);
                 // A second linked world shares source streams but needs its own
                 // derived streams. Preflight the whole scene before decorating it.
                 refreshLinkedMaterials();
                 window.ShaderEngine?.refreshExternalMeshTransforms?.(element.mesh);
                 element._lightflowManifest=result.manifest;
+                element.source_model_format=result.manifest.format;
                 element._lightflowAnimations=core.normalizeLinkedAnimations(result.model,window.invertMolang);
                 element._lightflowVariableLines={};
                 for(const line of String(result.model.animation_variable_placeholders||'').split('\n')){
@@ -1629,6 +2076,15 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 element._lightflowMaterialLimit=false;
                 window.ShaderEngine?.requestPreviewRender?.({cause:'scene_link_mount'});
                 syncPanel();
+            };
+            const syncInstanceTexture=(element,force=false)=>{
+                const resources=activeMounts.get(element);
+                if(!resources||!force&&hasSameMountedTexture(element,resources,mountedInstanceStates.get(element)))return false;
+                const status=element._lightflowStatus,revision=element.source_revision;
+                mountResult(element,resources.result);
+                element._lightflowStatus=status;element.source_revision=revision;
+                updateAnimatedTree(element);
+                return true;
             };
             // One native recovery dialog at a time; repeated hydration and linked
             // copies of the same source share a prompt. Dismissing keeps the link.
@@ -1647,7 +2103,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                     do{entry=sourceRecoveryQueue.shift();targets=entry?recoveryTargets(entry):[];}while(entry&&!targets.length);
                     if(!entry)return;
                     targets.forEach(element=>sourceRecoverySeen.set(element,element.source_link));
-                    const finish=()=>{sourceRecoveryDialog?.delete();sourceRecoveryDialog=null;scheduleSourceRecovery();};
+                    const finish=()=>{sourceRecoveryDialog?.hide();sourceRecoveryDialog?.delete();sourceRecoveryDialog=null;scheduleSourceRecovery();};
                     sourceRecoveryDialog=new Dialog('lightflow_scene_link_recovery',{
                         title:t('source_unavailable'),width:560,
                         form:{
@@ -1697,12 +2153,14 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
             const refreshInstance=async(element,force=false)=>{
                 if(disposed||!element||element.type!=='lightflow_scene_instance')return;
                 const project=element._lightflowProject||window.Project;
+                const reference=element.source_link;
                 const current=(element._lightflowRequest||0)+1;element._lightflowRequest=current;
                 element._lightflowStatus='updating';syncPanel();
                 const result=await readSource(element,force);
-                if(disposed||element._lightflowRequest!==current||!element.mesh?.parent||project!==window.Project)return;
+                if(disposed||element._lightflowRequest!==current||element.source_link!==reference||!element.mesh?.parent||project!==window.Project)return;
                 element._lightflowStatus=result.status;
                 if(result.status==='ready'){
+                    confirmedSources.set(element,{reference,path:result.path});
                     sourceRecoverySeen.delete(element);
                     element._lightflowManifest=result.manifest;
                     // Source files are still checked on project selection. An
@@ -1718,6 +2176,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                     mountResult(element,result);
                 }
                 else {
+                    confirmedSources.delete(element);
                     if(result.status==='empty'){clearMounted(element);element._lightflowPlaying=false;}
                     if(['missing','read_error'].includes(result.status))queueSourceRecovery(element,result,force);
                     syncPanel();
@@ -1780,19 +2239,30 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
             const sourcePath=element=>{
                 const root=rootOf(element);
                 if(!root)return '';
-                try{return core.resolveLinkReference(JSON.parse(root.source_link),root._lightflowProject?.save_path||Project?.save_path||'',paths)||'';}
+                try{return confirmedSource(root)||core.resolveLinkReference(JSON.parse(root.source_link),receiverBase(root._lightflowProject||Project),paths)||'';}
                 catch(_){return '';}
             };
             const edit=(element,values,label)=>{
                 Undo.initEdit({elements:[element]});
                 element.extend(values);
+                if('secondary_skin_layer'in values&&updateSecondarySkinLayer(element))window.ShaderEngine?.invalidateExternalMeshIntegrationCaches?.();
                 element.preview_controller?.updateTransform?.(element);
                 Undo.finishEdit(label);
                 window.ShaderEngine?.requestPreviewRender?.({cause:'scene_link_edit'});
                 syncPanel();
             };
             const animationIds=root=>Array.isArray(root?.animation_ids)&&root.animation_ids.length?root.animation_ids:root?.animation_id?[root.animation_id]:[];
-            const animationsFor=root=>animationIds(root).map(id=>root?._lightflowAnimations?.find(a=>String(a.uuid||a.name)===id)).filter(a=>a&&core.animationSupported(a));
+            const sourceAnimationId=animation=>String(animation.uuid||animation.name);
+            const findSourceAnimation=(root,id)=>root?._lightflowAnimations?.find(animation=>sourceAnimationId(animation)===id&&core.animationSupported(animation));
+            const animationsFor=root=>animationIds(root).map(id=>findSourceAnimation(root,id)).filter(Boolean);
+            const mountedAnimationRoot=id=>{
+                const root=OutlinerNode.uuids[id];
+                return root?.type==='lightflow_scene_instance'&&root._lightflowProject===Project&&activeMounts.has(root)?root:null;
+            };
+            const listAnimationGroups=()=>(Project?.elements||[]).filter(root=>root.type==='lightflow_scene_instance'&&activeMounts.has(root))
+                .map(root=>({id:root.uuid,name:root.name,animations:(root._lightflowAnimations||[]).filter(core.animationSupported)
+                    .map(animation=>({id:sourceAnimationId(animation),name:animation.name}))}))
+                .filter(group=>group.animations.length);
             const animationFor=root=>animationsFor(root).find(a=>String(a.uuid||a.name)===root?.animation_id)||animationsFor(root)[0];
             const layerFor=(root,id)=>root?.animation_layers?.find(layer=>layer.id===id);
             class LinkedSourceAnimator extends BoneAnimator {
@@ -1836,22 +2306,65 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
             const clipTime=(root,animation)=>{const layer=layerFor(root,String(animation.uuid||animation.name));const state={...root,animation_offset:(Number(root.animation_offset)||0)+(Number(layer?.offset)||0),animation_loop:typeof layer?.loop==='boolean'?layer.loop:root.animation_loop_override?root.animation_loop:animation.loop==='loop'};return core.linkedAnimationTime(layer?.locked?{...state,animation_locked:true,animation_time:layer.time}:state,animation,timelineClock(root));};
             const timelineClock=root=>Modes.animate?Number(Timeline.time)||0:Number(root?._lightflowTime??root?.animation_time)||0;
             const animationTime=root=>animationFor(root)?clipTime(root,animationFor(root)):0;
-            const updateAnimatedTree=element=>{
+            const sampleNativePoseKeyframes=(animator,root)=>{
+                const keys=[];
+                for(const key of animator[poseChannel]||[]){try{keys.push({key,snapshot:core.normalizePoseSnapshot(key.lightflow_pose_snapshot)});}catch{/* Ignore malformed or future snapshots. */}}
+                if(!keys.length)return null;
+                const groups={},order=window.Format?.euler_order||root._lightflowEulerOrder||'ZYX';
+                const neutralMesh={fix_rotation:new THREE.Euler(0,0,0,order),rotation:new THREE.Euler(0,0,0,order)};
+                const lastValues=Animator._last_values;
+                Animator._last_values=Object.fromEntries(Object.entries(lastValues||{}).map(([channel,values])=>[channel,Array.isArray(values)?values.slice():values]));
+                try{
+                    for(const id of new Set(keys.flatMap(({snapshot})=>Object.keys(snapshot.groups)))){
+                        const sampler=Object.create(BoneAnimator.prototype);
+                        sampler.animation=animator.animation;sampler.uuid=animator.uuid;
+                        sampler.quaternion_interpolation=animator.quaternion_interpolation;
+                        sampler.group={mesh:neutralMesh,scene_object:neutralMesh};
+                        const values={};
+                        for(const channel of ['position','rotation','scale']){
+                            sampler[channel]=keys.filter(({snapshot})=>snapshot.groups[id]).map(({key,snapshot})=>{
+                                // Read-only native Keyframe views: interpolation, handles and times stay owned by the real key.
+                                const view=Object.create(key),xyz=snapshot.groups[id][channel];
+                                Object.defineProperties(view,{channel:{value:channel},animator:{value:sampler},transform:{value:true},uniform:{value:false},data_points:{value:[{x:xyz[0],y:xyz[1],z:xyz[2]}]}});return view;
+                            });
+                            values[channel]=BoneAnimator.prototype.interpolate.call(sampler,channel);
+                        }
+                        if(values.position&&values.rotation&&values.scale)groups[id]={position:values.position,scale:values.scale,quaternion:core.quaternionFromDegrees(values.rotation,order)};
+                    }
+                }finally{Animator._last_values=lastValues;}
+                return groups;
+            };
+            const updateLinkedGizmo=()=>{
+                const transformer=window.Transformer;
+                if(transformer&&!transformer.dragging&&rootOf(Group.first_selected||Outliner.selected[0]))transformer.updateSelection();
+            };
+            const updateAnimatedTree=(element,updateGizmo=true)=>{
                 updatingAnimatedTree=true;
                 try{
+                    const frames=[];
+                    if(Modes.animate&&isSkinRoot(element))for(const animation of Animator.animations){
+                        const animator=animation.animators?.[element.uuid];
+                        if(!animation.playing||!animator||animator.muted?.[poseChannel]||!animator[poseChannel]?.length)continue;
+                        const groups=sampleNativePoseKeyframes(animator,element);
+                        if(groups)frames.push({groups,weight:Math.max(0,Math.min(1,Number(animator._lightflowPoseWeight??1)||0)),override:!!animation.override});
+                    }
+                    poseTrackFrames.set(element,frames);
                     element?.preview_controller?.updateTransform?.(element);
-                    element?.forEachChild?.(pose=>{if(pose.type==='lightflow_pose_group')pose.preview_controller?.updateTransform?.(pose);});
+                    element?.forEachChild?.(pose=>{if(pose.type==='lightflow_pose_group'&&rootOf(pose)===element)pose.preview_controller?.updateTransform?.(pose);});
                     if(Modes.animate)for(const animation of Animator.animations){
                         if(!animation.playing)continue;
                         for(const animator of Object.values(animation.animators)){
                             const node=OutlinerNode.uuids[animator.uuid];
-                            if(node&&rootOf(node)===element)animator.displayFrame();
+                            // Only replay tracks for the transforms reset above.
+                            // Native attachments already received their own keys from Blockbench.
+                            if(node===element||node?.type==='lightflow_pose_group'&&rootOf(node)===element)animator.displayFrame();
                         }
                     }
                 }finally{updatingAnimatedTree=false;}
+                element?.mesh?.updateMatrixWorld(true);
                 window.ShaderEngine?.refreshExternalMeshTransforms?.(element?.mesh);
                 updateOutline();
-                window.Transformer?.update?.();
+                if(updateGizmo)updateLinkedGizmo();
                 window.ShaderEngine?.requestPreviewRender?.({cause:'scene_link_animation'});
             };
             const expressionSamplers=new WeakMap(),instanceVariables=new WeakMap();
@@ -1871,15 +2384,19 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
             };
             applyPoseAnimation=pose=>{
                 const root=rootOf(pose),mesh=pose.mesh;
+                if(!root)return;
                 const basePosition=mesh.position.clone(),baseRotation=mesh.rotation.clone(),baseScale=mesh.scale.clone();
-                for(const animation of animationsFor(root)){
-                    const time=clipTime(root,animation);
+                const entries=window.LightflowCinematic?.getLinkedAnimationFrame?.(root.uuid)
+                    ?? animationsFor(root).map(animation=>({animation,time:clipTime(root,animation),weight:1}));
+                for(const {animation,time,weight} of entries){
+                    if(weight<=0)continue;
                     const position=sampleLinkedChannel(pose,animation,'position',time);
                     const rotation=sampleLinkedChannel(pose,animation,'rotation',time);
                     const scale=sampleLinkedChannel(pose,animation,'scale',time);
-                    if(position){if(animation.override)mesh.position.copy(basePosition);mesh.position.add(new THREE.Vector3().fromArray(position));}
-                    if(rotation){if(animation.override)mesh.rotation.copy(baseRotation);mesh.rotation.x+=Math.degToRad(rotation[0]);mesh.rotation.y+=Math.degToRad(rotation[1]);mesh.rotation.z+=Math.degToRad(rotation[2]);}
-                    if(scale){if(animation.override)mesh.scale.copy(baseScale);mesh.scale.multiply(new THREE.Vector3().fromArray(scale.map(value=>value===0?.00001:value)));}
+                    const override=animation.override&&weight>=1;
+                    if(position){if(override)mesh.position.copy(basePosition);mesh.position.addScaledVector(new THREE.Vector3().fromArray(position),weight);}
+                    if(rotation){if(override)mesh.rotation.copy(baseRotation);mesh.rotation.x+=Math.degToRad(rotation[0])*weight;mesh.rotation.y+=Math.degToRad(rotation[1])*weight;mesh.rotation.z+=Math.degToRad(rotation[2])*weight;}
+                    if(scale){if(override)mesh.scale.copy(baseScale);mesh.scale.multiply(new THREE.Vector3().fromArray(scale.map(value=>(1+(value-1)*weight)||.00001)));}
                 }
             };
             // A native, unsaved clock enables Timeline playback when the scene has
@@ -1888,7 +2405,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
             const ensureTimeline=()=>{
                 if(!Modes.animate||!Project)return;
                 const current=Animation.selected;
-                if(current&&!current._lightflowSceneLinkClock&&((Number(current.length)||0)>0||Object.values(current.animators||{}).some(animator=>animator.keyframes?.length)))return;
+                if(current&&!current._lightflowSceneLinkClock)return;
                 const roots=(Project.elements||[]).filter(e=>e.type==='lightflow_scene_instance');
                 const length=Math.max(.001,...roots.flatMap(root=>animationsFor(root).map(a=>(Number(a.length)||0)+Math.max(0,-((Number(root.animation_offset)||0)+(Number(layerFor(root,String(a.uuid||a.name))?.offset)||0))))));
                 let carrier=timelineCarriers.get(Project);
@@ -1901,8 +2418,10 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 if(disposed||!Project)return;
                 for(const root of Project.elements||[])if(root.type==='lightflow_scene_instance'){
                     if(Modes.animate)root._lightflowTime=Number(Timeline.time)||0;
-                    updateAnimatedTree(root);
+                    updateAnimatedTree(root,false);
                 }
+                // Blockbench centers the gizmo before dispatching display_animation_frame.
+                updateLinkedGizmo();
                 motionPanel?.inside_vue?.syncPlayback?.();
             };
             const nativeSetTime=Timeline.setTime;
@@ -2008,22 +2527,36 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
             owned.push({delete(){activeAnimationMenu?.hide();}});
 
             const openSource=async element=>{
-                const path=sourcePath(element);
-                if(!path)return;
-                const existing=window.ModelProject?.all?.find(project=>paths.normalize(project.save_path||'')===paths.normalize(path));
-                if(existing){existing.select();return;}
-                try{const text=await readFile(path);Codecs.project.load(core.parseBBModel(text),{path});}
-                catch(error){Blockbench.showQuickMessage(t("could_not_open_source_project"));}
+                const root=rootOf(element),project=window.Project,reference=root?.source_link;
+                if(!reference)return;
+                try{
+                    const file=await core.readLinkedFile(JSON.parse(reference),receiverBase(root._lightflowProject||project),paths,async path=>{
+                        const key=core.canonicalPathKey(path,paths);
+                        const existing=window.ModelProject?.all?.find(tab=>core.canonicalPathKey(tab.save_path,paths)===key);
+                        return existing?{existing}:{text:await readFile(path)};
+                    });
+                    if(disposed||window.Project!==project||root.source_link!==reference||!root.mesh?.parent)return;
+                    if(file.status!=='ready')throw new Error(file.message||file.status);
+                    if(file.bytes.existing)file.bytes.existing.select();
+                    else Codecs.project.load(core.parseBBModel(file.bytes.text),{path:file.path});
+                }catch(error){
+                    if(!disposed&&window.Project===project&&root.source_link===reference)Blockbench.showQuickMessage(t("could_not_open_source_project"));
+                }
             };
             const importPath=async(path,automatic=false)=>{
                 const targetProject=Project;
-                const receiver=Project?.save_path||'';
-                if(receiver&&paths.normalize(receiver).toLowerCase()===paths.normalize(path).toLowerCase()){
+                const receiver=targetProject?.save_path||'';
+                if(!targetProject)return;
+                let source;
+                try{source=core.makeLinkReference(path,receiver,paths).absoluteFallback;}
+                catch(error){Blockbench.showMessageBox({title:t("cannot_link_this_scene"),message:error.message});return;}
+                if(receiver&&core.canonicalPathKey(receiver,paths)===core.canonicalPathKey(source,paths)){
                     Blockbench.showMessageBox({title:t("choose_another_project"),message:t("a_project_cannot_contain_a_linked_instance_of_itself")});
                     return;
                 }
-                const link=core.makeLinkReference(path,receiver,paths);
-                const result=await core.readLinkedSource(link,receiver,paths,{readFile,prepareModel:prepareSourceModel},hash);
+                const base=receiverBase(targetProject);
+                const link=core.makeLinkReference(source,base,paths);
+                const result=await core.readLinkedSource(link,base,paths,{readFile,prepareModel:prepareSourceModel},hash);
                 if(disposed||Project!==targetProject)return;
                 if(result.status!=='ready'){
                     Blockbench.showMessageBox({title:t("cannot_link_this_scene"),message:result.message||statusText({_lightflowStatus:result.status})});
@@ -2033,22 +2566,23 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                     Blockbench.showMessageBox({title:t("no_supported_geometry"),message:t("choose_a_project_with_cubes_meshes_or_billboards_effects_and_loc")});
                     return;
                 }
-                const name=result.manifest.name||paths.normalize(path).split('/').pop().replace(/\.bbmodel$/i,'');
+                const name=result.manifest.name||source.split('/').pop().replace(/\.bbmodel$/i,'');
                 const hasCustomMaterials=result.model.elements?.some(item=>item.sa_material_instance_id);
                 const addInstance=form=>{
                     if(disposed||Project!==targetProject)return false;
-                    const geometry=form.geometry!==false&&!!(result.manifest.elementTypes.cube||result.manifest.elementTypes.mesh),billboards=!!form.billboards&&!!result.manifest.elementTypes.billboard;
+                    const geometry=form.geometry!==false&&!!(result.manifest.elementTypes.cube||result.manifest.elementTypes.mesh||result.manifest.elementTypes.texture_mesh),billboards=!!form.billboards&&!!result.manifest.elementTypes.billboard;
                     if(!geometry&&!billboards)return false;
                     Undo.initEdit({outliner:true,elements:[],selection:true});
                     const element=new SceneInstanceElement({name:form.name||name,source_link:JSON.stringify(link),include_geometry:geometry,include_billboards:billboards}).init();
                     element._lightflowProject=Project;element.addTo();element.select();
+                    confirmedSources.set(element,{reference:element.source_link,path:result.path});
                     assetCache.set(result.cacheKey,result);mountResult(element,result);
                     Undo.finishEdit(t("add_linked_scene"),{outliner:true});return element;
                 };
                 if(automatic)return addInstance({name,geometry:true,billboards:true});
                 importDialog?.delete?.();
                 const checkboxRow=window.LightManagerUI?.formDesign?.checkboxRow || (options=>({type:'checkbox',...options}));
-                const geometryCount=(result.manifest.elementTypes.cube||0)+(result.manifest.elementTypes.mesh||0);
+                const geometryCount=(result.manifest.elementTypes.cube||0)+(result.manifest.elementTypes.mesh||0)+(result.manifest.elementTypes.texture_mesh||0);
                 const billboardCount=result.manifest.elementTypes.billboard||0;
                 importDialog=new Dialog('lightflow_scene_link_import',{title:t("link_a_scene"),width:460,form:(window.LightManagerUI?.prepareForm || (form => form))({
                     summary:{type:'info',text:t("choose_what_this_instance_includes_textures_follow_the_selected")},
@@ -2058,10 +2592,10 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                     skipped:{type:'info',condition:Object.keys(result.manifest.ignoredTypes).length>0,text:t("excluded_from_this_version")+Object.entries(result.manifest.ignoredTypes).map(([type,count])=>`${count} ${type}`).join(', ')+'.'},
                     animations:{type:'info',condition:result.manifest.animations.length>0,text:`${result.manifest.animations.length} ${t("source_animations_available_in_the_instance_inspector_group_tran")}`},
                     material_note:{type:'info',condition:hasCustomMaterials,text:t("source_material_overrides_are_preserved_receiver_overrides_take")},
-                    file:{type:'info',text:path}
+                    file:{type:'info',text:source}
                 }),onConfirm(form){
                     if(disposed||Project!==targetProject)return false;
-                    const geometry=!!form.geometry&&!!(result.manifest.elementTypes.cube||result.manifest.elementTypes.mesh),billboards=!!form.billboards&&!!result.manifest.elementTypes.billboard;
+                    const geometry=!!form.geometry&&!!(result.manifest.elementTypes.cube||result.manifest.elementTypes.mesh||result.manifest.elementTypes.texture_mesh),billboards=!!form.billboards&&!!result.manifest.elementTypes.billboard;
                     if(!geometry&&!billboards){Blockbench.showQuickMessage(t("select_geometry_or_billboards"));return false;}
                     addInstance(form);
                 }});importDialog.show();
@@ -2075,7 +2609,11 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                     if(targets.length){
                         const current=targets.filter(target=>target.mesh?.parent&&target.source_link===references.get(target));
                         if(!current.length)return;
-                        const link=core.makeLinkReference(path,targetProject?.save_path||'',paths);
+                        if(core.canonicalPathKey(targetProject?.save_path,paths)===core.canonicalPathKey(path,paths)){
+                            Blockbench.showMessageBox({title:t("choose_another_project"),message:t("a_project_cannot_contain_a_linked_instance_of_itself")});
+                            return;
+                        }
+                        const link=core.makeLinkReference(path,receiverBase(targetProject),paths);
                         Undo.initEdit({elements:current});
                         for(const target of current)target.extend({source_link:JSON.stringify(link)});
                         Undo.finishEdit(t('relink_scene'));
@@ -2145,7 +2683,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 }
                 const projects=[...candidates.values()];
                 pickerDialog?.delete?.();
-                const picker=new Dialog('lightflow_scene_link_picker',{title:t("linked_scene"),width:860,buttons:[],component:{
+                const picker=new Dialog('lightflow_scene_link_picker',{title:t("linked_scene"),width:740,buttons:[],component:{
                     data(){return {query:'',projects};},
                     computed:{visible(){const q=this.query.trim().toLowerCase();return this.projects.filter(project=>!q||`${project.name} ${project.path}`.toLowerCase().includes(q));}},
                     methods:{
@@ -2155,15 +2693,139 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                         close(){picker.hide();}
                     },
                     template:`<div class="lf-links-picker">
-                        <header class="lf-links-picker-head"><div><div class="lf-links-eyebrow">LIGHTFLOW · SCENE LINKS</div><h2>${t("compose_with_a_linked_project")}</h2><p>${t("choose_a_blockbench_project_each_instance_has_its_own_position_a")}</p></div><button type="button" class="lf-links-browse" @click="browse"><i class="material-icons">folder_open</i>${t("choose_bbmodel")}</button></header>
-                        <div class="lf-links-picker-tools"><button type="button" class="lf-links-browse" @click="skin"><i class="material-icons">person_add</i>${t("create_skin")}</button><label><i class="material-icons">search</i><input v-model="query" type="search" :placeholder="'${t("find_a_project")}'" :aria-label="'${t("find_a_project")}'"></label><span>{{ visible.length }} ${t("projects")}</span></div>
-                        <main class="lf-links-picker-scroll"><div v-if="visible.length" class="lf-links-grid"><button v-for="project in visible" :key="project.path" type="button" class="lf-links-card" :disabled="project.self" :title="project.path" @click="choose(project)"><div class="lf-links-cover"><img v-if="project.thumbnail" :src="project.thumbnail" @error="project.thumbnail=''" alt=""><div v-else class="lf-links-cover-fallback"><i class="material-icons">view_in_ar</i></div><span class="lf-links-origin">{{ project.self ? '${t("current_scene")}' : project.open ? '${t("open")}' : '${t("recent")}' }}</span></div><div class="lf-links-card-info"><i class="material-icons">{{ project.self ? 'block' : 'kid_star' }}</i><div><strong>{{ project.name }}</strong><small>{{ project.path }}</small></div></div></button></div><div v-else class="lf-links-empty"><i class="material-icons">search_off</i><p>${t("no_matching_projects_choose_a_bbmodel_file_to_continue")}</p><button type="button" @click="browse">${t("choose_file")}</button></div></main>
+                        <header class="lf-links-picker-head"><div class="lf-links-picker-intro"><h2>${t("compose_with_a_linked_project")}</h2><p>${t("choose_a_blockbench_project_each_instance_has_its_own_position_a")}</p></div><button type="button" class="lf-links-browse" @click="browse"><i class="material-icons" aria-hidden="true">folder_open</i>${t("choose_bbmodel")}</button></header>
+                        <div class="lf-links-picker-tools"><label class="lf-links-search"><i class="material-icons" aria-hidden="true">search</i><input v-model="query" type="search" :placeholder="'${t("find_a_project")}'" :aria-label="'${t("find_a_project")}'"></label><span class="lf-links-count" aria-live="polite">{{ visible.length }} {{ visible.length === 1 ? '${t("project")}' : '${t("projects")}' }}</span><button type="button" class="lf-links-skin" @click="skin"><i class="material-icons" aria-hidden="true">person_add</i>${t("create_skin")}</button></div>
+                        <main class="lf-links-picker-scroll"><div v-if="visible.length" class="lf-links-grid"><button v-for="project in visible" :key="project.path" type="button" class="lf-links-card" :disabled="project.self" :title="project.path" @click="choose(project)"><div class="lf-links-cover"><img v-if="project.thumbnail" :src="project.thumbnail" @error="project.thumbnail=''" alt=""><div v-else class="lf-links-cover-fallback"><i class="material-icons" aria-hidden="true">view_in_ar</i></div></div><div class="lf-links-card-info"><div class="lf-links-card-heading"><strong>{{ project.name }}</strong><span class="lf-links-origin">{{ project.self ? '${t("current_scene")}' : project.open ? '${t("open")}' : '${t("recent")}' }}</span></div><small>{{ project.path }}</small></div><i v-if="!project.self" class="material-icons lf-links-card-arrow" aria-hidden="true">chevron_right</i></button></div><div v-else class="lf-links-empty"><i class="material-icons" aria-hidden="true">search_off</i><p>${t("no_matching_projects_choose_a_bbmodel_file_to_continue")}</p><button type="button" @click="browse">${t("choose_file")}</button></div></main>
                         <footer class="lf-links-picker-foot"><span>${t("the_source_remains_editable_in_its_own_tab")}</span><button type="button" @click="close">${t("close")}</button></footer>
                     </div>`
                 }});
                 pickerDialog=picker;picker.show();
             };
             const addAction=new Action('lightflow_scene_link_add',{name:'lightflow_links.add',icon:'kid_star',category:'edit',condition:()=>!!Project,click:showSourcePicker});
+            const buildSkinPoseSnapshot=async(root,preset,data)=>{
+                if(!isSkinRoot(root))throw Error(t('pose_source_changed'));
+                const receiver=Project,reference=root.source_link,revision=root.source_revision,result=await readSource(root);
+                if(disposed||Project!==receiver||OutlinerNode.uuids[root.uuid]!==root||root.source_link!==reference||root.source_revision!==revision)return null;
+                if(result.status!=='ready'||result.model.meta?.model_format!=='skin')throw Error(t('pose_source_changed'));
+                const posed=await prepareSourceModel({...result.model,skin_pose:'',skin_pose_data:data},preset);
+                if(disposed||Project!==receiver||OutlinerNode.uuids[root.uuid]!==root||root.source_link!==reference||root.source_revision!==revision)return null;
+                const desired=core.inspectBBModel(posed),targets=new Map(desired.groups.map(group=>[group.id,group])),groups={};
+                for(const pose of treeFor(root).values()){
+                    const target=targets.get(pose.source_group_id);if(!target)continue;
+                    const parent=target.parentId?targets.get(target.parentId):null;
+                    groups[pose.source_group_id]={position:target.origin.map((value,i)=>value-(parent?.origin[i]||0)),rotation:target.rotation.slice(),scale:(target.scale||[1,1,1]).slice()};
+                }
+                if(!Object.keys(groups).length)throw Error(t('pose_source_changed'));
+                return core.normalizePoseSnapshot({version:1,groups});
+            };
+            const poseKeyContext=(root,keys=null)=>{
+                if(disposed||!Modes.animate||!isSkinRoot(root)||!window.Format?.animation_mode)return null;
+                const animation=Animation.selected;
+                if(!animation||animation._lightflowSceneLinkClock){Blockbench.showQuickMessage(t('select_local_animation'));return null;}
+                return {root,project:Project,animation,time:Timeline.snapTime(Timeline.time),keys};
+            };
+            const insertSkinPoseKeys=async(context,preset,data,name,mode='bones')=>{
+                if(!context||disposed||!Modes.animate)return [];
+                const {root,project,animation,time,keys}=context,snapshot=await buildSkinPoseSnapshot(root,preset,data);
+                if(!snapshot||disposed||!Modes.animate||Project!==project||Animation.selected!==animation||OutlinerNode.uuids[root.uuid]!==root||!isSkinRoot(root))return [];
+                if(!keys&&Math.abs(Timeline.snapTime(Timeline.time)-time)>1e-7)return [];
+                if(keys&&!keys.every(key=>key.animator?.animation===animation&&key.animator[poseChannel]?.includes(key)))return [];
+                const created=[];
+                if(mode==='pose'){
+                    const value={lightflow_pose_snapshot:snapshot,lightflow_pose_label:String(name||t('pose_channel'))};
+                    const animator=animation.getBoneAnimator(root);animator.addToTimeline();
+                    Undo.initEdit({keyframes:keys||created});
+                    if(keys)for(const key of keys)key.extend(value);
+                    else {
+                        created.push(animator.createKeyframe(value,time,poseChannel,false,false));
+                    }
+                }else{
+                    Animator.preview();
+                    const requests=[];
+                    for(const pose of treeFor(root).values()){
+                        const target=snapshot.groups[pose.source_group_id],mesh=pose.mesh;if(!target||!mesh)continue;
+                        const basePosition=mesh.fix_position||mesh.position,baseRotation=mesh.fix_rotation||mesh.rotation,baseScale=mesh.fix_scale||mesh.scale;
+                        if(!animation.override&&baseScale.toArray().some((value,i)=>Math.abs(value)<1e-9&&target.scale[i]!==0))throw Error(t('pose_zero_scale'));
+                        requests.push({pose,values:{position:target.position.map((value,i)=>value-basePosition.getComponent(i)),rotation:target.rotation.map((value,i)=>value-Math.radToDeg(baseRotation.toArray()[i])),scale:target.scale.map((value,i)=>animation.override?value:Math.abs(baseScale.getComponent(i))<1e-9?1:value/baseScale.getComponent(i))}});
+                    }
+                    if(!requests.length)return [];
+                    for(const{pose}of requests)animation.getBoneAnimator(pose).addToTimeline(true);
+                    Undo.initEdit({keyframes:created});
+                    for(const{pose,values}of requests){const animator=animation.getBoneAnimator(pose);
+                        for(const channel of ['position','rotation','scale']){const value=values[channel];created.push(animator.createKeyframe({x:value[0],y:value[1],z:value[2]},time,channel,false,false));}}
+                }
+                Undo.finishEdit(mode==='pose'?t('pose_keyframe'):t('pose_keyframes'));
+                (keys?.[0]||created[0])?.select();TickUpdates.keyframe_selection=true;Animator.preview();
+                return keys||created;
+            };
+            const chooseSkinPose=async(root,choose,event)=>{
+                const position=event?.currentTarget?.isConnected?event.currentTarget:Number.isFinite(event?.clientX)?{clientX:event.clientX,clientY:event.clientY}:'mouse';
+                const receiver=Project,reference=root.source_link,library=window.LightflowSkinPoses,result=await readSource(root);
+                if(disposed||!Modes.animate||Project!==receiver||OutlinerNode.uuids[root.uuid]!==root||root.source_link!==reference||!isSkinRoot(root))return;
+                const items=[new MenuSeparator('lightflow_pose_presets',t('skin_pose')),
+                    ...['none','natural','walking','crouching','sitting','jumping','aiming'].map(id=>({id:'preset_'+id,name:tl('panel.skin_pose.'+id),icon:'accessibility_new',click:()=>choose(id,undefined,tl('panel.skin_pose.'+id))}))];
+                const saved=StateMemory.get('skin_poses')||[];
+                if(saved.length)items.push(new MenuSeparator('lightflow_pose_global',t('saved_poses')),...saved.map((pose,index)=>({id:'global_'+index,name:pose.name,icon:'accessibility',click:()=>choose(undefined,JSON.parse(JSON.stringify(pose.data)),pose.name)})));
+                if(library){
+                    const append=(model,prefix)=>{const entries=library.menuItems(model,(data,pose)=>choose(undefined,data,pose?.name||t('pose_channel')));
+                        items.push(...entries.map(item=>item instanceof MenuSeparator?new MenuSeparator(prefix+'_'+item.id,prefix+' · '+item.label):{...item,id:prefix+'_'+item.id}));};
+                    append(receiver,t('project_skin_poses'));if(result.status==='ready')append(result.model,t('source_skin_poses').replace(/…$/,''));
+                }
+                const menu=library?.openMenu?library.openMenu(items,position):new Menu(items,{searchable:true}).open(position);
+                skinLibraryMenus.clear();skinLibraryMenus.add(menu);
+            };
+            const runPosePicker=(context,mode,event)=>{
+                if(!context)return;
+                const report=error=>{if(!disposed&&Project===context.project)Blockbench.showMessageBox({title:t('cannot_apply_pose'),message:String(error.message||error)});};
+                chooseSkinPose(context.root,(preset,data,name)=>insertSkinPoseKeys(context,preset,data,name,mode).catch(report),event).catch(report);
+            };
+            const poseKeysAction=new Action('lightflow_scene_link_pose_keys',{name:t('pose_keyframes'),icon:'key',condition:()=>!!Modes.animate&&!!window.Format?.animation_mode&&isSkinRoot(rootOf(selected())),click:event=>runPosePicker(poseKeyContext(rootOf(selected())),'bones',event)});
+            const poseTrackAction=new Action('lightflow_scene_link_pose_track',{name:t('pose_keyframe'),icon:'add',condition:()=>!!Modes.animate&&!!window.Format?.animation_mode&&isSkinRoot(rootOf(selected())),click:event=>runPosePicker(poseKeyContext(rootOf(selected())),'pose',event)});
+            const selectedPoseKeys=()=>disposed?[]:Timeline.selected.filter(key=>key.channel===poseChannel&&isSkinRoot(rootOf(key.animator?.getGroup?.())));
+            const keyPoseAction=new Action('lightflow_scene_link_key_pose',{name:t('choose_key_pose'),icon:'accessibility',condition:()=>!!Modes.animate&&selectedPoseKeys().length>0,click:event=>{
+                const keys=selectedPoseKeys(),root=keys[0]?.animator?.getGroup();if(!root||!keys.every(key=>key.animator.getGroup()===root))return;
+                runPosePicker(poseKeyContext(root,keys),'pose',event);
+            }});
+            owned.push(poseKeysAction,poseTrackAction,keyPoseAction);
+            const keyMenu=Keyframe.prototype.menu;
+            keyMenu.addAction(keyPoseAction);
+            owned.push({delete(){keyMenu.removeAction(keyPoseAction);}});
+            // Extend the existing Keyframe inspector, alongside other custom animated properties.
+            const keyframeVue=window.Panels?.keyframe?.inside_vue;
+            const originalKeyframeRender=keyframeVue?.$options?.render;
+            const PoseKeyControl={
+                name:'lightflow-pose-key-control',props:['keyframes'],
+                computed:{
+                    sameRoot(){return this.keyframes.every(key=>key.animator?.getGroup?.()===this.keyframes[0]?.animator?.getGroup?.());},
+                    label(){const keys=this.keyframes;return keys.every(key=>key.lightflow_pose_label===keys[0]?.lightflow_pose_label)?keys[0]?.lightflow_pose_label||t('pose_channel'):t('multiple_poses');}
+                },
+                methods:{
+                    choose(event){if(this.sameRoot)keyPoseAction.click(event);},
+                    keyboard(event){if(['Enter',' '].includes(event.key)){event.preventDefault();event.stopPropagation();this.choose(event);}}
+                },
+                render(h){return h('div',{class:'lf-links-pose-key-properties'},[
+                    h('div',{class:'lf-links-pose-key-row'},[
+                        h('label',{attrs:{for:'lightflow_keyframe_pose'}},t('pose_channel')),
+                        h('div',{class:'bb-select',attrs:{id:'lightflow_keyframe_pose',role:'button',tabindex:this.sameRoot?0:-1,'aria-disabled':!this.sameRoot,'aria-haspopup':'menu','aria-label':t('choose_key_pose'),title:this.label},on:{click:this.choose,keydown:this.keyboard}},[this.label])
+                    ])
+                ]);}
+            };
+            if(typeof originalKeyframeRender==='function'){
+                const render=function(...args){
+                    const tree=originalKeyframeRender.apply(this,args);
+                    if(disposed||!Modes.animate||this.channel!==poseChannel||!this.keyframes.length||!this.keyframes.every(key=>key.channel===poseChannel&&isSkinRoot(key.animator?.getGroup?.())))return tree;
+                    // Pose values are names/snapshots; retain Blockbench's interpolation toolbar.
+                    const hideValues=node=>{if(node?.data?.staticClass==='keyframe_data_point')node.children=[];else node?.children?.forEach(hideValues);};hideValues(tree);
+                    tree.children||=[];
+                    tree.children.push(this.$createElement(PoseKeyControl,{key:'lightflow_pose_properties',props:{keyframes:this.keyframes}}));
+                    return tree;
+                };
+                keyframeVue.$options.render=render;keyframeVue.$forceUpdate();
+                owned.push({delete(){if(keyframeVue.$options.render===render)keyframeVue.$options.render=originalKeyframeRender;keyframeVue.$forceUpdate();}});
+            }
+            function updatePoseKeyPanel(){if(!disposed)keyframeVue?.$forceUpdate();}
+            owned.push(Blockbench.on('update_keyframe_selection',updatePoseKeyPanel));
+            owned.push(Blockbench.addCSS('#panel_keyframe .lf-links-pose-key-properties{padding:3px 8px}#panel_keyframe .lf-links-pose-key-row{display:flex;align-items:center;gap:7px;margin:4px 0;min-width:0}#panel_keyframe .lf-links-pose-key-row>label{flex:0 0 80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--color-subtle_text)}#panel_keyframe .lf-links-pose-key-row>.bb-select{flex:1;min-width:0;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#panel_keyframe .lf-links-pose-key-row>.bb-select:focus-visible{outline:1px solid var(--color-accent)}'));
             const applySkinPose=async(root,preset,data)=>{
                 if(!root||root._lightflowManifest?.format!=='skin')return;
                 const receiver=Project,result=await readSource(root);
@@ -2192,6 +2854,31 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                     const items=['none','natural','walking','crouching','sitting','jumping','aiming'].map(id=>({name:tl('panel.skin_pose.'+id),icon:'accessibility_new',click:()=>apply(id)}));
                     const saved=StateMemory.get('skin_poses')||[];
                     if(saved.length)items.push('_',{name:t("saved_poses"),icon:'format_list_bulleted',children:saved.map(pose=>({name:pose.name,icon:'accessibility',click:()=>apply(undefined,JSON.parse(JSON.stringify(pose.data)))}))});
+                    const library=window.LightflowSkinPoses;
+                    if(library){
+                        const receiver=Project;
+                        const applySaved=data=>{if(!disposed&&Project===receiver&&OutlinerNode.uuids[root.uuid]===root)apply(undefined,data);};
+                        let projectPoses=[];
+                        try{projectPoses=library.menuItems(receiver,applySaved);}
+                        catch(error){items.push({name:t("cannot_apply_pose"),icon:'error',click:()=>{if(!disposed)Blockbench.showMessageBox({title:t("cannot_apply_pose"),message:String(error.message||error)});}});}
+                        if(projectPoses.length)items.push({name:t("project_skin_poses"),icon:'format_list_bulleted',click:(context,event)=>{
+                            if(!disposed&&Project===receiver&&OutlinerNode.uuids[root.uuid]===root&&window.LightflowSkinPoses===library){
+                                const menu=library.openMenu(projectPoses,Number.isFinite(event?.clientX)?{clientX:event.clientX,clientY:event.clientY}:'mouse');
+                                if(menu){skinLibraryMenus.clear();skinLibraryMenus.add(menu);}
+                            }
+                        }});
+                        items.push({name:t("source_skin_poses"),icon:'folder_open',click:async(context,event)=>{
+                            const position=Number.isFinite(event?.clientX)&&Number.isFinite(event?.clientY)?{clientX:event.clientX,clientY:event.clientY}:'mouse';
+                            try{
+                                const result=await readSource(root);
+                                if(disposed||Project!==receiver||OutlinerNode.uuids[root.uuid]!==root||window.LightflowSkinPoses!==library)return;
+                                if(result.status!=='ready')throw Error(result.message||t("cannot_apply_pose"));
+                                const entries=library.menuItems(result.model,applySaved);
+                                if(!entries.length){Blockbench.showQuickMessage(t("source_skin_poses_empty"));return;}
+                                const menu=library.openMenu(entries,position);if(menu){skinLibraryMenus.clear();skinLibraryMenus.add(menu);}
+                            }catch(error){if(!disposed&&Project===receiver&&OutlinerNode.uuids[root.uuid]===root&&window.LightflowSkinPoses===library)Blockbench.showMessageBox({title:t("cannot_apply_pose"),message:String(error.message||error)});}
+                        }});
+                    }
                     items.push('_',{name:t("restore_source_pose"),icon:'restart_alt',click:()=>{
                         const poses=[...treeFor(root).values()];Undo.initEdit({elements:poses});
                         for(const pose of poses){pose.extend({pose_mode:'additive',position:[0,0,0],rotation:[0,0,0],scale:[1,1,1]});pose.preview_controller.updateTransform(pose);}
@@ -2199,6 +2886,8 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                     }});return items;
                 }
             });
+            const skinLibraryMenus=new Set();
+            owned.push({delete(){for(const menu of skinLibraryMenus)if(Menu.open===menu)menu.hide();skinLibraryMenus.clear();}});
             owned.push(skinPoseAction);
             const openAction=new Action('lightflow_scene_link_open',{name:'lightflow_links.open',icon:'open_in_new',category:'edit',condition:()=>!!rootOf(selected()),click:()=>openSource(selected())});
             const refreshAction=new Action('lightflow_scene_link_refresh',{name:'lightflow_links.refresh',icon:'sync',category:'edit',condition:()=>!!rootOf(selected()),click:()=>refreshInstance(rootOf(selected()),true)});
@@ -2208,17 +2897,56 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
             const materialAction=new Action('lightflow_scene_link_material',{name:t("material_override"),icon:'palette',condition:()=>!!rootOf(selected()),click:event=>{
                 const node=selected(),manager=window.MaterialManager;if(!node||!manager)return;
                 const assign=id=>{edit(node,{lightflow_material_override:id},t("override_linked_material"));refreshLinkedMaterials();syncPanel();};
+                const presets = Object.values(manager.materials||{});
+                for(const id of ['toon_outline_classic','toon_outline_lightflow']){
+                    const preset=manager.materials?.[id];
+                    if(preset&&!presets.includes(preset))presets.push(preset);
+                }
                 new Menu([
                     {name:t("inherit_material"),icon:node.lightflow_material_override?'radio_button_unchecked':'radio_button_checked',click:()=>assign('')},
                     '_',
                     ...Object.values(manager.instances||{}).map(instance=>({name:instance.name||instance.id,icon:node.lightflow_material_override===instance.id?'radio_button_checked':instance.icon||'palette',click:()=>assign(instance.id)})),
                     '_',
-                    ...Object.values(manager.materials||{}).map(material=>({name:material.name||material.id,icon:node.lightflow_material_override===material.id?'radio_button_checked':material.icon||'palette',click:()=>assign(material.id)}))
+                    ...presets.map(material=>({name:material.name||material.id,icon:node.lightflow_material_override===material.id?'radio_button_checked':material.icon||'palette',click:()=>assign(material.id)}))
                 ]).open(event);
             }});
             owned.push(materialAction);
             owned.push(addAction,openAction,refreshAction,relocateAction,resetAction,inspectAction);
             MenuBar.addAction(addAction,'tools');
+            let exportingBundle=false;
+            const exportBundleAction=new Action('lightflow_scene_link_export_bundle',{
+                name:'lightflow_links.export_bundle',icon:'folder_zip',category:'file',
+                condition:()=>!exportingBundle&&!!window.Project?.elements?.some(node=>node.type==='lightflow_scene_instance'&&node.source_link),
+                async click(){
+                    if(disposed||exportingBundle||!window.Project)return;
+                    const project=window.Project,spanish=String(window.Language?.code||window.settings?.language?.value||'en').startsWith('es');
+                    const title=tl('lightflow_links.export_bundle');
+                    const checkActive=()=>{if(disposed)throw new Error('Scene Links unloaded');};
+                    exportingBundle=true;
+                    try{
+                        if(typeof JSZip!=='function')throw new Error(spanish?'Blockbench no tiene disponible la compresión ZIP.':'ZIP compression is unavailable in this Blockbench build.');
+                        Blockbench.showQuickMessage(spanish?'Preparando el ZIP de la escena…':'Preparing scene ZIP…');
+                        const model=Codecs.project.compile({raw:true,bitmaps:true});
+                        const bundle=await core.buildSceneBundle(model,project.save_path,project.name,paths,{
+                            readProject:readFile,readAsset:path=>readFile(path,'buffer'),prepareModel:prepareSourceModel,checkActive
+                        });
+                        const zip=new JSZip();
+                        for(const [file,content] of bundle.entries)zip.file(file,content);
+                        const content=await zip.generateAsync({type:'blob',compression:'DEFLATE'});
+                        checkActive();
+                        Blockbench.export({resource_id:'lightflow_scene_bundle',type:'ZIP',extensions:['zip'],
+                            name:bundle.root.replace(/\.bbmodel$/i,''),savetype:'zip',content},()=>{
+                            if(!disposed)Blockbench.showQuickMessage(spanish?'Paquete de escena exportado.':'Scene package exported.');
+                        });
+                    }catch(error){
+                        if(!disposed)Blockbench.showMessageBox({title,icon:'error_outline',message:
+                            (spanish?'No se pudo incluir este archivo o vínculo.':'Could not include this file or link.')
+                            +'\n\n'+String(error.message).replace(/[`<>]/g,'')});
+                    }finally{exportingBundle=false;}
+                }
+            });
+            owned.push(exportBundleAction);
+            MenuBar.addAction(exportBundleAction,'file.export');
             let injectedSceneControl=null;
             const refreshSceneCreate=()=>{
                 if(disposed)return;
@@ -2232,31 +2960,206 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 form.buildForm();
             };
             setTimeout(refreshSceneCreate,0);
-            SceneInstanceElement.prototype.menu=new Menu(['lightflow_scene_link_inspect','lightflow_scene_link_skin_pose','lightflow_scene_link_material','lightflow_scene_link_refresh','lightflow_scene_link_open','lightflow_scene_link_relocate','set_element_marker_color','_',...Outliner.control_menu_group,'_','rename','delete']);
-            ScenePoseElement.prototype.menu=new Menu(['lightflow_scene_link_inspect','lightflow_scene_link_skin_pose','lightflow_scene_link_material','lightflow_scene_link_reset_pose','lightflow_scene_link_open','_',...Outliner.control_menu_group,'_','rename','delete']);
+            SceneInstanceElement.prototype.menu=new Menu(['lightflow_scene_link_inspect','lightflow_scene_link_skin_pose','lightflow_scene_link_pose_keys','lightflow_scene_link_pose_track','lightflow_scene_link_material','lightflow_scene_link_refresh','lightflow_scene_link_open','lightflow_scene_link_relocate','set_element_marker_color','_',...Outliner.control_menu_group,'_','rename','delete']);
+            ScenePoseElement.prototype.menu=new Menu(['lightflow_scene_link_inspect','lightflow_scene_link_skin_pose','lightflow_scene_link_pose_keys','lightflow_scene_link_pose_track','lightflow_scene_link_material','lightflow_scene_link_reset_pose','lightflow_scene_link_open','_',...Outliner.control_menu_group,'_','rename','delete']);
 
             const inspectorFields=[
                 {key:'position',icon:'open_with',label:t("position"),poseLabel:t("offset"),step:.25,reset:0},
                 {key:'rotation',icon:'sync',label:t("rotation"),poseLabel:t("rotation"),step:1,reset:0},
                 {key:'scale',icon:'aspect_ratio',label:t("scale"),poseLabel:t("scale"),step:.1,reset:1}
             ];
+            // Embed Light Manager's real custom_vector/NumSlider control inside
+            // the Vue inspector. The form owns its native DOM; Vue only owns the
+            // mount point, model identity and the edit transaction.
+            const sceneVectorComponent={
+                props:['field','value','elementId'],
+                template:'<div class="lf-links-shared-vector" ref="host"></div>',
+                methods:{
+                    currentElement(){const element=selected();return !disposed&&Project===this._vectorProject&&element?.uuid===this.elementId?element:null;},
+                    beginEdit(){
+                        if(this._vectorEdit||!this.currentElement())return;
+                        const element=this.currentElement();
+                        Undo.initEdit({elements:[element]});
+                        this._vectorEdit={element,changed:false};
+                    },
+                    changeVector({result,changed_keys}){
+                        if(changed_keys?.length&&!changed_keys.includes(this.field.key))return;
+                        const element=this.currentElement(),next=result?.[this.field.key];
+                        if(!element||!Array.isArray(next)||next.length!==3||!next.every(Number.isFinite))return;
+                        if(next.every((value,index)=>value===element[this.field.key][index]))return;
+                        const single=!this._vectorEdit;
+                        if(single)this.beginEdit();
+                        if(!this._vectorEdit)return;
+                        element.extend({[this.field.key]:next.slice()});
+                        element.preview_controller?.updateTransform?.(element);
+                        window.ShaderEngine?.requestPreviewRender?.({cause:'scene_link_edit'});
+                        this._vectorEdit.changed=true;
+                        if(single)this.finishEdit();
+                    },
+                    finishEdit(){
+                        const transaction=this._vectorEdit;
+                        if(!transaction)return;
+                        this._vectorEdit=null;
+                        if(transaction.changed)Undo.finishEdit(t("edit_linked_transform"));
+                        else Undo.cancelEdit(false);
+                        if(!disposed&&Project===this._vectorProject)syncPanel();
+                    },
+                    syncValue(value){
+                        if(this._vectorEdit||!this._vectorForm)return;
+                        const control=this._vectorForm.form_data[this.field.key];
+                        if(!control||!Array.isArray(value)||value.length!==3)return;
+                        if(control.getValue().some((number,index)=>number!==value[index]))control.setValue(value.slice(),false);
+                    },
+                    disposeForm(){
+                        this.finishEdit();
+                        const form=this._vectorForm;
+                        this._vectorForm=null;
+                        if(this._vectorListener?.delete)this._vectorListener.delete();
+                        else if(typeof this._vectorListener==='function')this._vectorListener();
+                        else form?.removeListener?.('change',this._vectorCallback);
+                        this._vectorListener=null;this._vectorCallback=null;
+                        if(!form)return;
+                        if(typeof form.delete==='function')form.delete();
+                        else for(const control of Object.values(form.form_data)){
+                            control.native_vector_sliders?.forEach(slider=>slider.delete?.());
+                            control.numberEditors?.forEach(editor=>editor.dispose?.());
+                        }
+                        form.node.remove();
+                    }
+                },
+                watch:{value:{handler(next){this.syncValue(next);},deep:true}},
+                mounted(){
+                    this._vectorProject=Project;
+                    const key=this.field.key;
+                    const form=new InputForm((window.LightManagerUI?.prepareForm||((config)=>config))({
+                        [key]:window.LightManagerUI.formDesign.vector({
+                            label:false,hide_header:true,resettable:false,axis_labels:true,dimensions:3,
+                            value:this.value.slice(),default:[this.field.reset,this.field.reset,this.field.reset],
+                            step:this.field.step,onBefore:()=>this.beginEdit(),onAfter:()=>this.finishEdit()
+                        })
+                    }));
+                    // Blockbench applies Form's own 6px padding with a higher
+                    // cascade layer priority than plugin CSS; remove it only
+                    // for this embedded, already-titled 28px vector.
+                    form.node.style.setProperty('padding','0px','important');
+                    this._vectorForm=form;
+                    this._vectorCallback=event=>this.changeVector(event);
+                    this._vectorListener=form.on('change',this._vectorCallback);
+                    const vector=form.form_data[key];
+                    vector.inputs_container.style.height='28px';
+                    Array.from(vector.inputs_container.children).forEach((row,index)=>{
+                        const axis=row.querySelector(':scope > span');
+                        if(axis)axis.style.color='var(--color-axis-'+['x','y','z'][index]+')';
+                    });
+                    for(const slider of vector.native_vector_sliders||[]){
+                        slider.node.style.height='28px';
+                        slider.node.style.borderRadius='8px';
+                        slider.jq_inner.css({'justify-content':'center','text-align':'center'});
+                        // Scene Links previously rejected blank/non-numeric XYZ
+                        // edits. Blockbench's NumSlider otherwise converts blank
+                        // text (or invalid pasted vector parts) to zero.
+                        const stopInput=slider.stopInput;
+                        slider.stopInput=function(...args){
+                            if(this.jq_inner.hasClass('editing')){
+                                const raw=this.jq_inner.text().trim().replace(/,(?=\d+$)/,'.');
+                                const parts=raw.split(/\s+/);
+                                const numeric=/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i;
+                                if(![1,3].includes(parts.length)||!parts.every(part=>numeric.test(part)&&Number.isFinite(Number(part)))){
+                                    this.jq_inner.text(String(this.value));
+                                }
+                            }
+                            return stopInput.apply(this,args);
+                        };
+                    }
+                    this.$refs.host.append(form.node);
+                },
+                beforeDestroy(){this.disposeForm();}
+            };
             inspector=new Panel('lightflow_scene_links_inspector',{name:t("scene_links"),icon:'kid_star',growable:true,resizable:true,
                 condition:{modes:['edit','render'],project:true},default_position:{slot:'right_bar',height:350,folded:false,attached_to:'transform',attached_index:1},
                 component:{
-                    data(){return {currentId:'',rootId:'',name:'',rootName:'',pose:false,renderMode:false,status:'',statusKey:'ready',path:'',file:'',poseMode:'additive',modified:0,stats:null,materialLimit:false,animations:[],animationId:'',playing:false,playbackTime:0,animationLength:0,loop:false,values:{position:[0,0,0],rotation:[0,0,0],scale:[1,1,1]},fields:inspectorFields};},
+                    components:{'lf-scene-vector':sceneVectorComponent},
+                    data(){return {currentId:'',rootId:'',name:'',rootName:'',pose:false,renderMode:false,sharedVectors:false,status:'',statusKey:'ready',path:'',file:'',poseMode:'additive',modified:0,stats:null,materialLimit:false,hasTextureChoice:false,textureLabel:'',textureMenuOpen:false,hasSecondarySkinLayer:false,secondarySkinLayer:false,animations:[],animationId:'',playing:false,playbackTime:0,animationLength:0,loop:false,values:{position:[0,0,0],rotation:[0,0,0],scale:[1,1,1]},fields:inspectorFields};},
                     methods:{
                         syncSelection(){
                             const element=selected(),root=rootOf(element);
+                            if(this.currentId!==element?.uuid||this._textureMenuProject!==Project)this.closeTextureMenu();
+                            this.sharedVectors=typeof InputForm!=='undefined'&&typeof FormElement!=='undefined'&&!!FormElement.types?.custom_vector&&!!window.LightManagerUI?.formDesign?.vector;
                             this.currentId=element?.uuid||'';this.rootId=root?.uuid||'';this.pose=element?.type==='lightflow_pose_group';this.renderMode=!!Modes.render;
                             this.name=element?.name||'';this.rootName=root?.name||'';this.status=root?statusText(root):'';this.statusKey=root?._lightflowStatus||'ready';
                             this.path=root?sourcePath(root):'';this.file=this.path.split(/[\\/]/).pop()||t("source_unavailable");
                             this.poseMode=this.pose?element.pose_mode||'additive':'additive';
                             this.values={position:element?.position?.slice()||[0,0,0],rotation:element?.rotation?.slice()||[0,0,0],scale:element?.scale?.slice()||[1,1,1]};
                             this.stats=root?._lightflowManifest||null;this.materialLimit=!!root?._lightflowMaterialLimit;
+                            const resources=activeMounts.get(root);
+                            this.hasSecondarySkinLayer=!!resources?.hasSecondarySkinLayer&&root.include_geometry!==false;
+                            this.secondarySkinLayer=root?.secondary_skin_layer===true;
+                            this.hasTextureChoice=!!resources?.hasDefaultTextureFaces&&root.include_geometry!==false;
+                            this.textureLabel=instanceTexture(root,resources)?.name||
+                                t(root?.texture_override?'missing_instance_texture':'source_default_texture');
                             this.animations=this.stats?.animations||[];this.animationId=root?.animation_id||'';this.loop=!!root?.animation_loop;this.animationLength=Number(animationFor(root)?.length)||0;this.syncPlayback();
                             let count=0;
                             root?.forEachChild?.(child=>{if(child.type==='lightflow_pose_group'&&(child.pose_mode==='absolute'||child.position?.some(v=>v!==0)||child.rotation?.some(v=>v!==0)||child.scale?.some(v=>v!==1)))count++;});
                             this.modified=count;
+                        },
+                        closeTextureMenu(){
+                            if(this._textureMenu?.node.isConnected)this._textureMenu.hide();
+                        },
+                        toggleSecondarySkinLayer(event){
+                            const element=selected();
+                            if(element?.uuid!==this.rootId||!this.hasSecondarySkinLayer)return;
+                            edit(element,{secondary_skin_layer:event.target.checked},t('toggle_skin_layer'));
+                        },
+                        openTextureMenu(event){
+                            const element=selected(),project=Project,anchor=event.currentTarget;
+                            if(element?.type!=='lightflow_scene_instance'||!this.hasTextureChoice)return;
+                            if(this.textureMenuOpen){this.closeTextureMenu();return;}
+                            const resources=activeMounts.get(element);
+                            const sourceTextures=resources?.result.model.textures||[];
+                            const choose=id=>{
+                                if(disposed||Project!==project||selected()!==element||!anchor.isConnected||
+                                    activeMounts.get(element)!==resources||
+                                    (id.startsWith('project:')&&!project.textures.some(texture=>'project:'+texture.uuid===id)))return;
+                                anchor.focus();
+                                if(id===element.texture_override)return;
+                                Undo.initEdit({elements:[element]});
+                                element.extend({texture_override:id});
+                                syncInstanceTexture(element);
+                                Undo.finishEdit(t('change_instance_texture'));
+                                syncPanel();
+                            };
+                            const items=[{id:'source_default',name:t('source_default_texture'),icon:'image',click:()=>choose('')}];
+                            if(sourceTextures.length)items.push(new MenuSeparator('linked_project',t('linked_project_textures')));
+                            for(const [index,texture] of sourceTextures.entries()){
+                                const id=sourceTextureId(texture,index),url=getTextureSource(texture,resources.result.path);
+                                const icon=document.createElement('img');
+                                icon.className='icon';
+                                if(url)icon.src=url;
+                                items.push({id,name:texture.name||texture.id||String(index+1),description:texture.path,icon:url?icon:'texture',click:()=>choose(id)});
+                            }
+                            if(project.textures?.length)items.push(new MenuSeparator('current_project',t('current_project_textures')));
+                            for(const texture of project.textures||[]){
+                                const id='project:'+texture.uuid;
+                                const icon=texture.img?.cloneNode(false);
+                                if(icon)icon.className='icon';
+                                items.push({id,name:texture.name,description:texture.path,icon:icon?.src?icon:'texture',click:()=>choose(id)});
+                            }
+                            const current=items.find(item=>item.id===(element.texture_override||'source_default'));
+                            if(current)current.marked=true;
+                            const search=window.LightManagerUI?.searchMenu;
+                            const menu=new Menu('lightflow_scene_link_texture',items,{searchable:!search,onClose:()=>{
+                                this.textureMenuOpen=false;
+                                this._textureMenu=null;
+                            }});
+                            this._textureMenu=menu;this._textureMenuProject=project;
+                            // Cap the list before opening so Blockbench never installs
+                            // its wheel handler for moving an oversized context menu.
+                            menu.node.classList.add('lf-links-texture-menu');
+                            menu.node.style.maxHeight='min(420px, calc(100vh - 56px))';
+                            menu.node.style.width='min(280px, calc(100vw - 16px))';
+                            menu.open(anchor);
+                            this.textureMenuOpen=true;
+                            search?.(menu,Object.fromEntries(items.filter(item=>item.id).map(item=>[item.id,item])),anchor,{labeledSections:true,descriptions:true});
                         },
                         syncPlayback(){const root=OutlinerNode.uuids?.[this.rootId];this.playbackTime=animationTime(root);this.playing=!!root?._lightflowPlaying;},
                         chooseAnimation(event){setAnimation(selected(),event.target.value);},
@@ -2278,6 +3181,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                         openSource(){openAction.trigger();},refresh(){refreshAction.trigger();},relink(){relocateAction.trigger();},resetPose(){resetAction.trigger();},add(){showSourcePicker();}
                     },
                     mounted(){this.syncSelection();},
+                    beforeDestroy(){this.closeTextureMenu();},
                     template:`<div class="lf-links-inspector">
                         <div v-if="!currentId" class="lf-links-inspector-empty"><i class="material-icons">kid_star</i><strong>${t("build_a_scene_with_linked_projects")}</strong><p>${t("choose_an_instance_in_the_outliner_to_place_it_or_open_a_group_t")}</p><button type="button" @click="add"><i class="material-icons">add</i>${t("add_linked_scene")}</button></div>
                         <template v-else>
@@ -2288,35 +3192,49 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                                 <span v-if="!pose" class="lf-links-status" :class="'lf-links-status-'+statusKey"><span class="lf-links-status-dot"></span>{{ status }}</span>
                                 <button v-else type="button" class="lf-links-icon-action" @click="resetPose" :title="'${t("reset_group_pose")}'" :aria-label="'${t("reset_group_pose")}'"><i class="material-icons">restart_alt</i></button>
                             </div>
-                            <div v-if="!pose" class="lf-links-source-card"><div class="lf-links-source-title"><i class="material-icons">description</i><span :title="path+(stats ? ' · '+stats.groups.length+' ${t("groups")}, '+stats.elements.length+' ${t("elements")}, '+stats.textures.length+' ${t("textures")}' : '')">{{ file }}</span><span v-if="materialLimit" class="lf-links-material-badge" :title="'${t("source_material_overrides_are_not_linked_yet")}'">${t("textures_only")}</span></div></div>
-                            <div v-if="!pose" class="lf-links-quick-actions"><button type="button" @click="refresh" :disabled="statusKey==='updating'" :title="'${t("read_the_latest_saved_source")}'"><i class="material-icons">sync</i>${t("update")}</button><button type="button" @click="openSource" :title="'${t("edit_the_source_project")}'"><i class="material-icons">open_in_new</i>${t("open_2")}</button><button type="button" @click="relink" :title="'${t("find_a_moved_source")}'"><i class="material-icons">folder_open</i>${t("find")}</button></div>
+                            <div v-if="!pose" class="lf-links-source-card">
+                                <div class="lf-links-source-title"><i class="material-icons">description</i><span :title="path+(stats ? ' · '+stats.groups.length+' ${t("groups")}, '+stats.elements.length+' ${t("elements")}, '+stats.textures.length+' ${t("textures")}' : '')">{{ file }}</span><span v-if="materialLimit" class="lf-links-material-badge" :title="'${t("source_material_overrides_are_not_linked_yet")}'">${t("textures_only")}</span></div>
+                                <div class="lf-links-source-actions" role="group" aria-label="${t("source_actions")}">
+                                    <button type="button" class="lf-links-source-update" :class="{pending:statusKey==='changed'}" @click="refresh" :disabled="statusKey==='updating'" :title="'${t("read_the_latest_saved_source")}'" aria-label="${t("update")}"><i class="material-icons">sync</i><span>${t("update")}</span></button>
+                                    <button type="button" class="lf-links-icon-action" @click="openSource" :title="'${t("edit_the_source_project")}'" aria-label="${t("open_2")}"><i class="material-icons">open_in_new</i></button>
+                                    <button type="button" class="lf-links-icon-action" @click="relink" :title="'${t("find_a_moved_source")}'" aria-label="${t("find")}"><i class="material-icons">folder_open</i></button>
+                                </div>
+                            </div>
+                            <button v-if="!pose && hasTextureChoice" type="button" class="lf-links-texture-choice" aria-haspopup="menu" :aria-expanded="String(textureMenuOpen)" :aria-label="'${t("instance_texture")} · '+textureLabel" :title="'${t("instance_texture")} · '+textureLabel" @click="openTextureMenu">
+                                <i class="material-icons" aria-hidden="true">texture</i><span>{{ textureLabel }}</span><i class="material-icons" aria-hidden="true">expand_more</i>
+                            </button>
+                            <label v-if="!pose && hasSecondarySkinLayer" class="lf-links-skin-layer">
+                                <input type="checkbox" :checked="secondarySkinLayer" @change="toggleSecondarySkinLayer" @keydown.space.stop.prevent="!$event.repeat && $event.target.click()"> ${t("secondary_skin_layer")}
+                            </label>
                             <div v-if="!pose && statusKey!=='ready'" class="lf-links-notice" role="status"><i class="material-icons">{{ statusKey==='updating' ? 'sync' : 'info_outline' }}</i><span>{{ status }}</span></div>
                             <div v-if="renderMode" class="lf-links-section-label"><span>{{ pose ? '${t("pose_this_group")}' : '${t("place_the_instance")}' }}</span><span v-if="!pose && modified" class="lf-links-pose-count">{{ modified }} ${t("posed")}</span></div>
                             <div v-if="pose" class="lf-links-mode" role="group" :aria-label="'${t("pose_mode")}'"><button type="button" :class="{active:poseMode==='additive'}" :aria-pressed="poseMode==='additive'" :title="'${t("adds_to_the_source_pose_follows_later_source_edits")}'" @click="setPoseMode('additive')">${t("additive")}</button><button type="button" :class="{active:poseMode==='absolute'}" :aria-pressed="poseMode==='absolute'" :title="'${t("keeps_fixed_values_if_the_source_pose_changes")}'" @click="setPoseMode('absolute')">${t("absolute")}</button></div>
-                            <template v-if="renderMode"><div class="lf-links-transform" v-for="field in fields" :key="field.key"><div class="lf-links-transform-head"><label><i class="material-icons">{{ field.icon }}</i>{{ pose ? field.poseLabel : field.label }}</label><button type="button" class="lf-links-reset-field" @click="resetField(field)" :title="'${t("reset")}'+' '+field.label" :aria-label="'${t("reset")}'+' '+field.label"><i class="material-icons">restart_alt</i></button></div><div class="lf-links-axis-row"><label v-for="(axis,index) in ['X','Y','Z']" :key="axis" :class="'lf-links-axis-'+axis.toLowerCase()"><span>{{ axis }}</span><input type="number" :step="field.step" :value="values[field.key][index]" :aria-label="(pose ? field.poseLabel : field.label)+' '+axis" @change="commitAxis($event,field.key,index)" @keydown.enter="$event.target.blur()" @keydown.esc.stop.prevent="cancelAxis($event,field.key,index)"></label></div></div></template>
+                            <template v-if="renderMode"><div class="lf-links-transform" v-for="field in fields" :key="field.key"><div class="lf-links-transform-head"><label><i class="material-icons">{{ field.icon }}</i>{{ pose ? field.poseLabel : field.label }}</label><button type="button" class="lf-links-reset-field" @click="resetField(field)" :title="'${t("reset")}'+' '+field.label" :aria-label="'${t("reset")}'+' '+field.label"><i class="material-icons">restart_alt</i></button></div><lf-scene-vector v-if="sharedVectors" :key="currentId+'_'+field.key" :element-id="currentId" :field="field" :value="values[field.key]"></lf-scene-vector><div v-else class="lf-links-axis-row"><label v-for="(axis,index) in ['X','Y','Z']" :key="axis" :class="'lf-links-axis-'+axis.toLowerCase()"><span class="lf-links-axis-marker" aria-hidden="true">{{ axis }}</span><input type="number" :step="field.step" :value="values[field.key][index]" :aria-label="(pose ? field.poseLabel : field.label)+' '+axis" @change="commitAxis($event,field.key,index)" @keydown.enter="$event.target.blur()" @keydown.esc.stop.prevent="cancelAxis($event,field.key,index)"></label></div></div></template>
                         </template>
                     </div>`
                 }});
             motionPanel=new Panel('lightflow_scene_links_animation',{
-                name:t("linked_animation"),icon:'cinematic_blur',growable:false,resizable:false,
-                condition:()=>!!Project&&!!Modes.animate&&!!rootOf(selected()),
-                default_position:{slot:'right_bar',height:100,folded:false,sidebar_index:7},
+                name:t("linked_animation"),icon:'cinematic_blur',growable:true,resizable:true,
+                condition:()=>!!Project&&!!Modes.animate&&!!rootOf(selected())?._lightflowManifest?.animations?.length,
+                default_position:{slot:'right_bar',height:185,folded:false,sidebar_index:7},
                 component:{
-                    data(){return {rootName:'',summary:'',locked:false,offset:0,loop:false,time:0,count:0};},
+                    data(){return {rootId:'',rootName:'',summary:'',locked:false,offset:0,loop:false,time:0,count:0};},
                     methods:{
-                        syncSelection(){const root=rootOf(selected());this.rootName=root?.name||'';this.locked=!!root?.animation_locked;this.offset=Number(root?.animation_offset)||0;this.loop=root?.animation_loop_override?!!root.animation_loop:animationFor(root)?.loop==='loop';
+                        syncSelection(){const root=rootOf(selected());this.rootId=root?.uuid||'';this.rootName=root?.name||'';this.locked=!!root?.animation_locked;this.offset=Number(root?.animation_offset)||0;this.loop=root?.animation_loop_override?!!root.animation_loop:animationFor(root)?.loop==='loop';
                             const clips=animationsFor(root);this.count=clips.length;this.summary=clips.length===1?clips[0].name:clips.length?clips.length+' '+t("animations"):t("original_pose");this.syncPlayback();},
                         syncPlayback(){const root=rootOf(selected());this.time=animationTime(root);},
                         choose(event){showAnimationMenu(rootOf(selected()),event.currentTarget);},
-                        setClock(locked){const root=rootOf(selected());if(!root)return;edit(root,{animation_locked:locked,...(locked?{animation_time:timelineClock(root)}:{})},t("change_linked_clock"));updateAnimatedTree(root);ensureTimeline();},
-                        setOffset(event){const root=rootOf(selected()),value=Number(event.target.value);if(!root||!Number.isFinite(value))return;edit(root,{animation_offset:value},t("offset_linked_animation"));ensureTimeline();updateAnimatedTree(root);},
-                        toggleLoop(){const root=rootOf(selected());if(!root)return;edit(root,{animation_loop:!this.loop,animation_loop_override:true},t("change_linked_loop"));updateAnimatedTree(root);}
+                        setClock(locked){const root=rootOf(selected());if(!root||root.uuid!==this.rootId)return;const time=timelineClock(root);if(!!root.animation_locked===locked&&(!locked||Number(root.animation_time)===time))return;edit(root,{animation_locked:locked,...(locked?{animation_time:time}:{})},t("change_linked_clock"));updateAnimatedTree(root);ensureTimeline();},
+                        setOffset(event){const root=rootOf(selected()),raw=event.target.value.trim(),value=Number(raw);if(!root||root.uuid!==this.rootId||!raw||!Number.isFinite(value)){event.target.value=this.offset;return;}if(value===Number(root.animation_offset||0))return;edit(root,{animation_offset:value},t("offset_linked_animation"));ensureTimeline();updateAnimatedTree(root);},
+                        cancelOffset(event){event.target.value=this.offset;event.target.blur();},
+                        toggleLoop(){const root=rootOf(selected());if(!root||root.uuid!==this.rootId)return;edit(root,{animation_loop:!this.loop,animation_loop_override:true},t("change_linked_loop"));updateAnimatedTree(root);}
                     },
                     mounted(){this.syncSelection();},
                     template:`<div class="lf-links-inspector lf-links-animation-panel">
                         <div class="lf-links-clock-head"><strong :title="rootName">{{ rootName }}</strong><span :title="'${t("evaluated_clip_time")}'">{{ time.toFixed(2) }} s</span></div>
+                        <button type="button" class="lf-links-animation-picker" @click="choose" aria-haspopup="menu" aria-label="${t("choose_linked_animations")}" :title="'${t("linked_clips")}: '+summary"><i class="material-icons">movie</i><span>{{ summary }}</span><i class="material-icons">arrow_drop_down</i></button>
                         <div class="lf-links-mode lf-links-clock-mode" role="group" :aria-label="'${t("animation_clock")}'"><button type="button" :class="{active:!locked}" :aria-pressed="!locked" @click="setClock(false)" :title="'${t("follow_the_native_timeline_plus_offset")}'"><i class="material-icons">timeline</i>Timeline</button><button type="button" :class="{active:locked}" :aria-pressed="locked" @click="setClock(true)" :title="'${t("keep_the_pose_at_the_current_timeline_time")}'"><i class="material-icons">lock</i>Lock in</button></div>
-
+                        <div class="lf-links-clock-settings"><label class="lf-links-global-offset" :title="'${t("offset_all_linked_clips")}'"><span>${t("time_offset")}</span><input type="number" step="0.05" :value="offset" aria-label="${t("offset_all_linked_clips")}" @change="setOffset" @keydown.enter="$event.target.blur()" @keydown.esc.stop.prevent="cancelOffset"><small>s</small></label><button type="button" class="lf-links-loop-toggle" :class="{active:loop}" :aria-pressed="loop" :title="'${t("default_clip_loop")}'" @click="toggleLoop"><i class="material-icons">{{ loop ? 'check_box' : 'check_box_outline_blank' }}</i><span>${t("loop_animation")}</span></button></div>
                     </div>`
                 }
             });
@@ -2325,7 +3243,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
             const libraryVM=new Vue({
                 data(){return {instances:[],selectedId:'',folded:{},query:''};},
                 methods:{
-                    sync(){this.selectedId=rootOf(selected())?.uuid||'';this.instances=(Project?.elements||[]).filter(root=>root.type==='lightflow_scene_instance').map(root=>({id:root.uuid,name:root.name,color:root.color>=0?markerColors[root.color%markerColors.length]?.pastel:'var(--color-accent)',active:animationIds(root),focus:root.animation_id,layers:root.animation_layers||[],clips:root._lightflowManifest?.animations||[]}));this.query=Panels.animations?.inside_vue?.search_term||'';},
+                    sync(){this.selectedId=rootOf(selected())?.uuid||'';this.instances=(Project?.elements||[]).filter(root=>root.type==='lightflow_scene_instance'&&root._lightflowManifest?.animations?.length).map(root=>({id:root.uuid,name:root.name,color:root.color>=0?markerColors[root.color%markerColors.length]?.pastel:'var(--color-accent)',active:animationIds(root),focus:root.animation_id,layers:root.animation_layers||[],clips:root._lightflowManifest?.animations||[]}));this.query=Panels.animations?.inside_vue?.search_term||'';},
                     root(id){return OutlinerNode.uuids[id];},
                     expand(id){const root=this.root(id);if(this.selectedId!==id){root?.clickSelect?.();this.$set(this.folded,id,false);}else this.$set(this.folded,id,!this.folded[id]);},
                     choose(id,clip,event){const root=this.root(id);if(!root||!clip.supported)return;if(this.selectedId!==id)root.clickSelect();if(event.ctrlKey||event.metaKey)toggleAnimation(root,clip.id);else selectClip(root,clip.id);},
@@ -2397,11 +3315,20 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 #right_bar .panel_tab_list:has(> .panel_handle[panel_id="transform"]) > .panel_handle[panel_id="lightflow_scene_links_inspector"]:before{content:'kid_star';font-family:'Material Icons';font-size:18px;line-height:1;flex:none;width:18px;text-align:center;}
                 body.lightflow-scene-link-selected #panel_transform .panel_toolbar_label:has(+ .toolbar[toolbar_id="element_origin"]),
                 body.lightflow-scene-link-selected #panel_transform .toolbar[toolbar_id="element_origin"]{display:none!important;}
-                #panel_lightflow_scene_links_inspector .panel_vue_wrapper{min-width:0;overflow:auto;}
+                #panel_lightflow_scene_links_inspector .panel_vue_wrapper,#panel_lightflow_scene_links_animation .panel_vue_wrapper{min-width:0;overflow:auto;}
                 .lf-links-inspector,.lf-links-inspector *{box-sizing:border-box;}
-                .lf-links-inspector{display:block!important;min-width:0;padding:0 10px 8px;color:var(--color-text);font-size:12px;}
+                .lf-links-inspector{--lf-links-control-height:30px;--lf-links-control-radius:8px;--lf-links-action-size:28px;--lf-links-glyph-size:18px;display:block!important;min-width:0;padding:0 10px 8px;color:var(--color-text);font-size:12px;}
                 .lf-links-inspector button{color:inherit;font:inherit;cursor:pointer;}
+                .lf-links-inspector :is(button,input,select,.nslide_tool),
+                :is(#lightflow_scene_link_picker,#lightflow_scene_link_import,#lightflow_scene_link_recovery,#lightflow_linked_clip_offset) :is(.dialog_wrapper,button,input,select){box-shadow:none!important;}
                 .lf-links-inspector button:focus-visible,.lf-links-inspector input:focus-visible{outline:2px solid var(--lf-focus-color, var(--color-text));outline-offset:1px;}
+                .lf-links-inspector .lf-links-texture-choice{display:flex;align-items:center;gap:6px;width:100%;min-width:0;min-height:var(--lf-links-control-height);margin:4px 0;padding:0 7px;border:1px solid var(--color-border);border-radius:var(--lf-links-control-radius);background:var(--color-back);text-align:left;}
+                .lf-links-texture-choice:hover{background:var(--color-button);}
+                .lf-links-texture-choice span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+                .lf-links-texture-choice i.material-icons{flex:none;font-size:18px;margin:0;}
+                .lf-links-skin-layer{display:flex;align-items:center;gap:7px;min-height:28px;padding:0 7px;cursor:pointer;}
+                .lf-links-skin-layer input{flex:none;margin:0;}
+                .contextMenu.lf-links-texture-menu{overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable;box-shadow:none!important;border:1px solid var(--color-border);}
                 .lf-links-inspector-head{display:flex;align-items:center;gap:7px;min-height:36px;border-bottom:1px solid var(--color-border);}
                 .lf-links-head-icon{flex:none;color:var(--color-accent);font-size:19px;}
                 .lf-links-title{min-width:0;flex:1;}
@@ -2412,6 +3339,10 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 .lf-links-status-updating .lf-links-status-dot{background:var(--color-accent);}
                 .lf-links-inspector .lf-links-back,.lf-links-inspector .lf-links-icon-action{display:grid;place-items:center;width:28px;min-width:28px;max-width:28px;height:28px;min-height:28px;padding:0;flex:0 0 28px;border-radius:8px;background:var(--color-button);}
                 .lf-links-back i,.lf-links-icon-action i{font-size:17px;}
+                #panel_lightflow_scene_links_inspector .lf-links-source-actions i.material-icons,
+                #panel_lightflow_scene_links_inspector .lf-links-reset-field i.material-icons,
+                #panel_lightflow_scene_links_inspector .lf-links-icon-action i.material-icons,
+                #panel_lightflow_scene_links_inspector .lf-links-back i.material-icons{display:block;flex:none;width:var(--lf-links-glyph-size);height:var(--lf-links-glyph-size);margin:0!important;font-size:var(--lf-links-glyph-size);line-height:var(--lf-links-glyph-size);text-align:center;transform:translateY(-.5px);}
                 .lf-links-icon-action{background:transparent;color:var(--color-subtle_text)!important;}
                 .lf-links-icon-action:hover{background:var(--color-button);color:var(--color-text)!important;}
                 .lf-links-icon-action:disabled{opacity:.4;cursor:default;}
@@ -2420,16 +3351,26 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 .lf-links-clock-head{display:flex;gap:8px;align-items:center;margin-bottom:5px;min-width:0;}
                 .lf-links-clock-head strong{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
                 .lf-links-clock-head>span{font-size:11px;color:var(--color-subtle_text);font-variant-numeric:tabular-nums;flex:none;}
-                #panel_lightflow_scene_links_animation .lf-links-animation-picker{display:flex;align-items:center;gap:5px;width:0;min-width:0;flex:1;height:28px;padding:0 6px;background:var(--color-button);border-radius:8px;text-align:left;}
+                #panel_lightflow_scene_links_animation .lf-links-animation-picker{display:flex;align-items:center;gap:6px;width:100%;min-width:0;min-height:30px;padding:0 8px;background:var(--color-button);border-radius:8px;text-align:left;}
+                .lf-links-animation-picker:hover{filter:brightness(1.12);}
                 .lf-links-animation-picker span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-                .lf-links-animation-picker i{font-size:18px;flex:none;}
-                .lf-links-clock-mode{margin-top:6px!important;}
+                .lf-links-animation-picker i{font-size:18px;line-height:1;flex:none;}
+                .lf-links-clock-mode{margin-top:7px;}
                 .lf-links-clock-mode button{display:flex;align-items:center;justify-content:center;gap:5px;}
-                .lf-links-clock-mode i,.lf-links-offset i{font-size:16px;}
-                .lf-links-offset{display:flex;gap:5px;align-items:center;margin-top:5px;}
-                .lf-links-offset>span{display:flex;align-items:center;gap:5px;flex:1;color:var(--color-subtle_text);}
-                .lf-links-offset input{width:78px;min-width:0;text-align:right;font:inherit;}
-                .lf-links-offset small{color:var(--color-subtle_text);}
+                .lf-links-clock-mode i{font-size:16px;line-height:1;}
+                .lf-links-clock-settings{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:5px;margin-top:7px;}
+                .lf-links-global-offset{display:flex;align-items:center;gap:5px;min-width:0;min-height:30px;padding:0 6px;border:1px solid var(--color-border);border-radius:8px;background:var(--color-dark);}
+                .lf-links-global-offset>span{min-width:0;flex:1;color:var(--color-subtle_text);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+                .lf-links-global-offset input{width:53px;min-width:0;height:25px;padding:0 3px;background:transparent;border:0;text-align:right;font:inherit;color:var(--color-text);font-variant-numeric:tabular-nums;appearance:textfield;-moz-appearance:textfield;}
+                .lf-links-global-offset input::-webkit-outer-spin-button,.lf-links-global-offset input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
+                .lf-links-global-offset:focus-within{outline:2px solid var(--lf-focus-color,var(--color-text));outline-offset:1px;}
+                .lf-links-global-offset input:focus-visible{outline:none;}
+                .lf-links-global-offset small{font-size:11px;color:var(--color-subtle_text);}
+                .lf-links-loop-toggle{display:flex;align-items:center;justify-content:center;gap:4px;min-width:0;min-height:30px;padding:0 6px;border:1px solid var(--color-border);border-radius:8px;background:var(--color-dark);}
+                .lf-links-loop-toggle i{font-size:17px;line-height:1;color:var(--color-subtle_text);}
+                .lf-links-loop-toggle.active i{color:var(--color-accent);}
+                .lf-links-loop-toggle:hover{background:var(--color-button);}
+                .lf-links-loop-toggle span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
                 #animations_list .lf-links-animation-library,#animations_list .lf-links-animation-library>ul{list-style:none;margin:0;padding:0;overflow:visible;max-height:none;}
                 #animations_list .lf-links-library-head{display:flex;align-items:center;gap:5px;height:28px;min-width:0;padding:0 5px;color:var(--lf-link-color);cursor:pointer;}
                 .lf-links-library-head>.material-icons{font-size:22px;flex:none;}
@@ -2448,50 +3389,58 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 .lf-links-library-clip.unsupported{opacity:.45;}
                 .lf-links-library-head:focus-visible,.lf-links-library-clip:focus-visible,.lf-links-library-clip>.in_list_button:focus-visible{outline:2px solid var(--lf-focus-color, var(--color-text));outline-offset:-2px;}
                 .lf-links-animation-empty{margin:6px 0;color:var(--color-subtle_text);line-height:1.4;}
-                .lf-links-motion{margin:6px 0 0;border-top:1px solid var(--color-border);padding-top:6px;}
-                .lf-links-motion-row{display:flex;align-items:center;gap:4px;min-width:0;}
-                .lf-links-motion-row>i{font-size:17px;width:18px;flex:none;color:var(--color-subtle_text);}
-                .lf-links-motion-row select{flex:1;min-width:0;height:28px;border:1px solid var(--color-border);background:var(--color-dark);color:var(--color-text);font:inherit;}
-                #panel_lightflow_scene_links_animation .lf-links-motion-row .lf-links-icon-action{width:28px;min-width:28px;max-width:28px;height:28px;min-height:28px;padding:0;display:grid;place-items:center;flex:0 0 28px;}
-                .lf-links-motion-row .lf-links-icon-action i{font-size:18px;line-height:1;}
-                .lf-links-time-row{display:flex;align-items:center;gap:7px;margin-top:3px;min-height:24px;}
-                .lf-links-time-row input{flex:1;min-width:0;accent-color:var(--color-accent);}
-                .lf-links-time-row span{flex:none;min-width:44px;text-align:right;font-variant-numeric:tabular-nums;font-size:11px;color:var(--color-subtle_text);}
-                .lf-links-source-card{padding:6px 8px;margin:6px 0;background:var(--color-dark);border:1px solid var(--color-border);border-radius:8px;min-width:0;}
-                .lf-links-source-title{display:flex;align-items:center;gap:7px;min-width:0;}
+                .lf-links-source-card{display:flex;align-items:center;gap:6px;padding:5px 6px;margin:6px 0;background:var(--color-dark);border:1px solid var(--color-border);border-radius:8px;min-width:0;}
+                .lf-links-source-title{display:flex;align-items:center;gap:6px;min-width:0;flex:1;}
                 .lf-links-source-title i{font-size:17px;color:var(--color-accent);flex:none;}
                 .lf-links-source-title span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;}
                 .lf-links-source-title .lf-links-material-badge{flex:none;color:#e7a35b;font-size:10px;font-weight:400;cursor:help;}
-                #panel_lightflow_scene_links_inspector {container-type:inline-size;}
+                .lf-links-source-actions{display:flex;align-items:center;gap:3px;flex:none;}
+                .lf-links-source-update{display:flex;align-items:center;justify-content:center;gap:4px;min-height:28px;height:28px;padding:0 7px;border-radius:var(--lf-links-control-radius);background:var(--color-button);white-space:nowrap;line-height:1.2;}
+                .lf-links-source-update.pending{background:var(--color-accent);color:var(--lf-on-accent,var(--color-accent_text));}
+                .lf-links-source-actions .lf-links-icon-action{background:var(--color-button);}
+                .lf-links-source-actions button:hover{filter:brightness(1.12);}
+                .lf-links-source-actions button:disabled{opacity:.5;cursor:wait;}
+                #panel_lightflow_scene_links_inspector,#panel_lightflow_scene_links_animation{container-type:inline-size;}
                 .lf-links-axis-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;}
+                @container (max-width:300px){
+                    .lf-links-source-card{flex-wrap:wrap;}
+                    .lf-links-source-title{flex-basis:100%;}
+                    .lf-links-source-actions{width:100%;}
+                    .lf-links-source-update{flex:1;}
+                    .lf-links-clock-settings{grid-template-columns:minmax(0,1fr);}
+                    .lf-links-global-offset>span{overflow:visible;}
+                }
                 @container (max-width:260px){
-                    .lf-links-quick-actions button {flex-direction:column;white-space:normal;line-height:1.2;padding:5px 2px;}
                     .lf-links-axis-row {grid-template-columns:1fr;gap:3px;}
                     .lf-links-inspector-head {flex-wrap:wrap;padding-bottom:4px;}
                 }
-                .lf-links-quick-actions{display:grid;grid-template-columns:1.25fr 1fr 1fr;gap:5px;margin:6px 0;}
-                .lf-links-quick-actions button,.lf-links-inspector-empty button{display:flex;align-items:center;justify-content:center;gap:5px;min-width:0;min-height:29px;padding:4px 6px;border-radius:8px;background:var(--color-button);white-space:nowrap;}
-                .lf-links-quick-actions button:first-child{background:var(--color-accent);color:var(--lf-on-accent,var(--color-accent_text));}
-                .lf-links-quick-actions button:hover,.lf-links-inspector-empty button:hover{filter:brightness(1.17);}
-                .lf-links-quick-actions button:disabled{opacity:.5;cursor:wait;}
-                .lf-links-quick-actions i,.lf-links-inspector-empty button i{font-size:16px;flex:none;}
+                .lf-links-inspector-empty button{display:flex;align-items:center;justify-content:center;gap:5px;min-width:0;min-height:29px;padding:4px 6px;border-radius:8px;background:var(--color-button);white-space:nowrap;}
+                .lf-links-inspector-empty button:hover{filter:brightness(1.17);}
+                .lf-links-inspector-empty button i{font-size:16px;flex:none;}
                 .lf-links-notice{display:flex;align-items:center;gap:6px;padding:6px 8px;margin-bottom:8px;background:var(--color-button);border-left:2px solid #e7a35b;color:var(--color-text);line-height:1.35;}
                 .lf-links-notice i{font-size:15px;flex:none;}
                 .lf-links-section-label{display:flex;align-items:center;justify-content:space-between;gap:7px;margin:12px 0 7px;color:var(--color-subtle_text);font-size:11px;text-transform:uppercase;letter-spacing:.045em;}
                 .lf-links-pose-count{color:var(--color-accent);text-transform:none;letter-spacing:0;}
                 .lf-links-transform{padding:6px 0 8px;border-top:1px solid var(--color-border);}
-                .lf-links-transform-head{display:flex;align-items:center;justify-content:space-between;min-height:20px;gap:5px;margin-bottom:5px;}
+                .lf-links-transform-head{display:flex;align-items:center;justify-content:space-between;min-height:28px;gap:5px;margin-bottom:4px;}
+                /* InputForm owns native NumSliders, while Scene Links already
+                   supplies the transform heading: avoid the generic 6px Form
+                   padding and 4px FormElement margins around each 28px vector. */
+                #panel_lightflow_scene_links_inspector .lf-links-shared-vector > .form{padding:0!important;margin:0!important;}
+                #panel_lightflow_scene_links_inspector .lf-links-shared-vector .form_bar{margin:0!important;min-height:28px;}
                 .lf-links-transform-head label{display:flex;align-items:center;gap:6px;color:var(--color-text);}
-                .lf-links-transform-head label i{font-size:15px;color:var(--color-subtle_text);}
-                .lf-links-reset-field{display:grid;place-items:center;width:23px!important;min-width:23px!important;height:22px!important;min-height:22px!important;padding:0!important;border-radius:8px;color:var(--color-subtle_text)!important;}
-                .lf-links-reset-field:hover{background:var(--color-button);color:var(--color-text)!important;}
-                .lf-links-reset-field i{font-size:16px;}
-                .lf-links-axis-row label{display:flex;align-items:center;min-width:0;min-height:29px;background:var(--color-back);border:1px solid var(--color-border);border-radius:8px;}
-                .lf-links-axis-row span{flex:none;width:20px;text-align:center;font-size:10px;font-weight:700;}
-                .lf-links-axis-x span{color:#e27d87}.lf-links-axis-y span{color:#86c477}.lf-links-axis-z span{color:#77a8eb}
-                .lf-links-axis-row input{width:100%;min-width:0;height:27px;border:0;background:transparent;color:var(--color-text);font:inherit;text-align:right;padding:0 4px 0 0;appearance:textfield;-moz-appearance:textfield;}
-                .lf-links-axis-row label:focus-within{outline:2px solid var(--lf-focus-color, var(--color-text));outline-offset:2px;}
-                .lf-links-axis-row input::-webkit-outer-spin-button,.lf-links-axis-row input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
+                #panel_lightflow_scene_links_inspector .lf-links-transform-head label i{display:grid;place-items:center;width:18px;height:18px;font-size:16px;line-height:1;color:var(--color-subtle_text);}
+                #panel_lightflow_scene_links_inspector .lf-links-reset-field{display:grid;place-items:center;width:var(--lf-links-action-size)!important;min-width:var(--lf-links-action-size)!important;height:var(--lf-links-action-size)!important;min-height:var(--lf-links-action-size)!important;padding:0!important;flex:0 0 var(--lf-links-action-size);border:0;border-radius:var(--lf-links-control-radius);background:transparent;color:var(--color-subtle_text)!important;}
+                #panel_lightflow_scene_links_inspector .lf-links-reset-field:hover{background:var(--color-button);color:var(--color-text)!important;}
+                #panel_lightflow_scene_links_inspector .lf-links-axis-row label{display:flex;align-items:center;gap:5px;min-width:0;min-height:var(--lf-links-control-height);margin:0;background:transparent;border:0;}
+                #panel_lightflow_scene_links_inspector .lf-links-axis-marker{display:grid;place-items:center;flex:0 0 14px;width:14px;height:var(--lf-links-control-height);font-family:monospace;font-size:13px;font-weight:700;line-height:1;}
+                #panel_lightflow_scene_links_inspector .lf-links-axis-x .lf-links-axis-marker{color:var(--color-axis-x);}
+                #panel_lightflow_scene_links_inspector .lf-links-axis-y .lf-links-axis-marker{color:var(--color-axis-y);}
+                #panel_lightflow_scene_links_inspector .lf-links-axis-z .lf-links-axis-marker{color:var(--color-axis-z);}
+                #panel_lightflow_scene_links_inspector .lf-links-axis-row input{display:block;width:100%;min-width:0;height:var(--lf-links-control-height);min-height:var(--lf-links-control-height);margin:0;padding:0 4px;background:var(--color-back);border:1px solid var(--color-border);border-radius:var(--lf-links-control-radius);color:var(--color-text);font:inherit;font-size:12px;line-height:28px;text-align:center;font-variant-numeric:tabular-nums;appearance:textfield;-moz-appearance:textfield;}
+                #panel_lightflow_scene_links_inspector .lf-links-axis-row label:hover input:not(:focus){background:var(--color-button);}
+                #panel_lightflow_scene_links_inspector .lf-links-axis-row input:focus-visible{outline:2px solid var(--lf-focus-color, var(--color-text));outline-offset:1px;}
+                #panel_lightflow_scene_links_inspector .lf-links-axis-row input::-webkit-outer-spin-button,#panel_lightflow_scene_links_inspector .lf-links-axis-row input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
                 .lf-links-mode{display:grid;grid-template-columns:1fr 1fr;margin-top:7px;border:1px solid var(--color-border);border-radius:8px;overflow:hidden;}
                 .lf-links-mode button{min-height:29px;background:var(--color-dark);}
                 .lf-links-mode button+button{border-left:1px solid var(--color-border);}
@@ -2499,44 +3448,51 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 .lf-links-inspector-empty{display:grid;justify-items:center;gap:8px;padding:30px 10px;text-align:center;}
                 .lf-links-inspector-empty>i{display:grid;place-items:center;width:40px;height:40px;line-height:40px;font-size:30px;color:var(--color-accent); justify-content: center; overflow: visible;}
                 .lf-links-inspector-empty strong{font-size:13px;}.lf-links-inspector-empty p{margin:0 0 5px;color:var(--color-subtle_text);line-height:1.4;}
-                #lightflow_scene_link_picker .dialog_wrapper{width:min(860px,calc(100vw - 28px));max-width:calc(100vw - 28px);}
-                #lightflow_scene_link_picker .dialog_content{padding:0!important;overflow:hidden!important;max-height:none!important;}
+                #lightflow_scene_link_picker .dialog_wrapper{width:min(740px,calc(100vw - 28px));max-width:calc(100vw - 28px);}
+                #lightflow_scene_link_picker .dialog_content{padding:0!important;overflow:hidden!important;max-height:calc(100vh - 96px)!important;}
                 #lightflow_scene_link_picker .button_bar:empty{display:none;}
                 .lf-links-picker,.lf-links-picker *{box-sizing:border-box;}
-                .lf-links-picker{height:min(650px,calc(100vh - 112px));display:flex;flex-direction:column;min-height:0;background:var(--color-ui);color:var(--color-text);}
-                .lf-links-picker-head{display:flex;align-items:center;justify-content:space-between;gap:20px;height:auto!important;min-height:148px;overflow:visible!important;padding:22px 28px 18px;background:linear-gradient(132deg,var(--color-dark),var(--color-ui) 80%);border-bottom:1px solid var(--color-border); border-radius:8px;}
-                .lf-links-picker-head>div{min-width:0;max-width:540px;}
-                .lf-links-eyebrow{color:var(--color-text);font-size:11px;font-weight:700;letter-spacing:.11em;margin-bottom:8px;}
-                .lf-links-picker h2{font-size:25px;line-height:1.18;font-weight:400;margin:0 0 9px;}
-                .lf-links-picker-head p{font-size:13px;line-height:1.5;color:var(--color-subtle_text);margin:0;white-space:normal!important;}
-                .lf-links-browse{display:flex;align-items:center;justify-content:center;gap:8px;height:auto!important;min-height:38px;padding:8px 12px;white-space:nowrap;background:var(--color-button);color:var(--color-text);border-radius:4px;cursor:pointer;}
-                .lf-links-browse:hover,.lf-links-picker-foot button:hover{background:var(--color-accent);color:var(--lf-on-accent,var(--color-accent_text));}
-                .lf-links-picker-tools{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px 28px 12px;}
-                .lf-links-picker-tools label{display:flex;align-items:center;gap:7px;width:min(330px,100%);min-height:34px;padding:0 9px;background:var(--color-dark);border:1px solid var(--color-border);border-radius:4px;}
-                .lf-links-picker-tools label:focus-within{border-color:var(--color-accent);}
-                .lf-links-picker-tools input{min-width:0;width:100%;background:transparent;border:0;color:var(--color-text);outline:0;}
-                .lf-links-picker-tools>span{color:var(--color-subtle_text);font-size:12px;white-space:nowrap;}
-                .lf-links-picker-scroll{flex:1;min-height:0;overflow:auto;padding:3px 28px 24px;scrollbar-gutter:stable;}
-                .lf-links-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;align-content:start;}
-                .lf-links-card{height:auto!important;min-height:194px;min-width:0;padding:0;text-align:left;border:1px solid var(--color-border);border-radius:6px;overflow:hidden;color:var(--color-text);background:var(--color-dark);cursor:pointer;transition:border-color .15s,transform .15s,background .15s;}
-                .lf-links-card:hover:not(:disabled){border-color:var(--color-accent);background:var(--color-button);transform:translateY(-2px);}
-                .lf-links-card:focus-visible{border-color:var(--lf-focus-color,var(--color-text));background:var(--color-button);outline:2px solid var(--lf-focus-color,var(--color-text));outline-offset:2px;}
-                .lf-links-card:disabled{opacity:.57;cursor:default;}
-                .lf-links-cover{height:152px;position:relative;overflow:hidden;background:var(--color-button);}
+                .lf-links-picker{display:flex;flex-direction:column;min-width:0;max-height:calc(100vh - 96px);background:var(--color-ui);color:var(--color-text);}
+                .lf-links-picker button{margin:0;border:0;box-shadow:none;font:inherit;}
+                .lf-links-picker button:focus-visible{outline:2px solid var(--lf-focus-color,var(--color-accent));outline-offset:2px;}
+                #lightflow_scene_link_picker .lf-links-picker>.lf-links-picker-head{display:flex;align-items:center;justify-content:space-between;gap:18px;height:auto!important;margin:14px 24px 0;padding:16px 18px;background:color-mix(in srgb,var(--color-ui) 78%,var(--color-dark));border:1px solid var(--color-border);border-radius:8px;}
+                .lf-links-picker-intro{min-width:0;flex:1;}
+                .lf-links-picker h2{font-size:19px;line-height:1.25;font-weight:600;margin:0 0 7px;}
+                .lf-links-picker-head p{max-width:520px;font-size:12px;line-height:1.5;color:var(--color-subtle_text);margin:0;white-space:normal!important;}
+                .lf-links-browse,.lf-links-skin,.lf-links-picker-foot button,.lf-links-empty button{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:34px;height:auto!important;padding:7px 12px;border-radius:8px;white-space:nowrap;cursor:pointer;}
+                .lf-links-browse{flex:none;background:var(--color-accent);color:var(--lf-on-accent,var(--color-accent_text,var(--color-text)));font-weight:600!important;}
+                .lf-links-browse:hover{filter:brightness(1.08);}
+                .lf-links-picker button .material-icons{flex:none;margin:0;font-size:18px;line-height:1;}
+                .lf-links-skin,.lf-links-picker-foot button,.lf-links-empty button{background:var(--color-button);color:var(--color-text);}
+                .lf-links-skin:hover,.lf-links-picker-foot button:hover,.lf-links-empty button:hover{background:var(--color-dark);}
+                .lf-links-picker-tools{display:flex;align-items:center;gap:12px;padding:14px 24px 10px;}
+                .lf-links-search{display:flex;flex:1;align-items:center;gap:8px;min-width:0;min-height:34px;padding:0 10px;background:var(--color-dark);border:1px solid var(--color-border);border-radius:8px;color:var(--color-subtle_text);}
+                .lf-links-search:focus-within{border-color:var(--color-accent);outline:1px solid var(--color-accent);}
+                .lf-links-search .material-icons{font-size:18px;line-height:1;flex:none;}
+                .lf-links-search input{flex:1;min-width:0;width:100%;height:32px;margin:0;padding:0;background:transparent;border:0;color:var(--color-text);outline:0!important;box-shadow:none!important;font:inherit;font-size:12px;}
+                .lf-links-search input::-webkit-search-cancel-button{cursor:pointer;}
+                .lf-links-count{color:var(--color-subtle_text);font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap;}
+                .lf-links-picker-scroll{min-height:0;max-height:min(400px,calc(100vh - 320px));overflow-y:auto;overflow-x:hidden;padding:6px 24px 16px;}
+                .lf-links-grid{display:grid;grid-template-columns:minmax(0,1fr);gap:8px;align-content:start;}
+                .lf-links-card{display:flex;align-items:center;gap:14px;width:100%;min-width:0;min-height:102px;height:auto!important;padding:7px;text-align:left;border:1px solid var(--color-border)!important;border-radius:8px;overflow:hidden;color:var(--color-text);background:var(--color-dark);cursor:pointer;transition:border-color .12s,background .12s;}
+                .lf-links-card:hover:not(:disabled){border-color:var(--color-accent)!important;background:var(--color-button);}
+                .lf-links-card:focus-visible{border-color:var(--color-accent)!important;background:var(--color-button);}
+                .lf-links-card:disabled{opacity:.68;cursor:default;}
+                .lf-links-cover{width:148px;height:86px;flex:none;overflow:hidden;border-radius:5px;background:var(--color-button);}
                 .lf-links-cover img{width:100%;height:100%;object-fit:cover;display:block;}
-                .lf-links-cover-fallback{display:grid;place-items:center;width:100%;height:100%;background:radial-gradient(circle at 62% 35%,var(--color-button),var(--color-dark) 75%);}
-                .lf-links-cover-fallback i{font-size:52px;color:var(--color-subtle_text);opacity:.65;}
-                .lf-links-origin{position:absolute;top:9px;left:9px;padding:3px 7px;border-radius:8px;background:rgba(16,18,24,.82);color:#e5e9f0;font-size:11px;}
-                .lf-links-card-info{display:flex;gap:9px;min-width:0;padding:12px;align-items:flex-start;}
-                .lf-links-card-info>i{font-size:20px;color:var(--color-accent);flex:none;}
-                .lf-links-card-info>div{min-width:0;}
-                .lf-links-card-info strong{display:block;font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-                .lf-links-card-info small{display:block;margin-top:5px;color:var(--color-text);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-                .lf-links-empty{display:grid;justify-items:center;gap:10px;padding:48px 12px;color:var(--color-subtle_text);text-align:center;}
-                .lf-links-empty>i{font-size:42px;}.lf-links-empty p{margin:0;}.lf-links-empty button{padding:7px 12px;background:var(--color-button);border-radius:4px;}
-                .lf-links-picker-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 28px;border-top:1px solid var(--color-border);color:var(--color-subtle_text);font-size:12px;}
-                .lf-links-picker-foot button{padding:7px 12px;color:var(--color-text);background:var(--color-button);border-radius:4px;cursor:pointer;}
-                @media(max-width:640px){.lf-links-picker-head{display:block;padding:18px;}.lf-links-picker-head .lf-links-browse{margin-top:13px;width:100%;}.lf-links-picker-tools{padding:12px 18px;}.lf-links-picker-scroll{padding:3px 18px 18px;}.lf-links-grid{grid-template-columns:1fr;}.lf-links-picker-foot{padding:10px 18px;}}
+                .lf-links-cover-fallback{display:grid;place-items:center;width:100%;height:100%;background:var(--color-button);}
+                .lf-links-cover-fallback i{font-size:32px!important;color:var(--color-subtle_text);}
+                .lf-links-card-info{flex:1;min-width:0;padding:4px 0;}
+                .lf-links-card-heading{display:flex;align-items:center;gap:8px;min-width:0;}
+                .lf-links-card-heading strong{display:block;min-width:0;font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+                .lf-links-origin{flex:none;padding:3px 7px;border-radius:6px;background:var(--color-button);color:var(--color-subtle_text);font-size:11px;line-height:1.3;white-space:nowrap;}
+                .lf-links-card-info small{display:block;margin-top:8px;color:var(--color-subtle_text);font-size:11px;line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+                .lf-links-card-arrow{color:var(--color-subtle_text);margin:0 7px!important;}
+                .lf-links-empty{display:grid;justify-items:center;gap:10px;padding:32px 12px;color:var(--color-subtle_text);text-align:center;}
+                .lf-links-empty>i{font-size:32px;}.lf-links-empty p{margin:0;line-height:1.45;}.lf-links-empty button{margin-top:4px;}
+                .lf-links-picker-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 24px;border-top:1px solid var(--color-border);color:var(--color-subtle_text);font-size:12px;line-height:1.4;}
+                @media(max-width:640px){#lightflow_scene_link_picker .lf-links-picker>.lf-links-picker-head{align-items:stretch;flex-direction:column;gap:12px;margin:12px 16px 0;padding:16px;}.lf-links-picker-head .lf-links-browse{align-self:flex-start;}.lf-links-picker-tools{padding:12px 16px 10px;flex-wrap:wrap;gap:8px;}.lf-links-search{flex-basis:100%;}.lf-links-count{margin-right:auto;}.lf-links-picker-scroll{padding:6px 16px 12px;max-height:min(400px,calc(100vh - 380px));}.lf-links-picker-foot{padding:10px 16px;}}
+                @media(max-width:430px){.lf-links-cover{width:88px;height:72px;}.lf-links-card{min-height:88px;gap:10px;}.lf-links-card-heading{align-items:flex-start;flex-direction:column;gap:4px;}.lf-links-card-info small{margin-top:5px;}.lf-links-card-arrow{margin:0 2px!important;}.lf-links-picker-foot{align-items:flex-start;}.lf-links-picker-foot span{flex:1;}}
             `));
             syncPanel=()=>{
                 document.body.classList.toggle('lightflow-scene-link-selected',!!selected());
@@ -2547,6 +3503,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 queueMicrotask(()=>{if(!disposed)updateOutline();});
             };
             const hydrate=()=>{
+                upgradeLinkedAnimators();
                 if(disposed||!Project)return;
                 for(const element of Project.elements||[]){
                     if(element?.type==='lightflow_scene_instance'&&!(element instanceof SceneInstanceElement))Object.setPrototypeOf(element,SceneInstanceElement.prototype);
@@ -2565,10 +3522,29 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
             owned.push(Blockbench.on('select_project',hydrate),Blockbench.on('load_project',hydrate),Blockbench.on('select_mode',()=>setTimeout(()=>{arrangeInspector();syncPanel();mountAnimationLibrary();ensureTimeline();syncTimeline();},0)),Blockbench.on('reset_layout',()=>setTimeout(()=>{arrangeInspector();syncPanel();mountAnimationLibrary();ensureTimeline();syncTimeline();},0)),Blockbench.on('update_selection',syncPanel));
             owned.push(Codecs.project.on('parsed',()=>{hydrate();queueMicrotask(()=>{if(!disposed)hydrate();});}));
             const restorePlaybackPose=()=>{
-                for(const root of Project?.elements||[])if(root.type==='lightflow_scene_instance'){root._lightflowPlaying=false;delete root._lightflowTime;if(!activeMounts.has(root)){root._lightflowProject=Project;refreshInstance(root);}else updateAnimatedTree(root);}
+                let skinLayerChanged=false;
+                for(const root of Project?.elements||[])if(root.type==='lightflow_scene_instance'){
+                    root._lightflowPlaying=false;delete root._lightflowTime;
+                    if(!activeMounts.has(root)||!confirmedSource(root)){root._lightflowProject=Project;refreshInstance(root);}
+                    else if(!syncInstanceTexture(root)){
+                        skinLayerChanged=updateSecondarySkinLayer(root)||skinLayerChanged;
+                        updateAnimatedTree(root);
+                    }
+                }
+                if(skinLayerChanged){
+                    window.ShaderEngine?.invalidateExternalMeshIntegrationCaches?.();
+                    window.ShaderEngine?.requestPreviewRender?.({cause:'scene_link_skin_layer'});
+                }
                 syncPanel();
             };
             owned.push(Blockbench.on('undo',restorePlaybackPose),Blockbench.on('redo',restorePlaybackPose));
+            const onProjectTexturesChanged=()=>{
+                if(disposed||!Project)return;
+                for(const root of SceneInstanceElement.all)if(root.texture_override)syncInstanceTexture(root);
+                inspector?.inside_vue?.syncSelection?.();
+            };
+            owned.push(Blockbench.on('add_texture',onProjectTexturesChanged),Blockbench.on('update_texture_selection',onProjectTexturesChanged),
+                Blockbench.on('edit_texture',onProjectTexturesChanged));
             let pointerStart=null,lastLinkedClick=null;
             const previewForEvent=event=>window.Preview?.all?.find(preview=>preview.canvas===event.target)||null;
             const linkedHit=(event,preview)=>{
@@ -2578,7 +3554,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 const linked=[];
                 for(const root of SceneInstanceElement.all){
                     if(root.visibility===false||root.locked||!root.mesh?.visible)continue;
-                    for(const holder of mountedCubes.get(root)||[])holder.traverse(object=>{if(object.isMesh&&object.visible&&!object.userData.lightflowTerrainBufferOwner)linked.push(object);});
+                    for(const holder of mountedCubes.get(root)||[])holder.traverseVisible(object=>{if(object.isMesh&&!object.userData.lightflowTerrainBufferOwner)linked.push(object);});
                 }
                 if(!linked.length)return null;
                 const native=Outliner.elements.map(element=>element.mesh).filter(mesh=>mesh?.geometry&&mesh.visible);
@@ -2616,16 +3592,26 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
             owned.push({delete(){document.removeEventListener('pointerdown',onPointerDown,true);document.removeEventListener('pointerup',onPointerUp,true);document.removeEventListener('dblclick',onViewportDoubleClick,true);}});
             const onDoubleClick=event=>{
                 const row=event.target.closest?.('.outliner_node');
-                if(!row)return;
+                const object=event.target.closest?.('.outliner_object');
+                const button=event.target.closest?.('.outliner_button, .outliner_buttons, button');
+                if(!row||!object||button||!object.contains(event.target))return;
                 const element=selected();
-                if(element?.type==='lightflow_scene_instance'&&row.contains(event.target)){event.preventDefault();event.stopPropagation();openSource(element);}
+                if(element?.type==='lightflow_scene_instance'&&row.id===element.uuid&&row.contains(event.target)){event.preventDefault();event.stopPropagation();openSource(element);}
             };
             document.addEventListener('dblclick',onDoubleClick,true);
             owned.push({delete(){document.removeEventListener('dblclick',onDoubleClick,true);}});
             const setRigidBatching=enabled=>{rigidBatchingEnabled=!!enabled;for(const resource of renderResources.values())if(!resource.retired)for(const owner of [...resource.users])if(owner._lightflowProject===Project)mountResult(owner,resource.result);updateOutline();window.ShaderEngine?.requestPreviewRender?.({cause:'scene_link_batching'});};
-            window.LightflowSceneLinks={resolveSourceMaterialSlots,importPath,createSkinLink,prepareSourceModel,applySkinPose,showSourcePicker,refresh:refreshInstance,refreshMaterials:refreshLinkedMaterials,openSource,setAnimation,setAnimationTime,togglePlayback,setAnimations,toggleAnimation,showAnimationMenu,showClipMenu,setClipOffset,setRigidBatching,core};
+            window.LightflowSceneLinks={resolveSourceMaterialSlots,importPath,createSkinLink,prepareSourceModel,applySkinPose,buildSkinPoseSnapshot,insertSkinPoseKeys,poseKeyContext,showSourcePicker,refresh:refreshInstance,refreshMaterials:refreshLinkedMaterials,openSource,setAnimation,setAnimationTime,togglePlayback,setAnimations,toggleAnimation,showAnimationMenu,showClipMenu,setClipOffset,setRigidBatching,core,
+                listAnimationGroups,
+                getLinkedAnimation:(instanceId,animationId)=>findSourceAnimation(mountedAnimationRoot(instanceId),animationId),
+                openAnimationSource:instanceId=>openSource(mountedAnimationRoot(instanceId))};
             hydrate();
             this._lightflowSceneLinksDispose=()=>{
+                if(disposed)return;
+                sceneProperties(SceneInstanceElement);sceneProperties(ScenePoseElement);
+                for(const animator of Timeline.animators.slice())if(['lightflow_scene_instance','lightflow_pose_group'].includes(animator.getGroup?.()?.type)){
+                    for(const key of animator.keyframes)key.unselect?.();Timeline.animators.remove(animator);if(Timeline.selected_animator===animator)Timeline.selected_animator=null;
+                }
                 if(Animation.selected?._lightflowSceneLinkClock){if(Timeline.playing)Timeline.pause();Animation.selected=null;Timeline.clear();}
                 delete SceneInstanceElement.animator;delete ScenePoseElement.animator;
                 disposed=true;

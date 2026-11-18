@@ -6678,6 +6678,7 @@ void main() {
         dependencies: ['light_manager', 'shader_architect'],
 
         onload() {
+            if(this.source==='file')this.new_repository_format=false;
             Runtime.disposed = false;
             if (
                 !window.LIGHT_MANAGER_LOADED ||

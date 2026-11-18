@@ -192,6 +192,7 @@
         title:'Lightflow UI Lab',author:'Lightflow',description:'Development-only gallery of real Lightflow controls.',
         icon:'widgets',version:'1.0.0',variant:'both',min_version:'4.9.0',
         onload(){
+            if(this.source==='file')this.new_repository_format=false;
             fixtureCss=window.LightManagerUI?.addDesignedPanelStyles?.('lightflow_ui_lab_panel',{lab:true});
             css=Blockbench.addCSS(`
                 .lf-ui-lab {display:flex;flex-direction:column;gap:8px;min-width:0;padding:8px;}

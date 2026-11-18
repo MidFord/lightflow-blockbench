@@ -2186,6 +2186,7 @@
         variant: 'both',
         dependencies: ['light_manager'],
         onload() {
+            if(this.source==='file')this.new_repository_format=false;
             cleanup();
             addStyles();
             createPanel();

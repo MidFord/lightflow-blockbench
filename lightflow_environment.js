@@ -55,12 +55,35 @@
 
     // Vanilla PNGs are supplied locally by the user, never bundled or downloaded.
 
+    const SKY_TYPES = Object.freeze({
+        cycle: 'lightflow_environment.sky_type.cycle',
+        cubemap: 'lightflow_environment.sky_type.cubemap',
+        solid: 'lightflow_environment.sky_type.solid'
+    });
+    const SKY_TYPE_ICONS = { cycle: 'wb_twilight', cubemap: 'view_in_ar', solid: 'format_color_fill' };
+    const CUBEMAP_FACES = ['px', 'nx', 'py', 'ny', 'pz', 'nz'];
+
+    function isCycleSky() {
+        return !settings.sky_type || settings.sky_type === 'cycle';
+    }
+
     const DEFAULT_SETTINGS = {
         enabled: false,
         preset: 'vanilla',
         time: 6000,
         animate_time: false,
         day_length_seconds: 120,
+        sky_type: 'cycle',
+        backdrop_color: '#8098b5',
+        sky_show_celestials: false,
+        sky_light_elevation: 35,
+        cubemap_yaw: 0,
+        cubemap_px: '',
+        cubemap_nx: '',
+        cubemap_py: '',
+        cubemap_ny: '',
+        cubemap_pz: '',
+        cubemap_nz: '',
         sun_azimuth: 0,
         palette_mode: 'preset',
         // Preserve the user's authored custom palette while viewing native colors.
@@ -443,7 +466,7 @@
     });
 
     function getDimensionAtmosphere() {
-        return DIMENSION_ATMOSPHERES[settings.dimension] || null;
+        return settings.sky_type && settings.sky_type !== 'cycle' ? null : (DIMENSION_ATMOSPHERES[settings.dimension] || null);
     }
 
     function getReferenceCycleFrame(timeValue = settings.time, forPresetDefaults = false) {
@@ -496,7 +519,6 @@
         { id: 'forest', icon: 'forest', label: 'Forest' },
         { id: 'water', icon: 'water_drop', label: 'Water' },
         { id: 'atmosphere', icon: 'filter_drama', label: 'Atmosphere' },
-        { id: 'custom', icon: 'edit', label: 'Custom', custom: true }
     ].map(option => Object.freeze(option)));
 
     const presetSkyGradientProfileCache = new Map();
@@ -534,36 +556,30 @@
     let syncingEnvironmentPanel = false;
     let environmentPanelAttachmentEstablished = false;
     let environmentPanelCategory = 'sky';
-    const environmentPanelGroupsOpen = {
-        time: true,
-        sky: false,
-        fog: false,
-        fog_texture: false,
-        distance_grade: false,
-        celestial: true,
-        moon: false,
-        stars: false,
-        clouds: true,
-        cloud_motion: false,
-        cloud_palette: false,
-        cloud_lighting: false,
-        cloud_detail: false,
-        ambient: false,
-        bloom: false,
-        shadows: false
-    };
+    let environmentPanelDetail = 'essentials';
+    let environmentPalettePhase = 'day_sky_gradient';
+    const environmentTimelineSelection = { sky: null, clouds: null };
+    let environmentCloudTimeSection = 'appearance';
+    const environmentPanelFocus = { sky: 'time', atmosphere: 'clouds', lighting: 'sources' };
+    // Each editor tab remembers its own place; switching tabs must not inherit
+    // the scroll offset from a much longer section such as Atmosphere.
+    const environmentPanelCategoryScroll = { sky: 0, atmosphere: 0, lighting: 0 };
     const environmentPanelLayoutKeys = new Set([
         'dimension', 'dimension_fog_mode', 'sky_cycle_mode', 'animate_time', 'palette_mode',
         'sky_time_gradients_enabled', 'sky_time_gradients', 'distance_fog_enabled',
         'distance_fog_color_mode', 'distance_fog_gradient', 'distance_fog_noise',
         'distance_grade_enabled', 'distance_grade_follow_fog', 'distance_grade_tint_mode', 'distance_grade_pivot_mode', 'sun_enabled',
-        'sun_mode', 'moon_mode', 'moon_texture_layout', 'stars_enabled',
+        'enabled', 'sky_show_celestials', 'sun_mode', 'moon_mode', 'moon_texture_layout', 'stars_enabled',
         'clouds_enabled', 'cloud_style', 'cloud_mode', 'cloud_palette_mode',
         'cloud_time_profiles_enabled', 'cloud_time_profiles',
         'cloud_bevel_enabled', 'cloud_bevel_smooth', 'cloud_bevel_distance_fade', 'cloud_lighting_mode',
         'cloud_fog_enabled', 'cloud_fog_color_mode', 'environment_bloom_enabled',
         'sun_cast_shadows', 'shadow_auto_fit', 'shadow_scene_fit', 'shadow_region_locked', 'pixelated_shadows'
     ]);
+    let backdropMesh = null;
+    let backdropCubeTexture = null;
+    let backdropCubeKey = null;
+    let backdropCubeStatus = 'incomplete';
     let vanillaSunTexture = null;
     let endSkyTexture = null;
     let vibrantVisualsSunTexture = null;
@@ -740,7 +756,8 @@
             name: PRESETS[id]?.name || id,
             icon: identity.icon,
             iconColor: identity.iconColor,
-            basePresetId: id
+            basePresetId: id,
+            skyType: 'cycle'
         };
     }
 
@@ -769,6 +786,7 @@
         return {
             id: preset.id,
             native: !!preset.native,
+            skyType: preset.skyType,
             name: preset.name,
             icon: normalizeEnvironmentPresetIcon(preset.icon, 'landscape'),
             iconColor: getEnvironmentPresetColorCSS(preset.iconColor)
@@ -791,17 +809,19 @@
         const basePresetId = PRESETS[data.basePresetId]
             ? data.basePresetId
             : (PRESETS[data.settings?.preset] ? data.settings.preset : 'vanilla');
+        const skyType = normalizeSkyType(data.skyType ?? data.settings?.sky_type);
         const nativeIdentity = getNativeSkyPresetDefinition(basePresetId);
         const requestedName = typeof data.name === 'string' ? data.name.trim() : '';
         return {
             id,
             native: false,
             name: requestedName || `${nativeIdentity.name} Custom`,
-            icon: normalizeEnvironmentPresetIcon(data.icon, nativeIdentity.icon),
+            icon: normalizeEnvironmentPresetIcon(data.icon, skyType === 'cycle' ? nativeIdentity.icon : SKY_TYPE_ICONS[skyType]),
             iconColor: normalizeEnvironmentPresetColor(data.iconColor || data.icon_color) || nativeIdentity.iconColor,
             basePresetId,
+            skyType,
             settings: captureEnvironmentPresetSettings(
-                normalizeSettings(Object.assign({}, DEFAULT_SETTINGS, data.settings || {}, { preset: basePresetId })),
+                normalizeSettings(Object.assign({}, DEFAULT_SETTINGS, data.settings || {}, { preset: basePresetId, sky_type: skyType })),
                 basePresetId
             ),
             createdAt: Number(data.createdAt) || Date.now(),
@@ -909,6 +929,7 @@
         const nextSettings = captureEnvironmentPresetSettings(settings, preset.basePresetId);
         if (JSON.stringify(nextSettings) === JSON.stringify(preset.settings)) return false;
         preset.settings = nextSettings;
+        preset.skyType = settings.sky_type;
         preset.updatedAt = Date.now();
         saveEnvironmentPresetRegistry();
         return true;
@@ -1335,6 +1356,7 @@
     }
 
     function sampleCurrentSkyColor(position, daylight, twilight, applyIntensity = true) {
+        if (settings.sky_type && settings.sky_type !== 'cycle') return hexToRgb(settings.backdrop_color);
         const reference = sampleReferenceSkyColor(clamp(position, 0, 1));
         if (reference) return applyIntensity ? multiplyColor(reference, settings.sky_intensity) : reference;
         const timed = settings.palette_mode === 'custom' && settings.sky_time_gradients_enabled
@@ -1381,6 +1403,17 @@
     function updateSkyGradientTexture(state) {
         const texture = ensureSkyGradientTexture();
         if (!texture || !skyGradientTextureData) return;
+        if (settings.sky_type && settings.sky_type !== 'cycle') {
+            const signature = 'backdrop:' + settings.backdrop_color;
+            if (signature === lastSkyGradientSignature) return;
+            lastSkyGradientSignature = signature;
+            const rgba = [...hexToRgb(settings.backdrop_color).map(channel => Math.round(channel * 255)), 255];
+            for (let offset = 0; offset < skyGradientTextureData.length; offset += 4) {
+                skyGradientTextureData.set(rgba, offset);
+            }
+            texture.needsUpdate = true;
+            return;
+        }
         const cycleFrame = getReferenceCycleFrame();
         const dimension = getDimensionAtmosphere();
         if (cycleFrame || dimension) {
@@ -1525,6 +1558,17 @@
         const result = Object.assign({}, DEFAULT_SETTINGS, source || {});
         result.enabled = result.enabled !== false;
         result.preset = PRESETS[result.preset] ? result.preset : 'vanilla';
+        result.sky_type = normalizeSkyType(result.sky_type);
+        result.backdrop_color = normalizeHex(result.backdrop_color, DEFAULT_SETTINGS.backdrop_color);
+        result.sky_show_celestials = result.sky_show_celestials === true;
+        result.sky_light_elevation = clamp(finite(result.sky_light_elevation, DEFAULT_SETTINGS.sky_light_elevation), -90, 90);
+        result.cubemap_yaw = mod(finite(result.cubemap_yaw, 0), 360);
+        if (result.sky_type === 'cubemap') {
+            for (const face of CUBEMAP_FACES) {
+                const key = 'cubemap_' + face;
+                result[key] = typeof result[key] === 'string' ? result[key].trim() : '';
+            }
+        }
         result.dimension = Object.prototype.hasOwnProperty.call(DIMENSION_ATMOSPHERES, result.dimension) ? result.dimension : 'overworld';
         result.dimension_fog_mode = result.dimension_fog_mode === 'custom' ? 'custom' : 'preset';
         result.sky_cycle_mode = result.sky_cycle_mode === 'legacy' ? 'legacy' : 'reference';
@@ -1795,6 +1839,10 @@
         result.pixel_shadow_steps = Math.round(clamp(finite(result.pixel_shadow_steps, 4), 2, 16));
         result.pixel_shadow_scale = Math.round(clamp(finite(result.pixel_shadow_scale, 2), 1, 16));
         return result;
+    }
+
+    function normalizeSkyType(value) {
+        return value === 'cubemap' || value === 'solid' ? value : 'cycle';
     }
 
     function loadSettings() {
@@ -2447,7 +2495,7 @@
     }
 
     async function syncManagedVanillaResources() {
-        if (!environmentRuntimeLoaded || vanillaResourceRestorePending) return false;
+        if (!environmentRuntimeLoaded || !isCycleSky() || vanillaResourceRestorePending) return false;
         const local = readConfiguredTerrainSkyResources();
         const requestedRoot = local?.root || '';
         if (requestedRoot !== managedVanillaRequestRoot) {
@@ -2485,7 +2533,7 @@
         const generation = ++vanillaResourceGeneration;
         const controller = new AbortController();
         automaticVanillaTransfer = controller;
-        const timeout = setTimeout(() => controller.abort(), 15000);
+        let timeout = null;
         try {
             const local = readConfiguredTerrainSkyResources();
             if (local) {
@@ -2493,6 +2541,9 @@
                 if (applied) managedVanillaRoot = local.root;
                 return applied;
             }
+            const accepted = await window.LightManagerUI?.requestMinecraftEula?.();
+            if (!accepted || controller.signal.aborted || generation !== vanillaResourceGeneration || !environmentRuntimeLoaded) return false;
+            timeout = setTimeout(() => controller.abort(), 15000);
             const images = {};
             for (const kind of VANILLA_RESOURCE_NAMES) {
                 const url = `https://raw.githubusercontent.com/Mojang/bedrock-samples/${VANILLA_RESOURCE_REVISION}/resource_pack/textures/environment/${kind}.png`;
@@ -2740,7 +2791,9 @@
             context.fillRect(0, 0, 1, 1);
             fallbackTexture = createCanvasTexture(canvas, 'Lightflow_Environment_Fallback');
         }
-        if (!proceduralCloudTexture) proceduralCloudTexture = createProceduralCloudTexture(256);
+        if (!proceduralCloudTexture && settings.clouds_enabled && settings.cloud_mode === 'procedural' && !getDimensionAtmosphere()) {
+            proceduralCloudTexture = createProceduralCloudTexture(256);
+        }
         if (builtInSkyTexturesReady) {
             if (settings.enabled && !automaticVanillaAttempted && !vanillaResourceRestorePending && vanillaResourceStatus.state !== 'ready') {
                 void prepareAutomaticVanillaResources();
@@ -2758,6 +2811,11 @@
     }
 
     function getSunDirection(timeValue = settings.time) {
+        if (settings.sky_type && settings.sky_type !== 'cycle') {
+            const elevation = settings.sky_light_elevation * Math.PI / 180;
+            const azimuth = settings.sun_azimuth * Math.PI / 180;
+            return [Math.cos(elevation) * Math.cos(azimuth), Math.sin(elevation), Math.cos(elevation) * Math.sin(azimuth)];
+        }
         let angle = mod(timeValue, 24000) / 24000 * TWO_PI;
         if (settings.sky_cycle_mode === 'reference') {
             // Minecraft's eased celestial clock keeps the sun above the
@@ -2820,7 +2878,7 @@
             : context && typeof context === 'object' && Object.prototype.hasOwnProperty.call(context, 'studioBloomEnabled')
                 ? !!context.studioBloomEnabled
                 : true;
-        const profileEnabled = !!(settings.enabled && settings.environment_bloom_enabled && !getDimensionAtmosphere());
+        const profileEnabled = !!(settings.enabled && isCycleSky() && settings.environment_bloom_enabled && !getDimensionAtmosphere());
         const active = profileEnabled && studioBloomEnabled;
         const sunHeight = getSunDirection()[1];
         const sunVisible = settings.sun_mode !== 'hidden' && settings.sun_opacity > 0 && sunHeight >= -0.055;
@@ -2845,7 +2903,7 @@
                 moon: { enabled: moonVisible, contribution: settings.moon_bloom_contribution },
                 stars: { enabled: settings.stars_enabled, contribution: settings.star_bloom_contribution },
                 clouds: { enabled: settings.clouds_enabled,
-                    contribution: getEffectiveCloudAppearance()?.cloud_bloom_contribution ?? settings.cloud_bloom_contribution }
+                    contribution: (isCycleSky() ? getEffectiveCloudAppearance()?.cloud_bloom_contribution : undefined) ?? settings.cloud_bloom_contribution }
             }
         };
     }
@@ -3001,6 +3059,14 @@ uniform bool uEnvironmentVisibilityPass;
     // gradients, cloud timelines, fog and Bloom out of this per-draw path.
     function getCelestialLightingState(preset = getPalette(), dimension = getDimensionAtmosphere()) {
         const sunDirection = getSunDirection();
+        if (settings.sky_type && settings.sky_type !== 'cycle') {
+            const sunColor = hexToRgb(settings.sun_light_day_color);
+            return {
+                enabled: !!settings.enabled, sunDirection, celestialDirection: sunDirection,
+                daylight: 1, night: 0, twilight: 0, daylightKeyColor: sunColor, sunColor,
+                sunIntensity: settings.sun_enabled ? settings.sun_intensity : 0
+            };
+        }
         const sunHeight = sunDirection[1];
         const daylight = dimension ? 0 : smoothstep(-0.12, 0.16, sunHeight);
         const night = dimension ? 0 : 1 - smoothstep(-0.28, 0.04, sunHeight);
@@ -3023,7 +3089,29 @@ uniform bool uEnvironmentVisibilityPass;
             daylight, night, twilight, daylightKeyColor, sunColor, sunIntensity };
     }
 
+    function getBackdropLightingState() {
+        const key = getCelestialLightingState();
+        const color = hexToRgb(settings.backdrop_color);
+        return {
+            ...key,
+            preset: settings.preset, skyType: settings.sky_type, dimension: 'overworld',
+            time: settings.time, celestialEnabled: settings.sky_show_celestials,
+            referenceCycle: false, referenceCelestials: false, referenceCloudCycle: false,
+            sunLightColor: key.daylightKeyColor, cloudCoverage: 0, cloudOpacity: 0,
+            zenithColor: color, horizonColor: color, groundColor: color,
+            ambientColor: color, ambientSkyColor: color, ambientGroundColor: color,
+            ambientIntensity: 0, environmentIntensity: 0, hemisphericalFill: false,
+            skyGradientPower: 1, skyGradientDomain: 'full_sky',
+            celestialSize: settings.celestial_size, moonSize: settings.moon_size,
+            sunHorizonScale: 1, sunGazeScale: 1, sunGlare: 0, sunsetDirectionalGlow: 0,
+            bloom: getBloomSettings(),
+            pixelatedShadows: settings.pixelated_shadows,
+            pixelShadowSteps: settings.pixel_shadow_steps, pixelShadowScale: settings.pixel_shadow_scale
+        };
+    }
+
     function getLightingState() {
+        if (settings.sky_type && settings.sky_type !== 'cycle') return getBackdropLightingState();
         const preset = getPalette();
         const timedCloudLook = getEffectiveCloudAppearance();
         const cloudLook = timedCloudLook || getBaseCloudAppearance();
@@ -3261,8 +3349,8 @@ uniform bool uEnvironmentVisibilityPass;
             smoothness: settings.distance_fog_smoothness,
             curve: settings.distance_fog_curve,
             skyBlend: dimension ? 0 : settings.distance_fog_sky_blend,
-            skyIntensity: settings.sky_intensity,
-            skyGradientPower: settings.sky_gradient_power,
+            skyIntensity: settings.sky_type && settings.sky_type !== 'cycle' ? 1 : settings.sky_intensity,
+            skyGradientPower: state.skyGradientPower,
             noise: settings.distance_fog_noise,
             noiseScale: settings.distance_fog_noise_scale,
             gradientStrength: dimensionFog ? 0 : settings.distance_fog_gradient,
@@ -5268,15 +5356,18 @@ void main() {
     function updateSunShadowGizmo() {
         const gizmo = createSunShadowGizmo();
         if (!gizmo || !sunLight || !sunTarget) return;
+        const workspace = window.LightManagerUI?.workspace;
+        const host = environmentPanel?.getHostPanel?.() || environmentPanel;
+        const environmentOpen = !!host && !!window.Modes?.render && !host.folded &&
+            (host.open_attached_panel || host) === environmentPanel;
+        const editing = window.Toolbox?.selected?.id === 'lightflow_sun_region_tool';
         const shouldShow = !!(
-            (settings.show_shadow_gizmo || window.Toolbox?.selected?.id === 'lightflow_sun_region_tool') &&
-            settings.enabled &&
-            settings.sun_enabled &&
-            settings.sun_cast_shadows &&
-            (settings.shadow_auto_fit || window.Toolbox?.selected?.id === 'lightflow_sun_region_tool') &&
-            (!window.Canvas || Canvas.show_gizmos !== false) &&
-            (window.Toolbox?.selected?.id === 'lightflow_sun_region_tool' || !window.LightManagerAreaGizmos || LightManagerAreaGizmos.enabled !== false)
-            && (window.Toolbox?.selected?.id === 'lightflow_sun_region_tool' || window.LightManagerUI?.workspace?.helperPolicy === 'all')
+            settings.enabled && settings.sun_enabled && settings.sun_cast_shadows &&
+            window.Canvas?.show_gizmos !== false && workspace?.helperPolicy !== 'clean' &&
+            (editing || (
+                settings.show_shadow_gizmo && settings.shadow_auto_fit &&
+                (environmentOpen || (workspace?.helperPolicy === 'all' && window.LightManagerAreaGizmos?.enabled !== false))
+            ))
         );
         gizmo.root.visible = shouldShow;
         if (!shouldShow) return;
@@ -5312,7 +5403,7 @@ void main() {
         };
         Object.keys(gizmo.handles).forEach(key => {
             const handle = gizmo.handles[key];
-            handle.visible = window.Toolbox?.selected?.id === 'lightflow_sun_region_tool';
+            handle.visible = editing;
             handle.position.copy(positions[key]);
             handle.scale.setScalar(getSunShadowGizmoControlScale(positions[key]));
         });
@@ -5447,7 +5538,7 @@ void main() {
                 hoveredHandle = sunShadowGizmoRaycaster.intersectObjects(handles, false)[0]?.object || null;
                 if (hoveredHandle) {
                     window.LightManagerUI?.gizmos?.highlight?.(hoveredHandle, true);
-                    hoverStatus = tl('light_manager.ui.sun_region') + ' · ' + hoveredHandle.userData.lightflowEnvironmentShadowHandle.axis.toUpperCase();
+                    hoverStatus = tl('lightflow_environment.action.sun_region') + ' · ' + hoveredHandle.userData.lightflowEnvironmentShadowHandle.axis.toUpperCase();
                     Blockbench.setStatusBarText(hoverStatus);
                 }
                 return;
@@ -5499,7 +5590,7 @@ void main() {
             () => window.removeEventListener('blur', cancelPointer)
         );
         const regionTool = new Tool('lightflow_sun_region_tool', {
-            name: 'light_manager.ui.sun_region', icon: 'crop_free', modes: ['edit', 'render'], selectElements: false,
+            name: 'lightflow_environment.action.sun_region', icon: 'crop_free', modes: ['edit', 'render'], selectElements: false,
             condition: () => !!window.Project && !!(Modes.edit || Modes.render) && settings.enabled && settings.sun_enabled && settings.sun_cast_shadows && settings.shadow_auto_fit,
             onSelect: updateSunShadowGizmo,
             onUnselect() { cancelPointer(); updateSunShadowGizmo(); }
@@ -5512,6 +5603,110 @@ void main() {
         target?.setRGB?.(value[0], value[1], value[2]);
     }
 
+    function clearBackdropCube() {
+        if (backdropMesh) {
+            backdropMesh.material.uniforms.uBackdropCube.value = null;
+            backdropMesh.material.uniforms.uHasCubemap.value = false;
+        }
+        backdropCubeTexture?.dispose();
+        backdropCubeTexture = null;
+        backdropCubeKey = null;
+        backdropCubeStatus = 'incomplete';
+    }
+
+    function getBackdropCube(preview) {
+        const key = CUBEMAP_FACES.map(face => settings['cubemap_' + face]).join('|');
+        if (key === backdropCubeKey) return backdropCubeTexture;
+        clearBackdropCube();
+        const images = CUBEMAP_FACES.map(face => {
+            const texture = window.Texture?.all?.find(candidate => candidate.uuid === settings['cubemap_' + face]);
+            return getProjectTextureImage(texture);
+        });
+        if (images.some(image => !image || image.complete === false)) return null;
+        const size = images[0].naturalWidth ?? images[0].width;
+        const maxSize = (preview || window.Preview?.selected || window.main_preview)?.renderer?.capabilities?.maxCubemapSize || 2048;
+        if (!size || size > maxSize || images.some(image =>
+            (image.naturalWidth ?? image.width) !== size || (image.naturalHeight ?? image.height) !== size)) {
+            backdropCubeStatus = 'size';
+            return null;
+        }
+        backdropCubeTexture = new THREE.CubeTexture(images);
+        backdropCubeTexture.name = 'Lightflow Environment Cubemap';
+        backdropCubeTexture.generateMipmaps = false;
+        backdropCubeTexture.minFilter = THREE.LinearFilter;
+        backdropCubeTexture.needsUpdate = true;
+        backdropCubeKey = key;
+        backdropCubeStatus = 'ready';
+        return backdropCubeTexture;
+    }
+
+    function updateBackdrop(state, preview) {
+        if (!backdropMesh) {
+            const material = new THREE.ShaderMaterial({
+                name: 'Lightflow Environment Backdrop',
+                uniforms: {
+                    uSkyProjection: { value: new THREE.Matrix4() },
+                    uBackdropColor: { value: new THREE.Color() },
+                    uBackdropCube: { value: null },
+                    uHasCubemap: { value: false },
+                    uCubemapYaw: { value: new THREE.Vector2() },
+                    uShowCelestials: { value: false },
+                    uSunDirection: { value: new THREE.Vector3() },
+                    uSunColor: { value: new THREE.Color() },
+                    uMoonColor: { value: new THREE.Color() }
+                },
+                vertexShader: SKY_VERTEX,
+                fragmentShader: `
+                    varying vec3 vSkyDirection;
+                    uniform vec3 uBackdropColor, uSunDirection, uSunColor, uMoonColor;
+                    uniform samplerCube uBackdropCube;
+                    uniform bool uHasCubemap, uShowCelestials;
+                    uniform vec2 uCubemapYaw;
+                    void main() {
+                        vec3 direction = normalize(vSkyDirection);
+                        vec3 color = uBackdropColor;
+                        if (uHasCubemap) {
+                            vec3 rotated = vec3(
+                                direction.x * uCubemapYaw.x + direction.z * uCubemapYaw.y,
+                                direction.y,
+                                direction.z * uCubemapYaw.x - direction.x * uCubemapYaw.y);
+                            color = textureCube(uBackdropCube, rotated).rgb;
+                        }
+                        if (uShowCelestials) {
+                            float alignment = dot(direction, uSunDirection);
+                            color = mix(color, uSunColor, smoothstep(.9991, .9993, alignment));
+                            color = mix(color, uMoonColor, smoothstep(.9995, .99965, -alignment));
+                        }
+                        gl_FragColor = vec4(color, 1.0);
+                    }
+                `,
+                side: THREE.BackSide,
+                depthWrite: false,
+                fog: false,
+                toneMapped: false
+            });
+            backdropMesh = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2), material);
+            backdropMesh.name = 'Lightflow Environment Backdrop';
+            backdropMesh.frustumCulled = false;
+            backdropMesh.renderOrder = -100000;
+            backdropMesh.userData.lightflowEnvironment = true;
+            backdropMesh.onBeforeRender = (renderer, scene, camera) => updateSkyProjection(material, camera);
+            Canvas.scene.add(backdropMesh);
+        }
+        const uniforms = backdropMesh.material.uniforms;
+        const cube = settings.sky_type === 'cubemap' ? getBackdropCube(preview) : null;
+        uniforms.uBackdropCube.value = cube;
+        uniforms.uHasCubemap.value = !!cube;
+        const yaw = settings.cubemap_yaw * Math.PI / 180;
+        uniforms.uCubemapYaw.value.set(Math.cos(yaw), Math.sin(yaw));
+        setColor(uniforms.uBackdropColor.value, state.horizonColor);
+        uniforms.uShowCelestials.value = settings.sky_show_celestials;
+        uniforms.uSunDirection.value.fromArray(state.sunDirection);
+        setColor(uniforms.uSunColor.value, hexToRgb(settings.sun_color));
+        setColor(uniforms.uMoonColor.value, hexToRgb(settings.moon_color));
+        backdropMesh.visible = true;
+    }
+
     function updateScene(options = {}) {
         // A late texture-load callback can arrive after plugin unload. It must
         // not recreate disposed sky meshes alongside the next plugin instance.
@@ -5520,18 +5715,23 @@ void main() {
         const studioRender = options.studio !== undefined
             ? !!options.studio
             : !!window.LightManagerStudioRenderSession;
-        createSky();
+        const showCycle = settings.enabled && isCycleSky();
+        const showBackdrop = settings.enabled && !isCycleSky();
+        if (showCycle && !createSky()) ensureSkyTextures();
         createSunLight();
         ensureSunLightParent();
-        ensureSkyTextures();
         const state = getLightingState();
-        const preset = getPalette();
+        if (settings.sky_type !== 'cubemap' && backdropCubeTexture) clearBackdropCube();
 
-        if (skyMesh) skyMesh.visible = !!settings.enabled;
-        if (lensFlareMesh) lensFlareMesh.visible = !!(settings.enabled && settings.lens_flare_enabled && state.celestialEnabled && settings.sun_mode !== 'hidden');
-        if (cloudMesh) cloudMesh.visible = !!(settings.enabled && state.celestialEnabled && settings.clouds_enabled);
-        updateVanillaStars(state);
-        if (skyMaterial) {
+        if (backdropMesh) backdropMesh.visible = false;
+        if (showBackdrop) updateBackdrop(state, options.preview);
+        if (skyMesh) skyMesh.visible = !!showCycle;
+        if (lensFlareMesh) lensFlareMesh.visible = !!(showCycle && settings.lens_flare_enabled && state.celestialEnabled && settings.sun_mode !== 'hidden');
+        if (cloudMesh) cloudMesh.visible = false;
+        if (showCycle) updateVanillaStars(state);
+        else if (starMesh) starMesh.visible = false;
+        if (showCycle && skyMaterial) {
+            const preset = getPalette();
             updateSkyGradientTexture(state);
             skyMaterial.uniforms.uSkyGradient.value = skyGradientTexture;
             skyMaterial.uniforms.uSkyIntensity.value = settings.sky_intensity;
@@ -5613,7 +5813,11 @@ void main() {
             const cloudTextureMode = settings.cloud_mode === 'procedural' && !cachedProceduralSource ? 0 : 1;
             skyMaterial.uniforms.uCloudMode.value = cloudTextureMode;
             skyMaterial.uniforms.uCloudTexture.value = activeCloudTexture;
-            if (cloudMaterial) {
+            if (cloudMesh) cloudMesh.visible = !!(
+                state.celestialEnabled && settings.clouds_enabled && state.cloudOpacity > 0 &&
+                activeCloudTexture !== missingSkyTexture
+            );
+            if (cloudMaterial && cloudMesh?.visible) {
                 setColor(cloudMaterial.uniforms.uCloudColor.value, hexToRgb(preset.cloud));
                 setColor(cloudMaterial.uniforms.uCloudTopColor.value, state.cloudTopColor);
                 setColor(cloudMaterial.uniforms.uCloudPhaseTop.value, state.cloudPhaseTop);
@@ -5782,6 +5986,7 @@ void main() {
             });
         }
         syncDistanceFog(options.preview);
+        return state;
     }
 
     function requestPreviewRender() {
@@ -5811,8 +6016,8 @@ void main() {
         }
     }
 
-    function dispatchChanged(cause) {
-        const detail = { cause: cause || 'settings', settings: Object.assign({}, settings), state: getLightingState() };
+    function dispatchChanged(cause, state = getLightingState()) {
+        const detail = { cause: cause || 'settings', settings: Object.assign({}, settings), state };
         try {
             window.dispatchEvent(new CustomEvent('lightflow_environment_changed', { detail }));
         } catch (error) {
@@ -5833,7 +6038,7 @@ void main() {
                 ? options.changedKeys.slice()
                 : null;
             if (options.timeOnly) {
-                controls.time?.setValue?.(settings.time);
+                controls.time?.setValue?.(settings.time, false);
                 return;
             }
             const activeShadowFrustum = getActiveShadowFrustum();
@@ -5847,27 +6052,130 @@ void main() {
                 : Object.keys(DEFAULT_SETTINGS);
             refreshLayout = requestedKeys === null || keys.some(key => environmentPanelLayoutKeys.has(key));
             keys.forEach(key => {
-                controls[key]?.setValue?.(panelValues[key]);
+                controls[key]?.setValue?.(panelValues[key], false);
             });
+            if (requestedKeys === null || keys.includes('sky_time_gradients')) {
+                syncEnvironmentTimelineFields('sky');
+            }
+            if (requestedKeys === null || keys.includes('cloud_time_profiles')) {
+                syncEnvironmentTimelineFields('clouds');
+            }
         } finally {
             syncingEnvironmentPanel = false;
         }
         if (refreshLayout) environmentPanel.form.update();
     }
 
-    function rebuildEnvironmentPanelForm() {
+    function rebuildEnvironmentPanelForm(options = {}) {
         if (!environmentPanel?.form) return;
         environmentPanelFormDirty = true;
         // Build current project controls when the native tab becomes visible.
         if (!environmentPanel.node?.getClientRects?.().length) return;
         environmentPanelFormDirty = false;
         const scrollContainer = environmentPanel.node?.querySelector?.('.form');
-        const scrollTop = scrollContainer?.scrollTop || 0;
+        const scrollTop = options.restoreCategoryScroll
+            ? (environmentPanelCategoryScroll[environmentPanelCategory] || 0)
+            : (scrollContainer?.scrollTop || 0);
         environmentPanel.form.form_config = (window.LightManagerUI?.prepareForm || (form => form))(createPanelForm());
         environmentPanel.form.buildForm();
         syncEnvironmentPanel();
         const nextScrollContainer = environmentPanel.node?.querySelector?.('.form');
         if (nextScrollContainer) nextScrollContainer.scrollTop = scrollTop;
+    }
+
+    // Navigation changes only the visibility metadata of existing FormElements.
+    // A full build tears down 200+ editors (gradient canvases, color pickers,
+    // events), causing visible stalls and throwing away the focused control.
+    function updateEnvironmentPanelNavigation(options = {}) {
+        const form = environmentPanel?.form;
+        const controls = form?.form_data;
+        if (!controls || environmentPanelFormDirty) return rebuildEnvironmentPanelForm({ restoreCategoryScroll: true });
+        const topics = getEnvironmentPanelTopics(environmentPanelCategory);
+        const focus = getEnvironmentPanelFocus(environmentPanelCategory, topics);
+        const selectedGroups = new Set(focus.groups);
+        const essentials = environmentPanelDetail === 'essentials';
+        for (const group of getEnvironmentPanelGroups()) {
+            const belongs = selectedGroups.has(group.id);
+            const visible = belongs && (!essentials || getEnvironmentEssentialFields(group.id).length > 0);
+            const groupKey = ENVIRONMENT_PANEL_GROUP_PREFIX + group.id;
+            if (controls[groupKey]) controls[groupKey].options.panel_category_visible = visible;
+            let subsectionIndex = 0;
+            for (const entry of group.entries) {
+                if (entry && typeof entry === 'object' && entry.subsection) {
+                    const key = `_environment_subsection_${group.id}_${subsectionIndex++}`;
+                    if (controls[key]) controls[key].options.panel_category_visible = belongs && !essentials;
+                    continue;
+                }
+                if (!controls[entry]) continue;
+                const phaseGradient = ENVIRONMENT_SKY_GRADIENT_KEYS.includes(entry);
+                controls[entry].options.panel_category_visible = belongs && (
+                    !essentials || getEnvironmentEssentialFields(group.id).includes(entry) ||
+                    (phaseGradient && environmentPalettePhase === entry)
+                );
+                // The full editor still exposes all four curves; Essentials
+                // shows one at a time with no separate dialog.
+            }
+        }
+        for (const category of Object.keys(ENVIRONMENT_PANEL_FOCUS)) {
+            const element = controls[`_environment_focus_${category}`];
+            if (!element) continue;
+            element.options.condition = () => environmentPanelCategory === category;
+        }
+        if (controls._environment_palette_phase) {
+            controls._environment_palette_phase.options.panel_category_visible = selectedGroups.has('sky') && essentials;
+        }
+        const skyVisible = selectedGroups.has('sky');
+        for (const key of ['_environment_sky_time_start', '_environment_sky_timeline',
+            '_environment_sky_timed_gradient']) {
+            if (controls[key]) controls[key].options.panel_category_visible = skyVisible;
+        }
+        const cloudVisible = selectedGroups.has('clouds');
+        for (const key of ['_environment_cloud_time_start', '_environment_cloud_timeline']) {
+            if (controls[key]) controls[key].options.panel_category_visible = cloudVisible;
+        }
+        if (controls._environment_cloud_time_section) {
+            controls._environment_cloud_time_section.options.panel_category_visible = cloudVisible && !essentials;
+        }
+        for (const key of ENVIRONMENT_CLOUD_TIME_FIELDS) {
+            const control = controls['_environment_cloud_timed_' + key];
+            if (!control) continue;
+            control.options.panel_category_visible = cloudVisible &&
+                (essentials ? ENVIRONMENT_CLOUD_TIME_QUICK.includes(key)
+                    : (ENVIRONMENT_CLOUD_TIME_SECTIONS[environmentCloudTimeSection] || []).includes(key));
+        }
+        form.update();
+        const scrollContainer = environmentPanel.node?.querySelector?.('.form') || form.node;
+        if (options.resetScroll) scrollContainer.scrollTop = 0;
+        else if (options.restoreCategoryScroll) scrollContainer.scrollTop = environmentPanelCategoryScroll[environmentPanelCategory] || 0;
+    }
+
+    function selectEnvironmentPanelCategory(category) {
+        if (!Object.prototype.hasOwnProperty.call(environmentPanelCategoryScroll, category)
+            || category === environmentPanelCategory) return false;
+        environmentPanelCategoryScroll[environmentPanelCategory] =
+            environmentPanel?.node?.querySelector?.('.form')?.scrollTop || 0;
+        environmentPanelCategory = category;
+        updateEnvironmentPanelNavigation({ restoreCategoryScroll: true });
+        return true;
+    }
+
+    function selectEnvironmentPanelFocus(focus) {
+        const topics = getEnvironmentPanelTopics(environmentPanelCategory);
+        if (!topics.some(topic => topic.id === focus) || environmentPanelFocus[environmentPanelCategory] === focus) return false;
+        environmentPanelFocus[environmentPanelCategory] = focus;
+        environmentPanelCategoryScroll[environmentPanelCategory] = 0;
+        updateEnvironmentPanelNavigation({ resetScroll: true });
+        return true;
+    }
+
+    function selectEnvironmentPanelDetail(detail) {
+        if (!['essentials', 'all'].includes(detail) || detail === environmentPanelDetail) return false;
+        environmentPanelDetail = detail;
+        // A long All-settings page may have a scroll offset beyond the much
+        // shorter Essentials view. Begin at the category heading on mode change.
+        environmentPanelCategoryScroll[environmentPanelCategory] = 0;
+        updateEnvironmentPanelNavigation({ resetScroll: true });
+        return true;
     }
 
     function applySettings(next, options = {}) {
@@ -5976,20 +6284,29 @@ void main() {
             markEnvironmentUndoChanged();
             saveEnvironmentPresetRegistry();
             environmentPanel?.form?.form_data?._environment_preset_identity?.setValue?.(createEnvironmentSkyPresetInfoDisplay().value);
+            environmentPanel?.form?.form_data?._environment_preset_state?.setValue?.(
+                tr('lightflow_environment.panel.preset_editable'));
+            environmentPanel?.form?.update?.();
             Blockbench.showQuickMessage(tl('lightflow_environment.message.editable_copy_created'), 2600);
         }
         recordPhase('persist');
         syncActiveCustomSkyPresetFromSettings(options.cause || 'settings');
         recordPhase('preset');
-        if (options.syncPanel !== false) syncEnvironmentPanel({ changedKeys });
+        if (options.syncPanel !== false) {
+            if (changedKeys.includes('sky_type')) rebuildEnvironmentPanelForm();
+            else syncEnvironmentPanel({ changedKeys });
+        }
         recordPhase('panel');
+        let state;
         if (fogOnly && options.forceShadow !== true) syncDistanceFog();
-        else updateScene({
+        else state = updateScene({
             forceShadow: options.forceShadow === true,
-            animation: !!options.animation
+            animation: !!options.animation,
+            deferRenderPreparation: changedKeys.includes('enabled') && options.render !== false &&
+                !window.LightManagerStudioRenderSession
         });
         recordPhase(fogOnly ? 'fog' : 'scene');
-        dispatchChanged(options.cause || 'settings');
+        dispatchChanged(options.cause || 'settings', state);
         recordPhase('dispatch');
         if (options.render !== false) requestPreviewRender();
         recordPhase('scheduleRender');
@@ -6186,17 +6503,17 @@ void main() {
             sunset_sky_gradient: {"version": 2, "color_space": "srgb", "interpolation": "smooth", "stops": [{"id": "sunset_ground", "position": 0, "color": "#4f4061", "midpoint": 0.5}, {"id": "sunset_horizon", "position": 0.5, "color": "#a06879", "midpoint": 0.5}, {"id": "sunset_middle", "position": 0.74, "color": "#4d3571", "midpoint": 0.5}, {"id": "sunset_zenith", "position": 1, "color": "#151140", "midpoint": 0.5}], "domain": "full_sky", "horizon_position": 0.5},
             night_sky_gradient: {"version": 2, "color_space": "srgb", "interpolation": "smooth", "stops": [{"id": "night_ground", "position": 0, "color": "#0b1828", "midpoint": 0.5}, {"id": "night_horizon", "position": 0.5, "color": "#3a72ae", "midpoint": 0.5}, {"id": "night_middle", "position": 0.74, "color": "#22416f", "midpoint": 0.5}, {"id": "night_zenith", "position": 1, "color": "#040f22", "midpoint": 0.5}], "domain": "full_sky", "horizon_position": 0.5},
             star_density: 1,
-            environment_strength: 0.75,
+            environment_strength: 0.72,
             ambient_fill_color_mode: "sky",
             ambient_fill_shape: "preset",
             ambient_fill_sky_color: "#ffffff",
             ambient_fill_ground_color: "#ffffff",
             ambient_fill_day_multiplier: 1,
-            ambient_fill_night_multiplier: 1,
+            ambient_fill_night_multiplier: 1.0416666666666667,
             sun_enabled: true,
-            sun_intensity: 2.2,
-            sun_light_color_mode: "sun",
-            sun_light_day_color: "#fff7c7",
+            sun_intensity: 0.72,
+            sun_light_color_mode: "time",
+            sun_light_day_color: "#ffd954",
             sun_light_twilight_color: "#ffad74",
             moon_intensity: 0.28,
             moon_light_color_mode: "moon",
@@ -7012,6 +7329,24 @@ void main() {
         const presetGradients = getPresetSkyGradientProfiles();
         const form = {
             enabled: { type: 'checkbox', label: 'lightflow_environment.field.enabled', value: settings.enabled },
+            backdrop_color: { type: 'color', label: settings.sky_type === 'cubemap'
+                ? 'lightflow_environment.field.cubemap_fallback' : 'lightflow_environment.field.backdrop_color',
+                value: settings.backdrop_color },
+            sky_show_celestials: { type: 'checkbox', label: 'lightflow_environment.field.show_celestials',
+                value: settings.sky_show_celestials },
+            sky_light_elevation: { type: 'range', label: 'lightflow_environment.field.light_elevation',
+                value: settings.sky_light_elevation, min: -90, max: 90, step: 1, unit: '°',
+                condition: result => !!(result.sun_enabled || result.sky_show_celestials) },
+            cubemap_yaw: { type: 'range', label: 'lightflow_environment.field.cubemap_yaw',
+                value: settings.cubemap_yaw, min: 0, max: 360, step: 1, unit: '°' },
+            ...Object.fromEntries(CUBEMAP_FACES.map(face => {
+                const key = 'cubemap_' + face;
+                return [key, {
+                    type: 'texture_source', label: 'lightflow_environment.field.' + key,
+                    title: 'lightflow_environment.info.cubemap_faces',
+                    project_reference: true, value: settings[key]
+                }];
+            })),
             dimension: { type:'select', label:'lightflow_environment.field.dimension', value:settings.dimension,
                 options:{overworld:'Overworld',nether:'Nether',crimson_forest:'Crimson Forest',warped_forest:'Warped Forest',soulsand_valley:'Soul Sand Valley',basalt_deltas:'Basalt Deltas',end:'The End'} },
             dimension_fog_mode: { type:'select', label:'lightflow_environment.field.dimension_fog_mode', value:settings.dimension_fog_mode,
@@ -7427,6 +7762,13 @@ void main() {
             const condition = entry.condition;
             entry.condition = values => !values.cloud_time_profiles_enabled && (!condition || Condition(condition, values));
         }
+        if (!isCycleSky()) {
+            form.sun_enabled.label = 'lightflow_environment.field.light_enabled';
+            form.sun_intensity.label = 'lightflow_environment.field.light_intensity';
+            form.sun_light_day_color.label = 'lightflow_environment.field.light_color';
+            form.sun_light_day_color.condition = result => !!result.sun_enabled;
+            form.sun_azimuth.condition = result => !!(result.sun_enabled || result.sky_show_celestials);
+        }
         return enhanceEnvironmentDialogForm(form);
     }
 
@@ -7439,7 +7781,7 @@ void main() {
         {
             id: 'sky', label: 'lightflow_environment.group.sky', icon: 'gradient', color: '#78D7FF',
             entries: [
-                { subsection: 'lightflow_environment.field.palette_mode', icon: 'palette' },
+                { subsection: 'lightflow_environment.subsection.sky_palette', icon: 'palette' },
                 'palette_mode', '_sky_gradient_editor', 'day_sky_gradient', 'sunrise_sky_gradient',
                 'sunset_sky_gradient', 'night_sky_gradient',
                 'sky_time_gradients_enabled', '_sky_time_gradient_editor',
@@ -7460,9 +7802,9 @@ void main() {
             entries: [
                 'distance_look_presets', 'distance_fog_enabled', 'distance_fog_color_mode',
                 'distance_fog_fixed_color', 'distance_fog_day_color', 'distance_fog_sunrise_color', 'distance_fog_night_color',
-                { subsection: 'lightflow_environment.field.distance_fog_start', icon: 'straighten' },
+                { subsection: 'lightflow_environment.subsection.fog_range', icon: 'straighten' },
                 'distance_fog_start', 'distance_fog_end', 'distance_fog_smoothness', 'distance_fog_curve',
-                { subsection: 'lightflow_environment.field.distance_fog_gradient', icon: 'gradient' },
+                { subsection: 'lightflow_environment.subsection.fog_gradient', icon: 'gradient' },
                 'distance_fog_gradient', 'distance_fog_near_color', 'distance_fog_sky_blend', 'distance_fog_max_opacity', 'distance_fog_sync_background'
             ]
         },
@@ -7481,10 +7823,8 @@ void main() {
         {
             id: 'celestial', label: 'lightflow_environment.group.sun', icon: 'wb_sunny', color: '#FFBB68',
             entries: [
-                { subsection: 'lightflow_environment.field.sun_enabled', icon: 'light_mode' },
-                'sun_enabled', 'sun_azimuth', 'sun_intensity', 'sun_light_color_mode', 'sun_light_day_color', 'sun_light_twilight_color',
-                { subsection: 'lightflow_environment.group.appearance', icon: 'visibility' },
-                'sun_color', 'celestial_size', 'sun_mode', 'sun_texture_uuid', 'sun_blend_mode', 'sun_opacity',
+                'sun_mode', 'sun_color', 'celestial_size',
+                'sun_texture_uuid', 'sun_blend_mode', 'sun_opacity',
                 { subsection: 'lightflow_environment.group.sun_glow', icon: 'flare' },
                 'sun_horizon_scale', 'sun_gaze_scale', 'sun_glare', 'sunset_directional_glow',
                 'lens_flare_enabled','lens_flare_strength','lens_flare_scale',
@@ -7493,8 +7833,8 @@ void main() {
         {
             id: 'moon', label: 'lightflow_environment.group.moon', icon: 'nights_stay', color: '#C7A6FF',
             entries: [
-                'moon_intensity', 'moon_light_color_mode', 'moon_light_custom_color', 'moon_phase', 'moon_mode', 'moon_texture_uuid', 'moon_blend_mode', 'moon_opacity', 'moon_texture_layout', 'moon_atlas_columns', 'moon_atlas_rows', 'moon_phase_offset',
-                'moon_color', 'moon_size'
+                'moon_phase', 'moon_mode', 'moon_color', 'moon_size', 'moon_opacity',
+                'moon_texture_uuid', 'moon_blend_mode', 'moon_texture_layout', 'moon_atlas_columns', 'moon_atlas_rows', 'moon_phase_offset'
             ]
         },
         {
@@ -7502,12 +7842,12 @@ void main() {
             entries: ['stars_enabled', 'star_brightness', 'star_density']
         },
         {
-            id: 'clouds', label: 'lightflow_environment.field.clouds', icon: 'cloud', color: '#6ED9FF',
+            id: 'clouds', label: 'lightflow_environment.group.cloud_structure', icon: 'cloud', color: '#6ED9FF',
             entries: [
-                { subsection: 'lightflow_environment.field.cloud_mode', icon: 'texture' },
+                { subsection: 'lightflow_environment.subsection.cloud_source', icon: 'texture' },
                 'clouds_enabled', 'cloud_mode', 'cloud_style', 'cloud_texture_uuid',
                 'cloud_time_profiles_enabled', '_cloud_time_profiles_editor',
-                { subsection: 'lightflow_environment.field.cloud_coverage', icon: 'air' },
+                { subsection: 'lightflow_environment.subsection.cloud_shape', icon: 'air' },
                 'cloud_coverage', 'cloud_opacity', 'cloud_scale', 'cloud_height', 'cloud_thickness', 'cloud_extrusion'
             ]
         },
@@ -7524,7 +7864,7 @@ void main() {
             entries: [
                 'cloud_environment_influence', 'cloud_time_tint_strength',
                 'cloud_lighting_mode', 'cloud_sky_tint_strength', 'cloud_sun_tint_strength',
-                { subsection: 'lightflow_environment.field.cloud_fog_enabled', icon: 'foggy' },
+                { subsection: 'lightflow_environment.subsection.cloud_fog', icon: 'foggy' },
                 'cloud_fog_enabled', 'cloud_fog_color_mode', 'cloud_fog_color', 'cloud_fog_strength', 'cloud_fog_start', 'cloud_fog_end', 'cloud_density', 'cloud_absorption', 'cloud_translucency'
             ]
         },
@@ -7533,14 +7873,22 @@ void main() {
             entries: ['cloud_scattering_strength', 'cloud_scattering_size', 'cloud_edge_hardness', 'cloud_view_response', 'cloud_gradient_thickness', 'cloud_gradient_alpha', 'cloud_optical_thickness', 'cloud_phase_anisotropy', 'cloud_density_variation', 'cloud_bevel_enabled', 'cloud_bevel_width', 'cloud_bevel_smooth', 'cloud_bevel_softness', 'cloud_bevel_roundness', 'cloud_bevel_strength', 'cloud_bevel_distance_fade', 'cloud_bevel_distance_min_scale', 'cloud_edge_strength', 'cloud_shadow_bevel_strength']
         },
         {
+            id: 'sun_light', label: 'lightflow_environment.group.sun_light', icon: 'wb_sunny', color: '#FFBB68',
+            entries: ['sun_enabled', 'sun_azimuth', 'sun_intensity', 'sun_light_color_mode', 'sun_light_day_color', 'sun_light_twilight_color']
+        },
+        {
+            id: 'moon_light', label: 'lightflow_environment.group.moon_light', icon: 'nights_stay', color: '#C7A6FF',
+            entries: ['moon_intensity', 'moon_light_color_mode', 'moon_light_custom_color']
+        },
+        {
             id: 'bloom', label: 'lightflow_environment.group.bloom', icon: 'flare', color: '#FF9FD0',
             entries: [
                 'environment_bloom_enabled',
-                { subsection: 'lightflow_environment.field.bloom_strength', icon: 'blur_on' },
+                { subsection: 'lightflow_environment.subsection.bloom_shape', icon: 'blur_on' },
                 'bloom_threshold', 'bloom_soft_knee', 'bloom_strength', 'bloom_core_strength', 'bloom_core_radius', 'bloom_halo_strength', 'bloom_halo_radius',
-                { subsection: 'lightflow_environment.field.bloom_hdr_strength', icon: 'hdr_on' },
+                { subsection: 'lightflow_environment.subsection.bloom_sources', icon: 'hdr_on' },
                 'bloom_hdr_strength', 'bloom_emissive_strength', 'bloom_occlusion',
-                { subsection: 'lightflow_environment.field.sun_bloom_contribution', icon: 'wb_sunny' },
+                { subsection: 'lightflow_environment.subsection.bloom_sky', icon: 'wb_sunny' },
                 'sun_bloom_contribution', 'moon_bloom_contribution', 'star_bloom_contribution', 'cloud_bloom_contribution'
             ]
         },
@@ -7548,22 +7896,99 @@ void main() {
             id: 'shadows', label: 'lightflow_environment.group.shadows', icon: 'ev_shadow', color: '#9EA9C8',
             entries: [
                 'sun_cast_shadows', 'fit_shadow_region',
-                { subsection: 'lightflow_environment.field.shadow_auto_fit', icon: 'center_focus_strong' },
+                { subsection: 'lightflow_environment.subsection.shadow_region', icon: 'center_focus_strong' },
                 'shadow_auto_fit', 'shadow_scene_fit', 'shadow_region_locked', 'show_shadow_gizmo', 'shadow_area', 'shadow_near', 'shadow_far',
-                { subsection: 'lightflow_environment.field.shadow_resolution', icon: 'high_quality' },
+                { subsection: 'lightflow_environment.subsection.shadow_quality', icon: 'high_quality' },
                 'shadow_resolution', 'studio_shadow_resolution', 'shadow_camera_quality', 'shadow_camera_distance', 'shadow_softness_mode', 'shadow_blur', 'shadow_softness', 'shadow_bias', 'shadow_normal_bias_auto', 'shadow_normal_bias',
-                { subsection: 'lightflow_environment.field.pixelated_shadows', icon: 'grid_on' },
+                { subsection: 'lightflow_environment.subsection.shadow_pixel', icon: 'grid_on' },
                 'pixelated_shadows', 'pixel_shadow_steps', 'pixel_shadow_scale'
             ]
         }
     ];
 
-    // Keep panel and full editor navigation identical; every field has one home.
+    // Three direct destinations per main category. The artist changes a task
+    // with one click, then edits visible controls without opening folders.
+    // Full settings still live in the same destinations and search spans all.
+    const ENVIRONMENT_PANEL_FOCUS = Object.freeze({
+        sky: [
+            { id: 'time', label: 'lightflow_environment.focus.time', groups: ['time'] },
+            { id: 'colors', label: 'lightflow_environment.focus.colors', groups: ['sky'] },
+            { id: 'celestial', label: 'lightflow_environment.focus.celestial', groups: ['celestial', 'moon', 'stars'] }
+        ],
+        atmosphere: [
+            { id: 'clouds', label: 'lightflow_environment.focus.clouds', groups: ['clouds', 'cloud_motion'] },
+            { id: 'appearance', label: 'lightflow_environment.focus.appearance', groups: ['cloud_palette', 'cloud_lighting', 'cloud_detail'] },
+            { id: 'distance', label: 'lightflow_environment.focus.distance', groups: ['fog', 'fog_texture', 'distance_grade'] }
+        ],
+        lighting: [
+            { id: 'sources', label: 'lightflow_environment.focus.sources', groups: ['ambient', 'sun_light', 'moon_light'] },
+            { id: 'bloom', label: 'lightflow_environment.focus.bloom', groups: ['bloom'] },
+            { id: 'shadows', label: 'lightflow_environment.focus.shadows', groups: ['shadows'] }
+        ]
+    });
+    const BACKDROP_SKY_FIELDS = ['backdrop_color', 'sky_show_celestials'];
+    const CUBEMAP_SKY_FIELDS = ['cubemap_yaw', ...CUBEMAP_FACES.map(face => 'cubemap_' + face)];
+    const BACKDROP_LIGHT_FIELDS = ['sun_enabled', 'sun_azimuth', 'sky_light_elevation', 'sun_intensity', 'sun_light_day_color'];
+
+    function getEnvironmentPanelGroups() {
+        if (isCycleSky()) return ENVIRONMENT_PANEL_GROUPS;
+        return ENVIRONMENT_PANEL_GROUPS.flatMap(group => {
+            if (group.id === 'sky') return [{ ...group, entries: settings.sky_type === 'cubemap'
+                ? [...CUBEMAP_SKY_FIELDS, ...BACKDROP_SKY_FIELDS] : BACKDROP_SKY_FIELDS }];
+            if (group.id === 'sun_light') return [{ ...group, entries: BACKDROP_LIGHT_FIELDS }];
+            if (['fog', 'fog_texture', 'distance_grade', 'shadows'].includes(group.id)) return [group];
+            return [];
+        });
+    }
+
+    function getEnvironmentPanelTopics(category) {
+        const topics = ENVIRONMENT_PANEL_FOCUS[category];
+        if (isCycleSky()) return topics;
+        const groups = getEnvironmentPanelGroups();
+        return topics.filter(topic => topic.groups.some(id => groups.some(group => group.id === id)));
+    }
+
+    function getEnvironmentPanelFocus(category, topics = getEnvironmentPanelTopics(category)) {
+        return topics.find(topic => topic.id === environmentPanelFocus[category]) || topics[0];
+    }
+
+    function getEnvironmentEssentialFields(groupId) {
+        if (!isCycleSky() && groupId === 'sky') return [...CUBEMAP_SKY_FIELDS, ...BACKDROP_SKY_FIELDS];
+        if (!isCycleSky() && groupId === 'sun_light') return BACKDROP_LIGHT_FIELDS;
+        return ENVIRONMENT_PANEL_ESSENTIAL_FIELDS[groupId] || [];
+    }
+
+    const ENVIRONMENT_SKY_GRADIENT_KEYS = Object.freeze([
+        'day_sky_gradient', 'sunrise_sky_gradient', 'sunset_sky_gradient', 'night_sky_gradient'
+    ]);
+
+    // The same field belongs to exactly one group in both the panel and composer.
     function getEnvironmentGroupCategory(id) {
         if (id === 'fog' || id === 'fog_texture' || id === 'distance_grade' || id === 'clouds' || id.startsWith('cloud_')) return 'atmosphere';
-        if (['ambient', 'shadows', 'bloom'].includes(id)) return 'lighting';
+        if (['ambient', 'sun_light', 'moon_light', 'shadows', 'bloom'].includes(id)) return 'lighting';
         return 'sky';
     }
+
+    // Minimal daily-workflow surface. All remaining settings retain their one
+    // existing home and are discoverable via All settings or global search.
+    const ENVIRONMENT_PANEL_ESSENTIAL_FIELDS = Object.freeze({
+        time: ['dimension', 'time', 'animate_time', 'day_length_seconds'],
+        sky: ['palette_mode', 'sky_time_gradients_enabled', 'sky_intensity'],
+        celestial: ['sun_mode', 'sun_color', 'celestial_size', 'sun_glare', 'lens_flare_enabled'],
+        moon: ['moon_phase', 'moon_mode', 'moon_color', 'moon_size'],
+        stars: ['stars_enabled', 'star_brightness'],
+        fog: ['distance_look_presets', 'distance_fog_enabled', 'distance_fog_color_mode', 'distance_fog_start', 'distance_fog_end', 'distance_fog_max_opacity'],
+        distance_grade: ['distance_grade_enabled', 'distance_grade_saturation', 'distance_grade_contrast'],
+        clouds: ['clouds_enabled', 'cloud_mode', 'cloud_style', 'cloud_time_profiles_enabled',
+            'cloud_coverage', 'cloud_opacity', 'cloud_scale', 'cloud_height'],
+        cloud_motion: ['cloud_paused', 'cloud_speed', 'cloud_direction'],
+        cloud_palette: ['cloud_palette_mode', 'cloud_color', 'cloud_brightness'],
+        ambient: ['environment_strength', 'ambient_fill_color_mode', 'ambient_fill_shape'],
+        sun_light: ['sun_enabled', 'sun_azimuth', 'sun_intensity', 'sun_light_color_mode'],
+        moon_light: ['moon_intensity', 'moon_light_color_mode'],
+        bloom: ['environment_bloom_enabled', 'bloom_threshold', 'bloom_strength', 'bloom_halo_strength'],
+        shadows: ['sun_cast_shadows', 'fit_shadow_region', 'shadow_softness_mode', 'shadow_blur', 'shadow_softness']
+    });
 
     function environmentPanelValueEquals(left, right) {
         if (Array.isArray(left) || Array.isArray(right)) {
@@ -7644,13 +8069,18 @@ void main() {
             ? data.basePresetId
             : (PRESETS[settings.preset] ? settings.preset : 'vanilla');
         const nativeIdentity = getNativeSkyPresetDefinition(basePresetId);
-        const sourceSettings = data.settings || getNativeSkyPresetSettings(basePresetId, { enabled: settings.enabled });
+        const skyType = normalizeSkyType(data.skyType ?? data.settings?.sky_type);
+        const sourceSettings = skyType === 'cycle'
+            ? (data.settings || getNativeSkyPresetSettings(basePresetId, { enabled: settings.enabled }))
+            : { sun_enabled: false, sun_cast_shadows: false, ...data.settings };
+        const defaultName = skyType === 'cycle' ? `${nativeIdentity.name} Custom` : tr(SKY_TYPES[skyType]);
         const preset = normalizeCustomSkyPreset({
             id: data.id || createEnvironmentPresetId(),
-            name: getUniqueSkyPresetName(data.name || `${nativeIdentity.name} Custom`),
-            icon: data.icon || nativeIdentity.icon,
+            name: getUniqueSkyPresetName(data.name || defaultName),
+            icon: data.icon || SKY_TYPE_ICONS[skyType],
             iconColor: data.iconColor || nativeIdentity.iconColor,
             basePresetId,
+            skyType,
             settings: sourceSettings,
             createdAt: data.createdAt,
             updatedAt: data.updatedAt
@@ -7722,8 +8152,9 @@ void main() {
         const initialBaseId = PRESETS[basePresetId] ? basePresetId : 'vanilla';
         const initialIdentity = getNativeSkyPresetDefinition(initialBaseId);
         let lastBaseId = initialBaseId;
+        let lastSkyType = 'cycle';
         let lastAutoName = `${initialIdentity.name} Custom`;
-        let lastAutoIcon = initialIdentity.icon;
+        let lastAutoIcon = SKY_TYPE_ICONS.cycle;
         let autoName = true;
         let autoIcon = true;
         const dialog = new Dialog({
@@ -7732,9 +8163,17 @@ void main() {
             width: 500,
             form: (window.LightManagerUI?.prepareForm || (form => form))({
                 preview: {type: 'bar_display', value: lastAutoName, icon: lastAutoIcon, expand: true},
+                sky_type: {
+                    type: 'compact_select', show_value_text: true, expand: true,
+                    label: 'lightflow_environment.field.sky_type',
+                    options: Object.fromEntries(Object.entries(SKY_TYPES).map(([id, name]) =>
+                        [id, { name: tr(name), icon: SKY_TYPE_ICONS[id] }])),
+                    value: 'cycle'
+                },
                 base_preset: {
                     type: 'compact_select', show_value_text: true, expand: true, searchable: true, label: 'lightflow_environment.field.base_sky_model',
-                    options: getNativeSkyPresetOptions(), value: initialBaseId
+                    options: getNativeSkyPresetOptions(), value: initialBaseId,
+                    condition: result => result.sky_type === 'cycle'
                 },
                 name: { type: 'text', label: 'lightflow_environment.field.preset_name', value: lastAutoName },
                 icon: { type: 'icon_select', label: 'lightflow_environment.field.preset_icon', value: lastAutoIcon },
@@ -7754,19 +8193,21 @@ void main() {
                 if (currentName !== lastAutoName) autoName = false;
                 if (currentIcon !== lastAutoIcon) autoIcon = false;
                 const nextBaseId = PRESETS[result?.base_preset] ? result.base_preset : initialBaseId;
-                if (nextBaseId !== lastBaseId) {
+                const skyType = normalizeSkyType(result?.sky_type);
+                if (nextBaseId !== lastBaseId || skyType !== lastSkyType) {
                     const identity = getNativeSkyPresetDefinition(nextBaseId);
                     const nextValues = {};
                     if (autoName) {
-                        lastAutoName = `${identity.name} Custom`;
+                        lastAutoName = skyType === 'cycle' ? `${identity.name} Custom` : tr(SKY_TYPES[skyType]);
                         nextValues.name = lastAutoName;
                     }
                     if (autoIcon) {
-                        lastAutoIcon = identity.icon;
+                        lastAutoIcon = SKY_TYPE_ICONS[skyType];
                         nextValues.icon = lastAutoIcon;
                     }
                     nextValues.icon_color = identity.iconColor;
                     lastBaseId = nextBaseId;
+                    lastSkyType = skyType;
                     this.setFormValues(nextValues, false);
                 }
                 const values = this.form.getResult(), preview = this.form.form_data.preview;
@@ -7782,7 +8223,8 @@ void main() {
                     name: requestedName,
                     icon: result.icon,
                     iconColor: result.icon_color,
-                    basePresetId: result.base_preset
+                    basePresetId: result.base_preset,
+                    skyType: result.sky_type
                 }));
                 this.hide();
             }
@@ -7804,38 +8246,6 @@ void main() {
                 const name = String(result?.name || '').trim();
                 if (!name) return false;
                 runEnvironmentUndo('lightflow_environment.undo.rename_preset', () => updateEnvironmentSkyPresetMetadata(preset.id, { name }));
-                this.hide();
-            }
-        }));
-    }
-
-    function openEnvironmentSkyPresetIconDialog(presetId) {
-        const preset = customSkyPresets[presetId];
-        if (!preset) return;
-        const initialIcon = preset.icon;
-        showEnvironmentIdentityDialog(new Dialog({
-            id: 'lightflow_environment_sky_preset_icon_dialog',
-            title: 'lightflow_environment.dialog.change_preset_icon',
-            width: 420,
-            form: (window.LightManagerUI?.prepareForm || (form => form))({
-                preview: {
-                    type: 'bar_display', value: preset.name, icon: initialIcon,
-                    icon_color: getEnvironmentPresetColorCSS(preset.iconColor), expand: true
-                },
-                icon: { type: 'icon_select', label: 'lightflow_environment.field.preset_icon', value: initialIcon }
-            }),
-            onFormChange(result) {
-                const nextIcon = normalizeEnvironmentPresetIcon(result?.icon, initialIcon);
-                const preview = this.form?.form_data?.preview;
-                if (preview && preview.icon_name !== nextIcon) {
-                    preview.icon_name = nextIcon;
-                    preview.buildDOM?.();
-                }
-            },
-            onConfirm(result) {
-                const icon = String(result?.icon || '').trim();
-                if (!icon) return false;
-                runEnvironmentUndo('lightflow_environment.undo.change_preset_icon', () => updateEnvironmentSkyPresetMetadata(preset.id, { icon }));
                 this.hide();
             }
         }));
@@ -7968,27 +8378,7 @@ void main() {
         }));
     }
 
-    function getEnvironmentPresetIconMenuItems(preset) {
-        // Aspect-ratio glyphs are frame controls; custom input still accepts their IDs.
-        const registeredIcons = (window.LightManagerIcons?.list?.() || [])
-            .filter(icon => icon.startsWith('lightflow:') && !icon.startsWith('lightflow:aspect-'))
-            .map(icon => ({ id: 'registered_' + icon.slice('lightflow:'.length), icon, label: icon }));
-        const options = [...ENVIRONMENT_PRESET_ICON_OPTIONS.filter(option => !option.custom), ...registeredIcons,
-            { id: 'custom', icon: 'edit', label: tr('lightflow_environment.action.other_icon'), custom: true }];
-        const usesPresetIcon = options.some(option => !option.custom && option.icon === preset.icon);
-        return options.map(option => ({
-            id: `lightflow_environment_icon_${preset.id}_${option.id}`,
-            name: option.custom ? option.label : '\u00a0',
-            description: option.custom && !usesPresetIcon ? `${option.label} (${preset.icon})` : option.label,
-            icon: option.icon,
-            marked: option.custom ? !usesPresetIcon : option.icon === preset.icon,
-            click: () => option.custom
-                ? openEnvironmentSkyPresetIconDialog(preset.id)
-                : runEnvironmentUndo('lightflow_environment.undo.change_preset_icon', () => updateEnvironmentSkyPresetMetadata(preset.id, { icon: option.icon }))
-        }));
-    }
-
-    function getEnvironmentSkyPresetMenuItems() {
+    function getEnvironmentSkyPresetMenuItems(iconEditors) {
         const items = [];
         Object.keys(PRESETS).forEach(presetId => {
             const preset = getNativeSkyPresetDefinition(presetId);
@@ -8020,6 +8410,7 @@ void main() {
                 children: [
                     {
                         icon: 'code_blocks', name: 'lightflow_environment.action.change_base_sky_model',
+                        condition: () => preset.skyType === 'cycle',
                         click: () => openEnvironmentSkyPresetBaseDialog(preset.id)
                     },
                     {
@@ -8028,7 +8419,17 @@ void main() {
                     },
                     {
                         icon: 'interests', name: 'lightflow_environment.action.change_preset_icon',
-                        children: getEnvironmentPresetIconMenuItems(preset)
+                        children: window.LightManagerUI.GridMenu.iconItems(iconEditors, {
+                            id: `lightflow_environment_icon_${preset.id}`,
+                            options: ENVIRONMENT_PRESET_ICON_OPTIONS,
+                            includeRegistered: true,
+                            value: preset.icon,
+                            label: tr('lightflow_environment.action.other_icon'),
+                            color: getEnvironmentPresetColorCSS(preset.iconColor),
+                            apply: icon => runEnvironmentUndo('lightflow_environment.undo.change_preset_icon', () => (
+                                updateEnvironmentSkyPresetMetadata(preset.id, { icon })
+                            ))
+                        })
                     },
                     {
                         icon: 'palette', name: 'lightflow_environment.action.change_preset_color',
@@ -8079,7 +8480,8 @@ void main() {
     function openEnvironmentSkyPresetMenu(anchor) {
         if (typeof Menu === 'undefined') return;
         environmentIdentityMenu?.delete?.();
-        const items = getEnvironmentSkyPresetMenuItems();
+        const iconEditors = new Map();
+        const items = getEnvironmentSkyPresetMenuItems(iconEditors);
         const menu = new Menu(
             'lightflow_environment_sky_presets_menu',
             items,
@@ -8104,15 +8506,21 @@ void main() {
         });
         window.LightManagerUI.GridMenu.decorate(menu, {
             itemSelector: 'li[menu_item^="lightflow_environment_color_"]',
-            columns: 5, maxColumns: 5, cellSize: 36, padding: 6, refined: true
+            columns: 5, maxColumns: 5, cellSize: 36, padding: 6, refined: true, swatches: true
         });
         window.LightManagerUI.GridMenu.decorate(menu, {
             itemSelector: 'li[menu_item^="lightflow_environment_icon_"]',
             columns: 5, maxColumns: 5, cellSize: 36, padding: 6, refined: true,
-            footerSelector: '[menu_item$="_custom"]'
+            iconEditors, anchor: anchor?.currentTarget || anchor?.target || anchor
         });
-        menu.node?.querySelectorAll('li[menu_item^="lightflow_environment_icon_"][menu_item$="_custom"]')
-            .forEach(item => item.classList.add('light_manager_identity_custom_icon_item'));
+        const presetItems = items.filter(item => item && typeof item === 'object' &&
+            (String(item.id || '').startsWith('lightflow_environment_preset_') || item.id === 'lightflow_environment_no_custom_presets'));
+        window.LightManagerUI?.SectionedMenu?.decorate(menu, {
+            scrollItems: presetItems.map(item => item.id),
+            height: 360,
+            search: presetItems.length > 8,
+            anchor: anchor?.currentTarget || anchor?.target || anchor
+        });
     }
 
     function createEnvironmentSkyPresetInfoDisplay() {
@@ -8132,6 +8540,19 @@ void main() {
             title: identity.native
                 ? 'lightflow_environment.info.native_preset_locked'
                 : 'lightflow_environment.info.custom_preset_editable'
+        };
+    }
+    function createEnvironmentPresetStateDisplay() {
+        const native = isNativeSkyPresetSelected();
+        return {
+            type: 'bar_display',
+            icon: native ? 'lock_outline' : 'edit',
+            value: isCycleSky() ? tr(native ? 'lightflow_environment.panel.preset_native'
+                : 'lightflow_environment.panel.preset_editable') : tr(SKY_TYPES[settings.sky_type]),
+            description: native ? 'lightflow_environment.info.native_preset_locked'
+                : 'lightflow_environment.info.custom_preset_editable',
+            color: 'var(--color-subtle_text)', paragraph: false, expand: true,
+            text_alignment: 'left', search_ignore: true
         };
     }
 
@@ -8214,7 +8635,28 @@ void main() {
             })), 'lightflow_environment.undo.edit_gradient');
         }
 
-        if (['sun_texture_uuid','moon_texture_uuid','cloud_texture_uuid'].includes(key)) {
+        // A small schematic of the day/night cycle helps artists scrub by
+        // lighting mood. Keep the existing numeric editor and landmark buttons:
+        // this is a reusable visual variant of Light Manager's combo slider.
+        if (key === 'time') {
+            return withUndo(design.cycle(Object.assign({}, base, {
+                resettable: true,
+                reset_value: Number(defaults.time ?? DEFAULT_SETTINGS.time),
+                cycle_stops: [
+                    { at: 0, color: '#CE9A7D' },
+                    { at: 0.08, color: '#E6BD8D' },
+                    { at: 0.25, color: '#8CB8D8' },
+                    { at: 0.4, color: '#B2C9DD' },
+                    { at: 0.5, color: '#EFBD81' },
+                    { at: 0.6, color: '#AB7892' },
+                    { at: 0.77, color: '#414967' },
+                    { at: 0.9, color: '#65708A' },
+                    { at: 1, color: '#CE9A7D' }
+                ]
+            })));
+        }
+
+        if (base.type === 'texture_source' || ['sun_texture_uuid','moon_texture_uuid','cloud_texture_uuid'].includes(key)) {
             delete base.options;
             return withUndo(design.texture(withoutEnvironmentControlType(base)));
         }
@@ -8258,14 +8700,467 @@ void main() {
         return withUndo(base);
     }
 
+    // One shared compact timeline primitive for the sky and cloud inspectors.
+    // The editor fields below it remain native Light Manager FormElements.
+    function installEnvironmentInlineTimelineType() {
+        if (typeof FormElement === 'undefined' || !FormElement.types) return;
+        const previous = FormElement.types.lightflow_inline_timeline;
+        const Timeline = class extends FormElement {
+            get uses_wide_inputs() { return true; }
+            delete() {
+                this.numberFields?.forEach(field => field.dispose());
+                this.numberFields = [];
+                this.frameButtons?.clear();
+                super.delete();
+            }
+            setup() {
+                const description = this.options.description;
+                this.options.description = null;
+                super.setup();
+                this.options.description = description;
+            }
+            build(bar) {
+                this.bar = bar;
+                bar.classList.add('full_width_dialog_bar', 'lightflow_environment_timeline_row');
+                Object.assign(bar.style, {height:'auto', minHeight:'0', overflow:'visible',
+                    padding:'4px 0', alignItems:'stretch'});
+                bar.style.setProperty('height', 'auto', 'important');
+                this.node = document.createElement('div');
+                this.node.className = 'lightflow_environment_inline_timeline';
+                Object.assign(this.node.style, {display:'flex', flexDirection:'column', gap:'6px',
+                    minWidth:'0', width:'100%', boxSizing:'border-box'});
+                this.lane = document.createElement('div');
+                Object.assign(this.lane.style, {display:'flex', gap:'4px', width:'100%',
+                    maxWidth:'100%', overflowX:'auto', padding:'2px 0 5px', boxSizing:'border-box'});
+                this.lane.setAttribute('role', 'group');
+                this.lane.setAttribute('aria-label', tr(this.options.momentsLabel));
+                this.frameButtons = new Map();
+                // One Tab stop for the row. Arrow keys, Home and End move across
+                // moments without adding dozens of controls to the tab order.
+                this.lane.addEventListener('keydown', event => {
+                    if (event.altKey || event.ctrlKey || event.metaKey) return;
+                    const target = event.target.closest?.('button[data-frame-id]');
+                    if (!target || !this.lane.contains(target)) return;
+                    const buttons = Array.from(this.lane.children);
+                    const index = buttons.indexOf(target);
+                    if (index < 0) return;
+                    let next = index;
+                    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') next = (index + 1) % buttons.length;
+                    else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') next = (index + buttons.length - 1) % buttons.length;
+                    else if (event.key === 'Home') next = 0;
+                    else if (event.key === 'End') next = buttons.length - 1;
+                    else return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    buttons[next].click();
+                    buttons[next].focus({preventScroll:true});
+                    this.revealFrame(buttons[next]);
+                });
+                this.tools = document.createElement('div');
+                Object.assign(this.tools.style, {display:'flex', alignItems:'center', flexWrap:'wrap',
+                    gap:'5px', minWidth:'0'});
+                this.node.append(this.lane, this.tools);
+                bar.append(this.node);
+                this.refresh();
+            }
+            getValue() { return this.options.getSelected?.() || null; }
+            setValue() { this.refresh(); }
+            getDefault() { return null; }
+            revealFrame(button) {
+                if (!button || !this.lane) return;
+                const laneRect = this.lane.getBoundingClientRect();
+                const frameRect = button.getBoundingClientRect();
+                if (frameRect.left < laneRect.left + 4) this.lane.scrollLeft -= laneRect.left + 4 - frameRect.left;
+                else if (frameRect.right > laneRect.right - 4) this.lane.scrollLeft += frameRect.right - laneRect.right + 4;
+            }
+            refresh() {
+                if (!this.lane) return;
+                const opts = this.options;
+                const frames = opts.getFrames?.() || [];
+                const selected = opts.getSelected?.() || frames[0]?.id;
+                const focusedFrameId = this.lane.contains(document.activeElement)
+                    ? document.activeElement?.dataset?.frameId : null;
+                const nextButtons = [];
+                const nextIds = new Set(frames.map(frame => frame.id));
+                for (const id of this.frameButtons.keys()) {
+                    if (!nextIds.has(id)) this.frameButtons.delete(id);
+                }
+                for (const frame of frames) {
+                    let button = this.frameButtons.get(frame.id);
+                    if (!button) {
+                        button = document.createElement('button');
+                        button.type = 'button';
+                        button.dataset.frameId = frame.id;
+                        button.className = 'tool lightflow_environment_frame_chip';
+                        Object.assign(button.style, {display:'inline-flex', flex:'0 0 auto',
+                            alignItems:'stretch', flexDirection:'column', justifyContent:'center',
+                            gap:'4px', minWidth:'49px', height:'38px', padding:'4px 9px',
+                            borderRadius:'5px', border:'1px solid var(--color-border)',
+                            fontSize:'12px', cursor:'pointer'});
+                        const caption = document.createElement('span');
+                        caption.style.textAlign = 'center';
+                        const track = document.createElement('span');
+                        track.setAttribute('aria-hidden', 'true');
+                        Object.assign(track.style, {display:'block', width:'100%', height:'4px',
+                            borderRadius:'2px', background:'var(--color-border)', overflow:'hidden'});
+                        const swatch = document.createElement('span');
+                        Object.assign(swatch.style, {display:'block', width:'100%', height:'100%'});
+                        track.append(swatch);
+                        button.append(caption, track);
+                        button.addEventListener('click', () => {
+                            const id = button.dataset.frameId;
+                            if (id !== opts.getSelected?.()) opts.onSelect?.(id);
+                            this.frameButtons.get(id)?.focus({preventScroll:true});
+                            this.revealFrame(this.frameButtons.get(id));
+                        });
+                        this.frameButtons.set(frame.id, button);
+                    }
+                    const active = frame.id === selected;
+                    button.setAttribute('aria-pressed', active ? 'true' : 'false');
+                    button.tabIndex = active ? 0 : -1;
+                    const hint = opts.getFrameHint?.(frame);
+                    button.setAttribute('aria-label', (opts.getFrameLabel?.(frame) || '') + ' · ' +
+                        formatSkyClockTime(frame.time) + (hint ? ' · ' + hint : ''));
+                    button.title = button.getAttribute('aria-label');
+                    const label = opts.getFrameLabel?.(frame) || formatSkyClockTime(frame.time);
+                    if (button.firstChild.textContent !== label) button.firstChild.textContent = label;
+                    const swatch = button.lastChild.firstChild;
+                    const preview = opts.getFramePreview?.(frame);
+                    swatch.style.background = preview?.background || 'var(--color-subtle_text)';
+                    swatch.style.width = `${Math.round(clamp(Number(preview?.extent ?? 100), 0, 100))}%`;
+                    button.style.borderColor = active ? 'var(--color-accent)' : 'var(--color-border)';
+                    button.style.color = active ? 'var(--color-text)' : 'var(--color-subtle_text)';
+                    button.style.background = active
+                        ? 'color-mix(in srgb, var(--color-accent) 16%, var(--color-back))' : 'var(--color-back)';
+                    nextButtons.push(button);
+                }
+                if (nextButtons.length !== this.lane.children.length ||
+                    nextButtons.some((button, index) => this.lane.children[index] !== button)) {
+                    this.lane.replaceChildren(...nextButtons);
+                }
+                if (focusedFrameId) {
+                    this.frameButtons.get(focusedFrameId)?.focus({preventScroll:true});
+                }
+                const selectedFrame = frames.find(frame => frame.id === selected) || frames[0];
+                if (!selectedFrame) return;
+                const toolIdentity = [selectedFrame.id, selectedFrame.time, frames.length,
+                    opts.getNewTime?.(), !!opts.isFixed?.(selectedFrame)].join('|');
+                if (this.toolIdentity === toolIdentity && this.tools.children.length) return;
+                this.toolIdentity = toolIdentity;
+                const focusedNumber = this.tools.contains(document.activeElement)
+                    ? document.activeElement?.dataset?.timelineField : null;
+                this.numberFields?.forEach(field => field.dispose());
+                this.numberFields = [];
+                this.tools.replaceChildren();
+                const makeButton = (icon, label, click, disabled = false) => {
+                    const button = document.createElement('button');
+                    button.type = 'button';
+                    button.className = 'tool';
+                    button.title = tr(label);
+                    button.setAttribute('aria-label', tr(label));
+                    button.disabled = disabled;
+                    Object.assign(button.style, {display:'inline-flex', alignItems:'center', justifyContent:'center',
+                        width:'30px', minWidth:'30px', height:'30px', border:'1px solid var(--color-border)',
+                        borderRadius:'5px', background:'var(--color-back)', color:'var(--color-text)',
+                        opacity:disabled ? '.45' : '1'});
+                    button.append(Blockbench.getIconNode(icon));
+                    button.addEventListener('click', click);
+                    return button;
+                };
+                const createNumber = (value, label, key, disabled, onCommit, validate) => {
+                    const field = window.LightManagerUI.controls.createInlineNumberField({
+                        value, label: tr(label), min: 0, max: 23999, step: 1,
+                        disabled, validate, onCommit
+                    });
+                    field.input.dataset.timelineField = key;
+                    field.input.title = tr(label) + ' · ' + formatSkyClockTime(value);
+                    this.numberFields.push(field);
+                    return field;
+                };
+                const time = createNumber(selectedFrame.time, opts.timeLabel, 'selected',
+                    !!opts.isFixed?.(selectedFrame), value => {
+                        if (value !== selectedFrame.time) opts.onTimeChange?.(selectedFrame.id, value);
+                    }, value => !frames.some(frame =>
+                        frame.id !== selectedFrame.id && frame.time === value));
+                const makeRow = () => {
+                    const row = document.createElement('div');
+                    Object.assign(row.style, {display:'flex', alignItems:'center', gap:'5px',
+                        minWidth:'0', width:'100%', boxSizing:'border-box'});
+                    return row;
+                };
+                const makeCaption = label => {
+                    const caption = document.createElement('span');
+                    caption.textContent = tr(label);
+                    Object.assign(caption.style, {fontSize:'11px', color:'var(--color-subtle_text)',
+                        flex:'1 1 auto', minWidth:'0', lineHeight:'1.2'});
+                    return caption;
+                };
+                const selectedRow = makeRow();
+                selectedRow.append(makeCaption('lightflow_environment.panel.timeline_selected'),
+                    time.node, makeButton('visibility', opts.previewLabel, () => opts.onPreview?.(selectedFrame.id)),
+                    makeButton('delete_outline', opts.removeLabel, () => opts.onRemove?.(selectedFrame.id),
+                        frames.length <= opts.minFrames || !!opts.isFixed?.(selectedFrame)));
+                const addTime = createNumber(opts.getNewTime?.() ?? selectedFrame.time,
+                    opts.addLabel, 'new', false, (value, event) => {
+                        opts.setNewTime?.(value);
+                        if (event?.key === 'Enter') opts.onAdd?.(value);
+                    });
+                const addRow = makeRow();
+                addRow.append(makeCaption('lightflow_environment.panel.timeline_new'),
+                    addTime.node, makeButton('add', opts.addLabel, () => opts.onAdd?.(addTime.getValue()),
+                        frames.length >= opts.maxFrames));
+                this.tools.append(selectedRow, addRow);
+                if (focusedNumber) {
+                    this.numberFields.find(field =>
+                        field.input.dataset.timelineField === focusedNumber)?.input.focus({preventScroll:true});
+                }
+            }
+        };
+        FormElement.types.lightflow_inline_timeline = Timeline;
+        deletables.push({delete() {
+            if (FormElement.types.lightflow_inline_timeline !== Timeline) return;
+            if (previous) FormElement.types.lightflow_inline_timeline = previous;
+            else delete FormElement.types.lightflow_inline_timeline;
+        }});
+    }
+
+    const environmentTimelineNewTime = {sky: 6000, clouds: 6000};
+    function suggestEnvironmentTimelineTime(frames, preferred) {
+        const time = Math.round(clamp(Number(preferred) || 0, 0, 23999));
+        if (!frames.some(frame => frame.time === time)) return time;
+        const sorted = frames.slice().sort((a, b) => a.time - b.time);
+        const index = sorted.findIndex(frame => frame.time === time);
+        const following = sorted[(index + 1) % sorted.length].time;
+        const gap = (following - time + 24000) % 24000;
+        if (gap > 1) return (time + Math.floor(gap / 2)) % 24000;
+        for (let step = 1; step < 24000; step++) {
+            const candidate = (time + step) % 24000;
+            if (!frames.some(frame => frame.time === candidate)) return candidate;
+        }
+        return time;
+    }
+    function makeEnvironmentTimelineFrameId(kind, time, frames) {
+        const base = (kind === 'sky' ? 'clock_' : 'cloud_clock_') + time;
+        let id = base;
+        let suffix = 1;
+        while (frames.some(frame => frame.id === id)) id = base + '_' + suffix++;
+        return id;
+    }
+    const ENVIRONMENT_CLOUD_TIME_FIELDS = Object.freeze([
+        ...Object.keys(CLOUD_TIME_NUMERIC_FIELDS), ...CLOUD_TIME_COLOR_FIELDS
+    ]);
+    const ENVIRONMENT_CLOUD_TIME_QUICK = Object.freeze([
+        'cloud_coverage', 'cloud_opacity', 'cloud_brightness',
+        'cloud_top_color', 'cloud_shadow_side_color', 'cloud_environment_influence'
+    ]);
+    const ENVIRONMENT_CLOUD_TIME_SECTIONS = {
+        appearance: ['cloud_coverage', 'cloud_opacity', 'cloud_contrast', 'cloud_brightness'],
+        colors: CLOUD_TIME_COLOR_FIELDS,
+        edges: ENVIRONMENT_CLOUD_TIME_FIELDS.filter(key =>
+            key.startsWith('cloud_bevel_') || ['cloud_gradient_thickness', 'cloud_gradient_alpha',
+                'cloud_edge_hardness', 'cloud_view_response', 'cloud_edge_strength',
+                'cloud_shadow_bevel_strength'].includes(key)),
+        fog: ENVIRONMENT_CLOUD_TIME_FIELDS.filter(key => key.startsWith('cloud_fog_')),
+        advanced: ['cloud_scattering_strength', 'cloud_scattering_size',
+            'cloud_optical_thickness', 'cloud_phase_anisotropy', 'cloud_density_variation',
+            'cloud_density', 'cloud_absorption', 'cloud_translucency']
+    };
+    ENVIRONMENT_CLOUD_TIME_SECTIONS.lighting = ENVIRONMENT_CLOUD_TIME_FIELDS.filter(key =>
+        !Object.values(ENVIRONMENT_CLOUD_TIME_SECTIONS).some(list => list.includes(key)));
+    Object.freeze(ENVIRONMENT_CLOUD_TIME_SECTIONS);
+
+    function getEnvironmentTimelineFrames(kind) {
+        return kind === 'sky' ? settings.sky_time_gradients || [] : settings.cloud_time_profiles || [];
+    }
+
+    function getEnvironmentSelectedTimelineFrame(kind) {
+        const frames = getEnvironmentTimelineFrames(kind);
+        if (!frames.length) return null;
+        let selected = frames.find(frame => frame.id === environmentTimelineSelection[kind]);
+        if (!selected) {
+            selected = frames.reduce((nearest, frame) =>
+                Math.abs(frame.time - settings.time) < Math.abs(nearest.time - settings.time)
+                    ? frame : nearest, frames[0]);
+            environmentTimelineSelection[kind] = selected.id;
+        }
+        return selected;
+    }
+
+    function syncEnvironmentTimelineFields(kind) {
+        const controls = environmentPanel?.form?.form_data;
+        if (!controls) return;
+        const frame = getEnvironmentSelectedTimelineFrame(kind);
+        if (!frame) return;
+        if (kind === 'sky') {
+            controls._environment_sky_timed_gradient?.setValue?.(frame.gradient);
+            controls._environment_sky_timeline?.refresh?.();
+        } else {
+            for (const key of ENVIRONMENT_CLOUD_TIME_FIELDS) {
+                controls['_environment_cloud_timed_' + key]?.setValue?.(frame.appearance[key]);
+            }
+            controls._environment_cloud_timeline?.refresh?.();
+        }
+    }
+
+    function editEnvironmentTimeline(kind, action, structural = false) {
+        const label = kind === 'sky' ? 'lightflow_environment.undo.edit_gradient' : 'lightflow_environment.undo.edit';
+        return runEnvironmentUndo(label, () => {
+            const frames = cloneEnvironmentData(getEnvironmentTimelineFrames(kind));
+            const result = action(frames);
+            if (!result || !frames.length) return false;
+            const key = kind === 'sky' ? 'sky_time_gradients' : 'cloud_time_profiles';
+            applySettings({[key]: frames.sort((a, b) => a.time - b.time)}, {
+                cause: 'environment_timeline', forceShadow: false, syncPanel: false
+            });
+            if (structural) rebuildEnvironmentPanelForm();
+            else syncEnvironmentTimelineFields(kind);
+            return true;
+        });
+    }
+
+    function startEnvironmentTimeline(kind) {
+        const key = kind === 'sky' ? 'sky_time_gradients' : 'cloud_time_profiles';
+        const enabledKey = kind === 'sky' ? 'sky_time_gradients_enabled' : 'cloud_time_profiles_enabled';
+        const existing = getEnvironmentTimelineFrames(kind);
+        const next = existing.length >= 2 ? cloneEnvironmentData(existing)
+            : (kind === 'sky' ? ensureSkyTimeAnchors(seedSkyTimeGradients()) : seedCloudTimeProfiles());
+        environmentTimelineSelection[kind] = next[0].id;
+        environmentTimelineNewTime[kind] = suggestEnvironmentTimelineTime(next, settings.time);
+        runEnvironmentUndo('lightflow_environment.undo.edit', () =>
+            applySettings({[key]: next, [enabledKey]: true}, {
+                cause: 'environment_timeline_start', forceShadow: false, syncPanel: false
+            }));
+        rebuildEnvironmentPanelForm();
+    }
+
+    function getEnvironmentInlineTimelineConfig(kind) {
+        const sky = kind === 'sky';
+        return {
+            type: 'lightflow_inline_timeline',
+            description: sky ? 'lightflow_environment.info.sky_time_gradients'
+                : 'lightflow_environment.info.cloud_time_profiles',
+            condition: result => result.enabled !== false && result.dimension === 'overworld'
+                && (sky ? result.palette_mode === 'custom' && result.sky_time_gradients_enabled
+                    : result.clouds_enabled && result.cloud_time_profiles_enabled),
+            getFrames: () => getEnvironmentTimelineFrames(kind),
+            getSelected: () => getEnvironmentSelectedTimelineFrame(kind)?.id,
+            momentsLabel: 'lightflow_environment.panel.timeline_moments',
+            getFrameHint: frame => sky ? '' :
+                `${tr('lightflow_environment.panel.timeline_coverage')}: ${Math.round(clamp(finite(frame.appearance?.cloud_coverage, 0), 0, 1) * 100)}%`,
+            getFramePreview: frame => {
+                if (!sky) return {
+                    background: normalizeHex(frame.appearance?.cloud_top_color, '#B7C9DD'),
+                    extent: clamp(finite(frame.appearance?.cloud_coverage, 0), 0, 1) * 100
+                };
+                const stops = Array.isArray(frame.gradient?.stops) ? frame.gradient.stops : [];
+                return {
+                    background: stops.length >= 2
+                        ? `linear-gradient(90deg, ${stops.map(stop =>
+                            `${normalizeHex(stop.color, '#B7C9DD')} ${Math.round(clamp(finite(stop.position, 0), 0, 1) * 100)}%`).join(', ')})`
+                        : 'var(--color-subtle_text)'
+                };
+            },
+            getFrameLabel: frame => {
+                if (sky && frame.phase) {
+                    const label = frame.phase === 'day' ? 'lightflow_environment.gradient.day_sky_gradient'
+                        : frame.phase === 'sunrise' ? 'lightflow_environment.gradient.dawn_short'
+                        : frame.phase === 'sunset' ? 'lightflow_environment.gradient.dusk_short'
+                        : 'lightflow_environment.gradient.night_sky_gradient';
+                    return tr(label);
+                }
+                return formatSkyClockTime(frame.time);
+            },
+            timeLabel: sky ? 'lightflow_environment.field.sky_time_tick' : 'lightflow_environment.field.cloud_time_tick',
+            addLabel: sky ? 'lightflow_environment.action.sky_time_add' : 'lightflow_environment.action.cloud_time_add',
+            removeLabel: sky ? 'lightflow_environment.action.sky_time_remove' : 'lightflow_environment.action.cloud_time_remove',
+            previewLabel: 'lightflow_environment.panel.timeline_preview_time',
+            getNewTime: () => suggestEnvironmentTimelineTime(
+                getEnvironmentTimelineFrames(kind), environmentTimelineNewTime[kind]),
+            setNewTime: value => {if (Number.isInteger(value) && value >= 0 && value < 24000) environmentTimelineNewTime[kind] = value;},
+            minFrames: 2,
+            maxFrames: sky ? SKY_TIME_GRADIENT_MAX_FRAMES : CLOUD_TIME_PROFILE_MAX_FRAMES,
+            isFixed: frame => sky && !!getSkyTimeAnchor(frame),
+            onSelect: id => {
+                environmentTimelineSelection[kind] = id;
+                const selected = getEnvironmentSelectedTimelineFrame(kind);
+                if (selected) environmentTimelineNewTime[kind] = suggestEnvironmentTimelineTime(
+                    getEnvironmentTimelineFrames(kind), selected.time);
+                syncEnvironmentTimelineFields(kind);
+                environmentPanel?.form?.update?.();
+            },
+            onPreview: id => {
+                const frame = getEnvironmentTimelineFrames(kind).find(frame => frame.id === id);
+                if (!frame) return;
+                runEnvironmentUndo('lightflow_environment.undo.edit', () => applySettings({
+                    time: frame.time, animate_time: false
+                }, {cause:'environment_timeline_preview', forceShadow:false}));
+            },
+            onTimeChange: (id, time) => {
+                if (sky && getSkyTimeAnchor(getEnvironmentTimelineFrames(kind).find(frame => frame.id === id))) return;
+                editEnvironmentTimeline(kind, frames => {
+                    const frame = frames.find(frame => frame.id === id);
+                    if (!frame || frames.some(entry => entry.id !== id && entry.time === time)) return false;
+                    frame.time = time;
+                    environmentTimelineNewTime[kind] = suggestEnvironmentTimelineTime(frames, time);
+                    return true;
+                });
+            },
+            onAdd: time => {
+                if (!Number.isInteger(time) || time < 0 || time > 23999) return;
+                const frames = getEnvironmentTimelineFrames(kind);
+                const existing = frames.find(frame => frame.time === time);
+                if (existing) {
+                    environmentTimelineSelection[kind] = existing.id;
+                    syncEnvironmentTimelineFields(kind);
+                    environmentPanel?.form?.update?.();
+                    return;
+                }
+                if (frames.length >= (sky ? SKY_TIME_GRADIENT_MAX_FRAMES : CLOUD_TIME_PROFILE_MAX_FRAMES)) return;
+                editEnvironmentTimeline(kind, draft => {
+                    const next = sky
+                        ? makeSkyTimeGradient(time, position => sampleSkyTimeGradient(position, time, draft))
+                        : {id: 'cloud_clock_' + time, time,
+                            appearance: sampleCloudTimeAppearance(time, draft) || getBaseCloudAppearance()};
+                    // A renamed moment may retain its old ID. Never reuse it
+                    // when another moment is added at that vacated tick.
+                    next.id = makeEnvironmentTimelineFrameId(kind, time, draft);
+                    draft.push(next);
+                    environmentTimelineSelection[kind] = next.id;
+                    environmentTimelineNewTime[kind] = suggestEnvironmentTimelineTime(draft, time);
+                    return true;
+                }, true);
+            },
+            onRemove: id => {
+                const frames = getEnvironmentTimelineFrames(kind);
+                const frame = frames.find(frame => frame.id === id);
+                if (!frame || frames.length <= 2 || (sky && getSkyTimeAnchor(frame))) return;
+                Blockbench.showMessageBox({
+                    title: 'lightflow_environment.panel.timeline_remove_title',
+                    message: tr('lightflow_environment.panel.timeline_remove_confirm'),
+                    buttons: ['lightflow_environment.panel.timeline_remove_button', 'dialog.cancel'],
+                    confirm: 0, cancel: 1
+                }, button => {
+                    if (button !== 0) return;
+                    editEnvironmentTimeline(kind, draft => {
+                        const index = draft.findIndex(item => item.id === id);
+                        if (index < 0) return false;
+                        draft.splice(index, 1);
+                        environmentTimelineSelection[kind] = draft[Math.min(index, draft.length - 1)].id;
+                        return true;
+                    }, true);
+                });
+            }
+        };
+    }
+
     function createPanelForm() {
         const design = window.LightManagerUI.formDesign;
         const source = createDialogForm();
         const activePreset = getSkyPreset(activeSkyPresetId);
-        const baseDefaults = activePreset?.custom
-            ? activePreset.settings
-            : getNativeSkyPresetSettings(activePreset?.id || settings.preset, { enabled: settings.enabled });
-        const presetGradients = getPresetSkyGradientProfiles();
+        const baseDefaults = isCycleSky()
+            ? getNativeSkyPresetSettings(activePreset?.id || settings.preset, { enabled: settings.enabled })
+            : { ...DEFAULT_SETTINGS, sun_enabled: false, sun_cast_shadows: false };
+        const presetGradients = isCycleSky() ? getPresetSkyGradientProfiles() : {};
         const presetPalette = PRESETS[settings.preset] || PRESETS.vanilla;
         const effectiveDefaults = Object.assign({}, baseDefaults, {
             day_sky_gradient: presetGradients.day,
@@ -8278,9 +9173,11 @@ void main() {
         });
         const form = {
             _environment_preset_identity: createEnvironmentSkyPresetInfoDisplay(),
+            _environment_preset_state: createEnvironmentPresetStateDisplay(),
             _environment_preset_menu: {
-                type: 'action_button',
+                type: 'action_button', semantic_button: true,
                 icon: 'more_horiz',
+                background: 'var(--color-button)',
                 description: 'lightflow_environment.action.manage_presets',
                 color: 'var(--color-text)',
                 click: event => openEnvironmentSkyPresetMenu(event)
@@ -8289,11 +9186,11 @@ void main() {
                 type: 'bar_display', icon: 'info', paragraph: true, expand: true,
                 value: tr('lightflow_environment.resources.missing'),
                 color: 'var(--color-subtle_text)', search_ignore: true,
-                condition: form => form?.enabled !== false && ['unavailable', 'error'].includes(vanillaResourceStatus.state)
+                condition: form => isCycleSky() && form?.enabled !== false && ['unavailable', 'error'].includes(vanillaResourceStatus.state)
             },
             _environment_region: {
                 type: 'action_button', icon: 'control_camera',
-                description: 'light_manager.ui.sun_region',
+                description: 'lightflow_environment.action.sun_region',
                 condition: () => !!window.BarItems?.lightflow_sun_region_tool && Condition(BarItems.lightflow_sun_region_tool.condition),
                 click: () => { const tool = window.BarItems?.lightflow_sun_region_tool; if (tool && Condition(tool.condition)) tool.select(); }
             },
@@ -8325,32 +9222,54 @@ void main() {
             }),
             _environment_edit_copy: {
                 type: 'action_button', semantic_button: true, icon: 'content_copy',
-                text: 'lightflow_environment.action.create_editable_copy',
-                description: tl('lightflow_environment.info.quick_preset'),
+                title: 'lightflow_environment.action.create_editable_copy',
+                description: 'lightflow_environment.panel.copy_hint',
+                background: 'var(--color-button)',
                 condition: result => result.enabled !== false && isNativeSkyPresetSelected(),
                 click: () => runEnvironmentUndo('lightflow_environment.undo.duplicate_preset', () => duplicateEnvironmentSkyPreset(activeSkyPresetId))
             },
+            ...Object.fromEntries(Object.keys(ENVIRONMENT_PANEL_FOCUS).map(category => [
+                `_environment_focus_${category}`, design.inlineSelect({
+                    value: getEnvironmentPanelFocus(category).id,
+                    description: 'lightflow_environment.panel.focus_hint',
+                    multi_select: false,
+                    condition: () => environmentPanelCategory === category,
+                    options: Object.fromEntries(getEnvironmentPanelTopics(category).map(topic => [topic.id, { name: topic.label }]))
+                })
+            ])),
             _environment_search: design.search({
-                placeholder: 'Find setting', active_label: 'Active only', collapse_label: 'Collapse all'
+                placeholder: 'lightflow_environment.panel.search_all',
+                active_label: 'Active only', collapse_label: 'Collapse all',
+                compact_toolbar: true, hide_collapse: true, fast_filter: true
+            }),
+            _environment_detail: design.checkbox({
+                value: environmentPanelDetail === 'all',
+                label: 'lightflow_environment.panel.advanced',
+                description: 'lightflow_environment.panel.detail_hint',
+                layout: 'space_between', padding: '0 6px', icon_size: '18px'
             })
         };
-        form._environment_quick_hint = {
-            type: 'bar_display', value: tl('lightflow_environment.info.quick_preset'), icon: 'tune',
-            paragraph: true, expand: true, color: 'var(--color-subtle_text)', font_size: 11,
-            condition: () => isNativeSkyPresetSelected()
-        };
-
-        ENVIRONMENT_PANEL_GROUPS.forEach(group => {
+        const activeFocus = getEnvironmentPanelFocus(environmentPanelCategory);
+        getEnvironmentPanelGroups().forEach(group => {
             const category = getEnvironmentGroupCategory(group.id);
             const categoryVisible = environmentPanelCategory === category;
+            const quickFields = getEnvironmentEssentialFields(group.id);
+            const essentials = environmentPanelDetail === 'essentials';
+            const focusVisible = categoryVisible && activeFocus.groups.includes(group.id);
+            const groupVisible = focusVisible && (!essentials || quickFields.length > 0);
             const groupKey = ENVIRONMENT_PANEL_GROUP_PREFIX + group.id;
-            const groupOpen = environmentPanelGroupsOpen[group.id] !== false;
+            const groupOpen = true;
             const settingKeys = group.entries.filter(entry => typeof entry === 'string');
             const modified = settingKeys.some(key => Object.prototype.hasOwnProperty.call(effectiveDefaults || DEFAULT_SETTINGS, key)
                 && !environmentPanelValueEquals(settings[key], (effectiveDefaults || DEFAULT_SETTINGS)[key]));
             const enabledKey = settingKeys.find(key => /_enabled$/.test(key));
-            form[groupKey] = design.group({
-                panel_category_visible: categoryVisible,
+            form[groupKey] = design.staticGroup({
+                panel_category_visible: groupVisible,
+                search_origin: `${tr({
+                    sky: 'lightflow_environment.panel.category_sky',
+                    atmosphere: 'lightflow_environment.panel.category_atmosphere',
+                    lighting: 'lightflow_environment.panel.category_lighting'
+                }[category])} · ${tr(ENVIRONMENT_PANEL_FOCUS[category].find(topic => topic.groups.includes(group.id)).label)}`,
                 label: group.label,
                 label_icon: group.icon,
                 label_icon_color: group.color,
@@ -8366,7 +9285,8 @@ void main() {
                     )),
                 modified_label: 'Contains modified settings',
                 modified_color: group.color,
-                active: enabledKey ? settings[enabledKey] !== false : true
+                active: enabledKey ? settings[enabledKey] !== false :
+                    (group.id === 'moon_light' ? settings.sun_enabled !== false : true)
             });
 
             let subsectionIndex = 0;
@@ -8374,7 +9294,7 @@ void main() {
                 if (entry && typeof entry === 'object' && entry.subsection) {
                     const subsectionKey = `_environment_subsection_${group.id}_${subsectionIndex++}`;
                     form[subsectionKey] = design.subsection({
-                        panel_category_visible: categoryVisible,
+                        panel_category_visible: focusVisible && !essentials,
                         value: tr(entry.subsection, entry.subsection),
                         icon: entry.icon,
                         icon_color: group.color,
@@ -8387,9 +9307,102 @@ void main() {
                     });
                     return;
                 }
+                if (entry === '_sky_gradient_editor') {
+                    form._environment_palette_phase = design.inlineSelect({
+                        value: environmentPalettePhase,
+                        description: 'lightflow_environment.panel.gradient_phase_hint',
+                        multi_select: false,
+                        panel_category_visible: focusVisible && essentials,
+                        condition: result => result.palette_mode === 'custom' && !result.sky_time_gradients_enabled,
+                        options: {
+                            day_sky_gradient: { name: 'lightflow_environment.gradient.day_sky_gradient' },
+                            sunrise_sky_gradient: { name: 'lightflow_environment.gradient.dawn_short', description: 'lightflow_environment.gradient.sunrise_sky_gradient' },
+                            sunset_sky_gradient: { name: 'lightflow_environment.gradient.dusk_short', description: 'lightflow_environment.gradient.sunset_sky_gradient' },
+                            night_sky_gradient: { name: 'lightflow_environment.gradient.night_sky_gradient' }
+                        }
+                    });
+                    return;
+                }
+                if (entry === '_sky_time_gradient_editor') {
+                    const skyFrame = getEnvironmentSelectedTimelineFrame('sky');
+                    const skyAvailable = result => result.enabled !== false &&
+                        result.palette_mode === 'custom' && result.dimension === 'overworld';
+                    form._environment_sky_time_start = {
+                        type: 'action_button', semantic_button: true, icon: 'schedule',
+                        text: 'lightflow_environment.panel.sky_timeline_start',
+                        description: 'lightflow_environment.info.sky_time_gradients',
+                        panel_category_visible: focusVisible,
+                        condition: result => skyAvailable(result) && !result.sky_time_gradients_enabled,
+                        click: () => startEnvironmentTimeline('sky')
+                    };
+                    form._environment_sky_timeline = Object.assign(
+                        getEnvironmentInlineTimelineConfig('sky'), {panel_category_visible: focusVisible});
+                    form._environment_sky_timed_gradient = {
+                        type: 'gradient_editor',
+                        label: 'lightflow_environment.field.sky_time_gradient',
+                        description: 'lightflow_environment.info.sky_time_gradients',
+                        icon: 'gradient', compact: true,
+                        value: skyFrame?.gradient || settings.day_sky_gradient,
+                        min_stops: 3, max_stops: SKY_GRADIENT_MAX_STOPS,
+                        lock_endpoints: true, show_midpoints: true, stop_controls: true, stop_selector: true,
+                        height: 38, preview_resolution: 512,
+                        panel_category_visible: focusVisible,
+                        condition: result => skyAvailable(result) && result.sky_time_gradients_enabled,
+                        onBefore: () => beginEnvironmentUndo('lightflow_environment.undo.edit_gradient'),
+                        onAfter: () => finishEnvironmentUndo()
+                    };
+                    return;
+                }
+                if (entry === '_cloud_time_profiles_editor') {
+                    const cloudFrame = getEnvironmentSelectedTimelineFrame('clouds');
+                    const cloudAvailable = result => result.enabled !== false && result.clouds_enabled
+                        && result.dimension === 'overworld';
+                    form._environment_cloud_time_start = {
+                        type: 'action_button', semantic_button: true, icon: 'schedule',
+                        text: 'lightflow_environment.panel.cloud_timeline_start',
+                        description: 'lightflow_environment.info.cloud_time_profiles',
+                        panel_category_visible: focusVisible,
+                        condition: result => cloudAvailable(result) && !result.cloud_time_profiles_enabled,
+                        click: () => startEnvironmentTimeline('clouds')
+                    };
+                    form._environment_cloud_timeline = Object.assign(
+                        getEnvironmentInlineTimelineConfig('clouds'), {panel_category_visible: focusVisible});
+                    form._environment_cloud_time_section = design.enum({
+                        label: 'lightflow_environment.field.cloud_time_section',
+                        value: environmentCloudTimeSection,
+                        options: {
+                            appearance: 'lightflow_environment.option.cloud_time_appearance',
+                            colors: 'lightflow_environment.option.cloud_time_colors',
+                            edges: 'lightflow_environment.option.cloud_time_edges',
+                            lighting: 'lightflow_environment.option.cloud_time_light_only',
+                            fog: 'lightflow_environment.option.cloud_time_fog',
+                            advanced: 'lightflow_environment.option.cloud_time_advanced'
+                        },
+                        panel_category_visible: focusVisible && !essentials,
+                        condition: result => cloudAvailable(result) && result.cloud_time_profiles_enabled
+                    });
+                    for (const key of ENVIRONMENT_CLOUD_TIME_FIELDS) {
+                        const definition = source[key];
+                        if (!definition) continue;
+                        const control = Object.assign({}, definition, {
+                            condition: result => cloudAvailable(result) && result.cloud_time_profiles_enabled,
+                            value: cloudFrame?.appearance?.[key] ?? settings[key]
+                        });
+                        const controlKey = '_environment_cloud_timed_' + key;
+                        form[controlKey] = createEnvironmentPanelControl(key, control,
+                            groupKey, groupOpen, effectiveDefaults || DEFAULT_SETTINGS);
+                        form[controlKey].panel_category_visible = focusVisible &&
+                            (essentials ? ENVIRONMENT_CLOUD_TIME_QUICK.includes(key)
+                                : (ENVIRONMENT_CLOUD_TIME_SECTIONS[environmentCloudTimeSection] || []).includes(key));
+                    }
+                    return;
+                }
                 if (source[entry]) {
                     form[entry] = createEnvironmentPanelControl(entry, source[entry], groupKey, groupOpen, effectiveDefaults || DEFAULT_SETTINGS);
-                    form[entry].panel_category_visible = categoryVisible;
+                    form[entry].panel_category_visible = focusVisible && (
+                        !essentials || quickFields.includes(entry) ||
+                        (ENVIRONMENT_SKY_GRADIENT_KEYS.includes(entry) && entry === environmentPalettePhase)
+                    );
                 }
             });
         });
@@ -8915,7 +9928,14 @@ void main() {
     }
 
     function openSettingsDialog() {
+        const panelGroups = getEnvironmentPanelGroups();
         const formConfig = createDialogForm();
+        if (!isCycleSky()) {
+            const availableFields = new Set(panelGroups.flatMap(group => group.entries));
+            for (const key of Object.keys(formConfig)) {
+                if (key !== 'enabled' && !availableFields.has(key)) delete formConfig[key];
+            }
+        }
         const initialSettings = JSON.parse(JSON.stringify(settings));
         let dialog;
         let previousShadowFrustum = {
@@ -8943,7 +9963,7 @@ void main() {
             }
         };
         const categories = ['sky','atmosphere','lighting'].map(id=>({id, label:`lightflow_environment.panel.category_${id}`, entries:[]}));
-        for (const group of ENVIRONMENT_PANEL_GROUPS) {
+        for (const group of panelGroups) {
             const category = getEnvironmentGroupCategory(group.id);
             categories.find(section=>section.id===category).entries.push(...group.entries.filter(entry=>typeof entry==='string'));
         }
@@ -8951,10 +9971,10 @@ void main() {
         const grouped = {};
         for (const [key,field] of Object.entries(categorized)) {
             if (key.startsWith('environment_section')) continue;
-            const group = ENVIRONMENT_PANEL_GROUPS.find(group=>group.entries.includes(key));
+            const group = panelGroups.find(group=>group.entries.includes(key));
             if (group) {
                 const groupKey = `_task_group_${group.id}`;
-                if (!grouped[groupKey]) grouped[groupKey] = window.LightManagerUI.formDesign.group({label:group.label, label_icon:group.icon, value:group.id==='time', condition:field.condition});
+                if (!grouped[groupKey]) grouped[groupKey] = window.LightManagerUI.formDesign.group({label:group.label, label_icon:group.icon, value:group.id==='time' || (!isCycleSky() && ['sky', 'sun_light'].includes(group.id)), condition:field.condition});
                 const condition = field.condition;
                 field.condition = form => Condition(condition,form) && (form[groupKey]!==false || !!String(form._task_search||'').trim());
             }
@@ -8986,6 +10006,7 @@ void main() {
 
     function installUI() {
         const overridesHostId = Panels?.material_properties ? 'material_properties' : (Panels?.lightflow_scene ? 'lightflow_scene' : '');
+        installEnvironmentInlineTimelineType();
         settingsAction = new Action('lightflow_environment_composer', {
             name: 'lightflow_environment.action.open',
             description: 'lightflow_environment.action.open.desc',
@@ -9030,20 +10051,73 @@ void main() {
                 : Object.keys(result || {});
             if (changedKeys.includes('_environment_category')) {
                 const restoreFocus = environmentPanel.form.form_data._environment_category.node.contains(document.activeElement);
-                environmentPanelCategory = result._environment_category;
-                rebuildEnvironmentPanelForm();
+                if (!selectEnvironmentPanelCategory(result._environment_category)) return;
                 if (restoreFocus) queueMicrotask(() => environmentPanel.form.form_data
                     ._environment_category.button_nodes[environmentPanelCategory]?.focus());
                 return;
             }
-            changedKeys.forEach(key => {
-                if (!key.startsWith(ENVIRONMENT_PANEL_GROUP_PREFIX)) return;
-                const groupId = key.slice(ENVIRONMENT_PANEL_GROUP_PREFIX.length);
-                if (Object.prototype.hasOwnProperty.call(environmentPanelGroupsOpen, groupId)) {
-                    environmentPanelGroupsOpen[groupId] = result?.[key] !== false;
+            const focusKey = `_environment_focus_${environmentPanelCategory}`;
+            if (changedKeys.includes(focusKey)) {
+                const focusControl = environmentPanel.form.form_data[focusKey];
+                const restoreFocus = focusControl.node.contains(document.activeElement);
+                if (!selectEnvironmentPanelFocus(result[focusKey])) return;
+                if (restoreFocus) queueMicrotask(() => environmentPanel.form.form_data[focusKey]
+                    ?.button_nodes[environmentPanelFocus[environmentPanelCategory]]?.focus());
+                return;
+            }
+            if (changedKeys.includes('_environment_detail')) {
+                const restoreFocus = environmentPanel.form.form_data._environment_detail.node.contains(document.activeElement);
+                if (!selectEnvironmentPanelDetail(result._environment_detail ? 'all' : 'essentials')) return;
+                if (restoreFocus) queueMicrotask(() => environmentPanel.form.form_data
+                    ._environment_detail.node?.focus({ preventScroll: true }));
+                return;
+            }
+            if (changedKeys.includes('_environment_palette_phase')) {
+                if (!ENVIRONMENT_SKY_GRADIENT_KEYS.includes(result._environment_palette_phase)) return;
+                environmentPalettePhase = result._environment_palette_phase;
+                updateEnvironmentPanelNavigation();
+                return;
+            }
+            if (changedKeys.includes('_environment_cloud_time_section')) {
+                if (!Object.prototype.hasOwnProperty.call(ENVIRONMENT_CLOUD_TIME_SECTIONS, result._environment_cloud_time_section)) return;
+                environmentCloudTimeSection = result._environment_cloud_time_section;
+                updateEnvironmentPanelNavigation();
+                return;
+            }
+            if (changedKeys.includes('_environment_sky_timed_gradient')) {
+                const frame = getEnvironmentSelectedTimelineFrame('sky');
+                if (!frame || !result._environment_sky_timed_gradient) return;
+                const frames = cloneEnvironmentData(settings.sky_time_gradients);
+                const target = frames.find(item => item.id === frame.id);
+                if (!target) return;
+                target.gradient = cloneEnvironmentData(result._environment_sky_timed_gradient);
+                applySettings({sky_time_gradients: frames}, {
+                    cause: 'environment_timeline_gradient', forceShadow: false, syncPanel: false
+                });
+                return;
+            }
+            const cloudTimelineKeys = changedKeys.filter(key =>
+                key.startsWith('_environment_cloud_timed_') && result[key] !== undefined);
+            if (cloudTimelineKeys.length) {
+                const selected = getEnvironmentSelectedTimelineFrame('clouds');
+                if (!selected) return;
+                const frames = cloneEnvironmentData(settings.cloud_time_profiles);
+                const frame = frames.find(item => item.id === selected.id);
+                if (!frame) return;
+                for (const controlKey of cloudTimelineKeys) {
+                    const key = controlKey.slice('_environment_cloud_timed_'.length);
+                    if (!ENVIRONMENT_CLOUD_TIME_FIELDS.includes(key)) continue;
+                    frame.appearance[key] = CLOUD_TIME_COLOR_FIELDS.includes(key)
+                        ? normalizeHex(result[controlKey], frame.appearance[key])
+                        : clamp(finite(result[controlKey], frame.appearance[key]), ...CLOUD_TIME_NUMERIC_FIELDS[key]);
                 }
-            });
-
+                frame.appearance.cloud_fog_end = Math.max(frame.appearance.cloud_fog_end,
+                    frame.appearance.cloud_fog_start + 0.01);
+                applySettings({cloud_time_profiles: frames}, {
+                    cause: 'environment_timeline_cloud', forceShadow: false, syncPanel: false
+                });
+                return;
+            }
             const settingKeys = changedKeys.filter(key => Object.prototype.hasOwnProperty.call(DEFAULT_SETTINGS, key));
             if (!settingKeys.length) return;
             const panelResult = {};
@@ -9051,16 +10125,21 @@ void main() {
                 if (result && Object.prototype.hasOwnProperty.call(result, key)) panelResult[key] = result[key];
             });
             applySettings(panelResult, { cause: 'environment_panel', forceShadow: false, syncPanel: false });
-            if (settingKeys.includes('palette_mode')) rebuildEnvironmentPanelForm();
+            if (settingKeys.some(key => [
+                'palette_mode', 'sky_time_gradients_enabled', 'cloud_time_profiles_enabled',
+                'clouds_enabled', 'dimension'
+            ].includes(key))) updateEnvironmentPanelNavigation();
         });
         deletables.push(environmentPanelListener);
         window.LightManagerUI.applyFormGroups(environmentPanel.form, [
             {
-                elements: ['_environment_preset_identity', '_environment_region', '_environment_preset_menu'],
+                elements: ['_environment_preset_identity', '_environment_region',
+                    '_environment_edit_copy', '_environment_preset_menu'],
                 gap: '2px',
                 flex: {
                     _environment_preset_identity: '1 1 auto',
                     _environment_region: '0 0 auto',
+                    _environment_edit_copy: '0 0 auto',
                     _environment_preset_menu: '0 0 auto'
                 }
             }
@@ -9094,6 +10173,40 @@ void main() {
             'lightflow_environment.plugin.title': 'Lightflow Environment',
             'lightflow_environment.panel.title': 'ENVIRONMENT',
             'lightflow_environment.panel.disabled_hint': 'Enable Render Environment to edit.',
+            'lightflow_environment.panel.search_all': 'Search all sections',
+            'lightflow_environment.panel.focus_hint': 'Choose what you want to edit; controls appear directly below',
+            'lightflow_environment.focus.time': 'Time',
+            'lightflow_environment.focus.colors': 'Colors',
+            'lightflow_environment.focus.celestial': 'Celestials',
+            'lightflow_environment.focus.clouds': 'Clouds',
+            'lightflow_environment.group.cloud_structure': 'Type & shape',
+            'lightflow_environment.focus.appearance': 'Style',
+            'lightflow_environment.focus.distance': 'Distance',
+            'lightflow_environment.focus.sources': 'Lights',
+            'lightflow_environment.focus.bloom': 'Bloom',
+            'lightflow_environment.focus.shadows': 'Shadows',
+            'lightflow_environment.panel.detail_hint': 'Essential or complete controls for this task',
+            'lightflow_environment.panel.advanced': 'Advanced',
+            'lightflow_environment.panel.gradient_phase_hint': 'Gradient to edit',
+            'lightflow_environment.panel.preset_native': 'Original preset · protected',
+            'lightflow_environment.panel.preset_editable': 'Editable sky copy',
+            'lightflow_environment.panel.copy_hint': 'Create a separate editable copy of this built-in sky preset',
+            'lightflow_environment.panel.sky_timeline_start': 'Use colors over time',
+            'lightflow_environment.panel.cloud_timeline_start': 'Use cloud profiles over time',
+            'lightflow_environment.panel.timeline_preview_time': 'Show this moment in the scene (changes scene time)',
+            'lightflow_environment.panel.timeline_remove_title': 'Remove timeline moment',
+            'lightflow_environment.panel.timeline_remove_confirm': 'Remove the selected moment? This can be undone.',
+            'lightflow_environment.panel.timeline_remove_button': 'Remove',
+            'lightflow_environment.panel.timeline_selected': 'Selected · ticks',
+            'lightflow_environment.panel.timeline_new': 'Add at · ticks',
+            'lightflow_environment.panel.timeline_moments': 'Sky and cloud moments. Use arrow keys to select a moment.',
+            'lightflow_environment.panel.timeline_coverage': 'Cloud coverage',
+            'lightflow_environment.gradient.dawn_short': 'Dawn',
+            'lightflow_environment.gradient.dusk_short': 'Dusk',
+            'lightflow_environment.panel.essentials': 'Essentials',
+            'lightflow_environment.panel.essentials_hint': 'Show everyday controls for the selected task',
+            'lightflow_environment.panel.all_settings': 'Complete',
+            'lightflow_environment.panel.all_settings_hint': 'Show all controls for the selected task; search finds everything',
         'lightflow_environment.panel.category_sky': 'Sky',
         'lightflow_environment.field.frame_clock': 'Selected time',
         'lightflow_environment.preview.coverage': 'Coverage',
@@ -9105,8 +10218,23 @@ void main() {
         'lightflow_environment.group.ambient': 'Ambient light',
         'lightflow_environment.info.timeline_preview': 'Preview at the selected time. Closing this editor restores the scene clock; changes blend smoothly between moments.',
         'lightflow_environment.group.sun': 'Sun',
+        'lightflow_environment.group.sun_light': 'Sunlight',
+        'lightflow_environment.group.moon_light': 'Moonlight',
         'lightflow_environment.group.appearance': 'Appearance',
         'lightflow_environment.group.sun_glow': 'Glow & lens flare',
+            'lightflow_environment.subsection.sky_palette': 'Sky palette',
+            'lightflow_environment.subsection.fog_range': 'Fog range',
+            'lightflow_environment.subsection.fog_gradient': 'Fog color transition',
+            'lightflow_environment.subsection.sun_lighting': 'Sunlight & direction',
+            'lightflow_environment.subsection.cloud_source': 'Cloud type & source',
+            'lightflow_environment.subsection.cloud_shape': 'Cloud shape & coverage',
+            'lightflow_environment.subsection.cloud_fog': 'Cloud fog & depth',
+            'lightflow_environment.subsection.bloom_shape': 'Bloom shape',
+            'lightflow_environment.subsection.bloom_sources': 'Material glow',
+            'lightflow_environment.subsection.bloom_sky': 'Sky glow',
+            'lightflow_environment.subsection.shadow_region': 'Shadow coverage',
+            'lightflow_environment.subsection.shadow_quality': 'Quality & softness',
+            'lightflow_environment.subsection.shadow_pixel': 'Pixel art shadows',
         'lightflow_environment.group.moon': 'Moon',
         'lightflow_environment.group.cloud_motion': 'Movement',
         'lightflow_environment.group.cloud_palette': 'Color & contrast',
@@ -9134,7 +10262,6 @@ void main() {
             'lightflow_environment.dialog.gradient_title': 'Sky Gradient Editor',
             'lightflow_environment.dialog.create_preset': 'New Sky Preset',
             'lightflow_environment.dialog.rename_preset': 'Rename Sky Preset',
-            'lightflow_environment.dialog.change_preset_icon': 'Change Sky Preset Icon',
             'lightflow_environment.dialog.change_base_sky_model': 'Change Base Sky Model',
             'lightflow_environment.action.edit_gradients': 'Edit sky gradients…',
             'lightflow_environment.action.edit_gradients.desc': 'Edit separate day, dawn, sunset, and night sky gradients',
@@ -9188,10 +10315,30 @@ void main() {
             'lightflow_environment.option.cycle_reference': 'Reference cycle',
             'lightflow_environment.option.cycle_legacy': 'Legacy three-phase blend',
             'lightflow_environment.field.base_sky_model': 'Base Sky Model',
+            'lightflow_environment.field.sky_type': 'Sky Type',
+            'lightflow_environment.sky_type.cycle': 'Day/Night Cycle',
+            'lightflow_environment.sky_type.cubemap': 'Cubemap',
+            'lightflow_environment.sky_type.solid': 'Solid Color',
+            'lightflow_environment.field.backdrop_color': 'Background Color',
+            'lightflow_environment.field.cubemap_fallback': 'Fallback Color',
+            'lightflow_environment.field.show_celestials': 'Show Sun and Moon',
+            'lightflow_environment.field.light_elevation': 'Light Elevation',
+            'lightflow_environment.field.light_enabled': 'Directional Light',
+            'lightflow_environment.field.light_intensity': 'Light Intensity',
+            'lightflow_environment.field.light_color': 'Light Color',
+            'lightflow_environment.field.cubemap_yaw': 'Cubemap Rotation',
+            'lightflow_environment.info.cubemap_faces': 'Use six square project textures of the same size.',
+            'lightflow_environment.field.cubemap_px': 'Right (+X)',
+            'lightflow_environment.field.cubemap_nx': 'Left (−X)',
+            'lightflow_environment.field.cubemap_py': 'Top (+Y)',
+            'lightflow_environment.field.cubemap_ny': 'Bottom (−Y)',
+            'lightflow_environment.field.cubemap_pz': 'Front (+Z)',
+            'lightflow_environment.field.cubemap_nz': 'Back (−Z)',
             'lightflow_environment.field.preset_name': 'Preset Name',
             'lightflow_environment.field.preset_icon': 'Preset Icon',
             'lightflow_environment.field.preset_color': 'Marker Color',
             'lightflow_environment.field.enabled': 'Render Environment',
+            'lightflow_environment.action.sun_region': 'Edit sun shadow region',
             'lightflow_environment.field.time': 'Minecraft Time',
             'lightflow_environment.field.animate': 'Animate Day Cycle',
             'lightflow_environment.field.day_length': 'Day Cycle Duration (s)',
@@ -9524,6 +10671,8 @@ void main() {
         'lightflow_environment.group.ambient': 'Luz ambiental',
         'lightflow_environment.info.timeline_preview': 'Vista previa a la hora seleccionada. Al cerrar se restaura el reloj de la escena; los cambios se mezclan suavemente entre momentos.',
         'lightflow_environment.group.sun': 'Sol',
+        'lightflow_environment.group.sun_light': 'Luz del sol',
+        'lightflow_environment.group.moon_light': 'Luz de la luna',
         'lightflow_environment.group.appearance': 'Aspecto',
         'lightflow_environment.group.sun_glow': 'Resplandor y destellos',
         'lightflow_environment.group.moon': 'Luna',
@@ -9531,8 +10680,55 @@ void main() {
         'lightflow_environment.group.cloud_palette': 'Color y contraste',
         'lightflow_environment.group.cloud_lighting': 'Luz y volumen',
         'lightflow_environment.group.cloud_detail': 'Bordes y bisel',
+        'lightflow_environment.subsection.sky_palette': 'Paleta del cielo',
+        'lightflow_environment.subsection.fog_range': 'Distancia de niebla',
+        'lightflow_environment.subsection.fog_gradient': 'Transición de color de niebla',
+        'lightflow_environment.subsection.sun_lighting': 'Luz solar y dirección',
+        'lightflow_environment.subsection.cloud_source': 'Tipo y origen de nubes',
+        'lightflow_environment.subsection.cloud_shape': 'Forma y cobertura de nubes',
+        'lightflow_environment.subsection.cloud_fog': 'Niebla y profundidad de nubes',
+        'lightflow_environment.subsection.bloom_shape': 'Forma del Bloom',
+        'lightflow_environment.subsection.bloom_sources': 'Brillo de materiales',
+        'lightflow_environment.subsection.bloom_sky': 'Resplandor del cielo',
+        'lightflow_environment.subsection.shadow_region': 'Cobertura de sombras',
+        'lightflow_environment.subsection.shadow_quality': 'Calidad y suavidad',
+        'lightflow_environment.subsection.shadow_pixel': 'Sombras pixeladas',
         'lightflow_environment.panel.category_atmosphere': 'Atmósfera',
         'lightflow_environment.panel.category_lighting': 'Luz',
+        'lightflow_environment.panel.search_all': 'Buscar en todas las secciones',
+        'lightflow_environment.panel.focus_hint': 'Elige lo que quieres editar; los controles aparecen directamente debajo',
+        'lightflow_environment.focus.time': 'Hora',
+        'lightflow_environment.focus.colors': 'Colores',
+        'lightflow_environment.focus.celestial': 'Astros',
+        'lightflow_environment.focus.clouds': 'Nubes',
+        'lightflow_environment.group.cloud_structure': 'Tipo y forma',
+        'lightflow_environment.focus.appearance': 'Aspecto',
+        'lightflow_environment.focus.distance': 'Niebla',
+        'lightflow_environment.focus.sources': 'Luces',
+        'lightflow_environment.focus.bloom': 'Bloom',
+        'lightflow_environment.focus.shadows': 'Sombras',
+        'lightflow_environment.panel.detail_hint': 'Controles esenciales o completos para esta tarea',
+        'lightflow_environment.panel.advanced': 'Avanzado',
+        'lightflow_environment.panel.gradient_phase_hint': 'Gradiente que deseas editar',
+        'lightflow_environment.panel.preset_native': 'Preset original · protegido',
+        'lightflow_environment.panel.preset_editable': 'Copia editable del cielo',
+        'lightflow_environment.panel.copy_hint': 'Crear una copia editable independiente de este preset de cielo original',
+        'lightflow_environment.panel.sky_timeline_start': 'Usar colores según la hora',
+        'lightflow_environment.panel.cloud_timeline_start': 'Usar perfiles de nubes por hora',
+        'lightflow_environment.panel.timeline_preview_time': 'Mostrar este momento en la escena (cambia la hora de la escena)',
+        'lightflow_environment.panel.timeline_remove_title': 'Eliminar momento',
+        'lightflow_environment.panel.timeline_remove_confirm': '¿Eliminar el momento seleccionado? Puedes deshacer el cambio.',
+        'lightflow_environment.panel.timeline_remove_button': 'Eliminar',
+        'lightflow_environment.panel.timeline_selected': 'Seleccionado · ticks',
+        'lightflow_environment.panel.timeline_new': 'Añadir en · ticks',
+        'lightflow_environment.panel.timeline_moments': 'Momentos del cielo y las nubes. Usa las flechas para elegir un momento.',
+        'lightflow_environment.panel.timeline_coverage': 'Cobertura de nubes',
+        'lightflow_environment.gradient.dawn_short': 'Alba',
+        'lightflow_environment.gradient.dusk_short': 'Ocaso',
+        'lightflow_environment.panel.essentials': 'Esenciales',
+        'lightflow_environment.panel.essentials_hint': 'Mostrar los controles cotidianos de la tarea elegida',
+        'lightflow_environment.panel.all_settings': 'Completo',
+        'lightflow_environment.panel.all_settings_hint': 'Mostrar todos los ajustes de la tarea; la búsqueda encuentra cualquier control',
             'lightflow_environment.info.environment_disabled': 'Activa Renderizar entorno para editar este control.',
             'lightflow_environment.action.open': 'Compositor de entorno...',
             'lightflow_environment.action.open.desc': 'Edita el cielo, la hora, el sol, la luna, las nubes, la luz ambiental y las sombras de Minecraft.',
@@ -9554,7 +10750,6 @@ void main() {
             'lightflow_environment.dialog.gradient_title': 'Editor de gradientes del cielo',
             'lightflow_environment.dialog.create_preset': 'Nuevo preset de cielo',
             'lightflow_environment.dialog.rename_preset': 'Renombrar preset de cielo',
-            'lightflow_environment.dialog.change_preset_icon': 'Cambiar icono del preset',
             'lightflow_environment.dialog.change_base_sky_model': 'Cambiar modelo de cielo base',
             'lightflow_environment.action.edit_gradients': 'Editar degradados del cielo…',
             'lightflow_environment.action.edit_gradients.desc': 'Edita los degradados del cielo de día, amanecer, atardecer y noche.',
@@ -9608,10 +10803,30 @@ void main() {
             'lightflow_environment.option.cycle_reference': 'Ciclo de referencia',
             'lightflow_environment.option.cycle_legacy': 'Mezcla anterior de tres fases',
             'lightflow_environment.field.base_sky_model': 'Modelo de cielo base',
+            'lightflow_environment.field.sky_type': 'Tipo de cielo',
+            'lightflow_environment.sky_type.cycle': 'Ciclo día y noche',
+            'lightflow_environment.sky_type.cubemap': 'Cubemap',
+            'lightflow_environment.sky_type.solid': 'Color sólido',
+            'lightflow_environment.field.backdrop_color': 'Color de fondo',
+            'lightflow_environment.field.cubemap_fallback': 'Color de respaldo',
+            'lightflow_environment.field.show_celestials': 'Mostrar sol y luna',
+            'lightflow_environment.field.light_elevation': 'Elevación de la luz',
+            'lightflow_environment.field.light_enabled': 'Luz direccional',
+            'lightflow_environment.field.light_intensity': 'Intensidad de la luz',
+            'lightflow_environment.field.light_color': 'Color de la luz',
+            'lightflow_environment.field.cubemap_yaw': 'Giro del cubemap',
+            'lightflow_environment.info.cubemap_faces': 'Usa seis texturas cuadradas del proyecto del mismo tamaño.',
+            'lightflow_environment.field.cubemap_px': 'Derecha (+X)',
+            'lightflow_environment.field.cubemap_nx': 'Izquierda (−X)',
+            'lightflow_environment.field.cubemap_py': 'Arriba (+Y)',
+            'lightflow_environment.field.cubemap_ny': 'Abajo (−Y)',
+            'lightflow_environment.field.cubemap_pz': 'Frente (+Z)',
+            'lightflow_environment.field.cubemap_nz': 'Atrás (−Z)',
             'lightflow_environment.field.preset_name': 'Nombre del preset',
             'lightflow_environment.field.preset_icon': 'Icono del preset',
             'lightflow_environment.field.preset_color': 'Color del marcador',
             'lightflow_environment.field.enabled': 'Renderizar entorno',
+            'lightflow_environment.action.sun_region': 'Editar región de sombras del sol',
             'lightflow_environment.field.time': 'Hora de Minecraft',
             'lightflow_environment.field.animate': 'Animar ciclo del día',
             'lightflow_environment.field.day_length': 'Duración del ciclo (s)',
@@ -9951,6 +11166,8 @@ void main() {
         if (environmentProject === nextProject) return false;
         cancelEnvironmentUndo(false);
         clearProjectTextureCache();
+        clearBackdropCube();
+        if (backdropMesh) backdropMesh.visible = false;
         environmentRevision += 1;
         environmentProject = nextProject;
         if (typeof previewRenderFrame === 'number' && typeof cancelAnimationFrame === 'function') {
@@ -9975,6 +11192,8 @@ void main() {
             customSkyPresets = {};
             activeSkyPresetId = 'vanilla';
             if (skyMesh) skyMesh.visible = false;
+            if (backdropMesh) backdropMesh.visible = false;
+            if (lensFlareMesh) lensFlareMesh.visible = false;
             if (starMesh) starMesh.visible = false;
             if (cloudMesh) cloudMesh.visible = false;
             if (sunLight) {
@@ -10045,8 +11264,8 @@ void main() {
                 ensureSunLightParent();
             }
             const animateTime = !!settings.animate_time;
-            const animateClouds = !!(settings.clouds_enabled && !settings.cloud_paused && Math.abs(settings.cloud_speed) > 0.000001);
-            const animated = settings.enabled && !window.LightManagerStudioRenderSession && (animateTime || animateClouds);
+            const animateClouds = !!(cloudMesh?.visible && !settings.cloud_paused && Math.abs(settings.cloud_speed) > 0.000001);
+            const animated = settings.enabled && isCycleSky() && !window.LightManagerStudioRenderSession && (animateTime || animateClouds);
             if (animated && animateTime) {
                 settings.time = mod(settings.time + deltaSeconds * 24000 / Math.max(settings.day_length_seconds, 1), 24000);
             }
@@ -10069,8 +11288,8 @@ void main() {
                 lastRenderTime = timestamp;
                 if (animateTime) {
                     syncEnvironmentPanel({ timeOnly: true });
-                    updateScene({ forceShadow: false, animation: true });
-                    dispatchChanged('animation');
+                    const state = updateScene({ forceShadow: false, animation: true });
+                    dispatchChanged('animation', state);
                 } else if (cloudMaterial) {
                     cloudMaterial.uniforms.uCloudTime.value = updateCloudDerivedUniforms();
                 }
@@ -10120,6 +11339,11 @@ void main() {
         cloudMesh?.parent?.remove?.(cloudMesh);
         cloudMesh?.geometry?.dispose?.();
         cloudMaterial?.dispose?.();
+        clearBackdropCube();
+        backdropMesh?.parent?.remove(backdropMesh);
+        backdropMesh?.geometry.dispose();
+        backdropMesh?.material.dispose();
+        backdropMesh = null;
         skyMesh?.parent?.remove?.(skyMesh);
         skyMesh?.geometry?.dispose?.();
         skyMaterial?.dispose?.();
@@ -10188,6 +11412,8 @@ void main() {
         dependencies: ['light_manager'],
 
         onload: function loadLightflowEnvironment() {
+            const pluginContext = this;
+            if(this.source==='file')this.new_repository_format=false;
             if (environmentRuntimeLoaded) return;
             if (!environmentDependenciesReady()) {
                 if (!deferredLightManagerInit) {
@@ -10195,7 +11421,7 @@ void main() {
                         if (!environmentDependenciesReady()) return;
                         window.removeEventListener('light_manager_initialized', deferredLightManagerInit);
                         deferredLightManagerInit = null;
-                        loadLightflowEnvironment();
+                        loadLightflowEnvironment.call(pluginContext);
                     };
                     window.addEventListener('light_manager_initialized', deferredLightManagerInit);
                 }
@@ -10214,7 +11440,6 @@ void main() {
             registerProjectProperty();
             registerEnvironmentUndoHooks();
             installUI();
-            createSky();
             createSunLight();
             installSunShadowGizmoInteraction();
 
@@ -10271,6 +11496,9 @@ void main() {
                     cloudOccupancyTextures: cloudOccupancyTextures.size,
                     cloudDistanceTextures: cloudDistanceTextures.size,
                     cloudTraversal: '4x4-conservative-max-dda',
+                    skyType: settings.sky_type,
+                    cubemapStatus: backdropCubeStatus,
+                    cycleSkyAllocated: !!skyMesh,
                     cloudRuntime: { ...cloudRuntimeStats },
                     settingsPerformance: {
                         ...settingsPerformance,
@@ -10317,7 +11545,11 @@ void main() {
                 }
                 pendingProjectTextureChanges = false;
                 clearProjectTextureCache();
-                rebuildEnvironmentPanelForm();
+                clearBackdropCube();
+                if (isCycleSky()) rebuildEnvironmentPanelForm();
+                else for (const face of CUBEMAP_FACES) {
+                    environmentPanel?.form?.form_data?.['cubemap_' + face]?.updatePreview?.();
+                }
                 updateScene({ forceShadow: false });
                 requestPreviewRender();
             };
@@ -10328,7 +11560,16 @@ void main() {
                 void syncManagedVanillaResources();
             });
             deletables.push(packsListener);
-            const viewListener = Blockbench.on('update_view', () => updateSunShadowGizmo());
+            const viewListener = Blockbench.on('update_view', updateSunShadowGizmo);
+            const gizmoContextListeners = [
+                'lightflow_left_section_changed', 'select_mode', 'update_interface'
+            ].map(event =>
+                Blockbench.on(event, () => {
+                    const wasVisible = sunShadowGizmo?.root.visible;
+                    updateSunShadowGizmo();
+                    if (sunShadowGizmo?.root.visible !== wasVisible) requestPreviewRender();
+                })
+            );
             deletables.push(Blockbench.on('select_preview_scene', () => {
                 if (settings.enabled && typeof PreviewScene !== 'undefined') PreviewScene.active?.unselect?.();
             }));
@@ -10353,7 +11594,7 @@ void main() {
                 updateScene({ forceShadow: true });
             };
             window.addEventListener('light_manager_initialized', lightManagerListener);
-            deletables.push(...textureListeners, viewListener, studioRenderPreTileListener, studioRenderCompleteListener, {
+            deletables.push(...textureListeners, viewListener, ...gizmoContextListeners, studioRenderPreTileListener, studioRenderCompleteListener, {
                 delete() {
                     window.removeEventListener('light_manager_initialized', lightManagerListener);
                     window.removeEventListener('lightflow_gizmo_visibility_changed', gizmoVisibilityListener);

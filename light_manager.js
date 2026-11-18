@@ -6,6 +6,390 @@
  * @property {number} [quality=1.0] - Image quality for lossy formats (0.0 to 1.0).
  */
 
+// LIGHTFLOW_ANIMATION_JSON_START
+// Human-readable transport; native animation objects remain the playback authority.
+const LIGHTFLOW_ANIMATION_SECTIONS = {
+    bones: ['group', 'bone'], lights: ['light', 'light'], cameras: ['lightflow_camera', 'lightflow_camera_animation'],
+    scenes: ['lightflow_scene_instance', 'lightflow_scene_instance_animation'],
+    linked_bones: ['lightflow_pose_group', 'lightflow_scene_pose_animation'],
+    particles: ['lightflow_particle_effect', 'lightflow_particle_animation']
+};
+function lightflowAnimationNamedPath(node, root) {
+    const path = [];
+    for (let parent = node; parent && typeof parent === 'object' && parent !== root; parent = parent.parent) {
+        path.unshift(String(parent.name).replace(/~/g, '~0').replace(/\//g, '~1'));
+    }
+    return path.join('/');
+}
+function lightflowAnimationNamedTarget(node, nodes, root) {
+    const name = lightflowAnimationNamedPath({name: node.name});
+    if (nodes.filter(other => other.type === node.type && other.name === node.name).length === 1) return name;
+    const path = lightflowAnimationNamedPath(node, root);
+    if (nodes.filter(other => other.type === node.type && lightflowAnimationNamedPath(other, root) === path).length !== 1) {
+        throw new Error(tl('light_manager.animation_json.missing_target') + ': ' + path);
+    }
+    return path;
+}
+function resolveLightflowAnimationNamedTarget(reference, nodes, root) {
+    const matches = nodes.filter(node => lightflowAnimationNamedPath(node, reference.includes('/') ? root : node.parent) === reference);
+    if (matches.length !== 1) throw new Error(tl('light_manager.animation_json.missing_target') + ': ' + reference);
+    return matches[0];
+}
+function lightflowAnimationFrameValue(key, node, nodes) {
+    const number = value => typeof value === 'string' && value.trim() !== '' && Number.isFinite(Number(value)) && String(Number(value)) === value ? Number(value) : value;
+    const point = data => {
+        const fields = Object.keys(data);
+        if (!fields.every(field => ['x', 'y', 'z'].includes(field))) return data;
+        if (key.channel === 'intensity' || (fields.length === 1 && fields[0] === 'x')) return number(data.x);
+        return ['x', 'y', 'z'].map(axis => number(data[axis] ?? 0));
+    };
+    const frame = {};
+    if (key.channel === 'lightflow_pose') {
+        const snapshot = window.LightflowSceneLinks?.core?.normalizePoseSnapshot?.(key.lightflow_pose_snapshot);
+        if (!snapshot) throw new Error(tl('light_manager.animation_json.invalid'));
+        const descendants = [];
+        node.forEachChild(child => { if (child.source_group_id) descendants.push(child); });
+        frame.name = key.lightflow_pose_label || 'Pose'; frame.bones = Object.create(null);
+        for (const [id, transform] of Object.entries(snapshot.groups)) {
+            const bone = descendants.find(child => child.source_group_id === id);
+            if (!bone) throw new Error(tl('light_manager.animation_json.missing_target') + ': ' + id);
+            frame.bones[lightflowAnimationNamedTarget(bone, descendants, node)] = transform;
+        }
+    } else if (key.data_points.length === 2) {
+        frame.pre = point(key.data_points[0]); frame.post = point(key.data_points[1]);
+    } else if (key.data_points.length === 1) frame.post = point(key.data_points[0]);
+    else frame.points = key.data_points.map(point);
+    if (key.interpolation && key.interpolation !== 'linear') frame.lerp_mode = key.interpolation;
+    const bezier = {}, settings = {};
+    for (const [field, value] of Object.entries(key)) {
+        if (['uuid', 'channel', 'time', 'data_points', 'interpolation', 'lightflow_pose_snapshot', 'lightflow_pose_label'].includes(field)) continue;
+        if (field.startsWith('bezier_')) bezier[field.slice(7)] = value;
+        else if (!(field === 'color' && value === -1)) settings[field] = value;
+    }
+    if (Object.keys(bezier).length) frame.bezier = bezier;
+    if (Object.keys(settings).length) frame.settings = settings;
+    return Object.keys(frame).length === 1 && Object.hasOwn(frame, 'post') && (Array.isArray(frame.post) || typeof frame.post !== 'object') ? frame.post : frame;
+}
+function decodeLightflowReadableAnimations(data) {
+    const invalid = () => { throw new Error(tl('light_manager.animation_json.invalid')); };
+    const record = value => value && typeof value === 'object' && !Array.isArray(value);
+    if (!record(data.animations) || !Object.keys(data.animations).length || Object.keys(data.animations).length > 1000) invalid();
+    const animations = [];
+    let count = 0;
+    for (const [name, clip] of Object.entries(data.animations)) {
+        if (!record(clip) || !name.trim() || (clip.settings !== undefined && !record(clip.settings))) invalid();
+        if (clip.loop !== undefined && ![true, false, 'hold_on_last_frame'].includes(clip.loop)) invalid();
+        const animation = {...clip.settings, name, length: clip.animation_length ?? 0, loop: clip.loop === true ? 'loop' : clip.loop === 'hold_on_last_frame' ? 'hold' : 'once', animators: {}};
+        for (const field of ['snapping', 'blend_weight', 'anim_time_update', 'start_delay', 'loop_delay', 'markers']) if (Object.hasOwn(clip, field)) animation[field] = clip[field];
+        animation.override = clip.override_previous_animation ?? false;
+        const targets = {};
+        for (const [section, entries] of Object.entries(clip)) {
+            if (!Object.hasOwn(LIGHTFLOW_ANIMATION_SECTIONS, section) && !['elements', 'effects'].includes(section)) {
+                if (!['animation_length', 'loop', 'settings', 'override_previous_animation', 'snapping', 'blend_weight', 'anim_time_update', 'start_delay', 'loop_delay', 'markers'].includes(section)) invalid();
+                continue;
+            }
+            if (!record(entries)) invalid();
+            for (const [reference, track] of Object.entries(section === 'effects' ? {effects: entries} : entries)) {
+                if (!record(track) || !reference || (track.settings !== undefined && !record(track.settings))) invalid();
+                const [type, animatorType] = LIGHTFLOW_ANIMATION_SECTIONS[section] || [track.node_type, section === 'effects' ? 'effect' : track.animator_type];
+                if (section !== 'effects' && (typeof type !== 'string' || typeof animatorType !== 'string')) invalid();
+                const id = section === 'effects' ? 'effects' : section + ':' + reference;
+                const blueprint = {...track.settings, name: reference, type: animatorType, keyframes: []};
+                if (section !== 'effects') targets[id] = {type, name: reference.split('/').at(-1).replace(/~1/g, '/').replace(/~0/g, '~'), reference,
+                    path: [{name: reference, type}]};
+                for (const [channelName, curve] of Object.entries(track)) {
+                    if (['settings', 'node_type', 'animator_type'].includes(channelName)) continue;
+                    if (!record(curve)) invalid();
+                    const channel = channelName === 'pose' && section === 'scenes' ? 'lightflow_pose' : channelName;
+                    for (const [timecode, frame] of Object.entries(curve)) {
+                        if (!timecode.trim() || !Number.isFinite(Number(timecode))) invalid();
+                        const frames = record(frame) && Object.hasOwn(frame, 'keys') ? frame.keys : [frame];
+                        if (!Array.isArray(frames) || !frames.length) invalid();
+                        for (const value of frames) {
+                            if (++count > 250000) invalid();
+                            const spec = record(value) ? value : {post: value};
+                            if (Object.keys(spec).some(field => !['settings', 'lerp_mode', 'pre', 'post', 'points', 'bezier', 'name', 'bones'].includes(field))) invalid();
+                            if (spec.settings !== undefined && !record(spec.settings)) invalid();
+                            const interpolation = spec.lerp_mode === 'smooth' ? 'catmullrom' : spec.lerp_mode ?? 'linear';
+                            if (!['linear', 'step', 'catmullrom', 'bezier'].includes(interpolation)) invalid();
+                            const key = {...spec.settings, time: Number(timecode), channel, interpolation};
+                            const point = value => {
+                                if (Array.isArray(value)) { if (value.length !== 3 || value.some(v => !['number', 'string'].includes(typeof v) || typeof v === 'number' && !Number.isFinite(v))) invalid(); return {x: value[0], y: value[1], z: value[2]}; }
+                                if (typeof value === 'number' && Number.isFinite(value) || typeof value === 'string') return {x: value, y: 0, z: 0};
+                                if (!record(value)) invalid(); return value;
+                            };
+                            if (channel === 'lightflow_pose') {
+                                if (!record(spec.bones)) invalid();
+                                key.lightflow_pose_snapshot = {version: 1, groups: spec.bones}; key.lightflow_pose_label = spec.name || 'Pose';
+                                key.data_points = [{x: 0, y: 0, z: 0}];
+                            } else if (Object.hasOwn(spec, 'points')) {
+                                if (!Array.isArray(spec.points) || !spec.points.length) invalid(); key.data_points = spec.points.map(point);
+                            } else {
+                                if (!Object.hasOwn(spec, 'post')) invalid();
+                                key.data_points = Object.hasOwn(spec, 'pre') ? [point(spec.pre), point(spec.post)] : [point(spec.post)];
+                            }
+                            if (spec.bezier !== undefined) {
+                                if (!record(spec.bezier) || Object.keys(spec.bezier).some(key => !['linked', 'left_time', 'right_time', 'left_value', 'right_value'].includes(key))) invalid();
+                                for (const [field, value] of Object.entries(spec.bezier)) {
+                                    if (field === 'linked' ? typeof value !== 'boolean' : !Array.isArray(value) || value.length !== 3 || value.some(v => !Number.isFinite(v))) invalid();
+                                    key['bezier_' + field] = value;
+                                }
+                            }
+                            blueprint.keyframes.push(key);
+                        }
+                    }
+                }
+                animation.animators[id] = blueprint;
+            }
+        }
+        if (clip.animation_length === undefined) for (const track of Object.values(animation.animators)) for (const key of track.keyframes) animation.length = Math.max(animation.length, key.time);
+        animations.push({animation, targets});
+    }
+    return {format: 'lightflow_animation', format_version: 1, animations};
+}
+function lightflowAnimationTarget(node) {
+    const path = [];
+    for (let parent = node; parent && typeof parent === 'object'; parent = parent.parent) {
+        path.unshift({name: parent.name, type: parent.type});
+    }
+    return {uuid: node.uuid, name: node.name, type: node.type, path};
+}
+function buildLightflowAnimationJSON(animations, nodes) {
+    const byId = new Map(nodes.map(node => [node.uuid, node]));
+    const result = {format: 'lightflow_animation', format_version: 2, animations: Object.create(null)};
+    for (const animation of animations) {
+        const data = JSON.parse(JSON.stringify(animation.getUndoCopy({absolute_paths: false})));
+        if (!animation.name?.trim() || Object.hasOwn(result.animations, animation.name)) throw new Error(tl('light_manager.animation_json.invalid') + ': ' + animation.name);
+        const clip = {animation_length: data.length};
+        if (data.loop !== 'once') clip.loop = data.loop === 'loop' ? true : 'hold_on_last_frame';
+        if (data.override) clip.override_previous_animation = true;
+        for (const field of ['snapping', 'blend_weight', 'anim_time_update', 'start_delay', 'loop_delay', 'markers']) if (data[field] !== undefined && data[field] !== '') clip[field] = data[field];
+        const settings = {};
+        for (const [field, value] of Object.entries(data)) if (!['name', 'uuid', 'selected', 'path', 'saved', 'saved_name', 'animators', 'length', 'loop', 'override', 'snapping', 'blend_weight', 'anim_time_update', 'start_delay', 'loop_delay', 'markers'].includes(field) && !(field === 'group_name' && value === '' || field === 'scope' && value === 0)) settings[field] = value;
+        if (Object.keys(settings).length) clip.settings = settings;
+        for (const [id, animator] of Object.entries(data.animators || {})) {
+            if (!animator.keyframes?.length && !animator.rotation_global) continue;
+            const node = byId.get(id), track = {};
+            let section = 'effects', reference;
+            if (id !== 'effects') {
+                if (!node) throw new Error(tl('light_manager.animation_json.missing_target') + ': ' + (animator.name || id));
+                section = Object.keys(LIGHTFLOW_ANIMATION_SECTIONS).find(key => LIGHTFLOW_ANIMATION_SECTIONS[key][0] === node.type && LIGHTFLOW_ANIMATION_SECTIONS[key][1] === animator.type) || 'elements';
+                reference = lightflowAnimationNamedTarget(node, nodes);
+                if (section === 'elements') { track.node_type = node.type; track.animator_type = animator.type; }
+            }
+            const settings = {};
+            for (const [field, value] of Object.entries(animator)) if (!['name', 'type', 'keyframes'].includes(field) && !(['rotation_global', 'quaternion_interpolation'].includes(field) && value === false)) settings[field] = value;
+            if (Object.keys(settings).length) track.settings = settings;
+            for (const key of animator.keyframes || []) {
+                const channel = key.channel === 'lightflow_pose' ? 'pose' : key.channel;
+                if (['settings', 'node_type', 'animator_type'].includes(channel)) throw new Error(tl('light_manager.animation_json.unsupported') + ': ' + channel);
+                const curve = track[channel] ||= Object.create(null), time = String(key.time);
+                const value = lightflowAnimationFrameValue(key, node, nodes);
+                if (Object.hasOwn(curve, time)) {
+                    if (!curve[time]?.keys) curve[time] = {keys: [curve[time]]};
+                    curve[time].keys.push(value);
+                } else curve[time] = value;
+            }
+            if (section === 'effects') clip.effects = track;
+            else {
+                const tracks = clip[section] ||= Object.create(null);
+                if (Object.hasOwn(tracks, reference)) throw new Error(tl('light_manager.animation_json.missing_target') + ': ' + reference);
+                tracks[reference] = track;
+            }
+        }
+        result.animations[animation.name] = clip;
+    }
+    return result;
+}
+function stringifyLightflowAnimationJSON(value) {
+    // Keep vectors readable without rounding native times, expressions or Bezier values.
+    const format = (value, depth) => {
+        if (!value || typeof value !== 'object') return JSON.stringify(value);
+        if (Array.isArray(value) && value.every(item => item === null || typeof item !== 'object')) return '[' + value.map(item => JSON.stringify(item)).join(', ') + ']';
+        const pad = '  '.repeat(depth + 1), closing = '  '.repeat(depth);
+        const keys = Object.keys(value);
+        if (keys.every(key => key.trim() !== '' && Number.isFinite(Number(key)))) keys.sort((a, b) => Number(a) - Number(b));
+        const entries = Array.isArray(value) ? value.map(item => format(item, depth + 1))
+            : keys.map(key => JSON.stringify(key) + ': ' + format(value[key], depth + 1));
+        const [open, close] = Array.isArray(value) ? ['[', ']'] : ['{', '}'];
+        return entries.length ? open + '\n' + pad + entries.join(',\n' + pad) + '\n' + closing + close : open + close;
+    };
+    return format(value, 0);
+}
+function parseLightflowAnimationJSON(content) {
+    const invalid = () => { throw new Error(tl('light_manager.animation_json.invalid')); };
+    if (typeof content !== 'string' || content.length > 32 * 1024 * 1024) invalid();
+    let data = JSON.parse(content.replace(/^\uFEFF/, ''), (key, value) => {
+        if (['__proto__', 'prototype', 'constructor'].includes(key)) invalid();
+        return value;
+    });
+    const record = value => value && typeof value === 'object' && !Array.isArray(value);
+    if (!record(data)) invalid();
+    if (data.format === 'lightflow_animation' && data.format_version === 2) data = decodeLightflowReadableAnimations(data);
+    if (!data.format && typeof data.format_version === 'string' && record(data.animations) && Object.keys(data.animations).length &&
+        Object.values(data.animations).every(animation => record(animation) && (!animation.bones || record(animation.bones)))) {
+        return {bedrock: data};
+    }
+    if (data.format !== 'lightflow_animation' || data.format_version !== 1 ||
+        !Array.isArray(data.animations) || !data.animations.length || data.animations.length > 1000) invalid();
+    let count = 0;
+    for (const entry of data.animations) {
+        const animation = entry?.animation;
+        if (!record(animation) || typeof animation.name !== 'string' || !animation.name.trim() ||
+            !Number.isFinite(animation.length) || animation.length < 0 || animation.length > 10000 ||
+            !['once', 'loop', 'hold'].includes(animation.loop) || !record(entry.targets) ||
+            (animation.animators !== undefined && !record(animation.animators))) invalid();
+        for (const [id, animator] of Object.entries(animation.animators || {})) {
+            if (!record(animator) || typeof animator.type !== 'string' || !Array.isArray(animator.keyframes)) invalid();
+            if (id !== 'effects') {
+                const target = entry.targets[id];
+                if (!record(target) || typeof target.type !== 'string' || typeof target.name !== 'string' ||
+                    !Array.isArray(target.path) || !target.path.length || target.path.length > 256 ||
+                    target.path.some(part => !record(part) || typeof part.name !== 'string' || typeof part.type !== 'string')) invalid();
+            }
+            for (const keyframe of animator.keyframes) {
+                if (++count > 250000 || !record(keyframe) || typeof keyframe.channel !== 'string' ||
+                    !Number.isFinite(keyframe.time) || keyframe.time < 0 || keyframe.time > 10000 ||
+                    !Array.isArray(keyframe.data_points) || !keyframe.data_points.length ||
+                    keyframe.data_points.some(point => !record(point))) invalid();
+            }
+        }
+        if (animation.markers !== undefined && (!Array.isArray(animation.markers) || animation.markers.some(marker =>
+            !record(marker) || !Number.isFinite(marker.time) || marker.time < 0))) invalid();
+    }
+    return data;
+}
+function prepareLightflowAnimationImport(entries, nodes) {
+    // Stage every animation before touching the project or its Undo history.
+    return entries.map(entry => {
+        const data = JSON.parse(JSON.stringify(entry.animation));
+        const tracks = data.animators || {};
+        for (const key of ['uuid', 'selected', 'path', 'saved', 'saved_name', 'animators']) delete data[key];
+        const animation = new Animation(data), used = new Set();
+        for (const [id, blueprint] of Object.entries(tracks)) {
+            let animator;
+            if (id === 'effects') {
+                if (blueprint.type !== 'effect') throw new Error(tl('light_manager.animation_json.invalid'));
+                animator = animation.animators.effects = new EffectAnimator(animation);
+            } else {
+                const target = entry.targets[id];
+                const candidates = nodes.filter(node => node.type === target.type && node.constructor.animator);
+                let node = target.reference !== undefined ? resolveLightflowAnimationNamedTarget(target.reference, candidates) : candidates.find(node => node.uuid === target.uuid);
+                if (!node) {
+                    const path = JSON.stringify(target.path);
+                    const matches = candidates.filter(node => JSON.stringify(lightflowAnimationTarget(node).path) === path);
+                    if (matches.length === 1) node = matches[0];
+                    else if (!matches.length) {
+                        const names = candidates.filter(node => node.name === target.name);
+                        if (names.length === 1) node = names[0];
+                    }
+                }
+                if (!node || used.has(node.uuid)) throw new Error(tl('light_manager.animation_json.missing_target') + ': ' + target.path.map(part => part.name).join(' / '));
+                used.add(node.uuid);
+                animator = animation.getBoneAnimator(node);
+            }
+            if (!animator || animator.type !== blueprint.type) throw new Error(tl('light_manager.animation_json.unsupported') + ': ' + blueprint.name);
+            for (const keyframe of blueprint.keyframes) {
+                animator.prepareKeyframeChannel?.(keyframe.channel);
+                if (!Object.hasOwn(animator.channels, keyframe.channel)) throw new Error(tl('light_manager.animation_json.unsupported') + ': ' + keyframe.channel);
+                if (keyframe.channel === 'lightflow_pose' && animator.type === 'lightflow_scene_instance_animation') {
+                    if (entry.targets[id]?.reference !== undefined) {
+                        const root = animator.getGroup(), descendants = [], groups = Object.create(null);
+                        root?.forEachChild(node => { if (node.source_group_id) descendants.push(node); });
+                        for (const [reference, transform] of Object.entries(keyframe.lightflow_pose_snapshot?.groups || {})) {
+                            const bone = resolveLightflowAnimationNamedTarget(reference, descendants, root);
+                            groups[bone.source_group_id] = transform;
+                        }
+                        keyframe.lightflow_pose_snapshot = {version: 1, groups};
+                    }
+                    const snapshot = window.LightflowSceneLinks?.core?.normalizePoseSnapshot?.(keyframe.lightflow_pose_snapshot);
+                    if (!snapshot || !Object.keys(snapshot.groups).length) throw new Error(tl('light_manager.animation_json.invalid'));
+                    const groupIds = new Set();
+                    animator.getGroup()?.forEachChild(node => { if (node.source_group_id) groupIds.add(node.source_group_id); });
+                    for (const id of Object.keys(snapshot.groups)) if (!groupIds.has(id)) {
+                        throw new Error(tl('light_manager.animation_json.missing_target') + ': ' + id);
+                    }
+                }
+            }
+            animator.extend(blueprint);
+            for (const keyframe of blueprint.keyframes) { delete keyframe.uuid; animator.addKeyframe(keyframe); }
+        }
+        return animation;
+    });
+}
+function installLightflowAnimationJSON() {
+    let alive = true, dialog = null;
+    const actions = [], nodes = () => [...Group.all, ...Outliner.elements];
+    const supported = () => alive && !!window.Project && Format.animation_mode;
+    const active = project => supported() && Project === project;
+    const report = error => Blockbench.showMessageBox({title: tl('light_manager.animation_json.title'), message: error.message, icon: 'error'});
+    const choose = (project, title, entries, run) => {
+        dialog?.delete();
+        const form = {help: {type: 'info', text: tl('light_manager.animation_json.help')}};
+        entries.forEach((entry, index) => { form['clip_' + index] = {type: 'checkbox', label: entry.name, value: true}; });
+        const current = new Dialog('lightflow_animation_json', {title, form, onConfirm(values) {
+            if (!active(project)) { current.delete(); return; }
+            const selected = entries.filter((entry, index) => values['clip_' + index]);
+            if (!selected.length) return false;
+            try { run(selected); current.delete(); if (dialog === current) dialog = null; }
+            catch (error) { report(error); return false; }
+        }, onCancel() { current.delete(); if (dialog === current) dialog = null; }});
+        dialog = current; current.show();
+    };
+    const importAction = new Action('lightflow_import_animation_json', {
+        name: tl('light_manager.animation_json.import'), icon: 'fa-file-video', category: 'animation', condition: supported,
+        click() {
+            const project = Project;
+            Blockbench.import({resource_id: 'lightflow_animation', extensions: ['json'], type: tl('light_manager.animation_json.title'), readtype: 'text'}, files => {
+                if (!active(project) || !files?.length) return;
+                try {
+                    const data = parseLightflowAnimationJSON(files[0].content);
+                    const entries = data.bedrock ? Object.keys(data.bedrock.animations).map(name => ({name})) : data.animations.map(entry => ({name: entry.animation.name, entry}));
+                    choose(project, tl('light_manager.animation_json.import'), entries, selected => {
+                        let animations = data.bedrock ? [] : prepareLightflowAnimationImport(selected.map(item => item.entry), nodes());
+                        Undo.initEdit({animations: []});
+                        try {
+                            if (data.bedrock) {
+                                for (const item of selected) for (const name of Object.keys(data.bedrock.animations[item.name].bones || {})) {
+                                    if (Group.all.filter(group => group.name.toLowerCase() === name.toLowerCase()).length !== 1) {
+                                        throw new Error(tl('light_manager.animation_json.missing_target') + ': ' + name);
+                                    }
+                                }
+                                const file = {json: data.bedrock, content: JSON.stringify(data.bedrock), name: files[0].name};
+                                const bedrock = window.AnimationCodec?.codecs?.bedrock;
+                                const names = selected.map(item => item.name);
+                                animations = bedrock ? bedrock.loadFile(file, names) : Animator.loadFile(file, names);
+                                for (const animation of animations) { animation.path = ''; animation.saved = false; }
+                            }
+                            for (const animation of animations) { animation.add(); animation.createUniqueName(); }
+                            Undo.finishEdit('Import animations', {animations});
+                        } catch (error) { Undo.cancelEdit(); throw error; }
+                        animations[0]?.select();
+                    });
+                } catch (error) { report(error); }
+            });
+        }
+    });
+    const exportAction = new Action('lightflow_export_animation_json', {
+        name: tl('light_manager.animation_json.export'), icon: 'movie', category: 'animation',
+        condition: () => supported() && Animation.all.length > 0,
+        click() {
+            const project = Project;
+            choose(project, tl('light_manager.animation_json.export'), Animation.all.map(animation => ({name: animation.name, animation})), selected => {
+                if (selected.some(item => !Animation.all.includes(item.animation))) throw new Error(tl('light_manager.animation_json.changed'));
+                const content = buildLightflowAnimationJSON(selected.map(item => item.animation), nodes());
+                Blockbench.export({resource_id: 'lightflow_animation', type: tl('light_manager.animation_json.title'), extensions: ['json'],
+                    name: (Project.name || 'model').replace(/\.bbmodel$/i, '') + '.lightflow.animation', content: stringifyLightflowAnimationJSON(content)});
+            });
+        }
+    });
+    actions.push(importAction, exportAction);
+    MenuBar.addAction(importAction, 'file.import'); MenuBar.addAction(exportAction, 'file.export');
+    MenuBar.addAction(importAction, 'animation'); MenuBar.addAction(exportAction, 'animation');
+    return {delete() { alive = false; dialog?.delete(); dialog = null; actions.forEach(action => action.delete()); }};
+}
+// LIGHTFLOW_ANIMATION_JSON_END
+
 // LIGHTFLOW_MENU_ORGANIZER_START
 function createLightflowMenuOrganizer({menuBar, items, checkCondition = () => true, text = value => value}) {
     const owners = new Set(['lightflow_hub','light_manager','shader_architect','lightflow_environment','lightflow_atmosphere','studio_render','lightflow_scene_links','lightflow_cinematic','perspective_matcher','visual_shader_graph','bedrock_structure_studio','lightflow_test_lab','lightflow_ui_lab','lightflow_ui_diagnostics']);
@@ -28,7 +412,7 @@ function createLightflowMenuOrganizer({menuBar, items, checkCondition = () => tr
                 group('lf_developer_domains','light_manager.menu.atmosphere_terrain_tests','blur_on',['lightflow_test_lab_run_atmosphere_v2','lightflow_test_lab_run_volume_complete','lightflow_test_lab_run_bedrock_structure']),
                 group('lf_developer_capture','light_manager.menu.capture_diagnostics','bug_report',['lightflow_test_lab_arm_project','lightflow_test_lab_export'])
             ])},
-        {host:'edit',parent:'',node:group('lightflow_menu_create','light_manager.menu.add_light_effect','auto_awesome',[
+        {host:'edit',parent:'',node:group('lightflow_menu_create','light_manager.menu.add_light_effect','lightflow:add_lightbulb',[
             'add_light','add_spot_light','add_directional_light','add_art_key','add_lightflow_volume','add_lightflow_god_ray','lightflow_particle_create','lightflow_scene_link_add'
         ])},
         {host:'edit',parent:'',node:group('lf_edit_terrain','light_manager.menu.terrain','view_in_ar',[
@@ -213,7 +597,7 @@ function mountLightflowFinishedImageViewer(root, media, options = {}) {
     .lf-image-viewer .lf-media-stage:focus-visible{outline:1px dashed var(--color-text);outline-offset:-2px;}
     .lf-image-viewer .lf-media-surface{position:absolute;transform-origin:center;background:var(--color-dark);outline:1px dashed color-mix(in srgb,var(--color-text) 24%,transparent);border-radius:0;box-shadow:none;pointer-events:none;will-change:transform;}
     .lf-image-viewer .lf-media-surface.checker{--lf-checker-a:color-mix(in srgb,var(--color-dark) 94%,var(--color-text));--lf-checker-b:color-mix(in srgb,var(--color-dark) 88%,var(--color-text));background-image:conic-gradient(var(--lf-checker-a) 25%,var(--lf-checker-b) 0 50%,var(--lf-checker-a) 0 75%,var(--lf-checker-b) 0);background-size:28px 28px;}
-    .lf-image-viewer .lf-media-surface img{position:static!important;display:block;max-width:none!important;max-height:none!important;width:100%;height:100%;user-select:none;pointer-events:none;}
+    .lf-image-viewer .lf-media-surface :is(img,canvas){position:static!important;display:block;max-width:none!important;max-height:none!important;width:100%;height:100%;user-select:none;pointer-events:none;}
     .lf-image-viewer .lf-media-toolbar{position:absolute;bottom:16px;left:50%;transform:translateX(-50%);display:flex;align-items:center;justify-content:center;gap:4px;flex-wrap:wrap;width:max-content;max-width:calc(100% - 24px);box-sizing:border-box;padding:5px;background:var(--color-ui);border:1px solid var(--color-border);border-radius:8px;box-shadow:none;z-index:2;}
     .lf-image-viewer .lf-media-toolgroup{display:flex;align-items:center;gap:4px;flex:0 0 auto;}
     .lf-image-viewer .lf-media-toolbar button{display:flex;align-items:center;justify-content:center;flex:0 0 34px;width:34px;height:34px;min-width:34px;min-height:34px;margin:0;padding:0;padding-left:3.75px;border:0;border-radius:8px;background:transparent;color:var(--color-text);box-shadow:none!important;}
@@ -244,10 +628,13 @@ function mountLightflowFinishedImageViewer(root, media, options = {}) {
     let scale=1,x=0,y=0,fitting=true,disposed=false,drag=null,space=false,frame=null,escapedFullscreen=false;
     const listeners=[];const listen=(node,type,fn,opts)=>{node.addEventListener(type,fn,opts);listeners.push(()=>node.removeEventListener(type,fn,opts));};
     const area=()=>{const reserve=options.embedded?0:dock.offsetHeight+32;return{width:Math.max(1,stage.clientWidth-32),height:Math.max(1,stage.clientHeight-reserve-16),cx:stage.clientWidth/2,cy:Math.max(1,stage.clientHeight-reserve)/2};};
-    const loaded=()=>media.naturalWidth>0&&media.naturalHeight>0;
-    const clampPan=()=>{const a=area(),maxX=Math.max(0,(media.naturalWidth*scale-a.width)/2),maxY=Math.max(0,(media.naturalHeight*scale-a.height)/2);x=Math.max(-maxX,Math.min(maxX,x));y=Math.max(-maxY,Math.min(maxY,y));return{maxX,maxY};};
-    const draw=()=>{if(disposed||!loaded())return;const a=area(),bounds=clampPan();surface.style.width=media.naturalWidth+'px';surface.style.height=media.naturalHeight+'px';surface.style.left=a.cx+'px';surface.style.top=a.cy+'px';surface.style.transform=`translate(calc(-50% + ${x}px),calc(-50% + ${y}px)) scale(${scale})`;surface.style.backgroundSize=28/scale+'px '+28/scale+'px';surface.style.outlineWidth=1/scale+'px';status.textContent=(scale*100<10?Number((scale*100).toFixed(1)):Math.round(scale*100))+'%';stage.classList.toggle('can-pan',bounds.maxX>0||bounds.maxY>0);fitButton.setAttribute('aria-pressed',String(fitting));actualButton.setAttribute('aria-pressed',String(!fitting&&Math.abs(scale-1)<.000001));outButton.disabled=scale<=Math.min(.01,fitScale())*1.001;inButton.disabled=scale>=Math.max(32,fitScale())*.999;};
-    const fitScale=()=>{const a=area();return Math.min(a.width/media.naturalWidth,a.height/media.naturalHeight);};
+    const canvas = media.tagName === 'CANVAS';
+    const width = () => canvas ? media.width : media.naturalWidth;
+    const height = () => canvas ? media.height : media.naturalHeight;
+    const loaded = () => width() > 0 && height() > 0;
+    const clampPan=()=>{const a=area(),maxX=Math.max(0,(width()*scale-a.width)/2),maxY=Math.max(0,(height()*scale-a.height)/2);x=Math.max(-maxX,Math.min(maxX,x));y=Math.max(-maxY,Math.min(maxY,y));return{maxX,maxY};};
+    const draw=()=>{if(disposed||!loaded())return;const a=area(),bounds=clampPan();surface.style.width=width()+'px';surface.style.height=height()+'px';surface.style.left=a.cx+'px';surface.style.top=a.cy+'px';surface.style.transform=`translate(calc(-50% + ${x}px),calc(-50% + ${y}px)) scale(${scale})`;surface.style.backgroundSize=28/scale+'px '+28/scale+'px';surface.style.outlineWidth=1/scale+'px';status.textContent=(scale*100<10?Number((scale*100).toFixed(1)):Math.round(scale*100))+'%';stage.classList.toggle('can-pan',bounds.maxX>0||bounds.maxY>0);fitButton.setAttribute('aria-pressed',String(fitting));actualButton.setAttribute('aria-pressed',String(!fitting&&Math.abs(scale-1)<.000001));outButton.disabled=scale<=Math.min(.01,fitScale())*1.001;inButton.disabled=scale>=Math.max(32,fitScale())*.999;};
+    const fitScale=()=>{const a=area();return Math.min(a.width/width(),a.height/height());};
     const fit=()=>{if(!loaded()||disposed)return;scale=fitScale();x=y=0;fitting=true;draw();};
     const setScale=(next,ax=0,ay=0)=>{if(!loaded())return;const bounded=Math.max(Math.min(.01,fitScale()),Math.min(Math.max(32,fitScale()),next)),ratio=bounded/scale;x=ax-(ax-x)*ratio;y=ay-(ay-y)*ratio;scale=bounded;fitting=false;draw();};
     const zoom=(factor,ax=0,ay=0)=>setScale(scale*factor,ax,ay);
@@ -268,7 +655,7 @@ function mountLightflowFinishedImageViewer(root, media, options = {}) {
     const leaveFullscreen=()=>{if(document.fullscreenElement===root)document.exitFullscreen().catch(()=>{});root.classList.remove('lf-media-expanded');syncFullscreen();fullscreenButton.focus();};
     const fullscreenButton=button(lightManagerInlineText('light_manager.inline.fullscreen'),'fullscreen',async()=>{if(isFullscreen()){leaveFullscreen();return;}hideTip();try{if(!root.requestFullscreen)throw Error('Unavailable');await root.requestFullscreen();}catch{if(!disposed)root.classList.add('lf-media-expanded');}if(!disposed)syncFullscreen();});
     listen(document,'fullscreenchange',syncFullscreen);
-    const ready=()=>{if(disposed)return;media.hidden=false;errorMessage.hidden=true;for(const b of [outButton,inButton,fitButton,actualButton,alphaButton])b.disabled=false;options.onMetadata?.({width:media.naturalWidth,height:media.naturalHeight});if(options.embedded&&!fitting)draw();else fit();};listen(media,'load',ready);
+    const ready=()=>{if(disposed)return;media.hidden=false;errorMessage.hidden=true;for(const b of [outButton,inButton,fitButton,actualButton,alphaButton])b.disabled=false;options.onMetadata?.({width:width(),height:height()});if(options.embedded&&!fitting)draw();else fit();};listen(media,'load',ready);
     listen(media,'error',()=>{media.hidden=true;status.textContent='—';errorMessage.textContent=lightManagerInlineText('light_manager.inline.unable_to_display_this_image');errorMessage.hidden=false;for(const b of [outButton,inButton,fitButton,actualButton,alphaButton])b.disabled=true;options.onError?.(lightManagerInlineText('light_manager.inline.unable_to_display_this_image'));});
     const anchor=event=>{const r=stage.getBoundingClientRect(),a=area();return{x:event.clientX-r.left-stage.clientLeft-a.cx,y:event.clientY-r.top-stage.clientTop-a.cy};};
     listen(stage,'wheel',event=>{if(!loaded()||event.deltaY===0||event.target.closest('button'))return;event.preventDefault();event.stopPropagation();stage.focus({preventScroll:true});const a=anchor(event),delta=event.deltaY*(event.deltaMode===1?16:event.deltaMode===2?stage.clientHeight:1);zoom(Math.exp(-Math.max(-240,Math.min(240,delta))*.002),a.x,a.y);},{passive:false});
@@ -288,6 +675,16 @@ function mountLightflowFinishedImageViewer(root, media, options = {}) {
 // Playback owns only finished media; image inspection remains the shared image viewer.
 function mountLightflowPlaybackViewer(root, media, options = {}) {
     const timeline = options.timeline, video = media.tagName === 'VIDEO';
+    const decodedCanvas = !video && timeline.decodeFrame ? document.createElement('canvas') : null;
+    const decodedContext = decodedCanvas?.getContext('2d');
+    if (decodedContext) {
+        decodedCanvas.width = decodedCanvas.height = 0;
+        decodedCanvas.setAttribute('role', 'img');
+        decodedCanvas.setAttribute('aria-label', media.alt);
+        media.removeAttribute('src');
+        media.remove();
+        media = decodedCanvas;
+    }
     const style = document.createElement('style'), stage = document.createElement('div');
     const dock = document.createElement('div'), row = document.createElement('div');
     const transport = document.createElement('div'), tools = document.createElement('div');
@@ -339,6 +736,7 @@ function mountLightflowPlaybackViewer(root, media, options = {}) {
     root.append(style, stage, dock); stage.append(message); dock.append(seek, row); row.append(transport, clock, counter, tools);
     let disposed = false, playing = false, index = 0, rate = 1, loop = true;
     let timer = null, request = 0, objectUrl = '', showing = false, followLatest = true;
+    let playbackStart = 0, playbackFrame = 0, playbackRun = 0;
     let disposeImage = null, videoFrame = null, expandedAnchor = null;
     const leaveExpanded = () => {
         root.classList.remove('lf-playback-expanded');
@@ -387,34 +785,75 @@ function mountLightflowPlaybackViewer(root, media, options = {}) {
         counter.textContent = (total ? index + 1 : 0) + ' / ' + total + ' ' + lightManagerInlineText('light_manager.inline.frames');
         fullscreen.setAttribute('aria-pressed', String(document.fullscreenElement === root || root.classList.contains('lf-playback-expanded')));
     }
-    function stop() { playing = false; clearTimeout(timer); if (video) media.pause(); sync(); }
+    function stop() {
+        if (playing && !video) { playbackRun++; request++; showing = false; }
+        playing = false;
+        clearTimeout(timer);
+        if (video) media.pause();
+        sync();
+    }
     async function show(value) {
         const total = count(); if (disposed || !total) return;
-        index = Math.max(0, Math.min(total - 1, value));
-        if (video) { media.currentTime = index / fps(); sync(); return; }
-        sync();
+        const target = Math.max(0, Math.min(total - 1, value));
+        if (video) { media.currentTime = target / fps(); sync(); return; }
         const token = ++request; showing = true;
         try {
-            const blob = await timeline.getFrame(index); if (disposed || token !== request) return;
-            const url = URL.createObjectURL(blob), old = objectUrl; objectUrl = url; media.src = url;
-            if (old) URL.revokeObjectURL(old); message.hidden = true;
-        } catch (error) { if (!disposed) { stop(); message.hidden = false; message.textContent = lightManagerInlineText('light_manager.inline.cannot_read_frame'); console.warn('[Lightflow viewer]', error); } }
+            if (decodedContext) {
+                const image = await timeline.decodeFrame(target);
+                try {
+                    if (disposed || token !== request) return;
+                    const resized = media.width !== image.displayWidth || media.height !== image.displayHeight;
+                    if (resized) { media.width = image.displayWidth; media.height = image.displayHeight; }
+                    decodedContext.globalCompositeOperation = 'copy';
+                    decodedContext.drawImage(image, 0, 0);
+                    if (resized) media.dispatchEvent(new Event('load'));
+                } finally { image.close(); }
+            } else {
+                const blob = await timeline.getFrame(target);
+                if (disposed || token !== request) return;
+                const url = URL.createObjectURL(blob), old = objectUrl;
+                objectUrl = url; media.src = url;
+                if (old) URL.revokeObjectURL(old);
+            }
+            index = target;
+            message.hidden = true;
+            sync();
+        } catch (error) { if (!disposed && token === request) { stop(); message.hidden = false; message.textContent = lightManagerInlineText('light_manager.inline.cannot_read_frame'); console.warn('[Lightflow viewer]', error); } }
         finally { if (token === request) showing = false; }
     }
-    async function tick() {
-        if (!playing || disposed) return;
-        if (index >= count() - 1 && !loop) { stop(); return; }
-        const started = performance.now(); await show((index + 1) % count());
-        if (playing && !disposed) timer = setTimeout(tick, Math.max(0, 1000 / fps() / rate - (performance.now() - started)));
+    const elapsedFrames = () => (performance.now() - playbackStart) * fps() * rate / 1000;
+    async function tick(run) {
+        if (!playing || disposed || run !== playbackRun) return;
+        const total = count();
+        const frame = Math.floor(playbackFrame + elapsedFrames());
+        const target = loop ? frame % total : Math.min(total - 1, frame);
+        if (!showing && (target !== index || !message.hidden)) await show(target);
+        if (!playing || disposed || run !== playbackRun) return;
+        if (!loop && index === total - 1 && frame >= total) { stop(); return; }
+        const position = playbackFrame + elapsedFrames();
+        const untilNext = (Math.floor(position) + 1 - position) * 1000 / fps() / rate;
+        clearTimeout(timer);
+        timer = setTimeout(() => tick(run), untilNext);
+    }
+    function startPlayback() {
+        playbackFrame = index;
+        playbackStart = performance.now();
+        playing = true;
+        sync();
+        void tick(++playbackRun);
     }
     function toggle() {
         followLatest = false;
         if (video) { if (media.paused) media.play().catch(error => { message.hidden = false; message.textContent = String(error.message); }); else media.pause(); return; }
-        if (playing) stop(); else if (count() > 1) { playing = true; sync(); timer = setTimeout(tick, 1000 / fps() / rate); }
+        if (playing) stop(); else if (count() > 1) startPlayback();
     }
     function step(amount) { followLatest = false; stop(); show(index + amount); }
     listen(seek, 'input', () => { const value = Number(seek.value); followLatest = false; stop(); show(value); });
-    listen(speed, 'change', () => { rate = Number(speed.value); if (video) media.playbackRate = rate; });
+    listen(speed, 'change', () => {
+        if (!video && playing) { playbackFrame += elapsedFrames(); playbackStart = performance.now(); }
+        rate = Number(speed.value);
+        if (video) media.playbackRate = rate;
+    });
     listen(document, 'fullscreenchange', sync);
     listen(root, 'keydown', event => {
         if (event.key === 'Escape' && (document.fullscreenElement === root || root.classList.contains('lf-playback-expanded'))) {
@@ -435,13 +874,15 @@ function mountLightflowPlaybackViewer(root, media, options = {}) {
         if (videoFrame !== null) media.cancelVideoFrameCallback?.(videoFrame);
         if (video) { media.pause(); media.removeAttribute('src'); media.load(); }
         disposeImage?.(); if (objectUrl) URL.revokeObjectURL(objectUrl);
+        if (decodedContext) media.width = media.height = 0;
         if (document.fullscreenElement === root) document.exitFullscreen().catch(() => {});
         leaveExpanded();root.classList.remove('lf-playback-viewer', 'lf-controls'); style.remove(); stage.remove(); dock.remove(); lightflowMediaViewers.delete(dispose);
     };
-    dispose.refresh = () => { sync(); if (!video && count() && !showing && (followLatest || !objectUrl)) show(followLatest ? count() - 1 : index); };
+    dispose.refresh = () => { sync(); if (!video && count() && !showing && (followLatest || !message.hidden)) show(followLatest ? count() - 1 : index); };
     dispose.getState = () => ({index, playing, count: count(), disposed});
-    lightflowMediaViewers.add(dispose); dispose.refresh();
-    if (options.autoplay && !video && count() > 1) { followLatest = false; show(0); playing = true; sync(); timer = setTimeout(tick, 1000 / fps()); }
+    lightflowMediaViewers.add(dispose);
+    if (options.autoplay && !video && count() > 1) { followLatest = false; startPlayback(); }
+    else dispose.refresh();
     return dispose;
 }
 
@@ -541,6 +982,224 @@ function bindLightflowNumberEdit(input, options) {
     });
     input.classList.add('lf-number-input');
     return { core, dispose() { core.dispose(); for (const [type, callback] of listeners) input.removeEventListener(type, callback, !!options.capture); } };
+}
+
+// The same pointer-lock gesture drives every ComboSlider's <> handle and the
+// inline numeric fields. Use relative travel while locked, falling back to
+// ordinary coordinates if Electron/browser policy rejects the lock. Gesture
+// listeners exist only while dragging and never release another control's lock.
+function bindLightflowNumberHandleMouseScrub(handle, options = {}) {
+    let gesture = null, disposed = false;
+    const lockedByUs = () => document.pointerLockElement === handle;
+    const move = event => {
+        if (!gesture) return;
+        const x = Number(event.clientX);
+        const dx = lockedByUs()
+            ? Number(event.movementX) || 0
+            : Number.isFinite(x) ? x - gesture.lastX : 0;
+        if (Number.isFinite(x)) gesture.lastX = x;
+        if (!Number.isFinite(dx)) return;
+        gesture.travel += dx;
+        options.onMove?.(gesture.travel, event);
+        event.preventDefault?.();
+    };
+    const finish = (event, cancelled = false) => {
+        if (!gesture) return;
+        gesture = null;
+        document.removeEventListener('mousemove', move, true);
+        document.removeEventListener('mouseup', up, true);
+        document.removeEventListener('keydown', keydown, true);
+        document.removeEventListener('pointerlockchange', lockChange);
+        window.removeEventListener('blur', blur);
+        if (lockedByUs()) document.exitPointerLock?.();
+        options.onFinish?.(event, cancelled);
+    };
+    // A mouseup generated after exiting Chromium pointer lock can report an
+    // artificial movementX (cursor recentering). The final value is already
+    // driven by mousemove; never treat release as another movement sample.
+    const up = event => finish(event);
+    const blur = event => finish(event, true);
+    const keydown = event => {
+        if (event.key !== 'Escape') return;
+        event.preventDefault();
+        event.stopPropagation();
+        finish(event, true);
+    };
+    const lockChange = () => {
+        if (lockedByUs()) {
+            if (!gesture || disposed) document.exitPointerLock?.();
+            else gesture.locked = true;
+        } else if (gesture?.locked) finish({type:'pointerlockchange'}, true);
+    };
+    const down = event => {
+        if (disposed || gesture || event.button !== 0 || options.disabled?.() ||
+            (document.pointerLockElement && !lockedByUs())) return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (options.onStart?.(event) === false) return;
+        gesture = {lastX:Number(event.clientX) || 0, travel:0, locked:false};
+        document.addEventListener('mousemove', move, true);
+        document.addEventListener('mouseup', up, true);
+        document.addEventListener('keydown', keydown, true);
+        document.addEventListener('pointerlockchange', lockChange);
+        window.addEventListener('blur', blur);
+        if (typeof handle.requestPointerLock === 'function') {
+            try {
+                Promise.resolve(handle.requestPointerLock()).then(() => {
+                    // A very quick click can end before the lock is granted.
+                    if ((disposed || !gesture) && lockedByUs()) document.exitPointerLock?.();
+                }).catch(() => { /* Coordinate fallback remains available. */ });
+            } catch (_) { /* Policy or test environment without pointer lock. */ }
+        }
+    };
+    handle.addEventListener('mousedown', down);
+    return {
+        get dragging() {return !!gesture;},
+        dispose() {
+            if (disposed) return;
+            disposed = true;
+            handle.removeEventListener('mousedown', down);
+            finish({type:'dispose'}, true);
+        }
+    };
+}
+
+// Compact numeric input for inline toolbars. Shares the ComboSlider's
+// number-edit core, text field, drag affordance and keyboard semantics,
+// without pretending a 0–23999-tick value is an ordinary short slider.
+function createLightflowInlineNumberField(options = {}) {
+    const minimum = Number.isFinite(options.min) ? options.min : 0;
+    const maximum = Number.isFinite(options.max) ? options.max : 23999;
+    const step = Number.isFinite(options.step) && options.step > 0 ? options.step : 1;
+    let committed = Number(options.value) || 0;
+    let draft = committed;
+    let disposed = false;
+    const root = document.createElement('div');
+    root.className = 'numeric_input tool disp_text lf-inline-number-control';
+    Object.assign(root.style, {display:'flex', alignItems:'center', position:'relative',
+        flex:'0 0 78px', width:'78px', minWidth:'0', height:'26px', boxSizing:'border-box'});
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.inputMode = 'numeric';
+    input.lang = 'en';
+    input.className = 'dark_bordered focusable_input';
+    input.value = String(committed);
+    input.setAttribute('aria-label', options.label || 'Value');
+    Object.assign(input.style, {width:'100%', minWidth:'0', height:'24px',
+        boxSizing:'border-box', textAlign:'center', paddingRight:'18px', margin:'0'});
+    const handle = document.createElement('div');
+    handle.className = 'tool numeric_input_slider';
+    handle.title = options.dragLabel || options.label || '';
+    handle.setAttribute('aria-hidden', 'true');
+    const glyph = document.createElement('i');
+    glyph.className = 'material-icons';
+    glyph.style.fontSize = '16px';
+    glyph.textContent = 'code';
+    handle.append(glyph);
+    root.append(input, handle);
+    const valid = value => Number.isFinite(value) && value >= minimum && value <= maximum
+        && Math.abs(Math.round(value / step) * step - value) < 1e-8
+        && options.validate?.(value) !== false;
+    const write = value => { draft = value; };
+    const commit = event => {
+        if (!valid(draft)) { draft = committed; input.value = String(committed); return; }
+        if (draft !== committed || event?.key === 'Enter') {
+            committed = draft;
+            options.onCommit?.(committed, event);
+        }
+        input.value = String(committed);
+    };
+    const numberEdit = bindLightflowNumberEdit(input, {
+        read: () => committed, write,
+        disabled: () => disposed || !!options.disabled,
+        onCommit: commit,
+        onCancel: () => {draft = committed; input.value = String(committed);},
+        tearingDown: () => disposed
+    });
+    let dragging = false, pointerId = null;
+    let base = 0, startX = 0;
+    const stopDrag = () => {
+        document.removeEventListener('pointermove', moveDrag, true);
+        document.removeEventListener('pointerup', finishDrag, true);
+        document.removeEventListener('pointercancel', cancelDrag, true);
+        dragging = false;
+        pointerId = null;
+    };
+    const moveDrag = event => {
+        if (!dragging || (pointerId !== null && event.pointerId !== pointerId)) return;
+        const delta = Math.trunc((event.clientX - startX) / (event.shiftKey ? 28 : 8));
+        draft = Math.min(maximum, Math.max(minimum, base + delta * step));
+        input.value = String(draft);
+        event.preventDefault();
+    };
+    const finishDrag = event => {
+        if (!dragging || (pointerId !== null && event.pointerId !== pointerId)) return;
+        moveDrag(event);
+        stopDrag();
+        commit(event);
+    };
+    const cancelDrag = () => {
+        if (!dragging) return;
+        stopDrag();
+        draft = committed;
+        input.value = String(committed);
+    };
+    const mouseDrag = bindLightflowNumberHandleMouseScrub(handle, {
+        disabled: () => disposed || !!options.disabled,
+        onStart: () => {
+            input.blur();
+            if (disposed) return false;
+            base = committed;
+        },
+        onMove: (travel, event) => {
+            const delta = Math.trunc(travel / (event.shiftKey ? 28 : 8));
+            draft = Math.min(maximum, Math.max(minimum, base + delta * step));
+            input.value = String(draft);
+        },
+        onFinish: (event, cancelled) => {
+            if (cancelled) {
+                draft = committed;
+                input.value = String(committed);
+            } else commit(event);
+        }
+    });
+    handle.addEventListener('pointerdown', event => {
+        // Mouse uses the shared pointer-locked scrubber. Keep pen/touch's
+        // pointer path independent, without requesting a cursor lock.
+        if (event.pointerType === 'mouse') return;
+        if (disposed || options.disabled || event.button !== 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        input.blur();
+        if (disposed) return;
+        dragging = true;
+        pointerId = event.pointerId;
+        base = committed;
+        startX = event.clientX;
+        // Match ComboSlider: listen for the duration of the gesture only.
+        // Pointer capture is unreliable inside attached, scrollable Blockbench panels.
+        document.addEventListener('pointermove', moveDrag, true);
+        document.addEventListener('pointerup', finishDrag, true);
+        document.addEventListener('pointercancel', cancelDrag, true);
+    });
+    input.addEventListener('keydown', event => {
+        if (options.disabled || !['ArrowUp', 'ArrowDown'].includes(event.key)) return;
+        event.preventDefault();
+        const amount = step * (event.shiftKey ? 10 : 1);
+        draft = Math.min(maximum, Math.max(minimum, committed + (event.key === 'ArrowUp' ? amount : -amount)));
+        commit(event);
+    });
+    if (options.disabled) {input.disabled = true; root.style.opacity = '.45';}
+    return {
+        node: root, input,
+        getValue: () => committed,
+        setValue(value) {
+            committed = Number(value);
+            draft = committed;
+            input.value = String(committed);
+        },
+        dispose() {if (disposed) return; disposed = true; mouseDrag.dispose(); cancelDrag(); numberEdit.dispose();}
+    };
 }
 
 function mountLightflowNumberEditors(root) {
@@ -1063,10 +1722,13 @@ function refreshLightManagerIconStyles() {
     if (!style) return;
     const rules = [
         '.light_manager_custom_icon{display:inline-flex!important;align-items:center;justify-content:center;width:1em;height:1em;min-width:1em;min-height:1em;flex:0 0 auto;vertical-align:middle!important;line-height:1;font-style:normal;background-origin:border-box;}',
+        '#tab_bar .project_tab>.light_manager_custom_icon{width:22px!important;height:22px!important;min-width:22px!important;min-height:22px!important;}',
         'li[menu_item]>.light_manager_custom_icon,.context_menu li>.light_manager_custom_icon,.menu_item>.light_manager_custom_icon,.select_menu li>.light_manager_custom_icon{width:22px!important;height:21px!important;min-width:22px!important;min-height:21px!important;}',
         '.side_menu_tool .light_manager_custom_icon_svg{width:22px!important;height:22px!important;min-width:22px!important;min-height:22px!important;}',
+        '#start_files .start_screen_left .format_entry .icon_wrapper>.light_manager_custom_icon{width:24px!important;height:24px!important;min-width:24px!important;min-height:24px!important;}',
         '.outliner_object>.light_manager_custom_icon{display:inline-flex!important;align-items:center;justify-content:center;width:20px!important;height:24px!important;min-width:20px!important;min-height:24px!important;line-height:24px!important;vertical-align:middle!important;}',
         '.bar_select.icon_mode .select_option>.light_manager_custom_icon{width:22px!important;height:22px!important;min-width:22px!important;min-height:22px!important;}',
+        '#status_bar .light_manager_custom_icon{width:22px!important;height:22px!important;min-width:22px!important;min-height:22px!important;}',
         '#mode_selector>li>.light_manager_custom_icon{display:inline-flex!important;align-items:center;justify-content:center;width:22px!important;height:22px!important;min-width:22px!important;min-height:22px!important;line-height:22px!important;vertical-align:top!important; margin-top: 2px; }',
         '.preview_menu .preview_view_mode_menu>.light_manager_custom_icon{width:22px!important;height:22px!important;min-width:22px!important;min-height:22px!important;}'
     ];
@@ -1193,11 +1855,53 @@ function installLightManagerIconBridge() {
     lightManagerPatchedGetIconNode.__lightManagerOriginalGetIconNode = previousGetIconNode;
     Blockbench.getIconNode = lightManagerPatchedGetIconNode;
     refreshLightManagerIconStyles();
+    // StartScreen captures the native resolver in Vue data before plugins load.
+    // Its v-html format list does not consult Blockbench.getIconNode again.
+    const startScreenVue = typeof StartScreen !== 'undefined' ? StartScreen.vue : null;
+    if (startScreenVue && typeof startScreenVue.getIconNode === 'function') {
+        const previous = startScreenVue.getIconNode;
+        const patched = function lightManagerStartScreenIcon(icon, color) {
+            if (bridgeState.active) {
+                const resolved = typeof icon === 'function' ? icon() : icon;
+                if (typeof resolved === 'string' && lightManagerCustomIconRegistry.has(resolved)) {
+                    return Blockbench.getIconNode(resolved, color);
+                }
+                return previous.call(this, resolved, color);
+            }
+            return previous.call(this, icon, color);
+        };
+        bridgeState.startScreen = { vue: startScreenVue, previous, patched };
+        startScreenVue.getIconNode = patched;
+    }
+    // The status bar also captures the resolver before plugins are loaded.
+    const statusVue = typeof Interface !== 'undefined' ? Interface.status_bar?.vue : null;
+    if (statusVue && typeof statusVue.getIconNode === 'function') {
+        const previous = statusVue.getIconNode;
+        const patched = function lightManagerStatusIcon(icon, color) {
+            const resolved = typeof icon === 'function' ? icon() : icon;
+            if (bridgeState.active && typeof resolved === 'string' && lightManagerCustomIconRegistry.has(resolved)) {
+                return Blockbench.getIconNode(resolved, color);
+            }
+            return previous.call(this, resolved, color);
+        };
+        bridgeState.statusBar = {vue: statusVue, previous, patched};
+        statusVue.getIconNode = patched;
+        statusVue.$forceUpdate?.();
+    }
     return true;
 }
 
 function restoreLightManagerIconBridge() {
     if (lightManagerIconBridgeState) lightManagerIconBridgeState.active = false;
+    const startScreen = lightManagerIconBridgeState?.startScreen;
+    if (startScreen && startScreen.vue.getIconNode === startScreen.patched) {
+        startScreen.vue.getIconNode = startScreen.previous;
+    }
+    const statusBar = lightManagerIconBridgeState?.statusBar;
+    if (statusBar && statusBar.vue.getIconNode === statusBar.patched) {
+        statusBar.vue.getIconNode = statusBar.previous;
+        statusBar.vue.$forceUpdate?.();
+    }
     if (
         typeof Blockbench !== 'undefined' &&
         lightManagerPatchedGetIconNode &&
@@ -1520,6 +2224,68 @@ function createLightflowLifecycleRuntime() {
         return model;
     };
 
+    const pendingAnimationTracks = new WeakMap();
+    const rememberMissingAnimationTracks = (project, model, late = false) => {
+        if (!model?.animations?.length || !project.animations?.length) return;
+        const elementTypes = new Map((model.elements || []).map(element => [element.uuid, element.type]));
+        const liveElements = new Map(project.elements.map(element => [element.uuid, element]));
+        const animations = new Map(project.animations.map(animation => [animation.uuid, animation]));
+        const pending = [];
+        for (const clip of model.animations) {
+            const animation = animations.get(clip.uuid);
+            if (!animation) continue;
+            for (const [uuid, track] of Object.entries(clip.animators || {})) {
+                if (uuid === 'effects' && track?.type === 'effect') {
+                    const current = animation.animators.effects;
+                    const missing = track.keyframes?.filter(key => typeof key.channel === 'string' &&
+                        /^lightflow_(?:global_var|uniform):/.test(key.channel) &&
+                        !current?.[key.channel]?.some(existing => key.uuid ? existing.uuid === key.uuid : existing.time === key.time));
+                    if (missing?.length) pending.push({animation, uuid, track: {...track, keyframes: missing}});
+                    continue;
+                }
+                const elementType = elementTypes.get(uuid);
+                if (!elementType || !track?.type || track.type === 'bone' || !track.keyframes?.length) continue;
+                const element = liveElements.get(uuid);
+                const ready = element?.type === elementType && element.constructor.animator;
+                if (animation.animators[uuid]?.keyframes?.length || (late && ready)) continue;
+                pending.push({ animation, uuid, elementType, track });
+            }
+        }
+        if (pending.length) pendingAnimationTracks.set(project, pending);
+    };
+
+    const restoreAnimationTracks = project => {
+        const pending = project && pendingAnimationTracks.get(project);
+        if (!pending?.length || project !== window.Project) return;
+        const elements = new Map(project.elements.map(element => [element.uuid, element]));
+        let restored = false;
+        const remaining = pending.filter(({ animation, uuid, elementType, track }) => {
+            if (!project.animations.includes(animation)) return false;
+            if (uuid === 'effects') {
+                const animator = animation.animators.effects ||= new EffectAnimator(animation);
+                if (track.keyframes.some(key => !animator.prepareKeyframeChannel?.(key.channel))) return true;
+                for (const keyframe of track.keyframes) {
+                    if (animator[keyframe.channel].some(key => keyframe.uuid ? key.uuid === keyframe.uuid : key.time === keyframe.time)) continue;
+                    animator.addKeyframe(keyframe, keyframe.uuid);
+                    restored = true;
+                }
+                return false;
+            }
+            if (animation.animators[uuid]?.keyframes?.length) return false;
+            const element = elements.get(uuid);
+            if (element?.type !== elementType || !element.constructor.animator) return true;
+            const animator = animation.getBoneAnimator(element);
+            for (const key of track.keyframes) animator?.prepareKeyframeChannel?.(key.channel);
+            if (!animator || track.keyframes.some(key => !Object.hasOwn(animator.channels, key.channel))) return true;
+            animation.extend({ animators: { [uuid]: track } });
+            restored = true;
+            return false;
+        });
+        if (remaining.length) pendingAnimationTracks.set(project, remaining);
+        else pendingAnimationTracks.delete(project);
+        if (restored && window.Modes?.animate) window.Animator?.preview();
+    };
+
     const preserveLiveElements = (project, types) => {
         if (!project || !Array.isArray(project.elements)) return;
         const model = modelByProject.get(project) || project._lightflowRecoveryModel;
@@ -1552,7 +2318,10 @@ function createLightflowLifecycleRuntime() {
             try {
                 const result = Blockbench.read([path], { errorbox: false }, files => {
                     const model = parseModel(files?.[0]?.content);
-                    if (model) captureModel(project, model);
+                    if (model) {
+                        captureModel(project, model);
+                        rememberMissingAnimationTracks(project, model, true);
+                    }
                     finish(model);
                 });
                 if (result === false) finish(null);
@@ -1588,6 +2357,7 @@ function createLightflowLifecycleRuntime() {
                 generation: runGeneration,
                 isCurrent: () => isCurrent(project, runGeneration)
             });
+            if (isCurrent(project, runGeneration)) restoreAnimationTracks(project);
         } catch (error) {
             console.warn(`[Lightflow] Project hydration failed for ${entry.id}`, error);
         } finally {
@@ -1867,16 +2637,48 @@ function createLightflowLifecycleRuntime() {
         if (project) parsingProjects.add(project);
     });
     if (parsingListener) listeners.push(parsingListener);
-    const parsedListener = window.Codecs?.project?.on?.('parsed', () => {
+    const parsedListener = window.Codecs?.project?.on?.('parsed', ({ model } = {}) => {
         const project = window.Project || activeProject;
         if (project) parsingProjects.delete(project);
         if (project) {
+            rememberMissingAnimationTracks(project, model);
             projectsAwaitingGeometry.add(project);
             geometryQuietFrames = 0;
             scheduleGeometryReadyHydration(project);
         }
     });
     if (parsedListener) listeners.push(parsedListener);
+    const compileListener = window.Codecs?.project?.on?.('compile', ({ model }) => {
+        const pending = window.Project && pendingAnimationTracks.get(window.Project);
+        if (!pending?.length || !model.animations?.length) return;
+        const clips = new Map(model.animations.map(clip => [clip.uuid, clip]));
+        const elements = new Set((model.elements || []).map(element => element.uuid));
+        for (const { animation, uuid, track } of pending) {
+            const clip = clips.get(animation.uuid);
+            if (clip && uuid === 'effects') {
+                const effects = (clip.animators ||= {}).effects;
+                if (!effects) clip.animators.effects = track;
+                else {
+                    const keyframes = effects.keyframes ||= [];
+                    for (const key of track.keyframes) {
+                        if (!keyframes.some(item => key.uuid ? item.uuid === key.uuid : item.channel === key.channel && item.time === key.time)) {
+                            keyframes.push(key);
+                        }
+                    }
+                }
+                continue;
+            }
+            if (!clip || !elements.has(uuid) || clip.animators?.[uuid]?.keyframes?.length) continue;
+            (clip.animators ||= {})[uuid] = track;
+        }
+    });
+    if (compileListener) listeners.push(compileListener);
+    listeners.push(Blockbench.on('register_element_type', () => {
+        const project = window.Project;
+        if (project && pendingAnimationTracks.has(project)) {
+            queueMicrotask(() => { if (!disposed) restoreAnimationTracks(project); });
+        }
+    }));
     listeners.push(Blockbench.on('update_selection', () => {
         const project = window.Project || activeProject;
         if (
@@ -2344,7 +3146,14 @@ function getLightManagerPreviewPointShadowSet(options = {}) {
     const elements = window.LightElement && Array.isArray(LightElement.all)
         ? LightElement.all
         : [];
-    const preview = renderOptions.preview || window.Preview?.selected || window.main_preview || null;
+    // Lights and their shadow maps are shared by every Three preview. Using the
+    // caller's camera here lets an auxiliary/offscreen preview replace the
+    // visible preview's point-shadow selection, only for the next render to
+    // replace it again. That thrashes shadow atlases and program topology.
+    const primaryPreview = window.Preview?.selected?.camera
+        ? window.Preview.selected
+        : (window.main_preview?.camera ? window.main_preview : null);
+    const preview = primaryPreview || renderOptions.preview || null;
     const cameraPosition = preview?.camera?.getWorldPosition && window.THREE
         ? preview.camera.getWorldPosition(LIGHT_MANAGER_PREVIEW_SHADOW_BUDGET_STATE.cameraPosition)
         : preview?.camera?.position || null;
@@ -2355,7 +3164,7 @@ function getLightManagerPreviewPointShadowSet(options = {}) {
         return !!(light && light.shadow);
     }).map(element => {
         const light = window.three_lights[element.uuid];
-        const intensity = Math.max(0, Number(element.render_intensity ?? element.intensity) || 0);
+        const intensity = Math.abs(Number(element.render_intensity ?? element.intensity) || 0);
         let distance = 0;
         if (cameraPosition && light?.getWorldPosition && window.THREE) {
             const position = light.getWorldPosition(
@@ -2407,7 +3216,7 @@ function applyLightManagerPreviewShadowBudget(options = {}, changesOut = null) {
         // Use the same retained-slot policy as the flag synchronizer below.
         // Otherwise an authored on -> off transition flips castShadow false/true
         // on every prepare, repeatedly reporting a repaired light topology.
-        const desiredCastShadow = !budgetSuppressed && (
+        const desiredCastShadow = !!light.shadow && !budgetSuppressed && (
             element.has_shadow !== false || light.userData.lightManagerRetainShadowSlot === true
         );
         if (light.castShadow !== desiredCastShadow) {
@@ -2418,6 +3227,14 @@ function applyLightManagerPreviewShadowBudget(options = {}, changesOut = null) {
             light.shadow.autoUpdate = false;
             if (budgetSuppressed || !requested) {
                 light.shadow.needsUpdate = false;
+                if (budgetSuppressed && light.shadow.map) {
+                    // Only a bounded number of point lights may cast realtime
+                    // shadows. A suppressed light must not keep its old 4x2
+                    // GPU atlas resident indefinitely as the camera moves past
+                    // different light groups. Re-entry already dirties the map
+                    // below, and Three will allocate it at the new resolution.
+                    disposeLightManagerShadowTargets(light.shadow);
+                }
             } else if (!beforeCastShadow && desiredCastShadow) {
                 // Re-entering the realtime budget needs this light's own map once.
                 // Do not dirty unrelated surviving shadow lights.
@@ -2521,6 +3338,19 @@ function rememberLightManagerRendererShadowSettings(renderer) {
         type: renderer.shadowMap.type,
         autoUpdate: renderer.shadowMap.autoUpdate
     });
+}
+
+function forgetLightManagerRendererShadowSettings(renderer) {
+    if (!renderer) return;
+    const listener = LIGHT_MANAGER_SHADOW_STATE.rendererLimitListeners.get(renderer);
+    if (listener) {
+        listener.canvas?.removeEventListener?.('webglcontextrestored', listener.invalidate);
+        LIGHT_MANAGER_SHADOW_STATE.rendererLimitListeners.delete(renderer);
+    }
+    LIGHT_MANAGER_SHADOW_STATE.rendererLimits.delete(renderer);
+    LIGHT_MANAGER_SHADOW_STATE.previousRendererShadowSettings.delete(renderer);
+    LIGHT_MANAGER_SHADOW_STATE.configuredRenderers.delete(renderer);
+    LIGHT_MANAGER_SHADOW_STATE.dirtyRenderers.delete(renderer);
 }
 
 function restoreLightManagerRendererShadowSettings() {
@@ -2939,7 +3769,7 @@ const LightManagerUtils = {
         return {
             light_type: lightType,
             color: this.colorArray(config.color),
-            intensity: this.num(config.intensity, 1, 0, 100000),
+            intensity: this.num(config.intensity, 1, -100000, 100000),
             key_light_enabled: this.bool(config.key_light_enabled, true) && keyLightWeight > 0,
             key_light_weight: keyLightWeight,
             distance: this.num(config.distance, 0, 0, 100000),
@@ -2972,7 +3802,7 @@ const LightManagerUtils = {
         const config = this.sanitizeConfig(light);
         Object.assign(light, config);
         light.render_color = this.colorArray(light.render_color || light.color, config.color);
-        light.render_intensity = this.num(light.render_intensity ?? light.intensity, config.intensity, 0, 100000);
+        light.render_intensity = this.num(light.render_intensity ?? light.intensity, config.intensity, -100000, 100000);
         if (!Array.isArray(light.rotation)) light.rotation = [0, 0, 0];
         if (!Array.isArray(light.render_rotation)) light.render_rotation = light.rotation.slice();
         const validTarget = Array.isArray(light.aim_target) && light.aim_target.length === 3 && light.aim_target.every(value => Number.isFinite(Number(value)));
@@ -2991,6 +3821,8 @@ const LightManagerUtils = {
         element.key_light_weight = this.num(element.key_light_weight, 1, 0, 100);
         element.key_light_enabled = this.bool(element.key_light_enabled, true) && element.key_light_weight > 0;
         element.art_mode = element.art_mode === 'direction' ? 'direction' : 'point';
+        element.art_glow_texture_mix = this.num(element.art_glow_texture_mix, 50, 0, 100);
+        element.art_glow_color_source = ['texture', 'mix'].includes(element.art_glow_color_source) ? element.art_glow_color_source : 'light';
         element.art_scope = element.art_scope === 'include' ? 'include' : 'box';
         element.art_include = Array.isArray(element.art_include) ? element.art_include.filter(Boolean) : [];
         element.art_exclude = Array.isArray(element.art_exclude) ? element.art_exclude.filter(Boolean) : [];
@@ -3183,9 +4015,14 @@ window.LightManagerArtKeys = {
         const uniforms = material?.uniforms;
         if (!uniforms?.uArtKeyCount) return;
         const keys = this.resolve(mesh);
+        // An empty receiver scope is not an empty scene: suppress the implicit
+        // artistic fallback when authored keys exist elsewhere in the project.
+        if (uniforms.uArtKeySceneCount) uniforms.uArtKeySceneCount.value = this.active().length;
         uniforms.uArtKeyCount.value = keys.length;
         keys.forEach((key, index) => {
             uniforms.uArtKeyVector.value[index].copy(key.vector);
+            if (uniforms.uArtKeyTextureMix) uniforms.uArtKeyTextureMix.value[index] = key.element.art_glow_color_source === 'texture' ? 1
+                : key.element.art_glow_color_source === 'mix' ? LightManagerUtils.num(key.element.art_glow_texture_mix, 50, 0, 100) / 100 : 0;
             uniforms.uArtKeyColor.value[index].fromArray(LightManagerUtils.colorArray(key.element.render_color || key.element.color).map(c => c / 255));
             uniforms.uArtKeyParams.value[index].set(key.element.art_mode === 'direction' ? 1 : 0,
                 Math.max(0, Number(key.element.render_intensity ?? key.element.intensity) || 0) * key.weight * key.coverage,
@@ -3207,6 +4044,86 @@ const LightManagerCameraShadows = {
     revision: 0,
     lightRevisions: new Map(),
     uniforms: null,
+    // Developer-only A/B: moment mipmaps for the principal directional map.
+    // Disabled by default; never changes the authored shadow style or projects.
+    momentLODEnabled: false,
+    setMomentLODEnabled(enabled) {
+        const next = enabled === true;
+        if (this.momentLODEnabled === next) return next;
+        this.momentLODEnabled = next;
+        this.invalidate({ all: true });
+        this.materials.forEach((_, material) => { material.needsUpdate = true; });
+        if (!next) {
+            this.renderers.forEach(state => this.releaseMomentLOD(state));
+            if (this.uniforms) this.uniforms.lfMomentShadowReady.value = 0;
+        }
+        return next;
+    },
+    momentLODSupported(renderer) {
+        if (!this.momentLODEnabled || !renderer?.capabilities?.isWebGL2 ||
+            (renderer.capabilities.maxTextures || 0) < 8) return false;
+        const gl = renderer.getContext?.();
+        // Both rendering RGBA16F and linearly filtering its mip levels must
+        // work; exposing float render targets alone is not sufficient.
+        return !!(gl?.getExtension?.('EXT_color_buffer_float') &&
+            gl?.getExtension?.('OES_texture_float_linear'));
+    },
+    releaseMomentLOD(state) {
+        state.momentLOD?.target?.dispose();
+        state.momentLOD?.quad?.geometry?.dispose();
+        state.momentLOD?.quad?.material?.dispose();
+        state.momentLOD = null;
+        if (this.uniforms) {
+            this.uniforms.lfMomentShadowReady.value = 0;
+            this.uniforms.lfMomentShadowMap.value = null;
+        }
+    },
+    updateMomentLOD(renderer, state, sourceShadow, force = false) {
+        const sourceTarget = sourceShadow?.map;
+        if (!this.momentLODSupported(renderer) || !sourceTarget?.texture) return false;
+        // Keep the auxiliary mip pyramid bounded even for 4K/8K depth maps.
+        const width = Math.max(1, Math.min(1024, sourceTarget.width));
+        const height = Math.max(1, Math.min(1024, sourceTarget.height));
+        let moment = state.momentLOD;
+        if (!moment || moment.target.width !== width || moment.target.height !== height) {
+            this.releaseMomentLOD(state);
+            const target = new THREE.WebGLRenderTarget(width, height, {
+                format: THREE.RGBAFormat, type: THREE.HalfFloatType,
+                minFilter: THREE.LinearMipmapLinearFilter, magFilter: THREE.LinearFilter,
+                generateMipmaps: true, depthBuffer: false, stencilBuffer: false
+            });
+            target.texture.name = 'Lightflow moment shadow LOD (experimental)';
+            const material = new THREE.ShaderMaterial({
+                depthTest: false, depthWrite: false, uniforms: { source: { value: null } },
+                vertexShader: 'varying vec2 uvMoment; void main(){uvMoment=uv;gl_Position=vec4(position.xy,0.0,1.0);}',
+                fragmentShader: '#include <packing>\nuniform sampler2D source; varying vec2 uvMoment; void main(){float d=clamp(1.0-unpackRGBAToDepth(texture2D(source,uvMoment)),0.0,1.0);gl_FragColor=vec4(d,d*d,0.0,1.0);}'
+            });
+            const quad = new THREE.Mesh(new THREE.PlaneBufferGeometry(2, 2), material);
+            quad.frustumCulled = false;
+            const scene = new THREE.Scene();
+            scene.add(quad);
+            moment = state.momentLOD = {
+                target, quad, scene, camera: new THREE.Camera(),
+                sourceTexture: null, conversions: 0
+            };
+        }
+        if (!force && moment.sourceTexture === sourceTarget.texture) return true;
+        moment.quad.material.uniforms.source.value = sourceTarget.texture;
+        const previous = renderer.getRenderTarget();
+        const previousFace = renderer.getActiveCubeFace?.() || 0;
+        const previousMip = renderer.getActiveMipmapLevel?.() || 0;
+        try {
+            renderer.setRenderTarget(moment.target);
+            // r129 generates render-target mipmaps at the end of renderer.render.
+            // A separate lightless scene avoids invoking the scene shadow path.
+            renderer.render(moment.scene, moment.camera);
+        } finally {
+            renderer.setRenderTarget(previous, previousFace, previousMip);
+        }
+        moment.sourceTexture = sourceTarget.texture;
+        moment.conversions++;
+        return renderer.getContext().getError() === renderer.getContext().NO_ERROR;
+    },
     getFilterFeatures() {
         // A retained native shadow slot must keep its filter family at zero intensity.
         const environment = typeof window !== 'undefined' ? window.LightflowEnvironment?.getVirtualLight?.({ includeInactiveShadowSlot: true }) : null;
@@ -3219,12 +4136,23 @@ const LightManagerCameraShadows = {
             if (mode === 'distance') features |= 2;
             if (mode === 'legacy') features |= 4;
         }
-        return features;
+        return features | (this.momentLODEnabled ? 8 : 0);
     },
     invalidate(options = {}) {
         const lights = options.elements || (options.element ? [options.element] : []);
         if (!lights.length || options.scene || options.all) this.revision++;
         else lights.forEach(light => this.lightRevisions.set(light.uuid, (this.lightRevisions.get(light.uuid) || 0) + 1));
+        // Material/scene editing over hours can create thousands of temporary
+        // light UUIDs; a full invalidation is a safe point to discard removed
+        // revisions without touching those still referenced by live elements.
+        if (this.lightRevisions.size > 512 && (!lights.length || options.scene || options.all)) {
+            const active = new Set((window.LightElement?.all || []).map(light => light.uuid));
+            const virtual = window.LightflowEnvironment?.getVirtualLight?.();
+            if (virtual?.uuid) active.add(virtual.uuid);
+            for (const uuid of this.lightRevisions.keys()) {
+                if (!active.has(uuid)) this.lightRevisions.delete(uuid);
+            }
+        }
     },
     getUniforms() {
         if (!this.uniforms) this.uniforms = {
@@ -3235,6 +4163,9 @@ const LightManagerCameraShadows = {
             lfCameraShadowBaseMatrix: { value: new THREE.Matrix4() },
             lfCameraShadowWorldMatrix0: { value: new THREE.Matrix4() }, lfCameraShadowWorldMatrix1: { value: new THREE.Matrix4() },
             lfCameraShadowMap0: { value: null }, lfCameraShadowMap1: { value: null },
+            lfMomentShadowMap: { value: null },
+            lfMomentShadowReady: { value: 0 },
+            lfMomentShadowScale: { value: 1 },
             lfCameraShadowMatrix0: { value: new THREE.Matrix4() }, lfCameraShadowMatrix1: { value: new THREE.Matrix4() },
             // resolution, normalized bias, PCF radius, distance-softness scale
             lfCameraShadowParams0: { value: new THREE.Vector4() }, lfCameraShadowParams1: { value: new THREE.Vector4() }
@@ -3414,8 +4345,13 @@ float lfGetArtisticPointShadow(sampler2D shadowMap, vec2 shadowMapSize, float sh
 #endif
 #endif
 `,
-    patchFragment(fragment, cameraDetail = true) {
-        if (!fragment.includes('#include <shadowmap_pars_fragment>')) return fragment;
+    patchFragment(fragment, cameraDetail = true, momentLOD = false) {
+        // A copied material may inherit the camera-shadow onBeforeCompile hook
+        // and then acquire another one. Its first hook already injected the
+        // complete receiver module, so running this pass again would duplicate
+        // lfCameraPlaneDepth and every camera-shadow uniform/function.
+        if (!fragment.includes('#include <shadowmap_pars_fragment>') ||
+            fragment.includes('#define LF_CAMERA_SHADOWS')) return fragment;
         // Expand only the two native receiver chunks. Leave shared ShaderChunk
         // untouched, and preserve custom RenderCraft/pixelated shader bodies.
         ['lights_fragment_begin', 'shadowmask_pars_fragment'].forEach(name => {
@@ -3567,6 +4503,28 @@ void lfCameraAccumulatePlaneBlocker(sampler2D map, vec2 uv, float compareDepth,
 }
 ${artisticProjected}
 ${distanceModule}
+${momentLOD ? `
+uniform sampler2D lfMomentShadowMap;
+uniform float lfMomentShadowReady;
+uniform float lfMomentShadowScale;
+float lfMomentProjectedShadow(vec4 coord, float bias, float sourceScale) {
+    if (coord.w <= 1e-5) return 1.0;
+    vec3 p = coord.xyz / coord.w;
+    if (any(lessThan(p, vec3(0.0))) || any(greaterThan(p, vec3(1.0)))) return 1.0;
+    // Reverse-depth moments maintain useful half-float precision near depth 1.
+    float receiver = clamp(1.0 - (p.z + bias), 0.0, 1.0);
+    // GLSL ES 1.00 receivers on r129 expose mip BIAS (not absolute textureLod).
+    vec2 coarse = texture2D(lfMomentShadowMap, p.xy, 2.0).rg;
+    float separation = max(coarse.x - receiver, 0.0);
+    float radius = clamp(sourceScale * separation * lfMomentShadowScale, 0.0, 24.0);
+    float lodBias = clamp(log2(max(1.0, radius)), 0.0, 4.5);
+    vec2 moments = texture2D(lfMomentShadowMap, p.xy, lodBias).rg;
+    float variance = max(moments.y - moments.x * moments.x, 0.0000001);
+    float difference = max(moments.x - receiver, 0.0);
+    float bound = variance / (variance + difference * difference);
+    return receiver >= moments.x ? 1.0 : clamp((bound - 0.55) / 0.45, 0.0, 1.0);
+}
+` : ''}
 float lfCameraCrispShadow(sampler2D map, vec3 p, vec4 params, vec3 dx, vec3 dy, vec2 slope) {
     vec2 size = vec2(params.x);
     float depth = p.z + params.y;
@@ -3688,7 +4646,7 @@ float lfCameraDirectionalShadow(int index, sampler2D baseMap, vec2 baseSize, flo
     if (detail.y > 0.0) {
         if (sourceScale == 0.0) baseShadow = snapped ? lfCameraRawProjectedShadow(baseMap, baseBias, coord)
             : lfCameraCrispBaseShadow(index, baseMap, baseSize, baseBias, coord);
-        else baseShadow = lfCameraBaseShadow(baseMap, baseSize, baseBias, baseRadius, coord, sourceScale);
+        else ${momentLOD ? 'if (lfMomentShadowReady > 0.5 && index == lfCameraShadowOwner && sourceScale > 0.0) baseShadow = lfMomentProjectedShadow(coord, baseBias, sourceScale); else ' : ''}baseShadow = lfCameraBaseShadow(baseMap, baseSize, baseBias, baseRadius, coord, sourceScale);
     }
     return detail.x + baseShadow * detail.y;
 }
@@ -3732,7 +4690,9 @@ float lfNativePointPixelShadow(float style, sampler2D map, vec2 size, float bias
             const start = module.indexOf(signature + ' {');
             const end = module.indexOf('\n#else', start);
             module = module.slice(0, start) +
-                signature + ' { if (sourceScale == 0.0) return snapped ? lfCameraRawProjectedShadow(baseMap, baseBias, coord) : lfCameraCrispBaseShadow(index, baseMap, baseSize, baseBias, coord); return lfCameraBaseShadow(baseMap, baseSize, baseBias, baseRadius, coord, sourceScale); }' +
+                signature + ' { if (sourceScale == 0.0) return snapped ? lfCameraRawProjectedShadow(baseMap, baseBias, coord) : lfCameraCrispBaseShadow(index, baseMap, baseSize, baseBias, coord); ' +
+                (momentLOD ? 'if (lfMomentShadowReady > 0.5 && index == lfCameraShadowOwner && sourceScale > 0.0) return lfMomentProjectedShadow(coord, baseBias, sourceScale); ' : '') +
+                'return lfCameraBaseShadow(baseMap, baseSize, baseBias, baseRadius, coord, sourceScale); }' +
                 module.slice(end);
         }
         return fragment
@@ -3740,7 +4700,16 @@ float lfNativePointPixelShadow(float style, sampler2D map, vec2 size, float bias
             .replace(/void\s+main\s*\(\s*\)\s*\{/, cameraDetail ? '$&\n#ifdef USE_SHADOWMAP\n    lfPrepareCameraShadowDerivatives();\n#endif\n' : '$&\n#ifdef USE_SHADOWMAP\n    lfPrepareShadowEdgeDerivatives();\n#endif\n');
     },
     patchVertex(vertex) {
-        const declarations = 'uniform float lfCameraShadowNormalBias;\nvarying vec3 lfCameraShadowWorldPosition;\nvarying vec3 lfCameraShadowWorldNormal;\n';
+        // Unlike the fragment module, vertex varyings have no GLSL guard.
+        // Recognize shaders already patched by an inherited hook before
+        // touching the same shadowmap/face-UV insertion point again.
+        if (/\blfCameraShadowWorldPosition\s*=/.test(vertex) &&
+            /\blfCameraShadowWorldNormal\s*=/.test(vertex)) return vertex;
+        const declarations = [
+            'uniform float lfCameraShadowNormalBias;',
+            'varying vec3 lfCameraShadowWorldPosition;',
+            'varying vec3 lfCameraShadowWorldNormal;'
+        ].filter(line => !vertex.includes(line)).join('\n') + '\n';
         if (vertex.includes('lfVPixelatedShadowFaceUv = normalizedFaceUv;')) {
             return declarations + vertex.replace('lfVPixelatedShadowFaceUv = normalizedFaceUv;',
                 'lfCameraShadowWorldNormal = lfSafeShadowNormal(worldNormal); lfCameraShadowWorldPosition = worldPosition.xyz + lfCameraShadowWorldNormal * lfCameraShadowNormalBias;\n    lfVPixelatedShadowFaceUv = normalizedFaceUv;');
@@ -3803,14 +4772,19 @@ float lfNativePointPixelShadow(float style, sampler2D map, vec2 size, float bias
                 const values = Array.isArray(uniform.value) ? uniform.value : [uniform.value];
                 return count + values.filter(value => value?.isTexture).length;
             }, 0) : ['map', 'alphaMap', 'lightMap', 'aoMap', 'emissiveMap', 'bumpMap', 'normalMap', 'displacementMap', 'roughnessMap', 'metalnessMap', 'envMap', 'specularMap', 'clearcoatMap', 'clearcoatNormalMap', 'clearcoatRoughnessMap', 'transmissionMap'].filter(name => material[name]?.isTexture).length;
-            const cameraDetail = nativeMaps + customMaps + 2 <= (renderer?.capabilities?.maxTextures || 16);
-            let fragment = manager.patchFragment(shader.fragmentShader, cameraDetail);
+            const momentLOD = manager.momentLODSupported(renderer) &&
+                nativeMaps + customMaps + 1 <= (renderer?.capabilities?.maxTextures || 16);
+            const cameraDetail = nativeMaps + customMaps + 2 + (momentLOD ? 1 : 0) <= (renderer?.capabilities?.maxTextures || 16);
+            let fragment = manager.patchFragment(shader.fragmentShader, cameraDetail, momentLOD);
             fragment = fragment.replace(/^#define LF_(?:ARTISTIC|DISTANCE|LEGACY)_FILTER_ENABLED [01]\s*$/gm, '');
             const activeFeatures = manager.getFilterFeatures();
             fragment = `#define LF_ARTISTIC_FILTER_ENABLED ${activeFeatures & 1 ? 1 : 0}\n#define LF_DISTANCE_FILTER_ENABLED ${activeFeatures & 2 ? 1 : 0}\n#define LF_LEGACY_FILTER_ENABLED ${activeFeatures & 4 ? 1 : 0}\n` + fragment;
             if (fragment !== shader.fragmentShader) {
                 const vertex = manager.patchVertex(shader.vertexShader);
-                if (vertex === shader.vertexShader) return;
+                // Already-patched vertex source is valid when a cloned material
+                // inherited a shadow hook. Still update filter defines/uniforms.
+                if (vertex === shader.vertexShader &&
+                    !/\blfCameraShadowWorldPosition\s*=/.test(vertex)) return;
                 shader.vertexShader = vertex;
                 shader.fragmentShader = fragment;
                 // Do not put manager-owned textures in ShaderMaterial.uniforms:
@@ -3858,9 +4832,17 @@ float lfNativePointPixelShadow(float style, sampler2D map, vec2 size, float bias
         if (previous?.shadowMap === renderer.shadowMap) return;
         if (previous) this.releaseRenderer(renderer, previous);
         const original = renderer.shadowMap.render;
-        const state = { original, shadowMap: renderer.shadowMap, cascades: [], signature: '', redraws: 0, owner: null, contextLost: false, materialRevision: -1, restoreNative: false };
+        const state = { original, shadowMap: renderer.shadowMap, cascades: [], signature: '', redraws: 0, owner: null, contextLost: false, materialRevision: -1, restoreNative: false, momentLOD: null };
         const manager = this;
         state.hook = function (lights, scene, camera) {
+            // First-frame telemetry only. Shadow-map atlas allocation/raster
+            // happens inside Three's private WebGLShadowMap.render(), not in
+            // renderer.compile(). Keep normal frames on the unchanged path.
+            const firstDrawEngine = window.ShaderEngine?.activeFirstPreviewDrawTrace
+                ? window.ShaderEngine : null;
+            const traceShadow = (label, callback) => firstDrawEngine
+                ? firstDrawEngine.measureFirstPreviewDrawPhase(label, callback)
+                : callback();
             LightManagerGroundShadows.updateLights(lights);
             // Auxiliary depth/normal scenes and foreign cameras must not retarget
             // the maps while Studio owns the shared light state.
@@ -3868,7 +4850,7 @@ float lfNativePointPixelShadow(float style, sampler2D map, vec2 size, float bias
             const foreign = window.LightManagerStudioRenderSession && studioPreview && renderer !== studioPreview.renderer;
             if (foreign && manager.uniforms) manager.uniforms.lfCameraShadowOwner.value = -1;
             if (scene !== window.Canvas?.scene || scene.overrideMaterial || foreign || !this.enabled || state.contextLost) {
-                return original.apply(this, arguments);
+                return traceShadow('native_shadows.render', () => original.apply(this, arguments));
             }
             if (state.restoreNative) {
                 lights.forEach(light => { if (light.shadow) light.shadow.needsUpdate = true; });
@@ -3888,11 +4870,39 @@ float lfNativePointPixelShadow(float style, sampler2D map, vec2 size, float bias
             }
             if (!owner || owner.mode === 'off' || this.type === THREE.VSMShadowMap) {
                 manager.releaseMaps(state);
-                return original.apply(this, arguments);
+                uniforms.lfMomentShadowReady.value = 0;
+                return traceShadow('native_shadows.render', () => original.apply(this, arguments));
             }
-            const helpers = manager.fit(state, owner, camera, renderer);
+            const helpers = traceShadow('native_shadows.fit_cascades',
+                () => manager.fit(state, owner, camera, renderer));
             if (helpers.some(light => light.shadow.needsUpdate)) this.needsUpdate = true;
-            const result = original.call(this, lights.concat(helpers.filter(light => light.userData.cameraShadowUseful)), scene, camera);
+            const baseShadow = owner.light.shadow;
+            const shadowWillUpdate = !!(this.autoUpdate || this.needsUpdate ||
+                baseShadow?.autoUpdate || baseShadow?.needsUpdate || !baseShadow?.map);
+            const result = traceShadow('native_shadows.render', () => original.call(
+                this,
+                lights.concat(helpers.filter(light => light.userData.cameraShadowUseful)),
+                scene,
+                camera
+            ));
+            // Convert packed native depth only after Three has finished rendering it.
+            // Mip generation and its FBO are owned by a separate bounded target.
+            let momentReady = false;
+            if (manager.momentLODSupported(renderer) && owner.light.shadow?.map) {
+                try {
+                    momentReady = manager.updateMomentLOD(renderer, state, baseShadow,
+                        shadowWillUpdate || state.momentLOD?.sourceTexture !== baseShadow.map.texture);
+                } catch (error) {
+                    console.warn('Lightflow moment LOD fallback to native PCSS:', error);
+                    manager.releaseMomentLOD(state);
+                }
+            } else if (state.momentLOD) {
+                manager.releaseMomentLOD(state);
+            }
+            uniforms.lfMomentShadowReady.value = momentReady ? 1 : 0;
+            uniforms.lfMomentShadowMap.value = momentReady ? state.momentLOD.target.texture : null;
+            uniforms.lfMomentShadowScale.value = momentReady ?
+                state.momentLOD.target.width / Math.max(1, baseShadow.mapSize.x) : 1;
             const directional = lights.filter(light => light.isDirectionalLight);
             if (helpers.length === 2 && helpers.every(light => !light.userData.cameraShadowUseful || light.shadow.map)) {
                 uniforms.lfCameraShadowOwner.value = directional.indexOf(owner.light);
@@ -3939,6 +4949,9 @@ float lfNativePointPixelShadow(float style, sampler2D map, vec2 size, float bias
         state.originalDispose = renderer.dispose;
         state.disposeHook = function () {
             manager.releaseRenderer(renderer, state);
+            // This wrapper denotes an actual renderer retirement, unlike the
+            // context-restored path that temporarily reattaches the same owner.
+            forgetLightManagerRendererShadowSettings(renderer);
             return state.originalDispose.apply(this, arguments);
         };
         renderer.dispose = state.disposeHook;
@@ -4068,6 +5081,7 @@ float lfNativePointPixelShadow(float style, sampler2D map, vec2 size, float bias
         }
     },
     releaseMaps(state) {
+        this.releaseMomentLOD(state);
         const textures = new Set(state.cascades.map(light => light.shadow.map?.texture).filter(Boolean));
         if (this.uniforms && [0, 1].some(index => textures.has(this.uniforms['lfCameraShadowMap' + index].value))) {
             this.uniforms.lfCameraShadowOwner.value = -1;
@@ -4110,6 +5124,7 @@ float lfNativePointPixelShadow(float style, sampler2D map, vec2 size, float bias
         });
         this.materials.forEach((state, material) => this.restoreMaterial(material, state));
         this.renderers.clear(); this.materials.clear(); this.lightRevisions.clear(); this.uniforms = null;
+        this.momentLODEnabled = false;
     }
 };
 
@@ -4807,13 +5822,13 @@ function syncLightManagerThreeLightShadowFlags(options = {}) {
         if (requestedCastShadow) light.userData.lightManagerRetainShadowSlot = true;
         const desiredVisible = true;
         const previewShadowSuppressed = light.userData.lightManagerPreviewShadowSuppressed === true;
-        const desiredCastShadow = !previewShadowSuppressed && (
+        const desiredCastShadow = !!light.shadow && !previewShadowSuppressed && (
             requestedCastShadow || light.userData.lightManagerRetainShadowSlot === true
         );
         const activeIntensity = Number(light.userData.lightManagerActiveIntensity);
         const desiredIntensity = !isLightManagerElementHierarchyVisible(element)
             ? 0
-            : (Number.isFinite(activeIntensity) ? activeIntensity : light.intensity);
+            : Math.max(0, Number.isFinite(activeIntensity) ? activeIntensity : light.intensity);
         const before = {
             visible: light.visible !== false,
             castShadow: light.castShadow === true
@@ -4955,7 +5970,15 @@ const LightManagerShadowRegions = {
         if (!project) return null;
         const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
         const previous = this.cache.get(project);
-        if (previous && previous.revision === this.revision && now - previous.time < 250) return previous.box;
+        // Changes to authored geometry are explicitly invalidated by the editor
+        // listeners below. Rewalking every mesh four times per second in an
+        // otherwise static scene caused periodic CPU spikes in fitted shadows.
+        // Keep a short fallback during animation, when external meshes may move
+        // without emitting an editor change event.
+        const animated = window.Timeline?.playing || window.Animator?.open ||
+            window.Transformer?.dragging || window.LightflowCinematicFrameContext;
+        const cacheLifetimeMs = animated ? 250 : 2000;
+        if (previous && previous.revision === this.revision && now - previous.time < cacheLifetimeMs) return previous.box;
         const box = new THREE.Box3(), visited = new Set();
         const excluded = new Set(window.Canvas?.gizmos || []);
         for (const Type of [window.LightElement, window.ArtKeyElement])
@@ -5963,7 +6986,7 @@ window.LightManagerAreaGizmos = {
     },
 
     buildPointVertices(element) {
-        const radius = Math.max(0.001, this.getRange(element, Math.max(4, Math.sqrt(this.num(element.render_intensity ?? element.intensity, 1)) * 4)));
+        const radius = Math.max(0.001, this.getRange(element, Math.max(4, Math.sqrt(Math.abs(this.num(element.render_intensity ?? element.intensity, 1))) * 4)));
         const vertices = [];
         this.pushCircle(vertices, radius, 0, 'xy', 48);
         this.pushCircle(vertices, radius, 0, 'xz', 48);
@@ -7911,19 +8934,26 @@ function runLightManagerElementUpdate(options = LIGHT_MANAGER_DEFAULT_UPDATE_OPT
             const activeIntensity = LightManagerUtils.num(
                 element.render_intensity ?? element.intensity,
                 element.intensity,
-                0,
+                -100000,
                 100000
             );
             light.userData = light.userData || {};
             light.userData.lightManagerElementUuid = element.uuid;
             light.userData.lightManagerActiveIntensity = activeIntensity;
-            light.intensity = isLightManagerElementHierarchyVisible(element) ? activeIntensity : 0;
+            // Keep the signed authored value for Lightflow shaders. Three's
+            // native light pipeline must never emit positive radiance for a
+            // negative light (its shadow map can still be sampled separately).
+            light.intensity = isLightManagerElementHierarchyVisible(element) ? Math.max(0, activeIntensity) : 0;
             light.visible = true;
 
             const requestedCastShadow = element.has_shadow !== false;
             if (requestedCastShadow) light.userData.lightManagerRetainShadowSlot = true;
-            light.castShadow = requestedCastShadow ||
-                light.userData.lightManagerRetainShadowSlot === true;
+            // Three.js r129 uploads shadowBias from its native shadow object
+            // whenever castShadow is true. A missing object must never occupy
+            // a shadow slot or the uniform uploader receives undefined.
+            light.castShadow = !!light.shadow && (
+                requestedCastShadow || light.userData.lightManagerRetainShadowSlot === true
+            );
             if (light.shadow && light.castShadow) {
                 light.shadow.autoUpdate = false;
                 if (!requestedCastShadow) light.shadow.needsUpdate = false;
@@ -8285,10 +9315,912 @@ function installLightflowOutlinerColors() {
     return { delete() { clearInterval(timer); event.delete(); css.delete(); style.remove(); } };
 }
 
+// Portable pose data uses the same bone-name/rotation/offset convention as Codecs.skin_model.
+function createLightflowSkinPoseLibrary(makeId) {
+    const schema = 'lightflow_skin_poses', version = 1;
+    const badKeys = new Set(['__proto__', 'prototype', 'constructor']);
+    const object = value => value && typeof value === 'object' && !Array.isArray(value);
+    const name = value => {
+        if (typeof value !== 'string' || !value.trim() || value.length > 128) throw Error('Invalid pose/group name');
+        return value.trim();
+    };
+    const vector = value => {
+        if (!Array.isArray(value) || value.length !== 3 || !value.every(n => typeof n === 'number' && Number.isFinite(n) && Math.abs(n) <= 1e6)) throw Error('Invalid pose vector');
+        return value.slice();
+    };
+    function data(value) {
+        if (!object(value) || Object.keys(value).length > 256) throw Error('Invalid pose bones');
+        const result = {};
+        for (const [key, entry] of Object.entries(value)) {
+            if (badKeys.has(key) || !key.trim() || key.length > 128) throw Error('Invalid bone name');
+            if (Array.isArray(entry)) result[key] = vector(entry);
+            else {
+                if (!object(entry) || Object.keys(entry).some(k => !['rotation', 'offset'].includes(k))) throw Error('Invalid bone transform');
+                result[key] = {rotation: vector(entry.rotation ?? [0, 0, 0]), offset: vector(entry.offset ?? [0, 0, 0])};
+            }
+        }
+        return result;
+    }
+    const empty = () => ({schema, version, groups: [], poses: []});
+    function parse(input) {
+        if (typeof input === 'string') {
+            if (input.length > 8 * 1024 * 1024) throw Error('Pose JSON exceeds 8 MiB');
+            input = JSON.parse(input);
+        }
+        let poses, groups = [];
+        if (object(input) && input.schema === schema) {
+            if (input.version !== version || !Array.isArray(input.groups) || !Array.isArray(input.poses)) throw Error('Unsupported pose library');
+            poses = input.poses; groups = input.groups;
+        } else if (Array.isArray(input)) poses = input;
+        else if (object(input) && Object.hasOwn(input, 'data')) poses = [input];
+        else poses = [{name: 'Pose', data: input}];
+        if (poses.length > 1000 || groups.length > 256) throw Error('Too many poses/groups');
+        const result = empty(), groupIds = new Set(), poseIds = new Set();
+        for (const group of groups) {
+            if (!object(group) || typeof group.id !== 'string' || !group.id || group.id.length > 128 || groupIds.has(group.id)) throw Error('Invalid group ID');
+            groupIds.add(group.id); result.groups.push({id: group.id, name: name(group.name)});
+        }
+        for (const pose of poses) {
+            if (!object(pose)) throw Error('Invalid pose');
+            const id = pose.id === undefined ? makeId() : pose.id;
+            if (typeof id !== 'string' || !id || id.length > 128 || poseIds.has(id)) throw Error('Invalid pose ID');
+            poseIds.add(id);
+            if (pose.group != null && !groupIds.has(pose.group)) throw Error('Unknown pose group');
+            result.poses.push({id, name: name(pose.name), group: pose.group ?? null, data: data(pose.data)});
+        }
+        return result;
+    }
+    function subset(library, ids, preserveGroups = true) {
+        const result = parse(library), selected = new Set(ids);
+        result.poses = result.poses.filter(pose => selected.has(pose.id));
+        const used = new Set(result.poses.map(pose => pose.group));
+        result.groups = preserveGroups ? result.groups.filter(group => used.has(group.id)) : [];
+        if (!preserveGroups) result.poses.forEach(pose => { pose.group = null; });
+        return result;
+    }
+    function merge(library, incoming, ids, preserveGroups = true) {
+        const result = parse(library), selected = subset(incoming, ids, preserveGroups), groupMap = new Map();
+        for (const group of selected.groups) {
+            const target = result.groups.find(item => item.name === group.name) || {id: makeId(), name: group.name};
+            if (!result.groups.includes(target)) result.groups.push(target);
+            groupMap.set(group.id, target.id);
+        }
+        for (const pose of selected.poses) result.poses.push({...pose, id: makeId(), group: groupMap.get(pose.group) ?? null});
+        return parse(result);
+    }
+    return {schema, empty, parse, data, subset, merge};
+}
+
+function installLightflowSkinPoses() {
+    const action = BarItems.custom_skin_poses, addAction = BarItems.add_custom_skin_pose, codec = Codecs.project;
+    if (!action || !addAction || !codec || !Codecs.skin_model?.getPoseData) return {delete() {}};
+    const core = createLightflowSkinPoseLibrary(() => guid()), key = core.schema;
+    const activeKey = 'lightflow_skin_pose_active';
+    const clone = value => JSON.parse(JSON.stringify(value));
+    const text = (en, es) => String(window.Language?.code || '').startsWith('es') ? es : en;
+    const title = () => text('Skin poses', 'Poses de skin');
+    const listeners = [], dialogs = new Set(), menus = new Set();
+    const poseNavigation = [];
+    let disposed = false, manager = null, managerProject = null, libraryStyles = null, poseName = null;
+    const alive = project => !disposed && Project === project && project?.format?.id === 'skin';
+    const read = project => core.parse(project?.[key] || core.empty());
+    const error = reason => { if (!disposed) Blockbench.showMessageBox({title: title(), message: text('Cannot read or save skin poses: ', 'No se pueden leer o guardar las poses: ') + String(reason.message || reason)}); };
+    const protect = callback => function(...args) { try { return callback.apply(this, args); } catch (reason) { error(reason); } };
+    const poseSignature = value => JSON.stringify(Object.entries(core.data(value)).map(([bone, entry]) => {
+        const rotation = Array.isArray(entry) ? entry : entry.rotation, offset = Array.isArray(entry) ? [0, 0, 0] : entry.offset;
+        return [bone.replace(/\s/g, ''), rotation, offset];
+    }).filter(([, rotation, offset]) => [...rotation, ...offset].some(value => value !== 0)).sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+    function rememberPose(project, pose) {
+        const globalIndex = (StateMemory.get('skin_poses') || []).indexOf(pose);
+        project[activeKey] = {id: pose.id || null, name: pose.name || text('Custom pose', 'Pose personalizada'), signature: poseSignature(pose.data),
+            navigationKey: pose._lightflowNavigationKey || (pose.id ? 'project:' + pose.id : globalIndex >= 0 ? 'global:' + globalIndex : null)};
+        syncPoseName();
+    }
+    function cyclePose(direction) {
+        if (!alive(Project)) return;
+        const library = read(Project);
+        const poses = [
+            ...(StateMemory.get('skin_poses') || []).map((pose, index) => ({...pose, id: null, _lightflowNavigationKey: 'global:' + index})),
+            ...[null, ...library.groups.map(group => group.id)].flatMap(group => library.poses.filter(pose => pose.group === group).map(pose => ({...pose, _lightflowNavigationKey: 'project:' + pose.id})))
+        ];
+        if (!poses.length) return;
+        const active = Project[activeKey];
+        let index = active ? poses.findIndex(pose => pose._lightflowNavigationKey === active.navigationKey && (pose.id || pose.name === active.name)) : -1;
+        if (index < 0 && active) index = poses.findIndex(pose => (active.id && pose.id === active.id) || (pose.name === active.name && poseSignature(pose.data) === active.signature));
+        const next = index < 0 ? (direction < 0 ? poses.length - 1 : 0) : (index + direction + poses.length) % poses.length;
+        apply(Project, poses[next]);
+    }
+    function syncPoseName() {
+        if (!poseName || disposed) return;
+        if (!Project || Project.format?.id !== 'skin') { poseName.set(''); return; }
+        const active = Project[activeKey];
+        let name = '';
+        if (active) {
+            const stored = Project[key]?.poses?.find(pose => pose.id === active.id);
+            name = stored?.name || active.name;
+            if (poseSignature(Codecs.skin_model.getPoseData()) !== active.signature) name += ' *';
+        } else {
+            const preset = Project.skin_pose;
+            name = preset && preset !== 'default' ? tl('panel.skin_pose.' + preset) : text('Custom pose', 'Pose personalizada');
+        }
+        poseName.set(name);
+        const noPoses = !(Project[key]?.poses?.length || (StateMemory.get('skin_poses') || []).length);
+        for (const action of poseNavigation) for (const node of new Set([action.node, ...action.nodes])) if (node) {
+            node.classList.toggle('disabled', noPoses); node.setAttribute('aria-disabled', String(noPoses));
+        }
+        for (const node of new Set([poseName.node, ...poseName.nodes])) if (node) {
+            node.title = text('Applied pose: ', 'Pose aplicada: ') + name + (name.endsWith(' *') ? text(' — modified', ' — modificada') : '');
+            node.setAttribute('aria-label', node.title);
+        }
+    }
+    function groupedItems(library, makeItem) {
+        const result = [];
+        for (const group of [{id: null, name: text('Ungrouped', 'Sin grupo')}, ...library.groups]) {
+            const poses = library.poses.filter(pose => pose.group === group.id);
+            if (!poses.length) continue;
+            result.push(new MenuSeparator('lightflow_skin_pose_group_' + (group.id || 'none'), group.name));
+            result.push(...poses.map(pose => ({...makeItem(pose), description: group.name})));
+        }
+        return result;
+    }
+    function openPoseMenu(items, anchor) {
+        if (disposed) return;
+        const sectionedMenu = window.LightManagerUI?.SectionedMenu;
+        const menu = new Menu(items, sectionedMenu ? {} : {searchable: true});
+        menus.clear(); menus.add(menu); menu.open(anchor || 'mouse');
+        if (sectionedMenu) {
+            const first = items[0];
+            if (first instanceof MenuSeparator && first.menu_node.parentElement !== menu.node) menu.node.prepend(first.menu_node);
+            const scrollItems = items.filter(item => item?.id != null && !(item instanceof MenuSeparator) && !item.always_show)
+                .map(item => item.id);
+            sectionedMenu.decorate(menu, {
+                scrollItems, height: 300, search: true, focusSearch: true, anchor,
+                placeholder: text('Search poses or groups', 'Buscar poses o grupos')
+            });
+        }
+        return menu;
+    }
+    function syncManager() {
+        const view = manager?.content_vue;
+        if (!view || !alive(managerProject)) return;
+        view.library = read(managerProject);
+        view.selection = view.selection.filter(id => view.library.poses.some(pose => pose.id === id));
+        if (!['all', 'none'].includes(view.group) && !view.library.groups.some(group => group.id === view.group)) view.group = 'all';
+    }
+    function listen(owner, event, callback) {
+        owner.on(event, callback); listeners.push(() => owner.removeListener(event, callback));
+    }
+    function edit(project, callback) {
+        if (!alive(project)) return;
+        const before = read(project), next = clone(before); callback(next);
+        const validated = core.parse(next);
+        Undo.initEdit({lightflow_skin_pose_library: true, lightflow_skin_pose_state: true});
+        project[key] = validated;
+        const active = project[activeKey], savedPose = validated.poses.find(pose => pose.id === active?.id);
+        if (active && savedPose) {
+            const oldPose = before.poses.find(pose => pose.id === active.id);
+            project[activeKey] = {...active, name: savedPose.name,
+                signature: oldPose && poseSignature(oldPose.data) !== poseSignature(savedPose.data) ? poseSignature(savedPose.data) : active.signature};
+        }
+        Undo.finishEdit(title());
+        project.saved = false;
+        syncManager();
+        syncPoseName();
+    }
+    function prompt(project, initial, callback) {
+        if (!alive(project)) return;
+        dialog({id: 'lightflow_skin_pose_name', title: title(), form: {name: {label: 'generic.name', type: 'text', value: initial}}, onConfirm(values) {
+            if (!alive(project)) return;
+            if (!values.name?.trim() || values.name.length > 128) { error(Error(text('Enter a name (1–128 characters)', 'Escribe un nombre (1–128 caracteres)'))); return false; }
+            callback(values.name.trim());
+        }});
+    }
+    function dialog(options) {
+        let instance;
+        const close = () => { dialogs.delete(instance); instance.resize_observer?.disconnect(); instance.delete(); };
+        instance = new Dialog({...options, onConfirm: values => {
+            if (disposed) return;
+            try {
+                const result = options.onConfirm(values);
+                if (result === false) return false;
+                close();
+            } catch (reason) { error(reason); return false; }
+        }, onCancel: () => { options.onCancel?.(); close(); }});
+        dialogs.add(instance); instance.show(); return instance;
+    }
+    function apply(project, pose) {
+        if (!alive(project)) return;
+        const data = core.data(pose.data);
+        Undo.initEdit({elements: Cube.all, groups: Group.all, lightflow_skin_pose_state: true});
+        // Match native applyPose: move cube coordinates with the pivot, then update the entire rig.
+        for (const group of Group.all) {
+            if (!group.skin_original_origin) continue;
+            const entry = data[group.name] || data[group.name.replace(/\s/g, '')] || [0, 0, 0];
+            const rotation = Array.isArray(entry) ? entry : entry.rotation;
+            const offset = Array.isArray(entry) ? [0, 0, 0] : entry.offset;
+            const delta = group.origin.map((value, i) => group.skin_original_origin[i] + offset[i] - value);
+            group.extend({rotation: rotation.slice()});
+            group.origin = group.origin.map((value, i) => value + delta[i]);
+            for (const cube of group.children.filter(child => child instanceof Cube)) {
+                for (const field of ['origin', 'from', 'to']) cube[field] = cube[field].map((value, i) => value + delta[i]);
+            }
+        }
+        Project.skin_pose = ''; Panels.skin_pose.inside_vue.pose = '';
+        rememberPose(project, pose);
+        Canvas.updateView({groups: Group.all, group_aspects: {transform: true}, elements: Outliner.elements, element_aspects: {transform: true}, selection: true});
+        Undo.finishEdit(title());
+    }
+    function exportPoses(library, ids, filename) {
+        const selected = core.subset(library, ids);
+        if (!selected.poses.length) throw Error(text('Select at least one pose', 'Selecciona al menos una pose'));
+        Blockbench.export({resource_id: key, type: title(), extensions: ['json'], name: filename || 'skin_poses', content: JSON.stringify(selected, null, 2)});
+    }
+    function choose(library, importing, callback) {
+        if (!library.poses.length) throw Error(text('No poses available', 'No hay poses disponibles'));
+        ensureLibraryStyles();
+        let selectionDialog;
+        selectionDialog = dialog({id: 'lightflow_skin_pose_selection', title: importing ? text('Import poses', 'Importar poses') : text('Export poses', 'Exportar poses'), width: 620,
+            component: {
+                data: () => ({search: '', selection: library.poses.map(pose => pose.id), range: false, first: 1, last: library.poses.length, groups: true}),
+                mounted() { configureSearchInput(this); },
+                computed: {
+                    sections() {
+                        const query = this.search.trim().toLocaleLowerCase();
+                        return [{id: null, name: text('Ungrouped', 'Sin grupo')}, ...library.groups].map(group => ({...group,
+                            poses: library.poses.map((pose, index) => ({...pose, index: index + 1})).filter(pose => pose.group === group.id && (pose.name + ' ' + group.name).toLocaleLowerCase().includes(query))
+                        })).filter(group => group.poses.length);
+                    }
+                },
+                methods: {
+                    text,
+                    all() { this.selection = library.poses.map(pose => pose.id); },
+                    none() { this.selection = []; },
+                    groupSelected(group) { return group.poses.every(pose => this.selection.includes(pose.id)); },
+                    toggleGroup(group, event) { const ids = new Set(group.poses.map(pose => pose.id)); this.selection = event.target.checked ? [...new Set([...this.selection, ...ids])] : this.selection.filter(id => !ids.has(id)); }
+                },
+                template: `<div class="lf-pose-picker">
+                    <search-bar ref="search" v-model="search"></search-bar>
+                    <div class="lf-pose-picker-controls"><span role="status">{{selection.length}} {{text('selected','seleccionadas')}}</span><button type="button" @click="all" :disabled="range">{{text('All','Todas')}}</button><button type="button" @click="none" :disabled="range">{{text('None','Ninguna')}}</button></div>
+                    <div class="lf-pose-picker-list"><section v-for="section in sections" :key="section.id||'none'"><label class="lf-pose-picker-heading"><input type="checkbox" :checked="groupSelected(section)" :disabled="range" @change="toggleGroup(section,$event)"> {{section.name}}</label><label v-for="pose in section.poses" :key="pose.id" class="lf-pose-picker-row"><input type="checkbox" v-model="selection" :value="pose.id" :disabled="range"><span>{{pose.index}}. {{pose.name}}</span></label></section><p v-if="!sections.length">{{text('No matching poses','No hay poses coincidentes')}}</p></div>
+                    <label><input type="checkbox" v-model="range"> {{text('Use a consecutive range','Usar un rango consecutivo')}}</label>
+                    <div v-if="range" class="lf-pose-picker-controls"><label>{{text('First pose','Primera pose')}} <input type="number" min="1" :max="${library.poses.length}" step="1" v-model.number="first"></label><label>{{text('Last pose','Última pose')}} <input type="number" min="1" :max="${library.poses.length}" step="1" v-model.number="last"></label></div>
+                    ${importing && library.groups.length ? `<label><input type="checkbox" v-model="groups"> {{text('Keep groups','Conservar grupos')}}</label>` : ''}
+                </div>`
+            }, onConfirm() {
+                const values = selectionDialog.content_vue;
+                const first = Number(values.first), last = Number(values.last);
+                if (values.range && (!Number.isInteger(first) || !Number.isInteger(last) || first < 1 || last < first || last > library.poses.length)) { error(Error(text('Invalid range', 'Rango inválido'))); return false; }
+                const ids = values.range ? library.poses.slice(first - 1, last).map(pose => pose.id) : values.selection;
+                if (!ids?.length) { error(Error(text('Select at least one pose', 'Selecciona al menos una pose'))); return false; }
+                return callback(ids, values.groups !== false);
+            }});
+        return selectionDialog;
+    }
+    function importPoses(project) {
+        Blockbench.import({resource_id: key, type: title(), extensions: ['json'], readtype: 'text'}, protect(files => {
+            if (!alive(project) || !files?.[0]) return;
+            const incoming = core.parse(files[0].content);
+            choose(incoming, true, (ids, groups) => {
+                if (!alive(project)) return;
+                const merged = core.merge(read(project), incoming, ids, groups);
+                edit(project, library => Object.assign(library, merged));
+            });
+        }));
+    }
+    function poseItem(project, pose) {
+        return {id: 'lightflow_skin_pose_' + pose.id, name: pose.name, icon: 'accessibility', click: protect(() => apply(project, pose)), children: [
+            {name: 'action.custom_skin_poses.update', icon: 'update', click: protect(() => {
+                if (!alive(project)) return;
+                const data = core.data(Codecs.skin_model.getPoseData());
+                edit(project, library => { const target = library.poses.find(item => item.id === pose.id); if (target) target.data = data; });
+            })},
+            {name: 'generic.rename', icon: 'edit', click: () => prompt(project, pose.name, name => edit(project, library => { const target = library.poses.find(item => item.id === pose.id); if (target) target.name = name; }))},
+            {name: text('Export pose JSON…', 'Exportar pose JSON…'), icon: 'save', click: protect(() => { if (alive(project)) exportPoses(read(project), [pose.id], pose.name); })},
+            {name: 'generic.delete', icon: 'delete', click: protect(() => edit(project, library => { library.poses = library.poses.filter(item => item.id !== pose.id); }))}
+        ]};
+    }
+    function ensureLibraryStyles() {
+        if (!libraryStyles) libraryStyles = Blockbench.addCSS(`
+            #panel_skin_pose [toolbar_item="lightflow_skin_pose_name"]{flex:1 1 auto;width:0;min-width:0;max-width:calc(100% - 76px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 6px;text-align:left;color:var(--color-subtle_text);cursor:default;}
+            #lightflow_skin_pose_selection .lf-pose-picker{display:flex;flex-direction:column;gap:10px;min-width:0;}
+            #lightflow_skin_pose_selection .search_bar{width:100%;box-sizing:border-box;}
+            #lightflow_skin_pose_selection .lf-pose-picker-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+            #lightflow_skin_pose_selection .lf-pose-picker-controls>span{flex:1;}
+            #lightflow_skin_pose_selection .lf-pose-picker-controls button{min-width:0;margin:0;}
+            #lightflow_skin_pose_selection .lf-pose-picker-controls input[type=number]{width:70px;}
+            #lightflow_skin_pose_selection .lf-pose-picker-list{max-height:min(340px,40vh);overflow:auto;border-block:1px solid var(--color-border);}
+            #lightflow_skin_pose_selection .lf-pose-picker-heading{display:block;position:sticky;top:0;background:var(--color-ui);padding:6px 4px;color:var(--color-subtle_text);font-size:12px;z-index:1;}
+            #lightflow_skin_pose_selection .lf-pose-picker-row{display:flex;align-items:center;gap:8px;padding:5px 8px;min-height:30px;overflow-wrap:anywhere;}
+            #lightflow_skin_pose_selection .lf-pose-picker-row input{flex-shrink:0;}
+            #lightflow_skin_pose_library .lf-pose-library{display:flex;flex-direction:column;gap:12px;min-width:0;}
+            #lightflow_skin_pose_library .lf-pose-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+            #lightflow_skin_pose_library button{min-width:0;min-height:30px;margin:0;}
+            #lightflow_skin_pose_library .lf-pose-toolbar .search_bar{flex:1;min-width:140px;}
+            #lightflow_skin_pose_library .lf-pose-columns{display:grid;grid-template-columns:minmax(130px,180px) minmax(0,1fr);gap:16px;min-height:240px;}
+            #lightflow_skin_pose_library .lf-pose-folders{display:flex;flex-direction:column;gap:4px;min-width:0;border-right:1px solid var(--color-border);padding-right:12px;max-height:340px;overflow:auto;}
+            #lightflow_skin_pose_library .lf-pose-folder{display:flex;gap:2px;min-width:0;}
+            #lightflow_skin_pose_library .lf-pose-folder>button:first-child{flex:1;text-align:left;min-width:0;height:auto;min-height:32px;padding:6px 8px;line-height:20px;overflow-wrap:anywhere;background:transparent;color:var(--color-text);box-shadow:none;}
+            #lightflow_skin_pose_library .lf-pose-folder>button[aria-pressed=true]{background:var(--color-accent);color:var(--color-accent_text);}
+            #lightflow_skin_pose_library .lf-pose-folder .tool,#lightflow_skin_pose_library .lf-pose-row .tool,#lightflow_skin_pose_library .lf-pose-bottom .tool{flex:0 0 30px;min-width:0;width:30px;padding:3px;box-shadow:none;}
+            #lightflow_skin_pose_library .lf-pose-list{min-width:0;max-height:340px;overflow:auto;}
+            #lightflow_skin_pose_library .lf-pose-row{display:flex;align-items:center;gap:8px;min-width:0;min-height:40px;border-bottom:1px solid var(--color-border);}
+            #lightflow_skin_pose_library .lf-pose-row>button.lf-pose-apply{flex:1;min-width:0;text-align:left;background:transparent;color:var(--color-text);box-shadow:none;padding:6px 0;}
+            #lightflow_skin_pose_library .lf-pose-row strong,#lightflow_skin_pose_library .lf-pose-row small{display:block;overflow-wrap:anywhere;}
+            #lightflow_skin_pose_library .lf-pose-row small{color:var(--color-subtle_text);font-size:12px;}
+            #lightflow_skin_pose_library .lf-pose-empty{padding:24px 8px;color:var(--color-subtle_text);}
+            #lightflow_skin_pose_library .lf-pose-bottom{display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-top:1px solid var(--color-border);padding-top:12px;}
+            #lightflow_skin_pose_library .lf-pose-destination{flex:1;min-width:100px;max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;}
+            #lightflow_skin_pose_library button:focus-visible,#lightflow_skin_pose_library input:focus-visible,#lightflow_skin_pose_library select:focus-visible{outline:2px solid var(--color-accent);outline-offset:2px;}
+            @media(max-width:620px){#lightflow_skin_pose_library .lf-pose-columns{grid-template-columns:minmax(100px,130px) minmax(0,1fr);gap:8px;}#lightflow_skin_pose_library .lf-pose-folders{padding-right:6px;}}
+        `);
+    }
+    function configureSearchInput(view) {
+        const input = view.$refs.search?.$refs?.input;
+        if (input) { input.placeholder = text('Search poses or groups', 'Buscar poses o grupos'); input.setAttribute('aria-label', input.placeholder); }
+    }
+    function showLibrary(project) {
+        if (!alive(project)) return;
+        if (manager && managerProject === project) { manager.show(); return; }
+        ensureLibraryStyles();
+        managerProject = project;
+        const menuAt = (items, event) => { if (!alive(project)) return; const menu = new Menu(items); menus.clear(); menus.add(menu); menu.open(event?.currentTarget || 'mouse'); };
+        const release = () => { manager = null; managerProject = null; };
+        manager = dialog({id: 'lightflow_skin_pose_library', title: text('Pose library', 'Biblioteca de poses'), width: 760,
+            buttons: ['dialog.close'], confirmIndex: 0, cancelIndex: 0, onConfirm: release, onCancel: release,
+            component: {
+                data: () => ({library: read(project), group: 'all', search: '', selection: [], destination: 'none'}),
+                mounted() { configureSearchInput(this); },
+                computed: {
+                    visible() { const query = this.search.trim().toLocaleLowerCase(); return this.library.poses.filter(pose => (this.group === 'all' || (this.group === 'none' ? !pose.group : pose.group === this.group)) && (pose.name + ' ' + this.groupName(pose.group)).toLocaleLowerCase().includes(query)); },
+                    allSelected() { return this.visible.length > 0 && this.visible.every(pose => this.selection.includes(pose.id)); }
+                },
+                methods: {
+                    text,
+                    groupName(id) { return this.library.groups.find(group => group.id === id)?.name || text('Ungrouped', 'Sin grupo'); },
+                    filter(id) { this.group = id; this.selection = []; },
+                    selectAll(event) { this.selection = event.target.checked ? this.visible.map(pose => pose.id) : []; },
+                    selectDestination(event) { const view = this; openPoseMenu([{id: 'none', name: text('Ungrouped', 'Sin grupo')}, ...this.library.groups].map(group => ({id: group.id, name: group.name, icon: 'folder', click: () => { if (alive(project)) view.destination = group.id; }})), event.currentTarget); },
+                    applyPose: protect(pose => apply(project, pose)),
+                    poseMenu(pose, event) { menuAt(poseItem(project, pose).children, event); },
+                    groupMenu(group, event) { menuAt([
+                        {name: 'generic.rename', icon: 'edit', click: () => prompt(project, group.name, name => edit(project, library => { const target = library.groups.find(item => item.id === group.id); if (target) target.name = name; }))},
+                        {name: text('Remove group (keep poses)', 'Quitar grupo (conservar poses)'), icon: 'folder_off', click: protect(() => edit(project, library => { library.groups = library.groups.filter(item => item.id !== group.id); library.poses.forEach(pose => { if (pose.group === group.id) pose.group = null; }); }))}
+                    ], event); },
+                    addGroup() { prompt(project, text('New group', 'Nuevo grupo'), name => edit(project, library => { library.groups.push({id: guid(), name}); })); },
+                    addPose() { const group = this.group; prompt(project, text('New pose', 'Nueva pose'), name => edit(project, library => library.poses.push({id: guid(), name, group: ['all', 'none'].includes(group) ? null : group, data: core.data(Codecs.skin_model.getPoseData())}))); },
+                    move: protect(function() { const ids = new Set(this.selection), target = this.destination === 'none' ? null : this.destination; edit(project, library => { library.poses.forEach(pose => { if (ids.has(pose.id)) pose.group = target; }); }); }),
+                    remove: protect(function() { const ids = new Set(this.selection); edit(project, library => { library.poses = library.poses.filter(pose => !ids.has(pose.id)); }); }),
+                    importFile: protect(() => importPoses(project)),
+                    exportSelected: protect(function() { if (alive(project)) exportPoses(read(project), this.selection); }),
+                    exportGroup: protect(function() { if (alive(project)) { const current = read(project); exportPoses(current, current.poses.filter(pose => this.group === 'all' || (this.group === 'none' ? !pose.group : pose.group === this.group)).map(pose => pose.id), this.group === 'all' ? 'skin_poses' : this.groupName(this.group)); } })
+                },
+                template: `<div class="lf-pose-library">
+                    <div class="lf-pose-toolbar"><search-bar ref="search" v-model="search"></search-bar><button type="button" @click="addPose">{{text('New pose','Nueva pose')}}</button><button type="button" @click="importFile">{{text('Import JSON…','Importar JSON…')}}</button></div>
+                    <div class="lf-pose-columns">
+                        <nav class="lf-pose-folders" :aria-label="text('Pose groups','Grupos de poses')">
+                            <div class="lf-pose-folder"><button type="button" :aria-pressed="group==='all'" @click="filter('all')">{{text('All poses','Todas las poses')}}</button></div>
+                            <div class="lf-pose-folder"><button type="button" :aria-pressed="group==='none'" @click="filter('none')">{{text('Ungrouped','Sin grupo')}}</button></div>
+                            <div v-for="folder in library.groups" :key="folder.id" class="lf-pose-folder"><button type="button" :aria-pressed="group===folder.id" @click="filter(folder.id)">{{folder.name}}</button><button type="button" class="tool" :aria-label="text('Group options: ','Opciones del grupo: ')+folder.name" @click="groupMenu(folder,$event)"><i class="material-icons">more_horiz</i></button></div>
+                            <button type="button" @click="addGroup">+ {{text('New group','Nuevo grupo')}}</button>
+                        </nav>
+                        <div class="lf-pose-list"><label><input type="checkbox" :checked="allSelected" @change="selectAll"> {{text('Select visible','Seleccionar visibles')}}</label>
+                            <div v-for="pose in visible" :key="pose.id" class="lf-pose-row"><input type="checkbox" :value="pose.id" v-model="selection" :aria-label="text('Select ','Seleccionar ')+pose.name"><button type="button" class="lf-pose-apply" @click="applyPose(pose)" :title="text('Apply pose','Aplicar pose')"><strong>{{pose.name}}</strong><small v-if="group==='all'">{{groupName(pose.group)}}</small></button><button type="button" class="tool" :aria-label="text('Pose options: ','Opciones de pose: ')+pose.name" @click="poseMenu(pose,$event)"><i class="material-icons">more_horiz</i></button></div>
+                            <p v-if="!visible.length" class="lf-pose-empty">{{text('No poses in this view. Add or import a pose.','No hay poses en esta vista. Añade o importa una pose.')}}</p>
+                        </div>
+                    </div>
+                    <div class="lf-pose-bottom"><span role="status">{{selection.length}} {{text('selected','seleccionadas')}}</span><button type="button" class="lf-pose-destination" @click="selectDestination($event)" :aria-label="text('Destination group: ','Grupo de destino: ')+groupName(destination)">{{groupName(destination)}} ▾</button><button type="button" :disabled="!selection.length" @click="move">{{text('Move','Mover')}}</button><button type="button" class="tool" :disabled="!selection.length" @click="remove" :aria-label="text('Delete selected poses','Eliminar poses seleccionadas')" :title="text('Delete selected poses','Eliminar poses seleccionadas')"><i class="material-icons">delete</i></button><button type="button" :disabled="!selection.length&&!visible.length" @click="selection.length?exportSelected():exportGroup()">{{selection.length?text('Export selection…','Exportar selección…'):group==='all'?text('Export all…','Exportar todas…'):text('Export group…','Exportar grupo…')}}</button></div>
+                </div>`
+            }});
+    }
+    function libraryItems(library, callback) {
+        return groupedItems(library, pose => ({id: 'lightflow_skin_pose_' + pose.id, name: pose.name, icon: 'accessibility', click: () => { if (!disposed) callback(clone(pose.data), {id: pose.id, name: pose.name, group: pose.group}); }}));
+    }
+    const previousChildren = action.children, previousAdd = addAction.click;
+    const children = function(...args) {
+        const native = previousChildren.apply(this, args);
+        if (!alive(Project)) return native;
+        const project = Project;
+        let library;
+        try { library = read(project); }
+        catch (reason) { return [...native, '_', {name: text('Cannot read project poses…', 'No se pueden leer las poses del proyecto…'), icon: 'error', click: () => error(reason)}]; }
+        // Preserve native global poses, Update/Delete and the native Add action.
+        const result = native.map(item => {
+            if (!item || typeof item !== 'object' || !Array.isArray(item.children)) return item;
+            const saved = (StateMemory.get('skin_poses') || [])[Number(item.id)];
+            if (!saved) return item;
+            return {...item, description: [item.description, text('Global poses', 'Poses globales')].filter(Boolean).join(' '), click: protect(function(...args) { const result = item.click?.apply(this, args); if (alive(project)) rememberPose(project, saved); return result; }), children: [...item.children,
+                {name: text('Export pose JSON…', 'Exportar pose JSON…'), icon: 'save', click: protect(() => { if (alive(project)) { const incoming = core.parse(saved); exportPoses(incoming, incoming.poses.map(pose => pose.id), saved.name); } })},
+                {name: text('Save in project', 'Guardar en el proyecto'), icon: 'add', click: protect(() => {
+                    const incoming = core.parse(saved);
+                    if (alive(project)) edit(project, library => Object.assign(library, core.merge(library, incoming, incoming.poses.map(pose => pose.id))));
+                })}
+            ]};
+        });
+        const globalPoses = result.filter(item => item && typeof item === 'object');
+        return [
+        ...(globalPoses.length ? [new MenuSeparator('lightflow_skin_pose_global', text('Global poses', 'Poses globales')), ...globalPoses] : []),
+        ...groupedItems(library, pose => poseItem(project, pose)),
+        '_', 'add_custom_skin_pose',
+        {id: 'lightflow_skin_pose_manage', always_show: true, name: text('Manage poses and groups…', 'Gestionar poses y grupos…'), icon: 'folder_open', click: protect(() => showLibrary(project))},
+        {id: 'lightflow_skin_pose_export', always_show: true, name: text('Export poses / range JSON…', 'Exportar poses / rango JSON…'), icon: 'save', condition: library.poses.length > 0, click: protect(() => { if (alive(project)) { const library = read(project); choose(library, false, ids => { if (alive(project)) exportPoses(library, ids); }); } })},
+        {id: 'lightflow_skin_pose_import', always_show: true, name: text('Import skin poses from JSON…', 'Importar poses de skin desde JSON…'), icon: 'file_upload', click: protect(() => { if (alive(project)) importPoses(project); })}];
+    };
+    const add = function(...args) {
+        if (!alive(Project)) return previousAdd.apply(this, args);
+        const project = Project;
+        prompt(project, text('New pose', 'Nueva pose'), name => edit(project, library => library.poses.push({id: guid(), name, group: null, data: core.data(Codecs.skin_model.getPoseData())})));
+    };
+    action.children = children; addAction.click = add;
+    // Track only menus opened through our wrapper so unload cannot leave callbacks alive.
+    const previousClick = action.click;
+    const click = function(event) {
+        if (!alive(Project)) return previousClick.call(this, event);
+        openPoseMenu(children.call(this), event?.target || event);
+    };
+    action.click = click;
+    listen(codec, 'compile', protect(({model}) => {
+        if (Project?.[key]) model[key] = clone(Project[key]);
+        if (Project?.[activeKey]) model[activeKey] = clone(Project[activeKey]);
+    }));
+    listen(codec, 'parse', protect(({model}) => {
+        if (!Project) return;
+        // Preserve malformed/forward-version payloads verbatim until the user can recover them.
+        Project[key] = model[key] ? clone(model[key]) : core.empty();
+        Project[activeKey] = model[activeKey] && typeof model[activeKey].name === 'string' && typeof model[activeKey].signature === 'string' ? clone(model[activeKey]) : null;
+    }));
+    listen(Blockbench, 'create_undo_save', ({save, aspects}) => {
+        if (aspects.lightflow_skin_pose_library) save[key] = clone(Project[key] || core.empty());
+        if (aspects.lightflow_skin_pose_state) save.lightflow_skin_pose_state = {pose: Project.skin_pose, panel: Panels.skin_pose.inside_vue.pose, active: clone(Project[activeKey] || null)};
+    });
+    listen(Blockbench, 'load_undo_save', ({save}) => {
+        if (save[key]) Project[key] = clone(save[key]);
+        if (save.lightflow_skin_pose_state) { Project.skin_pose = save.lightflow_skin_pose_state.pose; Panels.skin_pose.inside_vue.pose = save.lightflow_skin_pose_state.panel; Project[activeKey] = clone(save.lightflow_skin_pose_state.active || null); }
+        syncManager();
+        syncPoseName();
+    });
+    listen(Blockbench, 'select_project', () => { if (manager && managerProject !== Project) manager.cancel(); });
+    const poseView = Panels.skin_pose?.inside_vue, previousSetPose = poseView?.setPose;
+    const setPreset = function(...args) {
+        const result = previousSetPose.apply(this, args);
+        if (!disposed && Project?.format?.id === 'skin') { Project[activeKey] = null; syncPoseName(); }
+        return result;
+    };
+    if (previousSetPose) poseView.setPose = setPreset;
+    const poseToolbar = typeof Toolbars !== 'undefined' ? Toolbars.skin_pose : null;
+    if (typeof BarText !== 'undefined' && poseToolbar && !BarItems.lightflow_skin_pose_name) {
+        ensureLibraryStyles();
+        poseName = new BarText('lightflow_skin_pose_name', {name: text('Applied pose', 'Pose aplicada'), text: '',
+            condition: () => !!Project && Project.format?.id === 'skin', onUpdate: syncPoseName});
+        poseName.node.setAttribute('role', 'status'); poseName.node.setAttribute('aria-live', 'polite');
+        const index = poseToolbar.children.findIndex(item => item === addAction || item === 'add_custom_skin_pose');
+        poseToolbar.children.splice(index < 0 ? poseToolbar.children.length : index + 1, 0, poseName);
+        if (typeof Action !== 'undefined') for (const [id, direction, name, icon] of [
+            ['lightflow_skin_pose_previous', -1, text('Previous skin pose', 'Pose de skin anterior'), 'chevron_left'],
+            ['lightflow_skin_pose_next', 1, text('Next skin pose', 'Pose de skin siguiente'), 'chevron_right']
+        ]) if (!BarItems[id]) {
+            const action = new Action(id, {name, icon, category: 'view', condition: () => !!Project && Project.format?.id === 'skin', click: protect(() => cyclePose(direction))});
+            poseNavigation.push(action);
+            poseToolbar.children.splice(poseToolbar.children.indexOf(poseName) + poseNavigation.length, 0, action);
+        }
+        poseToolbar.update(true);
+        syncPoseName();
+    }
+    for (const event of ['update_view', 'finish_edit', 'finished_edit', 'select_project', 'update_interface']) listen(Blockbench, event, protect(syncPoseName));
+    listen(codec, 'parsed', protect(syncPoseName));
+    const previousApi = window.LightflowSkinPoses;
+    const api = {core, read, apply, openMenu: openPoseMenu, menuItems: (model, callback) => libraryItems(read(model), callback)};
+    window.LightflowSkinPoses = api;
+    return {delete() {
+        if (disposed) return;
+        disposed = true;
+        for (const menu of menus) if (Menu.open === menu) menu.hide();
+        menus.clear();
+        for (const instance of dialogs) {
+            if (Dialog.open === instance) instance.hide();
+            else {
+                const index = Dialog.stack?.indexOf(instance) ?? -1;
+                if (index >= 0) Dialog.stack.splice(index, 1);
+            }
+            instance.resize_observer?.disconnect(); instance.delete();
+        }
+        dialogs.clear(); listeners.reverse().forEach(remove => remove());
+        if (poseView?.setPose === setPreset) poseView.setPose = previousSetPose;
+        for (const action of poseNavigation) {
+            poseToolbar.remove(action, false); action.toolbars = action.toolbars.filter(toolbar => toolbar !== poseToolbar);
+            const replacement = BarItems[action.id]; action.delete();
+            if (replacement && replacement !== action) BarItems[replacement.id] = replacement;
+        }
+        poseNavigation.length = 0;
+        if (poseName) {
+            poseToolbar.remove(poseName, false);
+            poseName.toolbars = poseName.toolbars.filter(toolbar => toolbar !== poseToolbar);
+            poseToolbar.update(true);
+            const replacement = BarItems[poseName.id];
+            poseName.delete();
+            if (replacement && replacement !== poseName) BarItems[replacement.id] = replacement;
+            poseName = null;
+        }
+        manager = null; managerProject = null; libraryStyles?.delete(); libraryStyles = null;
+        if (action.children === children) action.children = previousChildren;
+        if (action.click === click) action.click = previousClick;
+        if (addAction.click === add) addAction.click = previousAdd;
+        if (window.LightflowSkinPoses === api) { if (previousApi === undefined) delete window.LightflowSkinPoses; else window.LightflowSkinPoses = previousApi; }
+    }};
+}
+
+function installLightflowScalarChannels() {
+    const globalPrefix = 'lightflow_global_var:';
+    const uniformPrefix = 'lightflow_uniform:';
+    const effects = EffectAnimator.prototype;
+    const previousOwnAdd = Object.getOwnPropertyDescriptor(effects, 'addKeyframe');
+    const previousOwnCreate = Object.getOwnPropertyDescriptor(effects, 'createKeyframe');
+    const previousAdd = effects.addKeyframe;
+    const previousCreate = effects.createKeyframe;
+    const previousStack = Animator.stackAnimations;
+    const parser = Animator.MolangParser;
+    const previousVariable = parser.variableHandler;
+    const label = key => tl('light_manager.scalar_animation.' + key);
+    let frame = null;
+    let active = true;
+    let propertyMenu = null;
+
+    const variableName = value => {
+        const name = String(value ?? '').trim().toLowerCase().replace(/^(?:v|variable)\./, '');
+        return /^[a-z_][a-z0-9_]*(?:\.[a-z0-9_]+)*$/.test(name) && name.length <= 64 &&
+            !['__proto__', 'constructor', 'prototype'].includes(name) ? name : '';
+    };
+    const uniformChannel = (id, name, axis) => uniformPrefix + encodeURIComponent(id) + ':' + name + ':' + axis;
+    const uniformInfo = (target, describe) => target.instance &&
+        window.MaterialManager?.getUniformAnimationTarget?.(target.instance, target.uniform, target.axis, describe);
+    const getGlobalBase = (key, params, args) => {
+        const value = Number(previousVariable?.call(parser, key, params, args));
+        return Number.isFinite(value) ? value : 0;
+    };
+    const decode = channel => {
+        if (typeof channel !== 'string') return null;
+        if (channel.startsWith(globalPrefix)) {
+            const name = channel.slice(globalPrefix.length);
+            return name && variableName(name) === name ? {variable: 'variable.' + name, name: 'v.' + name} : null;
+        }
+        if (!channel.startsWith(uniformPrefix)) return null;
+        const fields = channel.slice(uniformPrefix.length).split(':');
+        if (fields.length !== 3 || !fields[0] || !/^[A-Za-z_]\w{0,127}$/.test(fields[1]) || !/^[xyzw]?$/.test(fields[2])) return null;
+        try {
+            return {instance: decodeURIComponent(fields[0]), uniform: fields[1], axis: fields[2]};
+        } catch (_) { return null; }
+    };
+    function defineChannel(animator, channel, definition, keys = []) {
+        if (!Object.hasOwn(animator, 'channels')) Vue.set(animator, 'channels', {...animator.channels});
+        Vue.set(animator, channel, keys);
+        Vue.set(animator.muted, channel, animator.muted[channel] ?? false);
+        Vue.set(animator.channels, channel, {
+            mutable: true, transform: true, max_data_points: 2, lightflowScalar: true, ...definition
+        });
+    }
+    function prepareKeyframeChannel(channel) {
+        if (Object.hasOwn(this.channels, channel)) return true;
+        const target = decode(channel);
+        if (!target) return false;
+        const uniform = uniformInfo(target, true);
+        defineChannel(this, channel, {
+            name: target.name || uniform?.trackName || [target.uniform, target.axis].filter(Boolean).join('.'),
+            defaultValue: () => target.variable ? getGlobalBase(target.variable) : uniformInfo(target)?.value ?? 0,
+            lightflowTarget: target
+        });
+        return true;
+    }
+    function addKeyframe(data, uuid) {
+        prepareKeyframeChannel.call(this, data.channel);
+        return previousAdd.call(this, data, uuid);
+    }
+    function createEffectsKeyframe(value, time, channel, undo, select) {
+        prepareKeyframeChannel.call(this, channel);
+        return previousCreate.call(this, value, time, channel, undo, select);
+    }
+    function detachChannel(animator, channel) {
+        Vue.delete(animator.channels, channel);
+        Vue.delete(animator, channel);
+        Vue.delete(animator.muted, channel);
+    }
+    function removeChannel(animator, channel, undo = true) {
+        const config = animator?.channels?.[channel];
+        if (!config?.lightflowScalar) return false;
+        const keys = animator[channel].slice();
+        if (keys.length && undo) Undo.initEdit({animations: [animator.animation]});
+        keys.forEach(key => key.remove());
+        detachChannel(animator, channel);
+        animator.animation.setLength();
+        if (keys.length && undo) Undo.finishEdit(label('remove_track'));
+        TickUpdates.keyframe_selection = true;
+        if (undo) Animator.preview();
+        return true;
+    }
+    function pruneEmptyChannels() {
+        for (const animation of window.Project?.animations || []) {
+            for (const animator of Object.values(animation.animators)) {
+                for (const [channel, config] of Object.entries(animator.channels)) {
+                    if (config.lightflowScalar && !animator[channel]?.length) detachChannel(animator, channel);
+                }
+            }
+        }
+        TickUpdates.keyframe_selection = true;
+    }
+    function selectChannelToRemove(animator) {
+        const options = Object.fromEntries(Object.entries(animator.channels)
+            .filter(([, channel]) => channel.lightflowScalar).map(([id, channel]) => [id, channel.name]));
+        const first = Object.keys(options)[0];
+        if (!first) return;
+        window.LightManagerUI.showTaskDialog('lightflow_remove_scalar_track', {
+            title: label('remove_track'), width: 400,
+            form: {channel: window.LightManagerUI.formDesign.enum({label: label('property'), options, value: first})},
+            onConfirm(result) { if (animator.animation === Animation.selected) removeChannel(animator, result.channel); }
+        });
+    }
+    function sampleKeys(animator, channel) {
+        const animationBefore = parser.context.animation;
+        const lastValues = Animator._last_values;
+        parser.context.animation = animator.animation;
+        Animator._last_values = {};
+        try {
+            return BoneAnimator.prototype.interpolate.call(animator, channel, false, 'x');
+        } finally {
+            parser.context.animation = animationBefore;
+            Animator._last_values = lastValues;
+        }
+    }
+    function evaluate(tracks, base, context) {
+        let value = base;
+        for (const entry of tracks) {
+            const {animator, channel, time, loop, override, controllerWeight} = entry;
+            const animation = animator.animation;
+            const previousTime = Timeline.time, previousLoop = animation.loop;
+            if (previousTime !== time) Timeline.time = time;
+            if (previousLoop !== loop) animation.loop = loop;
+            try {
+                let weight = context.weights.get(entry);
+                if (weight === undefined) {
+                    context.weights.set(entry, controllerWeight);
+                    weight = animation.blend_weight ? Math.max(0, Number(parser.parse(animation.blend_weight, {'query.anim_time': animation.time})) || 0) : 1;
+                    weight *= controllerWeight;
+                    context.weights.set(entry, weight);
+                }
+                if (!weight) continue;
+                const sample = sampleKeys(animator, channel);
+                if (Number.isFinite(sample)) value = (override ? base : value) + (sample - base) * weight;
+            } finally {
+                if (previousLoop !== loop) animation.loop = previousLoop;
+                if (previousTime !== time) Timeline.time = previousTime;
+            }
+        }
+        return value;
+    }
+    function variableHandler(key, params, args) {
+        const context = frame;
+        const tracks = context?.globals.get(key);
+        if (!tracks) return previousVariable?.call(this, key, params, args);
+        if (context.resolving.has(key)) return context.bases.get(key) ?? 0;
+        if (context.values.has(key)) return context.values.get(key);
+        context.resolving.add(key);
+        try {
+            const base = getGlobalBase(key, {'query.anim_time': tracks.at(-1).animationTime});
+            context.bases.set(key, base);
+            const value = evaluate(tracks, base, context);
+            context.values.set(key, value);
+            return value;
+        } finally { context.resolving.delete(key); }
+    }
+    function stackAnimations(animations, inLoop, blend) {
+        if (!active) return previousStack.call(this, animations, inLoop, blend);
+        // Match native pose stacking, with the selected clip applied last.
+        const selected = Animation.selected;
+        const ordered = animations.length > 1 && selected && animations.includes(selected)
+            ? [...animations.filter(clip => clip !== selected), selected] : animations;
+        for (const animation of ordered) {
+            if (animation.loop === 'once' && animation.length && Timeline.time > animation.length) continue;
+            const animator = animation.animators.effects;
+            if (!animator || !Object.hasOwn(animator, 'channels')) continue;
+            for (const [channel, config] of Object.entries(animator.channels)) {
+                const target = config.lightflowTarget;
+                if (!target || animator.muted[channel] || !animator[channel]?.length) continue;
+                const context = frame ||= {globals: new Map(), uniforms: new Map(), values: new Map(), bases: new Map(),
+                    resolving: new Set(), weights: new Map()};
+                const entries = target.variable ? context.globals : context.uniforms;
+                const key = target.variable || channel;
+                if (!entries.has(key)) entries.set(key, []);
+                entries.get(key).push({animator, channel, target, time: Timeline.time, animationTime: animation.time,
+                    loop: animation.loop, override: animation.override, controllerWeight: blend?.[animation.uuid] ?? 1});
+                context.values.clear();
+            }
+        }
+        return previousStack.call(this, animations, inLoop, blend);
+    }
+    function applyUniforms() {
+        const manager = window.MaterialManager;
+        if (!manager?.applyUniformAnimationFrame) return;
+        const values = [];
+        if (frame) {
+            for (const tracks of frame.uniforms.values()) {
+                const target = tracks[0].target;
+                const info = uniformInfo(target);
+                if (info) values.push({...target, value: evaluate(tracks, info.value, frame)});
+            }
+        }
+        manager.applyUniformAnimationFrame(values);
+    }
+    function clear() {
+        frame = null;
+        window.MaterialManager?.applyUniformAnimationFrame?.([]);
+    }
+    function createKey(animation, channel, expression, time) {
+        if (animation !== Animation.selected) return;
+        const animator = animation.animators.effects ||= new EffectAnimator(animation);
+        if (!prepareKeyframeChannel.call(animator, channel)) return;
+        const config = animator.channels[channel];
+        const existing = animator[channel].length > 0;
+        const value = expression.trim() || (existing ? sampleKeys(animator, channel) : config.defaultValue());
+        const data = {data_points: [{x: value}]};
+        if (uniformInfo(config.lightflowTarget)?.discrete) data.interpolation = 'step';
+        animator.select();
+        animator.createKeyframe(data, time, channel, true);
+        Animator.preview();
+    }
+    function openGlobalPicker() {
+        const animation = Animation.selected;
+        if (!animation) return;
+        const names = new Set();
+        for (const [key] of Object.entries(Animator.global_variable_lines || {})) {
+            const name = key.startsWith('variable.') && variableName(key);
+            if (name) names.add(name);
+        }
+        for (const clip of Animation.all) {
+            for (const channel of Object.keys(clip.animators.effects?.channels || {})) {
+                if (channel.startsWith(globalPrefix)) names.add(channel.slice(globalPrefix.length));
+            }
+        }
+        const options = {new_variable: label('new_variable')};
+        for (const name of Array.from(names).sort()) options[globalPrefix + name] = 'v.' + name;
+        const time = Timeline.time;
+        window.LightManagerUI.showTaskDialog('lightflow_global_property_key', {
+            title: label('global_key'), width: 420,
+            form: {
+                channel: window.LightManagerUI.formDesign.enum({label: label('property'), options, value: 'new_variable'}),
+                name: {type: 'text', label: label('name'), placeholder: 'v.drive', condition: form => form.channel === 'new_variable'},
+                expression: {type: 'text', label: label('expression'), placeholder: '0'}
+            },
+            onConfirm(result) {
+                const channel = result.channel === 'new_variable' && variableName(result.name);
+                if (result.channel === 'new_variable' && !channel) {
+                    Blockbench.showQuickMessage(label('invalid_name'));
+                    return false;
+                }
+                createKey(animation, channel ? globalPrefix + channel : result.channel, result.expression, time);
+            }
+        });
+    }
+    function openUniformPicker(instanceId) {
+        const animation = Animation.selected;
+        if (!animation) return;
+        const targets = window.MaterialManager?.listUniformAnimationTargets?.(instanceId) || [];
+        if (!targets.length) return;
+        const options = Object.fromEntries(targets.map(target => [uniformChannel(instanceId, target.uniform, target.axis), target.label]));
+        const time = Timeline.time;
+        window.LightManagerUI.showTaskDialog('lightflow_uniform_property_key', {
+            title: label('uniform_key'), width: 460,
+            form: {
+                channel: window.LightManagerUI.formDesign.enum({label: label('property'), options, value: Object.keys(options)[0]}),
+                expression: {type: 'text', label: label('expression'), placeholder: label('current_value')}
+            },
+            onConfirm(result) { createKey(animation, result.channel, result.expression, time); }
+        });
+    }
+    function materialPickerItems() {
+        const manager = window.MaterialManager;
+        return Object.values(manager?.instances || {}).map(instance => {
+            const base = manager.materials[instance.baseMaterialId];
+            return {
+                id: 'lightflow_animated_material_' + instance.id,
+                name: instance.name || instance.id,
+                icon: instance.icon || base?.icon || 'texture',
+                color: manager.getMaterialInstanceIconColorCSS(instance.iconColor),
+                click: () => openUniformPicker(instance.id)
+            };
+        });
+    }
+    const api = {removeChannel, selectChannelToRemove};
+    window.LightflowScalarChannels = api;
+    effects.prepareKeyframeChannel = prepareKeyframeChannel;
+    effects.addKeyframe = addKeyframe;
+    effects.createKeyframe = createEffectsKeyframe;
+    Animator.stackAnimations = stackAnimations;
+    parser.variableHandler = variableHandler;
+    const deleteItem = {
+        id: 'lightflow_delete_scalar_track', name: 'light_manager.scalar_animation.remove_track', icon: 'delete',
+        condition: keyframe => !!keyframe?.animator?.channels?.[keyframe.channel]?.lightflowScalar,
+        click: keyframe => removeChannel(keyframe.animator, keyframe.channel)
+    };
+    const keyMenu = Keyframe.prototype.menu.structure;
+    keyMenu.splice(keyMenu.indexOf('delete'), 0, deleteItem);
+    const action = new Action('lightflow_scalar_property_key', {
+        name: 'light_manager.scalar_animation.title', category: 'animation', icon: 'functions',
+        condition: () => !!Modes.animate && !!Animation.selected,
+        click(event) {
+            const hasScalarTracks = animator => animator?.animation === Animation.selected &&
+                Object.values(animator.channels).some(channel => channel.lightflowScalar);
+            const animator = hasScalarTracks(Timeline.selected_animator) ? Timeline.selected_animator : Animation.selected?.animators.effects;
+            const particleAction = BarItems.lightflow_particle_property_key;
+            const materials = materialPickerItems();
+            const anchor = event?.currentTarget || event?.target || action.nodes[0];
+            const menu = propertyMenu = new Menu('lightflow_scalar_property_menu', [
+                {id: 'lightflow_particle_key_option', name: 'lightflow_atmosphere.ui.particle_add_property_key', icon: 'ac_unit',
+                    condition: () => !!particleAction && Condition(particleAction.condition),
+                    click: () => particleAction.trigger()},
+                {id: 'lightflow_global_key_option', name: 'light_manager.scalar_animation.global_key', icon: 'functions', click: openGlobalPicker},
+                {id: 'lightflow_uniform_key_option', name: 'light_manager.scalar_animation.uniform_key', icon: 'tune',
+                    condition: () => materials.length > 0,
+                    searchable: materials.length > 8,
+                    children: materials},
+                {name: 'light_manager.scalar_animation.remove_track', icon: 'delete',
+                    condition: () => hasScalarTracks(animator),
+                    click: () => selectChannelToRemove(animator)}
+            ], {onClose() { if (propertyMenu === menu) propertyMenu = null; }});
+            menu.open(anchor);
+            window.LightManagerUI.prepareScrollableMenu(menu);
+            const materialSubmenu = menu.node.querySelector('li[menu_item="lightflow_uniform_key_option"] > ul');
+            materialSubmenu?.addEventListener('keydown', event => {
+                if (event.key !== 'Enter' || event.isComposing || !event.target.matches('.menu_search_bar input')) return;
+                const row = materialSubmenu.querySelector(':scope > li[menu_item].focused') ||
+                    materialSubmenu.querySelector(':scope > li[menu_item]');
+                if (!row) return;
+                event.preventDefault();
+                event.stopPropagation();
+                row.click();
+            }, true);
+        }
+    });
+    Toolbars.timeline?.add(action, 5);
+    const listeners = [
+        Blockbench.on('display_default_pose', () => { frame = null; }),
+        Blockbench.on('display_animation_frame', applyUniforms),
+        Blockbench.on('undo', pruneEmptyChannels),
+        Blockbench.on('redo', pruneEmptyChannels),
+        Blockbench.on('select_project', clear),
+        Blockbench.on('close_project', clear),
+        Blockbench.on('select_mode', () => { if (!Modes.animate) clear(); })
+    ];
+    return {delete() {
+        active = false;
+        propertyMenu?.hide();
+        clear();
+        listeners.forEach(listener => listener.delete());
+        Toolbars.timeline?.remove(action);
+        action.delete();
+        const deleteIndex = keyMenu.indexOf(deleteItem);
+        if (deleteIndex !== -1) keyMenu.splice(deleteIndex, 1);
+        if (window.LightflowScalarChannels === api) delete window.LightflowScalarChannels;
+        if (effects.prepareKeyframeChannel === prepareKeyframeChannel) delete effects.prepareKeyframeChannel;
+        if (effects.addKeyframe === addKeyframe) {
+            if (previousOwnAdd) Object.defineProperty(effects, 'addKeyframe', previousOwnAdd);
+            else delete effects.addKeyframe;
+        }
+        if (effects.createKeyframe === createEffectsKeyframe) {
+            if (previousOwnCreate) Object.defineProperty(effects, 'createKeyframe', previousOwnCreate);
+            else delete effects.createKeyframe;
+        }
+        if (Animator.stackAnimations === stackAnimations) Animator.stackAnimations = previousStack;
+        if (parser.variableHandler === variableHandler) parser.variableHandler = previousVariable;
+    }};
+}
+
 function initializeLightManagerPlugin() {
     window.LightManagerIcons = lightManagerIconsApi;
     installLightManagerIconBridge();
     Language.addTranslations('en', {
+        'light_manager.eula.heading': 'Minecraft resources',
+        'light_manager.eula.continue': 'Accept and download',
+        'light_manager.eula.notice': 'Download sun, moon, clouds and Vanilla textures, including particles, from Mojang. Accept the Minecraft EULA to continue. Mojang retains copyright; Lightflow is not an official Minecraft product. Your acceptance is saved on this device.',
+        'light_manager.eula.read': 'Read Minecraft EULA',
+        'light_manager.eula.license': 'Read repository license',
+        'light_manager.eula.accept': 'I have read and accept the Minecraft EULA',
         'light_manager.ui.filter_all': 'All',
         'light_manager.ui.filter_active': 'Active',
         'light_manager.ui.filter_modified': 'Modified',
@@ -8367,6 +10299,8 @@ function initializeLightManagerPlugin() {
         'light_manager.ui.helpers_contextual': 'Contextual',
         'light_manager.ui.helpers_all': 'All helpers',
         'light_manager.ui.helpers_clean': 'Clean preview',
+        'light_manager.ui.world_ao_menu_hint': 'Right-click or press Shift+F10 for settings',
+        'light_manager.ui.helpers_clean_hint': 'Hides grids and editing helpers',
         'light_manager.ui.helpers_hint': 'Editing guides only. Lighting, materials and environment stay the same.',
         'light_manager.ui.view_options': 'View options',
         'light_manager.ui.scene_hint': 'Select an object in the viewport or Outliner to edit its properties.',
@@ -8417,22 +10351,35 @@ function initializeLightManagerPlugin() {
         'light_manager.ui.right_rail': 'Lightflow right panel rail',
         'light_manager.ui.wide_open_panel': 'Open {panel} over the wide canvas',
         'light_manager.ui.wide_close_panel': 'Close {panel}',
-        'light_manager.ui.sun_region': 'Edit sun shadow region',
-        'light_manager.ui.sun_region_hint': 'Requires Environment, sun shadows and automatic shadow fitting.',
         'light_manager.ui.light_details': 'Light & shadows',
         'light_manager.ui.selected_scope': 'Changes apply to the selected lights.',
         'light_manager.ui.no_light': 'Select a light in the viewport or Outliner to edit it.',
         'light_manager.ui.saved_cameras': 'Saved cameras',
-        'light_manager.ui.ao_settings': 'Ambient occlusion',
         'light_manager.ui.attached_ray': 'Create attached God Ray',
         'light_manager.ui.transform_selection': 'Move / Rotate selection',
         'light_manager.ui.art_source_section': 'Source & reach',
         'light_manager.ui.art_scope_section': 'Influence & targets',
-        'light_manager.ui.world_shading': 'Shading',
-        'light_manager.ui.world_ao': 'Ambient occlusion',
-        'light_manager.ui.world_grid': 'Grid',
-        'light_manager.ui.world_ground': 'Ground',
+        'light_manager.ui.key_light_section': 'Key Light',
+        'light_manager.ui.shadow_details_section': 'Shadow bounds & quality',
         'light_manager.ui.add_light': 'Add light',
+        'light_manager.animation_json.title': 'Lightflow Animation JSON',
+        'light_manager.scalar_animation.title': 'Animated Properties',
+        'light_manager.scalar_animation.global_key': 'Global MoLang Variable…',
+        'light_manager.scalar_animation.uniform_key': 'Material Uniform…',
+        'light_manager.scalar_animation.remove_track': 'Delete Property Track…',
+        'light_manager.scalar_animation.property': 'Property',
+        'light_manager.scalar_animation.new_variable': 'New global variable',
+        'light_manager.scalar_animation.name': 'Variable name',
+        'light_manager.scalar_animation.expression': 'Value or MoLang',
+        'light_manager.scalar_animation.invalid_name': 'Enter a valid MoLang variable name.',
+        'light_manager.scalar_animation.current_value': 'Current value',
+        'light_manager.animation_json.import': 'Import animations (Lightflow JSON)',
+        'light_manager.animation_json.export': 'Export animations (Lightflow JSON)',
+        'light_manager.animation_json.help': 'Preserves native keyframes and Lightflow channels. The destination needs matching objects and plugins. Models, rigs and media are not included.',
+        'light_manager.animation_json.invalid': 'Invalid or unsupported animation JSON.',
+        'light_manager.animation_json.missing_target': 'Missing or ambiguous animation target',
+        'light_manager.animation_json.unsupported': 'Required animator or channel is unavailable',
+        'light_manager.animation_json.changed': 'The animation selection changed. Open the exporter again.',
         'light_manager.ui.keyframe_color': 'Color',
         'light_manager.ui.keyframe_color_mixed': 'Mixed colors — picking a color replaces the selected RGB values.',
         'light_manager.action.add_light_menu': 'Add Light',
@@ -8448,15 +10395,23 @@ function initializeLightManagerPlugin() {
         'property.shadow_settings.compact': 'Shadows',
         'property.light_color': 'Light Color',
         'property.light_intensity': 'Intensity',
-        'property.light_intensity.desc': 'Higher values make the light brighter.',
+        'property.light_intensity.desc': 'Positive values illuminate. Negative values darken the whole light volume, regardless of face direction; choose a color to tint the resulting shade (black = neutral darkness).',
         'property.light_temperature': 'Temperature',
         'property.light_temperature.desc': 'Color temperature in Kelvin. Lower is warmer; higher is cooler.',
         'property.light_type': 'Light Type',
+        'light_manager.ui.shadow_clip_managed': 'Shadow clipping is controlled by the fitted or locked directional shadow region. Disable that mode to edit these values.',
         'light_manager.art.name': 'Art Key',
         'light_manager.art.add': 'Add Art Key',
         'light_manager.art.edit': 'Edit Art Key',
         'light_manager.art.hint': 'Affects Glow / Rim only. The box targets object centers; Include adds objects outside it. Drag handles with Edit light gizmos. Up to 8 keys per object.',
         'light_manager.art.source': 'Source',
+        'light_manager.art.glow_color_source': 'Glow color',
+        'light_manager.art.glow_color_source.desc': 'Normal Glow: choose the key color, the texture with HSV adjustments, or a mix of both. Exact Light Color keeps the key color.',
+        'light_manager.art.glow_color_light': 'Light color',
+        'light_manager.art.glow_color_texture': 'Texture / HSV',
+        'light_manager.art.glow_color_mix': 'Mix both',
+        'light_manager.art.glow_texture_mix': 'Texture mix',
+        'light_manager.art.glow_texture_mix.desc': '0% uses the key color; 100% uses the texture with HSV adjustments.',
         'light_manager.art.point': 'Glow point',
         'light_manager.art.direction': 'Direction',
         'light_manager.art.radius': 'Point radius',
@@ -8763,6 +10718,12 @@ function initializeLightManagerPlugin() {
     });
 
     Language.addTranslations('es', {
+        'light_manager.eula.heading': 'Recursos de Minecraft',
+        'light_manager.eula.continue': 'Aceptar y descargar',
+        'light_manager.eula.notice': 'Descarga desde Mojang el sol, la luna, las nubes y las texturas Vanilla, incluidas las partículas. Acepta la EULA de Minecraft para continuar. Mojang conserva los derechos; Lightflow no es un producto oficial de Minecraft. Tu aceptación se guarda en este dispositivo.',
+        'light_manager.eula.read': 'Leer EULA de Minecraft',
+        'light_manager.eula.license': 'Leer licencia del repositorio',
+        'light_manager.eula.accept': 'He leído y acepto la EULA de Minecraft',
         'light_manager.ui.filter_all': 'Todos',
         'light_manager.ui.filter_active': 'Activos',
         'light_manager.ui.filter_modified': 'Modificados',
@@ -8841,6 +10802,8 @@ function initializeLightManagerPlugin() {
         'light_manager.ui.helpers_contextual': 'Contextuales',
         'light_manager.ui.helpers_all': 'Todas las ayudas',
         'light_manager.ui.helpers_clean': 'Vista limpia',
+        'light_manager.ui.world_ao_menu_hint': 'Haz clic derecho o pulsa Mayús+F10 para abrir los ajustes',
+        'light_manager.ui.helpers_clean_hint': 'Oculta las cuadrículas y las ayudas de edición',
         'light_manager.ui.helpers_hint': 'Solo guías de edición. La iluminación, los materiales y el entorno se conservan.',
         'light_manager.ui.view_options': 'Opciones de vista',
         'light_manager.ui.scene_hint': 'Selecciona un objeto en la vista o el Outliner para editar sus propiedades.',
@@ -8891,23 +10854,36 @@ function initializeLightManagerPlugin() {
         'light_manager.ui.right_rail': 'Riel derecho de paneles Lightflow',
         'light_manager.ui.wide_open_panel': 'Abrir {panel} sobre el lienzo ancho',
         'light_manager.ui.wide_close_panel': 'Cerrar {panel}',
-        'light_manager.ui.sun_region': 'Editar región de sombras del sol',
-        'light_manager.ui.sun_region_hint': 'Requiere Entorno, sombras del sol y ajuste automático de sombras.',
         'light_manager.ui.light_details': 'Luz y sombras',
         'light_manager.ui.selected_scope': 'Los cambios se aplican a las luces seleccionadas.',
         'light_manager.ui.no_light': 'Selecciona una luz en la vista o el Outliner para editarla.',
         'light_manager.ui.saved_cameras': 'Cámaras guardadas',
-        'light_manager.ui.ao_settings': 'Oclusión ambiental',
         'light_manager.ui.attached_ray': 'Crear rayo de luz vinculado',
         'light_manager.ui.transform_selection': 'Mover / Rotar selección',
         'light_manager.ui.art_source_section': 'Origen y alcance',
         'light_manager.ui.art_scope_section': 'Influencia y objetos',
-        'light_manager.ui.world_shading': 'Sombreado',
-        'light_manager.ui.world_ao': 'Oclusión ambiental',
-        'light_manager.ui.world_grid': 'Cuadrícula',
-        'light_manager.ui.world_ground': 'Suelo',
+        'light_manager.ui.key_light_section': 'Key Light',
+        'light_manager.ui.shadow_details_section': 'Límites y calidad de sombras',
         'light_manager.ui.add_light': 'Añadir luz',
         'light_manager.ui.keyframe_color': 'Color',
+        'light_manager.animation_json.title': 'Animaciones JSON de Lightflow',
+        'light_manager.scalar_animation.title': 'Propiedades animadas',
+        'light_manager.scalar_animation.global_key': 'Variable global de MoLang…',
+        'light_manager.scalar_animation.uniform_key': 'Uniform de material…',
+        'light_manager.scalar_animation.remove_track': 'Eliminar pista de propiedad…',
+        'light_manager.scalar_animation.property': 'Propiedad',
+        'light_manager.scalar_animation.new_variable': 'Nueva variable global',
+        'light_manager.scalar_animation.name': 'Nombre de la variable',
+        'light_manager.scalar_animation.expression': 'Valor o MoLang',
+        'light_manager.scalar_animation.invalid_name': 'Introduce un nombre de variable MoLang válido.',
+        'light_manager.scalar_animation.current_value': 'Valor actual',
+        'light_manager.animation_json.import': 'Importar animaciones (JSON Lightflow)',
+        'light_manager.animation_json.export': 'Exportar animaciones (JSON Lightflow)',
+        'light_manager.animation_json.help': 'Conserva keyframes nativos y canales Lightflow. El destino necesita objetos y plugins correspondientes. No incluye modelos, rigs ni archivos multimedia.',
+        'light_manager.animation_json.invalid': 'JSON de animación inválido o no compatible.',
+        'light_manager.animation_json.missing_target': 'Destino de animación ausente o ambiguo',
+        'light_manager.animation_json.unsupported': 'Animador o canal requerido no disponible',
+        'light_manager.animation_json.changed': 'Cambió la selección de animaciones. Abre de nuevo el exportador.',
         'light_manager.ui.keyframe_color_mixed': 'Colores distintos — elegir un color sustituye los valores RGB seleccionados.',
         'light_manager.action.add_light_menu': 'Añadir luz',
         'light_manager.ui.add_volume': 'Añadir volumen',
@@ -8922,15 +10898,23 @@ function initializeLightManagerPlugin() {
         'property.shadow_settings.compact': 'Sombras',
         'property.light_color': 'Color de luz',
         'property.light_intensity': 'Intensidad',
-        'property.light_intensity.desc': 'Cuanto mayor sea el valor, más brillará la luz.',
+        'property.light_intensity.desc': 'Los valores positivos iluminan. Los negativos oscurecen toda la zona de influencia sin depender de la orientación de las caras; el color tiñe la sombra (negro = oscuridad neutra).',
         'property.light_temperature': 'Temperatura',
         'property.light_temperature.desc': 'Temperatura de color en Kelvin. Menor es mas calida; mayor es mas fria.',
         'property.light_type': 'Tipo de luz',
+        'light_manager.ui.shadow_clip_managed': 'El recorte de sombras lo controla la región direccional ajustada o bloqueada. Desactiva ese modo para editar estos valores.',
         'light_manager.art.name': 'Key artística',
         'light_manager.art.add': 'Añadir Key artística',
         'light_manager.art.edit': 'Editar Key artística',
         'light_manager.art.hint': 'Solo afecta a Glow / Rim. La caja incluye centros de objetos; Incluir permite añadir otros fuera. Arrastra los tiradores con Editar gizmos. Hasta 8 keys por objeto.',
         'light_manager.art.source': 'Fuente',
+        'light_manager.art.glow_color_source': 'Color del glow',
+        'light_manager.art.glow_color_source.desc': 'Glow Normal: elige el color de la key, la textura con ajustes HSV o una mezcla de ambos. Color exacto de luz conserva el color de la key.',
+        'light_manager.art.glow_color_light': 'Color de luz',
+        'light_manager.art.glow_color_texture': 'Textura / HSV',
+        'light_manager.art.glow_color_mix': 'Mezcla',
+        'light_manager.art.glow_texture_mix': 'Mezcla de textura',
+        'light_manager.art.glow_texture_mix.desc': '0% usa el color de la key; 100% usa la textura con los ajustes HSV.',
         'light_manager.art.point': 'Punto de Glow',
         'light_manager.art.direction': 'Dirección',
         'light_manager.art.radius': 'Radio del punto',
@@ -9241,6 +11225,62 @@ function initializeLightManagerPlugin() {
 
 
     let deletables = [];
+    let minecraftEulaPending = null;
+    let cancelMinecraftEula = null;
+    function requestMinecraftEula() {
+        const key = 'bedrock_structure_studio_preferences_v1';
+        const read = () => {
+            try {
+                const value = JSON.parse(localStorage.getItem(key) || '{}');
+                return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+            } catch (_) { return {}; }
+        };
+        if (read().minecraftPacksEulaAccepted === true) return Promise.resolve(true);
+        if (minecraftEulaPending) return minecraftEulaPending;
+        const text = key => tl('light_manager.eula.' + key);
+        minecraftEulaPending = new Promise(resolve => {
+            let settled = false;
+            const finish = accepted => {
+                if (settled) return;
+                settled = true;
+                dialog.hide();
+                dialog.delete();
+                cancelMinecraftEula = null;
+                minecraftEulaPending = null;
+                if (accepted) {
+                    try { localStorage.setItem(key, JSON.stringify({...read(), minecraftPacksEulaAccepted:true, minecraftPacksEulaAcceptedAt:new Date().toISOString()})); } catch (_) {}
+                }
+                resolve(accepted);
+            };
+            const dialog = new Dialog({
+                id:'lightflow_minecraft_eula', title:'Minecraft EULA', width:560,
+                buttons:[text('continue'), 'dialog.cancel'],
+                form:{
+                    intro:{type:'bar_display', expand:true, value:''},
+                    notice:{type:'info', text:text('notice')},
+                    terms:{type:'action_button', icon:'open_in_new', text:text('read'), click:()=>Blockbench.openLink('https://www.minecraft.net/en-us/eula')},
+                    license:{type:'action_button', icon:'description', text:text('license'), click:()=>Blockbench.openLink('https://github.com/Mojang/bedrock-samples/blob/main/LICENSE.md')},
+                    accepted:{type:'custom_checkbox', presentation:'checkbox', layout:'space_between', icon_size:'28px', label:text('accept'), value:false}
+                },
+                onConfirm(result) { if (result.accepted !== true) return false; finish(true); return false; },
+                onCancel() { finish(false); return false; }
+            });
+            cancelMinecraftEula = () => finish(false);
+            dialog.show();
+            const intro = dialog.form?.form_data?.intro?.bar;
+            if (intro) {
+                intro.style.cssText = 'display:flex;align-items:center;gap:16px;padding:8px 0 4px';
+                const icon = Blockbench.getIconNode(LIGHTFLOW_GRASSBLOCK_ICON);
+                icon.style.cssText = 'width:48px;height:48px;font-size:48px;flex-shrink:0;color:var(--color-accent)';
+                const heading = document.createElement('strong');
+                heading.textContent = text('heading');
+                heading.style.cssText = 'font-size:20px;line-height:1.3';
+                intro.replaceChildren(icon, heading);
+            }
+        });
+        return minecraftEulaPending;
+    }
+
     let lightManagerUIApi = null;
     let lightTextures = {}; // THREE.Texture instances will be loaded here
     let originalAnimatorPreview = null;
@@ -10409,6 +12449,26 @@ function initializeLightManagerPlugin() {
         { id: 'silver', name: 'Silver', standard: '#bed1f2', pastel: '#dce7f8' }
     ].map(entry => Object.freeze(entry)));
 
+    function createNativeMenuSearch(placeholder, type = 'search', row = document.createElement('li')) {
+        row.classList.add('menu_search_bar');
+        row.setAttribute('role', 'presentation');
+        row.style.cssText = 'position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:6px;padding:5px;flex-shrink:0;background:var(--color-bright_ui);border-bottom:1px solid var(--color-border);cursor:default';
+        const input = document.createElement('input');
+        input.type = type;
+        input.placeholder = placeholder || translateLightManager('light_manager.ui.search_options');
+        input.setAttribute('aria-label', input.placeholder);
+        input.style.cssText = 'width:100%;min-width:0;height:28px;box-sizing:border-box;flex:1';
+        row.replaceChildren(input);
+        if (type === 'search') {
+            const icon = Blockbench.getIconNode('search');
+            icon.setAttribute('aria-hidden', 'true');
+            icon.style.cssText = 'position:static;display:flex;align-items:center;justify-content:center;flex:0 0 20px;margin:0';
+            row.append(icon);
+        }
+        row.addEventListener('click', event => event.stopPropagation());
+        return {row, input};
+    }
+
     class LightManagerGridMenu {
         constructor(menu, options = {}) {
             this.menu = menu;
@@ -10428,6 +12488,87 @@ function initializeLightManagerPlugin() {
             return Math.min(count, Math.max(minColumns, Math.min(maxColumns, Math.ceil(Math.sqrt(count)))));
         }
 
+        static iconItems(editors, {id, options, value, label, color, apply, includeRegistered = false}) {
+            const registered = (includeRegistered ? window.LightManagerIcons?.list?.() || [] : [])
+                .filter(icon => icon.startsWith('lightflow:') && !icon.startsWith('lightflow:aspect-'))
+                .map(icon => ({id: 'registered_' + icon.slice('lightflow:'.length), icon, label: icon}));
+            const tiles = [...options, ...registered].map(option => ({
+                id: `${id}_${option.id}`,
+                name: '\u00a0',
+                description: option.label,
+                icon: option.icon,
+                marked: option.icon === value,
+                click: () => apply(option.icon)
+            }));
+            const editorId = id + '_custom';
+            editors.set(editorId, {value, label, color, apply, customValue: !tiles.some(tile => tile.marked)});
+            return [...tiles, {id: editorId, name: label, icon: 'edit', click() {}}];
+        }
+
+        addIconEditor(item, {value, label, color, apply, customValue}) {
+            const {row, input} = createNativeMenuSearch(label, 'text', item);
+            row.classList.add('light_manager_grid_icon_editor');
+            row.removeAttribute('title');
+            const field = document.createElement('div');
+            field.className = 'light_manager_grid_icon_field';
+            input.value = customValue ? value : '';
+            input.spellcheck = false;
+            input.autocomplete = 'off';
+            const preview = document.createElement('button');
+            preview.type = 'button';
+            preview.title = tl('dialog.confirm');
+            preview.setAttribute('aria-label', preview.title);
+            field.append(input, preview);
+            row.append(field);
+
+            const render = () => {
+                const icon = input.value.trim();
+                let glyph;
+                try {
+                    glyph = Blockbench.getIconNode(icon || value, color);
+                    input.removeAttribute('aria-invalid');
+                } catch {
+                    glyph = Blockbench.getIconNode('help_outline');
+                    input.setAttribute('aria-invalid', 'true');
+                }
+                glyph.setAttribute('aria-hidden', 'true');
+                preview.replaceChildren(glyph);
+                preview.disabled = !icon || input.hasAttribute('aria-invalid');
+            };
+            const close = () => {
+                if (Menu.open !== this.menu) return;
+                this.menu.hide();
+                this.options.anchor?.focus?.();
+            };
+            const commit = () => {
+                if (preview.disabled || Menu.open !== this.menu) return;
+                const icon = input.value.trim();
+                close();
+                if (icon !== value) apply(icon);
+            };
+            input.addEventListener('input', render);
+            item.addEventListener('click', event => {
+                event.stopPropagation();
+                if (event.target === item || event.target === field) {
+                    input.focus();
+                    input.select();
+                }
+            });
+            item.addEventListener('keydown', event => {
+                event.stopPropagation();
+                if (event.isComposing) return;
+                if (event.key === 'Escape') {
+                    event.preventDefault();
+                    close();
+                } else if (event.key === 'Enter' && event.target === input) {
+                    event.preventDefault();
+                    commit();
+                }
+            });
+            preview.addEventListener('click', commit);
+            render();
+        }
+
         apply() {
             const root = this.menu?.node;
             if (!root) return this;
@@ -10443,13 +12584,16 @@ function initializeLightManagerPlugin() {
 
             const cellSize = Math.max(28, Math.round(Number(this.options.cellSize) || 40));
             const padding = Math.max(0, Math.round(Number(this.options.padding) || 4));
+            const editorFor = item => this.options.iconEditors?.get(item.getAttribute('menu_item'));
+            const isFooter = item => editorFor(item) || (this.options.footerSelector && item.matches(this.options.footerSelector));
             groupedItems.forEach((items, container) => {
-                const tiles = this.options.footerSelector ? items.filter(item => !item.matches(this.options.footerSelector)) : items;
+                const tiles = items.filter(item => !isFooter(item));
                 const columns = LightManagerGridMenu.calculateColumns(tiles.length, this.options);
                 if (!columns) return;
                 const rows = Math.ceil(tiles.length / columns) + (tiles.length < items.length ? 1 : 0);
                 container.classList.add('light_manager_grid_menu');
                 if (this.options.refined) container.classList.add('light_manager_grid_menu_refined');
+                if (this.options.swatches) container.classList.add('light_manager_grid_menu_swatches');
                 container.style.setProperty('--light-manager-grid-columns', String(columns));
                 container.style.setProperty('--light-manager-grid-cell-size', `${cellSize}px`);
                 container.style.setProperty('--light-manager-grid-padding', `${padding}px`);
@@ -10459,14 +12603,25 @@ function initializeLightManagerPlugin() {
 
                 items.forEach(item => {
                     item.classList.add('light_manager_grid_menu_item');
+                    if (isFooter(item)) item.classList.add('light_manager_grid_menu_footer');
+                    const editor = editorFor(item);
+                    if (editor) {
+                        this.addIconEditor(item, editor);
+                        return;
+                    }
                     item.setAttribute('aria-selected', item.classList.contains('marked') ? 'true' : 'false');
                     if (item.title) item.setAttribute('aria-label', item.title);
                     if (this.options.refined) {
-                        const footer = this.options.footerSelector && item.matches(this.options.footerSelector);
+                        const footer = isFooter(item);
                         item.setAttribute('role', footer ? 'menuitem' : 'menuitemradio');
                         if (!footer) item.setAttribute('aria-checked', item.classList.contains('marked') ? 'true' : 'false');
+                        if (this.options.swatches && item.classList.contains('marked')) {
+                            const check = Blockbench.getIconNode('check');
+                            check.classList.add('light_manager_grid_swatch_check');
+                            check.setAttribute('aria-hidden', 'true');
+                            item.append(check);
+                        }
                     }
-                    if (this.options.footerSelector && item.matches(this.options.footerSelector)) item.classList.add('light_manager_grid_menu_footer');
                 });
                 this.groups.push({ container, items, columns, rows });
             });
@@ -10530,6 +12685,261 @@ function initializeLightManagerPlugin() {
                 background-color: var(--color-button);
                 border-radius: 3px;
             }
+        `);
+    }
+
+    // One geometry contract for every FormElement panel_search consumer:
+    // inspectors, narrow toolbars, task dialogs and UI Lab. Local panels
+    // choose a layout variant; icon alignment and radii live here.
+    function addLightManagerSharedPanelSearchStyles() {
+        if (typeof Blockbench?.addCSS !== 'function') return null;
+        return Blockbench.addCSS(`
+            .light_manager_panel_search {
+                --lf-search-size: 32px;
+                --lf-search-radius: 8px;
+                display: grid;
+                grid-template-columns: minmax(0,1fr) minmax(0,80px) var(--lf-search-size);
+                align-items: center;
+                gap: 4px;
+                width: 100% !important;
+                flex: 1 1 auto;
+                min-width: 0;
+            }
+            .light_manager_panel_search_compact {
+                grid-template-columns: minmax(0,1fr) var(--lf-search-size);
+            }
+            .light_manager_panel_search_icon_toolbar {
+                grid-template-columns: minmax(0,1fr) repeat(2,var(--lf-search-size)) !important;
+            }
+            .light_manager_panel_search_icon_toolbar > :is(
+                .light_manager_panel_search_input,
+                .light_manager_panel_search_active,
+                .light_manager_panel_search_collapse
+            ) { grid-row: 1 !important; }
+            .light_manager_panel_search_icon_toolbar > .light_manager_panel_search_input { grid-column: 1 !important; }
+            .light_manager_panel_search_icon_toolbar > .light_manager_panel_search_active { grid-column: 2 !important; }
+            .light_manager_panel_search_icon_toolbar > .light_manager_panel_search_collapse { grid-column: 3 !important; }
+            .light_manager_panel_search :is(
+                .light_manager_panel_search_input,
+                .light_manager_panel_search_active,
+                .light_manager_panel_search_collapse
+            ) {
+                display: flex;
+                align-items: center;
+                min-width: 0;
+                height: var(--lf-search-size) !important;
+                min-height: var(--lf-search-size) !important;
+                box-sizing: border-box;
+                border: 1px solid var(--color-border);
+                border-radius: var(--lf-search-radius) !important;
+                background: var(--color-back);
+                color: var(--color-subtle_text);
+            }
+            .light_manager_panel_search_input { gap: 5px; padding: 0 6px; }
+            .light_manager_panel_search_input > :is(i,.icon) { flex: 0 0 auto; font-size: 17px; }
+            .light_manager_panel_search_input input {
+                flex: 1 1 0;
+                width: 0;
+                min-width: 0;
+                height: 30px;
+                padding: 0;
+                border: 0;
+                /* Blockbench's input:focus rule can restore an outline here.
+                   Only the enclosing search field owns the focus ring. */
+                outline: none !important;
+                box-shadow: none !important;
+                background: transparent;
+                color: var(--color-text);
+                font: inherit;
+            }
+            .light_manager_panel_search_clear {
+                display: grid !important;
+                place-items: center;
+                flex: 0 0 22px !important;
+                width: 22px !important;
+                min-width: 22px !important;
+                max-width: 22px !important;
+                height: 24px !important;
+                min-height: 24px !important;
+                max-height: 24px !important;
+                padding: 0 !important;
+                margin: 0 !important;
+                border: 0 !important;
+                background: transparent !important;
+                color: var(--color-subtle_text);
+            }
+            .light_manager_panel_search_clear[hidden] { display: none !important; }
+            .light_manager_panel_search_clear > .icon {
+                width: 16px !important;
+                min-width: 16px !important;
+                margin: 0 !important;
+                font-size: 16px;
+            }
+            .light_manager_panel_search_clear:hover { color: var(--color-text); }
+            .light_manager_panel_search_clear:focus-visible { outline: 2px solid var(--color-accent); }
+            .light_manager_panel_search :is(.light_manager_panel_search_active,.light_manager_panel_search_collapse) {
+                justify-content: center;
+                gap: 5px;
+                padding: 0 7px;
+                font: inherit;
+                cursor: pointer;
+            }
+            .light_manager_panel_search .light_manager_panel_search_active.bb-select:not(.light_manager_panel_search_icon_filter) {
+                justify-content: flex-start;
+                padding: 0 24px 0 8px;
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+            .light_manager_panel_search .light_manager_panel_search_active.bb-select:not(.light_manager_panel_search_icon_filter)::before {
+                /* Native bb-select uses 24px line-height on a 12px caret box.
+                   Center the glyph's line box, not just the pseudo box. */
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                top: 50% !important;
+                width: 16px !important;
+                height: 16px !important;
+                line-height: 16px !important;
+                transform: translateY(-50%) !important;
+            }
+            .light_manager_panel_search_active > span {
+                white-space: nowrap;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+            .light_manager_panel_search_collapse {
+                flex: 0 0 var(--lf-search-size);
+                width: var(--lf-search-size);
+                min-width: var(--lf-search-size);
+                max-width: var(--lf-search-size);
+                padding: 0 !important;
+                margin: 0 !important;
+                text-align: center;
+            }
+            .light_manager_panel_search_collapse > :is(i,.icon,svg) {
+                display: block;
+                width: 18px;
+                height: 18px;
+                padding: 0 !important;
+                margin: 0 !important;
+                line-height: 18px !important;
+                text-align: center;
+            }
+            .light_manager_panel_search_icon_filter {
+                position: relative;
+                width: var(--lf-search-size) !important;
+                min-width: var(--lf-search-size) !important;
+                max-width: var(--lf-search-size) !important;
+                padding: 0 !important;
+                margin: 0 !important;
+                font-size: 0 !important;
+                justify-content: center !important;
+            }
+            .light_manager_panel_search_icon_filter > :is(span,i,.icon) { display: none !important; }
+            .light_manager_panel_search_icon_filter::before {
+                content: 'filter_list';
+                font-family: 'Material Icons';
+                font-size: 18px;
+                font-weight: 400;
+                line-height: 18px !important;
+                display: block;
+                position: absolute !important;
+                top: 50% !important;
+                left: 50% !important;
+                width: 18px !important;
+                height: 18px !important;
+                transform: translate(-50%,-50%) !important;
+                text-align: center;
+                margin: 0 !important;
+                padding: 0 !important;
+                pointer-events: none;
+            }
+            .light_manager_panel_filter_compact {
+                position: relative;
+                display: flex !important;
+                align-items: center !important;
+                justify-content: center !important;
+                width: var(--lf-search-size) !important;
+                min-width: var(--lf-search-size) !important;
+                max-width: var(--lf-search-size) !important;
+                height: var(--lf-search-size) !important;
+                min-height: var(--lf-search-size) !important;
+                padding: 0 !important;
+                overflow: hidden;
+                box-sizing: border-box;
+                border-radius: var(--lf-search-radius) !important;
+            }
+            .light_manager_panel_filter_compact::before {
+                content: 'filter_list';
+                position: absolute !important;
+                top: 50% !important;
+                left: 50% !important;
+                width: 18px;
+                height: 18px;
+                transform: translate(-50%,-50%) !important;
+                font-family: 'Material Icons';
+                font-size: 18px;
+                font-weight: 400;
+                line-height: 18px;
+                text-align: center;
+                pointer-events: none;
+            }
+            .light_manager_panel_filter_compact > :is(span,i) { display: none !important; }
+            .light_manager_panel_search :is(.light_manager_panel_search_active,.light_manager_panel_search_collapse):hover {
+                border-color: color-mix(in srgb,var(--color-accent) 45%,var(--color-border));
+                background: color-mix(in srgb,var(--color-accent) 10%,var(--color-back));
+                color: var(--color-accent) !important;
+            }
+            .light_manager_panel_search_active.selected {
+                border-color: var(--color-accent);
+                color: var(--color-text) !important;
+                background: color-mix(in srgb,var(--color-accent) 18%,var(--color-back));
+            }
+            .light_manager_panel_search :is(.light_manager_panel_search_active,.light_manager_panel_search_collapse):focus-visible,
+            .light_manager_panel_search_input:focus-within,
+            .light_manager_panel_filter_compact:focus-visible {
+                color: var(--color-text);
+                outline: 2px solid var(--color-accent);
+                outline-offset: -2px;
+            }
+            /* Right-side inspector: preserve the label at normal widths and
+               switch to the shared icon geometry only in a narrow container. */
+            @container (max-width: 260px) {
+                #right_bar .lightflow-right-inspector .light_manager_panel_search:not(.light_manager_panel_search_compact):not(.light_manager_panel_search_icon_toolbar) {
+                    grid-template-columns: minmax(0,1fr) repeat(2,var(--lf-search-size));
+                }
+                #right_bar .lightflow-right-inspector .light_manager_panel_search_active.bb-select {
+                    position: relative;
+                    width: var(--lf-search-size) !important;
+                    min-width: var(--lf-search-size) !important;
+                    max-width: var(--lf-search-size) !important;
+                    padding: 0 !important;
+                    font-size: 0 !important;
+                    justify-content: center !important;
+                }
+                #right_bar .lightflow-right-inspector .light_manager_panel_search_active.bb-select > :is(span,i) {
+                    display: none !important;
+                }
+                #right_bar .lightflow-right-inspector .light_manager_panel_search_active.bb-select::before {
+                    content: 'filter_list';
+                    position: absolute !important;
+                    top: 50% !important;
+                    left: 50% !important;
+                    width: 18px !important;
+                    height: 18px !important;
+                    transform: translate(-50%,-50%) !important;
+                    font-family: 'Material Icons';
+                    font-size: 18px;
+                    font-weight: 400;
+                    line-height: 18px !important;
+                    text-align: center;
+                    margin: 0 !important;
+                    padding: 0 !important;
+                    pointer-events: none;
+                }
+            }
+            .light_manager_panel_filter_hidden { display: none !important; }
         `);
     }
 
@@ -10674,6 +13084,19 @@ function initializeLightManagerPlugin() {
             ${selector} .light_manager_form_variant_group .custom_checkbox:hover .material-icons {
                 color: var(--color-accent) !important;
             }
+            ${selector} .light_manager_form_variant_group:has(.light_manager_static_heading) {
+                margin-top: 9px !important;
+            }
+            ${selector} .light_manager_form_variant_group .light_manager_static_heading {
+                min-height: 29px !important;
+                height: auto !important;
+                cursor: default !important;
+                padding: 3px 6px !important;
+                background: transparent !important;
+            }
+            ${selector} .light_manager_form_variant_group .light_manager_static_heading:hover {
+                background: transparent !important;
+            }
             ${selector} .light_manager_form_variant_panel_tabs {
                 padding: 0 !important;
                 margin-bottom: 3px !important;
@@ -10696,101 +13119,7 @@ function initializeLightManagerPlugin() {
             ${selector} .light_manager_panel_search_bar {
                 margin: 0 0 3px !important;
             }
-            ${selector} .light_manager_panel_search {
-                display: grid;
-                grid-template-columns: minmax(0, 1fr) minmax(0, 80px) 32px;
-                gap: 4px;
-                width: 100% !important;
-                flex: 1 1 auto;
-                min-width: 0;
-            }
-            ${selector} .light_manager_panel_search_input,
-            ${selector} .light_manager_panel_search_active,
-            ${selector} .light_manager_panel_search_collapse {
-                display: flex;
-                align-items: center;
-                min-width: 0;
-                min-height: 29px;
-                box-sizing: border-box;
-                border: 1px solid var(--color-border);
-                border-radius: 3px;
-                background: var(--color-back);
-                color: var(--color-subtle_text);
-            }
-            ${selector} .light_manager_panel_search_input {
-                gap: 5px;
-                padding: 0 6px;
-            }
-            ${selector} .light_manager_panel_search_input > i {
-                flex: 0 0 auto;
-                font-size: 17px;
-            }
-            ${selector} .light_manager_panel_search_input input {
-                flex: 1 1 0;
-                width: 0;
-                min-width: 0;
-                height: 26px;
-                padding: 0;
-                border: 0;
-                outline: 0;
-                background: transparent;
-                color: var(--color-text);
-                font: inherit;
-            }
-            ${selector} .light_manager_panel_search_active,
-            ${selector} .light_manager_panel_search_collapse {
-                justify-content: center;
-                gap: 5px;
-                padding: 0 7px;
-                font: inherit;
-                cursor: pointer;
-            }
-            ${selector} .light_manager_panel_search_active {
-                min-height: 32px;
-            }
-            ${selector} .light_manager_panel_search_active > i,
-            ${selector} .light_manager_panel_search_collapse > i {
-                font-size: 17px;
-            }
-            ${selector} .light_manager_panel_search_collapse {
-                flex: 0 0 32px;
-                width: 32px;
-                height: 29px;
-                min-width: 32px;
-                min-height: 32px;
-                padding: 0;
-                text-align: center;
-            }
-            ${selector} .light_manager_panel_search_collapse > i {
-                display: block;
-                line-height: 1;
-            }
-            ${selector} .light_manager_panel_search_active:hover,
-            ${selector} .light_manager_panel_search_collapse:hover {
-                border-color: color-mix(in srgb, var(--color-accent) 45%, var(--color-border));
-                background: color-mix(in srgb, var(--color-accent) 10%, var(--color-back));
-                color: var(--color-accent) !important;
-            }
-            ${selector} .light_manager_panel_search_active.bb-select {
-                justify-content: flex-start; padding: 0 24px 0 8px;
-                white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-            }
-            ${selector} .light_manager_panel_search_clear {
-                display: grid!important; place-items: center; flex: 0 0 22px!important;
-                width: 22px!important; min-width: 22px!important; max-width: 22px!important;
-                height: 24px!important; min-height: 24px!important; max-height: 24px!important;
-                padding: 0!important; margin: 0!important; border: 0!important;
-                background: transparent!important; color: var(--color-subtle_text);
-            }
-            ${selector} .light_manager_panel_search_clear[hidden] { display: none!important; }
-            ${selector} .light_manager_panel_search_clear > .icon { width:16px!important; min-width:16px!important; margin:0!important; font-size:16px; }
-            ${selector} .light_manager_panel_search_clear:hover { color: var(--color-text); }
-            ${selector} .light_manager_panel_search_clear:focus-visible { outline: 2px solid var(--color-accent); }
-            ${selector} .light_manager_panel_search_active > span {
-                white-space: nowrap;
-                overflow: hidden;
-                text-overflow: ellipsis;
-            }
+            /* panel_search geometry is owned by addLightManagerSharedPanelSearchStyles. */
             ${selector} .lightflow_search_empty,
             ${selector} .lightflow_disabled_reason {
                 color: var(--color-text);
@@ -10801,21 +13130,6 @@ function initializeLightManagerPlugin() {
             ${selector} .lightflow_disabled_reason { flex: 1 0 100%; }
             ${selector} .dialog_bar:has(> .lightflow_disabled_reason:not([hidden])) { flex-wrap: wrap; }
             ${selector} .lightflow_search_expanded { border-left: 2px solid var(--color-accent); }
-            ${selector} .light_manager_panel_search_active.selected {
-                border-color: var(--color-accent);
-                color: var(--color-text) !important;
-                background: color-mix(in srgb, var(--color-accent) 18%, var(--color-back));
-            }
-            ${selector} .light_manager_panel_search_active:focus-visible,
-            ${selector} .light_manager_panel_search_collapse:focus-visible,
-            ${selector} .light_manager_panel_search_input:focus-within {
-                color: var(--color-text);
-                outline: 2px solid var(--color-accent);
-                outline-offset: -2px;
-            }
-            ${selector} .light_manager_panel_filter_hidden {
-                display: none !important;
-            }
             ${selector} .light_manager_group_summary {
                 min-width: 0;
                 margin-left: 6px;
@@ -11042,6 +13356,13 @@ function initializeLightManagerPlugin() {
                 padding: '2px 8px'
             }, options);
         },
+        staticGroup(options = {}) {
+            return Object.assign({
+                type: 'custom_checkbox', variant: 'group', static_heading: true,
+                layout: 'space_between', value: true,
+                padding: '2px 8px', label_color: 'var(--color-text)'
+            }, options);
+        },
         tabs(options = {}) {
             return Object.assign({
                 type: options.presentation === 'flat' ? 'tab_select' : 'horizontal_select',
@@ -11085,6 +13406,12 @@ function initializeLightManagerPlugin() {
         },
         texture(options = {}) {
             return Object.assign({ type: 'texture_source' }, options);
+        },
+        // Illustrated cyclic slider: shares combo-slider input, numeric edits,
+        // landmarks, keyboard gestures and undo callbacks. The band is an
+        // optional visual aid, never a second source of the value.
+        cycle(options = {}) {
+            return Object.assign({ type: 'combo_slider', cycle_track: true }, options);
         },
         vector(options = {}) {
             return Object.assign({ type: 'custom_vector' }, options);
@@ -11319,7 +13646,19 @@ function initializeLightManagerPlugin() {
         let railResize;
         const t = key => translateLightManager('light_manager.ui.' + key);
         const worldControls = () => Panels.global_renderer_properties?.form?.form_data;
-        const worldKeys = ['world_shading', 'world_ssao', 'world_grids', 'world_ground'];
+        const worldLabels = {
+            world_shading: 'shader_architect.world.shading',
+            world_ssao: 'shader_architect.world.ao',
+            world_ground: 'shader_architect.world.ground'
+        };
+        const worldKeys = Object.keys(worldLabels);
+        const syncRailLabel = (button, label, hint) => {
+            const title = hint ? label + ' · ' + hint : label;
+            if (button.title === title) return;
+            button.title = title;
+            button.setAttribute('aria-label', label);
+            button.querySelector('.tooltip').textContent = title;
+        };
         const navigateRail = event => {
             if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return;
             const available = [...event.currentTarget.querySelectorAll('button')].filter(button => !button.hidden && !button.disabled);
@@ -11469,7 +13808,7 @@ function initializeLightManagerPlugin() {
                     : type === 'lightflow_god_ray' ? ['move_tool', 'lightflow_god_ray_gizmos', 'lightflow_god_ray_detach', '_', 'edit_lightflow_god_ray']
                         : type === 'lightflow_particle_effect' ? ['move_tool', '_', 'lightflow_particle_settings']
                             : ['lightflow_scene_instance', 'lightflow_pose_group'].includes(type)
-                                ? ['lightflow_scene_link_inspect', 'lightflow_scene_link_skin_pose', 'lightflow_scene_link_reset_pose',
+                                ? ['lightflow_scene_link_inspect', 'lightflow_scene_link_skin_pose', 'lightflow_scene_link_pose_keys', 'lightflow_scene_link_pose_track', 'lightflow_scene_link_reset_pose',
                                     'lightflow_scene_link_material', 'lightflow_scene_link_refresh', 'lightflow_scene_link_open'] : [];
             new Menu(['move_tool', 'rotate_tool', 'resize_tool', '_', ...actions.filter(id => !['move_tool', 'rotate_tool', 'resize_tool'].includes(id)), '_', 'lightflow_find_setting']).open(event);
         };
@@ -11549,7 +13888,7 @@ function initializeLightManagerPlugin() {
                     divider.className = 'lightflow_viewport_tools_divider';
                     divider.setAttribute('role', 'separator');
                     node.append(divider);
-                    const helpersButton = add('helpers', 'visibility', t('helpers_clean'), () => {
+                    const helpersButton = add('helpers', 'language', t('helpers_clean'), () => {
                         if (workspace.helperPolicy === 'clean') workspace.setHelperPolicy(previousHelpers);
                         else { previousHelpers = workspace.helperPolicy; workspace.setHelperPolicy('clean'); }
                     });
@@ -11584,7 +13923,7 @@ function initializeLightManagerPlugin() {
                     worldNode.setAttribute('aria-orientation', 'vertical');
                     worldNode.setAttribute('aria-label', tl('panel.global_renderer_properties'));
                     const worldButtons = {};
-                    const addWorld = (id, icon, key, settings = false) => {
+                    const addWorld = (id, icon, key) => {
                         const button = document.createElement('button');
                         button.type = 'button';
                         button.className = 'tool lightflow_viewport_tool';
@@ -11592,7 +13931,6 @@ function initializeLightManagerPlugin() {
                         const label = tl(key);
                         button.title = label;
                         button.setAttribute('aria-label', label);
-                        if (settings) button.setAttribute('aria-haspopup', 'dialog');
                         const iconNode = Blockbench.getIconNode(icon);
                         iconNode.setAttribute('aria-hidden', 'true');
                         button.append(iconNode);
@@ -11602,40 +13940,39 @@ function initializeLightManagerPlugin() {
                         button.append(tooltip);
                         button.addEventListener('click', event => {
                             if (id === 'cinematic_sequence') { window.LightflowCinematic?.openViewportSequenceMenu?.(event); sync(); return; }
-                            const control = worldControls()?.[id];
-                            if (settings) control?.options?.click?.();
-                            else control?.node?.click();
+                            worldControls()?.[id]?.node?.click();
                             sync();
                         });
                         worldNode.append(button);
                         worldButtons[id] = button;
                     };
-                    addWorld('world_shading', 'wb_sunny', 'light_manager.ui.world_shading');
-                    addWorld('world_ssao', 'blur_on', 'light_manager.ui.world_ao');
-                    addWorld('world_ssao_settings', 'tune', 'light_manager.ui.ao_settings', true);
-                    const worldDivider = divider.cloneNode();
-                    worldNode.append(worldDivider);
-                    addWorld('world_grids', 'grid_3x3', 'light_manager.ui.world_grid');
-                    addWorld('world_ground', 'layers', 'light_manager.ui.world_ground');
-                    addWorld('world_environment_gizmos', 'crop_free', 'light_manager.ui.sun_region');
-                    worldButtons.world_environment_gizmos.addEventListener('click', () => {
-                        if (Toolbox.selected?.id === 'lightflow_sun_region_tool') run('light_manager_edit_tool');
-                        else {
-                            if (workspace.helperPolicy === 'clean') workspace.setHelperPolicy(previousHelpers);
-                            Canvas.show_gizmos = true;
-                            window.LightManagerAreaGizmos?.setEnabled?.(true, { notify: false });
-                            window.LightflowEnvironment?.setSettings?.({ show_shadow_gizmo: true }, { cause: 'gizmo_visibility', forceShadow: false, syncPanel: true });
-                            run('lightflow_sun_region_tool');
-                        }
-                        sync();
+                    addWorld('world_shading', 'wb_sunny', worldLabels.world_shading);
+                    addWorld('world_ssao', 'blur_on', worldLabels.world_ssao);
+                    const aoButton = worldButtons.world_ssao;
+                    const openAoMenu = event => {
+                        const openSettings = worldControls()?.world_ssao_settings?.options?.click;
+                        if (!openSettings) return;
+                        event.preventDefault();
+                        event.stopPropagation();
+                        new Menu([{
+                            id: 'lightflow_viewport_ao_settings',
+                            name: tl('shader_architect.world.ao_settings'),
+                            icon: 'tune',
+                            click: () => openSettings()
+                        }]).open(event.type === 'keydown' || event.detail === 0 && !event.clientX && !event.clientY ? aoButton : event);
+                    };
+                    aoButton.addEventListener('contextmenu', openAoMenu);
+                    aoButton.addEventListener('keydown', event => {
+                        if (!event.repeat && (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10')) openAoMenu(event);
                     });
-                    const sequenceDivider = divider.cloneNode(); worldNode.append(sequenceDivider);
-                    addWorld('cinematic_sequence', 'theaters', 'light_manager.ui.cinematic_sequences');
-                    worldNode.append(buttons.helpers);
+                    addWorld('world_ground', 'layers', worldLabels.world_ground);
+                    worldNode.append(divider.cloneNode(), buttons.helpers);
                     addWorld('environment', 'landscape', 'lightflow_environment.field.enabled');
                     worldButtons.environment.addEventListener('click', () => {
                         window.LightflowEnvironment?.setSettings?.({enabled: !window.LightflowEnvironment.settings.enabled}, {cause:'viewport_toggle',syncPanel:true}); sync();
                     });
+                    const sequenceDivider = divider.cloneNode(); worldNode.append(sequenceDivider);
+                    addWorld('cinematic_sequence', 'theaters', 'light_manager.ui.cinematic_sequences');
                     worldNode.addEventListener('pointerdown', event => event.stopPropagation());
                     worldNode.addEventListener('dblclick', event => event.stopPropagation());
                     worldNode.addEventListener('keydown', navigateRail);
@@ -11660,26 +13997,21 @@ function initializeLightManagerPlugin() {
                 worldButtons.cinematic_sequence.disabled = !!window.LightflowCinematic?.activeJob;
                 worldButtons.cinematic_sequence.classList.toggle('selected', !!window.LightflowCinematic?.sequencePreview);
                 worldButtons.cinematic_sequence.setAttribute('aria-pressed', String(!!window.LightflowCinematic?.sequencePreview));
-                worldButtons.world_ssao_settings.hidden = !controls?.world_ssao_settings;
                 for (const key of worldKeys) {
                     worldButtons[key].hidden = !controls?.[key];
                     const enabled = !!controls?.[key]?.value;
                     worldButtons[key].classList.toggle('selected', enabled);
                     worldButtons[key].setAttribute('aria-pressed', String(enabled));
+                    const hasMenu = key === 'world_ssao' && !!controls?.world_ssao_settings?.options?.click;
+                    syncRailLabel(worldButtons[key], tl(worldLabels[key]), hasMenu ? t('world_ao_menu_hint') : '');
+                    if (hasMenu) worldButtons[key].setAttribute('aria-haspopup', 'menu');
+                    else worldButtons[key].removeAttribute('aria-haspopup');
                 }
                 const environment = window.LightflowEnvironment?.settings;
+                if (environment) syncRailLabel(worldButtons.environment, tl('lightflow_environment.field.enabled'));
                 worldButtons.environment.hidden = !environment;
                 worldButtons.environment.classList.toggle('selected', !!environment?.enabled);
                 worldButtons.environment.setAttribute('aria-pressed', String(!!environment?.enabled));
-                const sunTool = Toolbox.selected?.id === 'lightflow_sun_region_tool';
-                const environmentActive = ((workspace.leftHost?.open_attached_panel || workspace.leftHost)?.id === 'lightflow_environment_panel');
-                const sunButton = worldButtons.world_environment_gizmos;
-                sunButton.hidden = animating || !window.BarItems?.lightflow_sun_region_tool || (!environmentActive && !sunTool);
-                sunButton.disabled = !environment?.enabled || !environment.sun_enabled || !environment.sun_cast_shadows || !environment.shadow_auto_fit;
-                sunButton.classList.toggle('selected', sunTool);
-                sunButton.setAttribute('aria-pressed', String(sunTool));
-                sunButton.title = sunButton.disabled ? t('sun_region_hint') : t('sun_region');
-                sunButton.querySelector('.tooltip').textContent = sunButton.title;
                 node.hidden = !active;
                 buttons.block_snap.hidden = !editing || !window.BarItems?.lightflow_block_snap;
                 const snapping = !!window.BarItems?.lightflow_block_snap?.value;
@@ -11702,10 +14034,7 @@ function initializeLightManagerPlugin() {
                 buttons.fit_lights.hidden = animating || !window.LightManagerFitTool?.canFit?.();
                 divider.hidden = animating ? !window.LightflowCinematic : selection().length === 0;
                 const clean = workspace.helperPolicy === 'clean';
-                const helpersLabel = t('helpers_' + (clean ? previousHelpers : 'clean'));
-                buttons.helpers.title = helpersLabel;
-                buttons.helpers.setAttribute('aria-label', helpersLabel);
-                buttons.helpers.querySelector('.tooltip').textContent = helpersLabel;
+                syncRailLabel(buttons.helpers, t('helpers_clean'), t('helpers_clean_hint'));
                 buttons.helpers.classList.toggle('selected', clean);
                 buttons.helpers.setAttribute('aria-pressed', String(clean));
                 buttons.gizmos.classList.toggle('selected', contextual && Toolbox.selected?.id === (light ? 'light_manager_edit_tool' : type === 'lightflow_god_ray' ? 'lightflow_god_ray_gizmos' : type === 'lightflow_particle_effect' ? 'move_tool' : 'resize_tool'));
@@ -12036,7 +14365,7 @@ function initializeLightManagerPlugin() {
             @container (max-width: 260px) { #left_bar .lightflow-left-navigation > .panel_handle { font-size: 13px !important; text-transform: none; } }
             #left_bar :is(#panel_lightflow_environment_panel, #panel_material_properties, #panel_lightflow_scene_composer_panel) .form { padding: 6px !important; margin-right: 0px; padding-right: 4px !important; margin-left: 0px !important;}
             #left_bar :is(#panel_lightflow_environment_panel, #panel_material_properties, #panel_lightflow_scene_composer_panel) .dialog_bar[form_type="enum_select"] { display: flex; flex-direction: column; align-items: stretch; gap: 4px; height: auto !important; padding: 6px 4px !important; }
-            #left_bar :is(#panel_lightflow_environment_panel, #panel_material_properties, #panel_lightflow_scene_composer_panel) .dialog_bar[form_type="enum_select"] > label.name_space_left { width: 100%; flex: 0 0 auto; padding: 0; }
+            #left_bar :is(#panel_lightflow_environment_panel, #panel_material_properties, #panel_lightflow_scene_composer_panel) .dialog_bar[form_type="enum_select"] > label.name_space_left { width: 100%; max-width: none !important; flex: 0 0 auto; padding: 0; }
             #left_bar :is(#panel_lightflow_environment_panel, #panel_material_properties, #panel_lightflow_scene_composer_panel) .dialog_bar[form_type="enum_select"] > .light_manager_enum_select_input { flex: 0 0 auto !important; width: 100% !important; min-width: 0 !important; height: auto !important; min-height: 30px; padding: 5px 26px 5px 8px !important; line-height: 1.3; white-space: normal !important; text-align: left; justify-content: flex-start; }
             #left_bar :is(#panel_lightflow_environment_panel, #panel_material_properties, #panel_lightflow_scene_composer_panel) .light_manager_form_variant_group .custom_checkbox { height: auto !important; min-height: 34px; }
             #left_bar :is(#panel_lightflow_environment_panel, #panel_material_properties, #panel_lightflow_scene_composer_panel) .light_manager_form_variant_group .custom_checkbox > span { flex: 1 1 auto !important; }
@@ -12052,10 +14381,21 @@ function initializeLightManagerPlugin() {
             #left_bar #panel_lightflow_environment_panel .form_bar__environment_region { display: none !important; }
             #left_bar :is(#panel_lightflow_environment_panel, #panel_material_properties, #panel_lightflow_scene_composer_panel) .light_manager_panel_search_bar { position: sticky; top: 0; z-index: 4; background: var(--color-ui) !important; padding-top: 6px !important; padding-bottom: 6px !important; }
             @container (max-width: 320px) {
-                #left_bar :is(#panel_lightflow_environment_panel, #panel_material_properties, #panel_lightflow_scene_composer_panel) .light_manager_panel_search { grid-template-columns: minmax(0, 1fr) 30px; }
-                #left_bar .light_manager_panel_search > .light_manager_panel_search_input { grid-column: 1 / -1; }
-                #left_bar .light_manager_panel_search > .light_manager_panel_search_active { grid-column: 1; grid-row: 2; width: 100% !important; }
-                #left_bar .light_manager_panel_search > .light_manager_panel_search_collapse { grid-column: 2; grid-row: 2; }
+                #left_bar .light_manager_panel_search:not(.light_manager_panel_search_icon_toolbar):not(.light_manager_panel_search_compact) {
+                    grid-template-columns: minmax(0, 1fr) var(--lf-search-size);
+                }
+                #left_bar .light_manager_panel_search:not(.light_manager_panel_search_icon_toolbar):not(.light_manager_panel_search_compact) > .light_manager_panel_search_input {
+                    grid-column: 1 / -1;
+                }
+                #left_bar .light_manager_panel_search:not(.light_manager_panel_search_icon_toolbar):not(.light_manager_panel_search_compact) > .light_manager_panel_search_active {
+                    grid-column: 1;
+                    grid-row: 2;
+                    width: 100% !important;
+                }
+                #left_bar .light_manager_panel_search:not(.light_manager_panel_search_icon_toolbar):not(.light_manager_panel_search_compact) > .light_manager_panel_search_collapse {
+                    grid-column: 2;
+                    grid-row: 2;
+                }
             }
             @container (max-width: 360px) {
                 #left_bar :is(#panel_lightflow_environment_panel, #panel_material_properties, #panel_lightflow_scene_composer_panel) .dialog_bar:has(.combo_slider_label) > .tool.widget { display: grid !important; grid-template-columns: minmax(0, 1fr) auto; height: auto !important; min-height: 48px; gap: 3px 4px; padding-top: 4px !important; padding-bottom: 4px !important; }
@@ -12102,6 +14442,9 @@ function initializeLightManagerPlugin() {
         const bar = Interface.right_bar;
         const outliner = Panels.outliner;
         const ids = ['light_properties', 'lightflow_atmosphere_properties', 'lightflow_god_ray_properties', 'lightflow_particle_properties', 'lightflow_scene_links_inspector'];
+        // God rays remain a separate scene element and native inspector, but
+        // share the Lighting destination in the artist-facing navigation.
+        const navigationIds = ids.filter(id => id !== 'lightflow_god_ray_properties');
         const t = key => translateLightManager('light_manager.ui.' + key);
         const tabs = new Set();
         const attrs = new Map();
@@ -12190,7 +14533,7 @@ function initializeLightManagerPlugin() {
             }
             const handle = event.target.closest('.panel_handle');
             if (!handle || event.target.closest('.panel_menu_button')) return;
-            const list = [...handle.parentElement.children].filter(node => ids.includes(node.getAttribute('panel_id')));
+            const list = [...handle.parentElement.children].filter(node => navigationIds.includes(node.getAttribute('panel_id')));
             if (!list.length) return;
             let index = list.indexOf(handle);
             if (event.key === 'Home') index = 0;
@@ -12198,7 +14541,12 @@ function initializeLightManagerPlugin() {
             else if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) index = (index + (['ArrowLeft', 'ArrowUp'].includes(event.key) ? -1 : 1) + list.length) % list.length;
             else if (!['Enter', ' '].includes(event.key)) return;
             event.preventDefault(); event.stopPropagation();
-            const panel = Panels[list[index].getAttribute('panel_id')];
+            const targetId = list[index].getAttribute('panel_id');
+            const selected = Outliner.selected?.[Outliner.selected.length - 1];
+            const effectiveId = targetId === 'light_properties' && selected?.type === 'lightflow_god_ray'
+                ? 'lightflow_god_ray_properties' : targetId;
+            const panel = Panels[effectiveId];
+            if (!panel) return;
             const host = panel.getHostPanel?.() || panel;
             if (host.folded) host.fold(false);
             host.selectTab(panel);
@@ -12207,11 +14555,26 @@ function initializeLightManagerPlugin() {
         const openClickedTab = event => {
             const handle = event.target.closest('.lightflow-right-navigation .panel_handle');
             if (!handle || event.target.closest('.panel_menu_button')) return;
+            // The Lighting tab follows the selected light or ray. Intercept the
+            // native tab click before it replaces a selected ray with the empty
+            // physical-light form.
+            if (handle.getAttribute('panel_id') === 'light_properties') {
+                const selected = Outliner.selected?.[Outliner.selected.length - 1];
+                const rayPanel = Panels.lightflow_god_ray_properties;
+                if (selected?.type === 'lightflow_god_ray' && rayPanel) {
+                    event.preventDefault(); event.stopImmediatePropagation();
+                    const host = rayPanel.getHostPanel?.() || rayPanel;
+                    if (host.folded) host.fold(false);
+                    host.selectTab?.(rayPanel);
+                    schedule();
+                    return;
+                }
+            }
             const panel = Panels[handle.getAttribute('panel_id')], host = panel?.getHostPanel?.() || panel;
             if (host?.folded) host.fold(false);
         };
         bar.addEventListener('keydown', keydown);
-        bar.addEventListener('click', openClickedTab);
+        bar.addEventListener('click', openClickedTab, true);
         const sync = () => {
             if (disposed) return;
             const enabled = Project?.mode === 'render' && outliner.slot === 'right_bar';
@@ -12258,29 +14621,48 @@ function initializeLightManagerPlugin() {
                     if (restoreFocus) focused.focus();
                 }
                 remember(list, 'role', 'tablist');
+                const activeInspectorId = (host.open_attached_panel || host).id;
+                const raySelected = activeInspectorId === 'lightflow_god_ray_properties';
                 for (const handle of list.children) {
                     const childId = handle.getAttribute('panel_id');
                     if (!ids.includes(childId)) continue;
+                    const merged = childId === 'lightflow_god_ray_properties';
+                    handle.classList.toggle('lightflow-inspector-merged-tab', merged);
+                    handle.classList.toggle('lightflow-merged-active', childId === 'light_properties' && raySelected);
+                    if (merged) remember(handle, 'aria-hidden', 'true');
                     const text = handle.querySelector(':scope > span');
                     if (text) {
                         if (!tabText.has(text)) tabText.set(text, text.textContent);
-                        const title = titles[ids.indexOf(childId)];
+                        const title = childId === 'light_properties' && raySelected ? t('scene_ray') : titles[ids.indexOf(childId)];
                         if (text.textContent !== title) text.textContent = title;
                     }
-                    if (!handle.querySelector(':scope > .lightflow-inspector-tab-icon')) {
-                        const icon = Blockbench.getIconNode(Panels[childId].icon || 'tune');
-                        icon.classList.add('lightflow-inspector-tab-icon');
+                    // Blockbench's attached native handles carry no pictogram.
+                    // Own one icon per handle and replace it only when the
+                    // inspector context actually changes (Light ↔ Godray).
+                    const desiredIcon = childId === 'light_properties'
+                        ? (raySelected ? 'lightflow:godray' : 'lightbulb')
+                        : (Panels[childId]?.icon || 'tune');
+                    const existingIcon = handle.querySelector(':scope > .lightflow-inspector-context-icon');
+                    if (!existingIcon || existingIcon.dataset.lightflowInspectorIcon !== desiredIcon) {
+                        const icon = Blockbench.getIconNode(desiredIcon);
+                        icon.classList.add('lightflow-inspector-context-icon');
                         icon.setAttribute('aria-hidden', 'true');
-                        handle.prepend(icon); tabIcons.add(icon);
+                        icon.dataset.lightflowInspectorIcon = desiredIcon;
+                        if (existingIcon) { existingIcon.replaceWith(icon); tabIcons.delete(existingIcon); }
+                        else handle.prepend(icon);
+                        tabIcons.add(icon);
                     }
-                    const title = titles[ids.indexOf(childId)];
+                    const title = childId === 'light_properties'
+                        ? `${t('scene_light')} / ${t('scene_ray')}`
+                        : titles[ids.indexOf(childId)];
                     remember(handle, 'title', title);
                     remember(handle, 'aria-label', title);
-                    const selected = (host.open_attached_panel || host).id === childId;
+                    const selected = !merged && (activeInspectorId === childId || (childId === 'light_properties' && raySelected));
                     remember(handle, 'role', 'tab');
                     remember(handle, 'tabindex', selected ? '0' : '-1');
                     remember(handle, 'aria-selected', String(selected));
-                    remember(handle, 'aria-controls', Panels[childId].node.id);
+                    const controlsPanel = childId === 'light_properties' && raySelected ? Panels.lightflow_god_ray_properties : Panels[childId];
+                    if (controlsPanel?.node) remember(handle, 'aria-controls', controlsPanel.node.id);
                     remember(Panels[childId].node, 'role', 'tabpanel');
                 }
             }
@@ -12310,7 +14692,7 @@ function initializeLightManagerPlugin() {
             run: () => renameOutliner()
         }));
         const style = Blockbench.addCSS(`
-            #right_bar:not(.lightflow-right-workspace) .lightflow-inspector-tab-icon { display:none; }
+            #right_bar:not(.lightflow-right-workspace) .lightflow-inspector-context-icon { display:none !important; }
             #right_bar.lightflow-right-workspace { overflow: hidden; }
             #right_bar.lightflow-right-workspace > .panel_container[panel_id="outliner"] { order: -10; margin-top: 0 !important; flex: 0 0 var(--lightflow-tree-height) !important; height: var(--lightflow-tree-height) !important; min-height: 0 !important; max-height: var(--lightflow-tree-height) !important; }
             #right_bar.lightflow-right-workspace > .lightflow-right-inspector { order: -9; flex: 1 1 0 !important; min-height: 0 !important; height: auto !important; container-type: inline-size; }
@@ -12319,10 +14701,16 @@ function initializeLightManagerPlugin() {
             #right_bar.lightflow-right-workspace .lightflow-right-inspector .form { padding: 6px !important; min-height: 0; overflow-y: auto; scrollbar-gutter: stable; margin-right: 0px; margin-left: 0px; }
             #right_bar.lightflow-right-workspace .lightflow-right-inspector > .panel_tab_bar { height: 32px !important; min-height: 32px; align-items: stretch; flex-shrink: 0; }
             #right_bar.lightflow-right-workspace .lightflow-right-navigation { display: flex; flex-wrap: nowrap; flex: 1 1 0; min-width: 0; height: 32px !important; overflow: hidden; }
+            #right_bar.lightflow-right-workspace .lightflow-right-navigation .panel_handle.lightflow-inspector-merged-tab { display: none !important; }
+            /* The Outliner selection owns the inspector context. Only its
+               current tab is shown; its native icon follows the selected
+               type, with Light's lightbulb as the default. */
+            #right_bar.lightflow-right-workspace .lightflow-right-navigation .panel_handle:not(.selected):not(.lightflow-merged-active) { display: none !important; }
             #right_bar.lightflow-right-workspace .lightflow-right-navigation .panel_handle { flex: 0 0 30px; min-width: 0; height: 32px; padding: 0 5px; display: flex; align-items: center; justify-content: center; gap: 4px; font-size: 14px; text-transform: none; }
-            #right_bar.lightflow-right-workspace .lightflow-right-navigation .panel_handle.selected { flex: 1 1 0; justify-content: flex-start; }
-            #right_bar.lightflow-right-workspace .lightflow-right-navigation .lightflow-inspector-tab-icon { flex: 0 0 20px; width: 20px; height: 20px; font-size: 20px; }
-            #right_bar.lightflow-right-workspace .lightflow-right-navigation .panel_handle:not(.selected) > :is(span,.panel_menu_button) { display: none; }
+            #right_bar.lightflow-right-workspace .lightflow-right-navigation .panel_handle:is(.selected,.lightflow-merged-active) { flex: 1 1 0; justify-content: flex-start; }
+            #right_bar.lightflow-right-workspace .lightflow-right-navigation .panel_handle.lightflow-merged-active { color: var(--color-text); background: var(--color-selected); }
+            #right_bar.lightflow-right-workspace .lightflow-right-navigation .lightflow-inspector-context-icon { display: inline-flex; flex: 0 0 20px; width: 20px; height: 20px; font-size: 20px; }
+            #right_bar.lightflow-right-workspace .lightflow-right-navigation .panel_handle:not(.selected):not(.lightflow-merged-active) > :is(span,.panel_menu_button) { display: none; }
             #right_bar.lightflow-right-workspace .lightflow-right-navigation .panel_handle > span { flex: 1 1 0; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
             #right_bar.lightflow-right-workspace .lightflow-right-navigation .panel_menu_button { flex: 0 0 16px; min-width: 16px; width: 16px; margin: 0; }
             #right_bar.lightflow-right-workspace .lightflow-right-navigation .panel_menu_button > i { font-size: 16px; }
@@ -12382,7 +14770,7 @@ function initializeLightManagerPlugin() {
                 #right_bar.lightflow-right-workspace #panel_light_properties .lf-light-primary-row { display: grid !important; grid-template-columns: auto minmax(0,1fr); gap: 4px !important; }
                 #right_bar.lightflow-right-workspace #panel_light_properties .lf-light-primary-row > .form_bar_light_properties_label { grid-column: 1 / -1; width: 100% !important; min-width: 0 !important; }
                 #right_bar.lightflow-right-workspace #panel_light_properties .lf-light-primary-row > .light_manager_form_separator { display: none; }
-                #right_bar.lightflow-right-workspace #panel_light_properties .lf-light-primary-row > .form_bar_light_color { justify-self: end; }
+                #right_bar.lightflow-right-workspace #panel_light_properties .lf-light-primary-row > .form_bar_light_color { justify-self: stretch; }
             }
             @container (max-width: 360px) {
                 #right_bar .lightflow-right-inspector .dialog_bar:has(.combo_slider_label) > .tool.widget { position: relative; display: grid !important; grid-template-columns: minmax(0,1fr) auto; min-height: 48px; height: auto !important; gap: 3px 4px; }
@@ -12397,11 +14785,6 @@ function initializeLightManagerPlugin() {
                 #right_bar .lightflow-right-inspector .dialog_bar:has(.combo_slider_label) > .tool.widget:has(> .material-icons:first-child) > .combo_slider_label { box-sizing: border-box; padding-left: 24px; }
             }
             @container (max-width: 260px) {
-                #right_bar .lightflow-right-inspector .light_manager_panel_search { grid-template-columns: minmax(0,1fr) 32px 32px; }
-                #right_bar .lightflow-right-inspector .light_manager_panel_search_active { width: 30px !important; min-width: 30px !important; padding: 0 !important; font-size: 0 !important; justify-content: center; }
-                #right_bar .lightflow-right-inspector .light_manager_panel_search_active > span { display: none; }
-                #right_bar .lightflow-right-inspector .light_manager_panel_search_active::before { content: 'filter_list'; font-family: 'Material Icons'; font-size: 18px; }
-                #right_bar .lightflow-right-inspector .light_manager_panel_search_active > i { display: none; }
                 #right_bar .lightflow-right-inspector .light_manager_group_summary { display: none; }
             }
             @container (max-width: 320px) { #right_bar .lightflow-outliner-filters button > i { display: none; } }
@@ -12412,14 +14795,14 @@ function initializeLightManagerPlugin() {
                 disposed = true; if (frame !== null) cancelAnimationFrame(frame);
                 observer.disconnect(); resize.disconnect(); listeners.forEach(listener => listener.delete());
                 bar.removeEventListener('pointerdown', resizeStart, true); filterTrigger.remove();
-                bar.removeEventListener('keydown', keydown); bar.removeEventListener('click', openClickedTab);
+                bar.removeEventListener('keydown', keydown); bar.removeEventListener('click', openClickedTab, true);
                 if (outliner.onResize === onResize) outliner.onResize = originalResize;
                 const index = Outliner.node_display_rules?.indexOf(rule); if (index >= 0) Outliner.node_display_rules.splice(index, 1);
                 Outliner.vue.root.splice(0, 0);
                 refreshTree(); filters.remove(); style.delete();
                 bar.classList.remove('lightflow-right-workspace'); bar.style.removeProperty('--lightflow-tree-height');
                 bar.querySelectorAll('.lightflow-right-inspector').forEach(node => node.classList.remove('lightflow-right-inspector'));
-                tabs.forEach(list => { list.classList.remove('lightflow-right-navigation'); });
+                tabs.forEach(list => { list.classList.remove('lightflow-right-navigation'); list.querySelectorAll('.lightflow-inspector-merged-tab,.lightflow-merged-active').forEach(handle => handle.classList.remove('lightflow-inspector-merged-tab', 'lightflow-merged-active')); });
                 attrs.forEach((backup, node) => backup.forEach((value, name) => value === null ? node.removeAttribute(name) : node.setAttribute(name, value)));
                 tabIcons.forEach(node => node.remove());
                 tabText.forEach((value, node) => { node.textContent = value; });
@@ -12694,7 +15077,7 @@ function initializeLightManagerPlugin() {
                 nodes.push(mesh.outline, mesh.grid_box);
                 if (element.getTypeBehavior?.('hide_in_screenshot')) nodes.push(mesh);
             });
-            nodes.filter(Boolean).forEach(node => {
+            nodes.filter(node => node && node !== Canvas.ground_plane).forEach(node => {
                 if (!cleanSnapshot.nodes.has(node)) cleanSnapshot.nodes.set(node, node.visible);
                 node.visible = false;
             });
@@ -13285,10 +15668,13 @@ function initializeLightManagerPlugin() {
         variant: 'both',
 
         onload() {
+            if(this.source==='file')this.new_repository_format=false;
             window.LightManagerIcons = lightManagerIconsApi;
             installLightManagerIconBridge();
             disposeLightManagerResources();
+            deletables.push(installLightflowSkinPoses());
             deletables.push(installLightflowOutlinerColors());
+            deletables.push(installLightflowAnimationJSON());
             disposeRetiredLightManagerLights();
             cleanupLightManagerRegistries();
             removeLightManagerLegacyStoredToolbarLayouts();
@@ -13299,9 +15685,22 @@ function initializeLightManagerPlugin() {
             window.LightManagerCameraShadows = LightManagerCameraShadows;
             window.LightManagerShadowRegions = LightManagerShadowRegions;
             deletables.push({ delete() { LightManagerShadowRegions.dispose(); LightManagerGroundShadows.dispose(); } });
-            for (const eventName of ['finish_edit', 'undo', 'redo', 'update_view', 'select_project', 'parsed', 'display_animation_frame']) {
+            for (const eventName of ['finish_edit', 'undo', 'redo', 'select_project', 'parsed', 'display_animation_frame']) {
                 deletables.push(Blockbench.on(eventName, () => LightManagerShadowRegions.invalidate()));
             }
+            deletables.push(Blockbench.on('update_view', (options = {}) => {
+                const elements = Array.isArray(options.elements) ? options.elements : [];
+                const groups = Array.isArray(options.groups) ? options.groups : [];
+                const elementAspects = options.element_aspects;
+                const groupAspects = options.group_aspects;
+                const geometryChanged = elements.some(element => element &&
+                    element.type !== 'light' && element.type !== 'art_key' &&
+                    (!elementAspects || elementAspects.transform || elementAspects.geometry ||
+                        elementAspects.faces || elementAspects.visibility));
+                const groupChanged = groups.some(group => group &&
+                    (!groupAspects || groupAspects.transform || groupAspects.visibility));
+                if (geometryChanged || groupChanged) LightManagerShadowRegions.invalidate();
+            }));
             for (const eventName of ['select_project', 'close_project']) {
                 deletables.push(Blockbench.on(eventName, () => LightManagerShadowRegions.dispose()));
             }
@@ -13899,10 +16298,23 @@ function initializeLightManagerPlugin() {
 
             window.ComboSlider = ComboSlider;
 
+            // A missing Menu icon is NOT a blank slot in native Blockbench:
+            // it becomes the help_outline '?' glyph. Normalize only Lightflow
+            // select options, preserving all explicit icons and native controls.
+            const normalizeLightflowSelectIcons = options => Object.fromEntries(
+                Object.entries(options || {}).map(([key, option]) => [
+                    key,
+                    option === false || option == null
+                        ? option
+                        : option && typeof option === 'object'
+                            ? { ...option, icon: option.icon ?? null }
+                            : { name: option === true ? key : option, icon: null }
+                ])
+            );
             const enabledLightflowSelectKeys = options => Object.keys(options).filter(key => options[key] && !options[key].disabled && Condition(options[key].condition));
             const searchableMenuDisposers = new Set();
             deletables.push({delete(){for(const dispose of [...searchableMenuDisposers]){if(Menu.open===dispose.menu)dispose.menu.hide();else dispose();}}});
-            const retainScrollableNativeSubmenus = menu => {
+            const retainScrollableNativeSubmenus = (menu, section) => {
                 if (!menu.node) return;
                 menu._lightflowSearchDispose?.();
                 const root=menu.node, previousHover=menu.hover, previousClose=menu.onClose;
@@ -13929,12 +16341,23 @@ function initializeLightManagerPlugin() {
                         submenu.style.height=Math.min(contentHeight,available)+'px';
                         submenu.style.overflowY=contentHeight>available?'auto':'hidden';
                         const rect=submenu.getBoundingClientRect();
-                        const x=anchorRect.right+rect.width<=innerWidth-8?anchorRect.right:anchorRect.left-rect.width;
+                        const opensRight=anchorRect.right+rect.width<=innerWidth-8;
+                        const overlapsButton=section===row.parentElement && row.classList.contains('hybrid_parent') && !opensRight;
+                        const x=opensRight?anchorRect.right:overlapsButton?anchorRect.right-rect.width:anchorRect.left-rect.width;
+                        let y=anchorRect.top;
+                        if(overlapsButton)y=anchorRect.bottom+rect.height<=innerHeight-8
+                            ? anchorRect.bottom-4 : anchorRect.top-rect.height+4;
                         submenu.style.left=Math.max(8,Math.min(x,innerWidth-rect.width-8))+'px';
-                        submenu.style.top=Math.max(8,Math.min(anchorRect.top,innerHeight-rect.height-8))+'px';
+                        submenu.style.top=Math.max(8,Math.min(y,innerHeight-rect.height-8))+'px';
                     }
                 };
-                const hover=function(...args){const result=previousHover.apply(this,args);position();return result;};
+                const hover = function(row, event, force) {
+                    if (Menu.open !== menu || !root.isConnected || !root.contains(row)) return;
+                    root.dataset.lightflowMenuNavigation = !event || event.type === 'keydown' ? 'keyboard' : 'pointer';
+                    const result = previousHover.call(this, row, event, force);
+                    position();
+                    return result;
+                };
                 const dispose=()=>{
                     if(disposed)return;disposed=true;
                     root.removeEventListener('scroll',position,true);window.removeEventListener('resize',position);
@@ -13951,36 +16374,223 @@ function initializeLightManagerPlugin() {
                 searchableMenuDisposers.add(dispose);
             };
 
-            const addNativeSelectSearch = (menu, options, anchor) => {
+            /**
+             * Keep an arbitrary group of native Blockbench menu rows scrollable
+             * without scrolling the search field or the remaining menu actions.
+             * Call after menu.open(), when Blockbench has created its LI nodes.
+             *
+             * Options: scrollItems (top-level menu_item ids), height (px),
+             * search (boolean), placeholder, anchor. No core Menu patching.
+             */
+            class LightManagerSectionedMenu {
+                static decorate(menu, options = {}) {
+                    const root = menu?.node;
+                    if (!root || !root.isConnected || root._lightflowSectionedMenuDispose) return false;
+                    const wanted = new Set((options.scrollItems || []).map(String));
+                    const originalRows = [...root.children];
+                    const originalRootStyle = root.getAttribute('style');
+                    const originallyScrollable = root.classList.contains('scrollable');
+                    const selected = originalRows.filter(row => row.tagName === 'LI' && wanted.has(row.getAttribute('menu_item')));
+                    if (!selected.length) return false;
+                    const first = originalRows.indexOf(selected[0]);
+                    const last = originalRows.indexOf(selected[selected.length - 1]);
+                    // A contiguous native region allows its own separators while
+                    // protecting arbitrary controls following it from scrolling.
+                    const start = originalRows[first - 1]?.matches('.menu_separator.has_label') ? first - 1 : first;
+                    const rows = originalRows.slice(start, last + 1);
+                    if (rows.some(row => !row.matches('li.menu_separator') && !wanted.has(row.getAttribute('menu_item')))) return false;
+
+                    const originalWidth = root.getBoundingClientRect().width;
+                    const section = document.createElement('li');
+                    section.setAttribute('role', 'presentation');
+                    Object.assign(section.style, {height:'auto',minHeight:'0',padding:'0',margin:'0',listStyle:'none'});
+                    const area = document.createElement('ul');
+                    area.className = 'light_manager_menu_scroll_content';
+                    Object.assign(area.style, {width:'100%',minHeight:'0',overflowY:'auto',overflowX:'hidden',
+                        margin:'0',padding:'0',listStyle:'none',overscrollBehavior:'contain',scrollbarGutter:'stable'});
+                    root.insertBefore(section, rows[0]);
+                    section.append(area);
+                    rows.forEach(row => area.append(row));
+                    root.classList.add('light_manager_menu_sectioned');
+                    root.classList.remove('scrollable');
+                    Object.assign(root.style, {display:'flex',flexDirection:'column',overflow:'visible',
+                        boxSizing:'border-box',maxHeight:'none'});
+                    if (originalWidth > 0) root.style.minWidth = `${Math.ceil(originalWidth)}px`;
+                    // Blockbench registers a root wheel/touch handler when the
+                    // unmodified menu is taller than the window. It moves the
+                    // WHOLE menu, so intercept it and scroll only from inside the list.
+                    const scrollWheel = event => {
+                        event.stopImmediatePropagation();
+                        if (event.ctrlKey || !area.contains(event.target) || event.target.closest('ul.contextMenu.sub')) return;
+                        event.preventDefault();
+                        const scale = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? area.clientHeight : 1;
+                        area.scrollTop += event.deltaY * scale;
+                    };
+                    root.addEventListener('wheel', scrollWheel, {capture:true,passive:false});
+                    section.addEventListener('click', event => {
+                        if (event.target === area || event.target === section) event.stopPropagation();
+                    });
+
+                    let searchInput;
+                    let searchRow;
+                    let emptyRow;
+                    const filter = () => {
+                        const query = (searchInput?.value || '').trim().toLocaleLowerCase();
+                        let visible = 0;
+                        let separator;
+                        for (const row of rows) {
+                            if (row.classList.contains('menu_separator')) {
+                                separator = row;
+                                row.style.display = 'none';
+                                continue;
+                            }
+                            const match = !query || [row.querySelector(':scope > span')?.textContent, row.title]
+                                .filter(Boolean).join(' ').toLocaleLowerCase().includes(query);
+                            row.style.display = match ? '' : 'none';
+                            row.classList.remove('focused', 'opened');
+                            if (match) {
+                                if (separator && (visible || separator.classList.contains('has_label'))) separator.style.display = '';
+                                separator = null;
+                                visible++;
+                            }
+                        }
+                        // Native submenus must not remain expanded when their
+                        // parent row is filtered away or its position changes.
+                        root.querySelectorAll('li.opened').forEach(row => row.classList.remove('opened'));
+                        if (emptyRow) emptyRow.style.display = visible ? 'none' : '';
+                        area.scrollTop = 0;
+                    };
+                    if (options.search) {
+                        ({row: searchRow, input: searchInput} = createNativeMenuSearch(options.placeholder));
+                        searchRow.classList.add('light_manager_menu_fixed_search');
+                        root.prepend(searchRow);
+                        emptyRow = document.createElement('li');
+                        emptyRow.className = 'disabled';
+                        emptyRow.textContent = translateLightManager('light_manager.ui.no_options');
+                        emptyRow.style.display = 'none';
+                        area.append(emptyRow);
+                        searchInput.addEventListener('input', filter);
+                    }
+                    // The root must keep overflow:visible for native/fixed
+                    // submenus. Its first scroll section, however, clips its
+                    // own colored rows and scrollbar without inheriting the
+                    // root's radius: that exposes square upper corners in
+                    // Environment while the same native menu is rounded in
+                    // Material Override/Pose. Round only the first scroll
+                    // surface; the menu itself still owns submenus and footer.
+                    if (root.firstElementChild === section) {
+                        const nativeCorners = getComputedStyle(root);
+                        area.style.borderTopLeftRadius = nativeCorners.borderTopLeftRadius;
+                        area.style.borderTopRightRadius = nativeCorners.borderTopRightRadius;
+                    }
+                    const touchRows = [...root.children];
+                    const stopNativeTouch = event => event.stopPropagation();
+                    touchRows.forEach(row => row.addEventListener('touchstart', stopNativeTouch, {passive:true}));
+
+                    const originalNavigate = menu.keyNavigate;
+                    const visibleRows = () => [...root.children].flatMap(row => row === section ? [...area.children] : [row])
+                        .filter(row => row.matches('li:not(.menu_separator):not(.disabled):not([role="presentation"])') &&
+                            !row.hidden && row.style.display !== 'none');
+                    const navigate = function(event) {
+                        const code = event.which || event.keyCode;
+                        if (code !== 38 && code !== 40) return originalNavigate.call(this, event);
+                        const current = root.querySelector('li.focused');
+                        if (current?.closest('ul.contextMenu.sub')) return originalNavigate.call(this, event);
+                        const choices = visibleRows();
+                        if (!choices.length) return true;
+                        const index = choices.indexOf(current);
+                        const next = choices[index < 0 ? (code === 40 ? 0 : choices.length - 1)
+                            : (index + (code === 40 ? 1 : -1) + choices.length) % choices.length];
+                        if (next.parentElement === area) next.scrollIntoView({block:'nearest'});
+                        if (current !== next) menu.hover(next, event);
+                        return true;
+                    };
+                    menu.keyNavigate = navigate;
+                    if (searchInput) searchInput.addEventListener('keydown', event => {
+                        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                            event.preventDefault(); event.stopPropagation();
+                            navigate({which:event.key === 'ArrowDown' ? 40 : 38,stopPropagation(){}});
+                        } else if (event.key === 'Enter') {
+                            event.preventDefault(); event.stopPropagation();
+                            const focused = root.querySelector('li.focused') || visibleRows().find(row => row.parentElement === area);
+                            focused?.click();
+                        } else if (event.key === 'ArrowRight' && root.querySelector('li.focused > ul.contextMenu.sub')) {
+                            event.preventDefault(); event.stopPropagation();
+                            originalNavigate.call(menu, {which:39});
+                            searchInput.blur();
+                        } else if (event.key === 'Escape') {
+                            event.preventDefault(); event.stopPropagation();
+                            menu.hide(); options.anchor?.focus?.();
+                        } else event.stopPropagation();
+                    });
+
+                    const resize = () => {
+                        if (!root.isConnected) return;
+                        // Reserve space for all fixed footer rows and search.
+                        area.style.maxHeight = 'none';
+                        const fixed = [...root.children].filter(child => child !== section)
+                            .reduce((height, child) => height + child.getBoundingClientRect().height, 0);
+                        const desired = Math.max(48, Number(options.height) || 180);
+                        const available = Math.max(48, window.innerHeight - 24 - fixed);
+                        area.style.maxHeight = `${Math.min(desired, available)}px`;
+                        const rect = root.getBoundingClientRect();
+                        const anchor = options.anchor?.currentTarget || options.anchor?.target || options.anchor;
+                        let preferredTop = rect.top;
+                        if (anchor instanceof HTMLElement) {
+                            const target = anchor.getBoundingClientRect();
+                            preferredTop = target.bottom;
+                            if (preferredTop + rect.height > window.innerHeight - 8 && target.top >= rect.height + 8) {
+                                preferredTop = target.top - rect.height;
+                            }
+                        } else if (Number.isFinite(anchor?.clientY)) preferredTop = anchor.clientY + 1;
+                        root.style.top = `${Math.max(8, Math.min(preferredTop, window.innerHeight - rect.height - 8))}px`;
+                        root.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - rect.width - 8))}px`;
+                    };
+                    resize();
+                    // Submenus stay in Blockbench's LI tree, but are positioned
+                    // fixed so the scroll area's overflow cannot clip them.
+                    retainScrollableNativeSubmenus(menu, area);
+                    const previousClose = menu.onClose;
+                    const previousDelete = menu.delete;
+                    let disposed = false;
+                    const dispose = () => {
+                        if (disposed) return;
+                        disposed = true;
+                        window.removeEventListener('resize', resize);
+                        root.removeEventListener('wheel', scrollWheel, true);
+                        touchRows.forEach(row => row.removeEventListener('touchstart', stopNativeTouch));
+                        if (originalRootStyle === null) root.removeAttribute('style');
+                        else root.setAttribute('style', originalRootStyle);
+                        root.classList.remove('light_manager_menu_sectioned');
+                        if (originallyScrollable) root.classList.add('scrollable');
+                        if (menu.keyNavigate === navigate) menu.keyNavigate = originalNavigate;
+                        if (menu.onClose === close) menu.onClose = previousClose;
+                        if (menu.delete === remove) menu.delete = previousDelete;
+                        if (root._lightflowSectionedMenuDispose === dispose) delete root._lightflowSectionedMenuDispose;
+                        menu._lightflowSearchDispose?.();
+                    };
+                    const close = function(...args) {dispose(); return previousClose?.apply(this,args);};
+                    const remove = function(...args) {dispose(); return previousDelete.apply(this,args);};
+                    menu.onClose = close;
+                    menu.delete = remove;
+                    root._lightflowSectionedMenuDispose = dispose;
+                    window.addEventListener('resize', resize);
+                    if (searchInput && options.focusSearch) searchInput.focus();
+                    return {root,area,searchInput,dispose};
+                }
+            }
+
+            const addNativeSelectSearch = (menu, options, anchor, settings = {}) => {
                 if (!menu.node) return;
                 menu._lightflowSearchDispose?.();
                 const rows = [...menu.node.children].filter(row => row.matches('li[menu_item]'));
-                const searchRow = document.createElement('li');
-                searchRow.setAttribute('role', 'presentation');
-                searchRow.className='menu_search_bar';
+                const {row: searchRow, input} = createNativeMenuSearch(settings.placeholder);
                 searchRow.dataset.lightflowMenuSearch='true';
-                searchRow.style.cssText = 'position:sticky;top:0;z-index:2;padding:5px;background:var(--color-bright_ui);cursor:default';
-                const input = document.createElement('input');
-                input.type = 'search';
-                input.placeholder = translateLightManager('light_manager.ui.search_options');
-                input.setAttribute('aria-label', input.placeholder);
-                input.style.cssText = 'width:100%;min-width:160px;height:28px;box-sizing:border-box';
-                searchRow.style.display = 'flex';
-                searchRow.style.alignItems = 'center';
-                searchRow.style.gap = '6px';
-                searchRow.style.borderBottom = '1px solid var(--color-border)';
-                const searchIcon = Blockbench.getIconNode('search');
-                searchIcon.setAttribute('aria-hidden', 'true');
-                searchIcon.style.cssText = 'position:static;display:flex;align-items:center;justify-content:center;flex:0 0 20px;margin:0';
-                input.style.minWidth = '0';
-                input.style.flex = '1';
-                searchRow.append(input, searchIcon);
                 menu.node.prepend(searchRow);
                 const empty = document.createElement('li');
                 empty.className = 'disabled'; empty.style.display = 'none';
                 empty.textContent = translateLightManager('light_manager.ui.no_options');
                 menu.node.append(empty);
-                searchRow.addEventListener('click', event => event.stopPropagation());
                 input.addEventListener('input', () => {
                     const query = input.value.trim().toLocaleLowerCase();
                     menu.node.querySelectorAll('li.opened').forEach(row=>row.classList.remove('opened'));
@@ -13989,23 +16599,28 @@ function initializeLightManagerPlugin() {
                         const option = options[row.getAttribute('menu_item')];
                         const label = option?.name ? (typeof tl === 'function' ? tl(option.name) : option.name)
                             : (row.querySelector(':scope > span')?.textContent || '');
-                        const matches = !query || String(label).toLocaleLowerCase().includes(query);
+                        const detail = settings.descriptions ? String(option?.description || '') : '';
+                        const matches = option?.always_show || !query || String(label + ' ' + detail).toLocaleLowerCase().includes(query);
                         row.style.display = matches ? '' : 'none';
                         row.classList.remove('focused');
-                        if (matches) visible++;
+                        if (matches && !(settings.preferResults && option?.always_show)) visible++;
                     });
                     const children = [...menu.node.children];
                     for (const separator of children.filter(node => node.classList.contains('menu_separator'))) {
                         const index = children.indexOf(separator);
                         const hasVisibleOption = nodes => nodes.some(node => rows.includes(node) && node.style.display !== 'none');
-                        separator.style.display = hasVisibleOption(children.slice(0, index)) &&
+                        if (settings.labeledSections && separator.classList.contains('has_label')) {
+                            const next = children.findIndex((node, i) => i > index && node.classList.contains('menu_separator'));
+                            separator.style.display = hasVisibleOption(children.slice(index + 1, next < 0 ? undefined : next)) ? '' : 'none';
+                        } else separator.style.display = hasVisibleOption(children.slice(0, index)) &&
                             hasVisibleOption(children.slice(index + 1)) ? '' : 'none';
                     }
                     empty.style.display = visible ? 'none' : '';
                 });
                 input.addEventListener('keydown', event => {
                     event.stopPropagation();
-                    const visible = rows.filter(row => row.style.display !== 'none' && !row.classList.contains('disabled'));
+                    const visible = rows.filter(row => row.style.display !== 'none' && !row.classList.contains('disabled') &&
+                        !(settings.preferResults && input.value.trim() && options[row.getAttribute('menu_item')]?.always_show));
                     const active = visible.findIndex(row => row.classList.contains('focused'));
                     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
                         event.preventDefault();
@@ -14021,7 +16636,7 @@ function initializeLightManagerPlugin() {
                         event.preventDefault();
                         (visible[active < 0 ? 0 : active])?.click();
                     } else if (event.key === 'Escape') {
-                        event.preventDefault(); menu.hide(); anchor?.focus();
+                        event.preventDefault(); menu.hide(); anchor?.focus?.();
                     }
                 });
                 const rect = menu.node.getBoundingClientRect();
@@ -14042,7 +16657,7 @@ function initializeLightManagerPlugin() {
                     super(id, data);
                     this.type = 'select';
                     this.data = data;
-                    this.options = data.options || {};
+                    this.options = normalizeLightflowSelectIcons(data.options);
                     this.values = Object.keys(this.options);
                     this.value = data.value !== undefined ? data.value : (data.default !== undefined ? data.default : (this.values[0] || ''));
                     this.onChange = data.onChange;
@@ -14200,7 +16815,9 @@ function initializeLightManagerPlugin() {
                             items.push({
                                 id: key,
                                 name: opt.name || key,
-                                icon: opt.icon,
+                                // Native Menu otherwise inserts help_outline for an
+                                // absent icon. Text-only options must be iconless.
+                                icon: opt.icon ?? null,
                                 color: undefined,
                                 condition: opt.disabled ? false : opt.condition,
                                 marked: key === this.value,
@@ -14321,14 +16938,20 @@ function initializeLightManagerPlugin() {
                         let wrapper = btn.querySelector?.('.main_icon_wrapper');
                         if (wrapper) {
                             wrapper.innerHTML = '';
-                            let iconElement = Blockbench.getIconNode(opt.icon || 'help');
-                            if (this.icon_size !== undefined) {
-                                iconElement.style.fontSize = typeof this.icon_size === 'number' ? `${this.icon_size}px` : this.icon_size;
+                            const hasIcon = opt.icon !== undefined && opt.icon !== null && opt.icon !== '';
+                            wrapper.style.display = hasIcon && !this.data.hide_icon ? 'flex' : 'none';
+                            if (hasIcon) {
+                                const iconElement = Blockbench.getIconNode(opt.icon);
+                                if (this.icon_size !== undefined) {
+                                    iconElement.style.fontSize = typeof this.icon_size === 'number' ? `${this.icon_size}px` : this.icon_size;
+                                }
+                                if (opt.color) {
+                                    iconElement.style.color = opt.color;
+                                }
+                                wrapper.append(iconElement);
                             }
-                            if (opt.color) {
-                                iconElement.style.color = opt.color;
-                            }
-                            wrapper.append(iconElement);
+                            // An icon-only select with no icon remains readable.
+                            if (valueLabel) valueLabel.hidden = hasIcon && !this.show_value_text;
                         }
                     });
 
@@ -14336,7 +16959,7 @@ function initializeLightManagerPlugin() {
                 }
 
                 setOptions(options) {
-                    this.options = options || {};
+                    this.options = normalizeLightflowSelectIcons(options);
                     this.values = Object.keys(this.options);
 
                     // Fallback to the default or first option when current value is missing.
@@ -15318,7 +17941,6 @@ function initializeLightManagerPlugin() {
                     this.menu = new Menu('lightflow_texture_source_menu', structure, { searchable: true });
                     this.menu.open(this.node);
                     this.menu.node.classList.add('lightflow_texture_source_menu');
-                    addNativeSelectSearch(this.menu, structure, this.node);
                 }
                 setValue(value, update_form = true) { this.value = String(value || ''); this.updatePreview(); if (update_form) this.form.updateValues(); return this; }
                 getValue() { return this.value; }
@@ -15416,10 +18038,11 @@ function initializeLightManagerPlugin() {
                     const expandControl = data.expand_control === true;
                     this.colorpicker.node.classList.add('light_manager_advanced_color_control');
                     this.colorpicker.node.classList.toggle('is_expanded', expandControl);
-                    this.colorpicker.node.style.flex = expandControl ? '0 1 174px' : '0 0 auto';
-                    this.colorpicker.node.style.width = expandControl ? '174px' : 'auto';
-                    this.colorpicker.node.style.minWidth = expandControl ? '92px' : '0';
-                    this.colorpicker.node.style.maxWidth = expandControl ? '174px' : 'none';
+                    const fillAvailable = expandControl && data.fill_available === true;
+                    this.colorpicker.node.style.flex = fillAvailable ? '1 1 auto' : (expandControl ? '0 1 174px' : '0 0 auto');
+                    this.colorpicker.node.style.width = fillAvailable ? '100%' : (expandControl ? '174px' : 'auto');
+                    this.colorpicker.node.style.minWidth = fillAvailable ? '0' : (expandControl ? '92px' : '0');
+                    this.colorpicker.node.style.maxWidth = fillAvailable ? 'none' : (expandControl ? '174px' : 'none');
                     this.colorpicker.node.style.height = '28px';
                     this.colorpicker.node.style.margin = '0';
 
@@ -15455,9 +18078,35 @@ function initializeLightManagerPlugin() {
                 .light_manager_marked_slider .light_manager_slider_mark:hover { color: var(--color-text) !important; text-decoration:underline; text-decoration-thickness:2px; text-underline-offset:2px; }
                 .light_manager_marked_slider .light_manager_slider_mark:focus-visible { outline: 1px solid var(--color-accent); outline-offset: 0; }
                 :is(.light_manager_marked_slider,.light_manager_full_track_slider) input[type=range] { display: block; height: 28px; }
+                .light_manager_cycle_band {
+                    height: 11px; width: calc(100% - 16px); margin: 3px 8px 0;
+                    position: relative; box-sizing: border-box; border-radius: 8px;
+                    border: 1px solid color-mix(in srgb, var(--color-border) 52%, transparent);
+                    overflow: visible; pointer-events: none;
+                }
+                .light_manager_cycle_cursor {
+                    position: absolute; top: 50%; width: 12px; height: 12px;
+                    border-radius: 50%; transform: translate(-50%,-50%);
+                    background: var(--color-text);
+                    border: 2px solid var(--color-ui);
+                    box-shadow: 0 0 0 1px var(--color-text);
+                }
+                .light_manager_search_origin {
+                    display: inline-flex; align-items: center; flex: 0 0 auto;
+                    margin-left: 4px; padding: 1px 4px; border-radius: 4px;
+                    border: 1px solid var(--color-border); color: var(--color-subtle_text);
+                    font-size: 10px; font-weight: 500; line-height: 1.4;
+                    white-space: nowrap;
+                }
             `));
             FormElement.types.combo_slider = class FormElementComboSlider extends FormElement {
-                delete() { this.modifierHints?.delete(); this.numberEdit?.dispose(); this.releasePopupDocumentListeners?.(); this.popup_panel?.remove(); super.delete(); }
+                delete() {
+                    this.numberHandleDeleting = true;
+                    this.numberHandleDrag?.dispose();
+                    this.stopNumberHandleTouchDrag?.(null, true);
+                    this.modifierHints?.delete(); this.numberEdit?.dispose();
+                    this.releasePopupDocumentListeners?.(); this.popup_panel?.remove(); super.delete();
+                }
                 get uses_wide_inputs() { return true; }
 
                 setup() {
@@ -15693,6 +18342,25 @@ function initializeLightManagerPlugin() {
                         bar.style.setProperty('height', 'auto', 'important');
                         bar.style.setProperty('min-height', '0', 'important');
                     }
+                    if (data.cycle_track && !this.is_compact && Array.isArray(data.cycle_stops)
+                        && data.cycle_stops.length >= 2 && this.settings.max > this.settings.min) {
+                        const stops = data.cycle_stops.filter(stop => Number.isFinite(stop.at)
+                            && stop.at >= 0 && stop.at <= 1 && /^#[0-9a-f]{6}$/i.test(stop.color || ''))
+                            .sort((a, b) => a.at - b.at);
+                        if (stops.length >= 2) {
+                            const band = document.createElement('div');
+                            band.className = 'light_manager_cycle_band';
+                            band.setAttribute('aria-hidden', 'true');
+                            band.style.background = `linear-gradient(90deg, ${stops.map(stop => `${stop.color} ${stop.at * 100}%`).join(', ')})`;
+                            const cursor = document.createElement('span');
+                            cursor.className = 'light_manager_cycle_cursor';
+                            band.append(cursor);
+                            this.cycleBand = band;
+                            this.cycleCursor = cursor;
+                            // Preserve the ordinary range and landmark buttons.
+                            comboWrapper.insertBefore(band, rangeInput);
+                        }
+                    }
 
 
                     // Configure the selected interaction mode.
@@ -15836,55 +18504,77 @@ function initializeLightManagerPlugin() {
                     let $range = $(this.slider_node).find('input[type="range"]');
                     let $number = $(this.slider_node).find('input[type="text"]');
 
-                    // Drag behavior for the input's mini slider ("<>").
-                    if (typeof addEventListeners !== 'undefined') {
-                        addEventListeners(numSliderIcon, 'mousedown touchstart', e1 => {
-                            if (scope.is_disabled || scope.input_toggle?.checked === false) return;
-                            if (typeof convertTouchEvent !== 'undefined') convertTouchEvent(e1);
-
-                            let lastDifference = 0;
-                            const startValue = parseFloat(scope.numberInput.value) || 0;
-
-                            if (scope.onBefore) scope.onBefore(e1);
-                            scope.isDragging = true;
-
-                            let move = e2 => {
-                                if (typeof convertTouchEvent !== 'undefined') convertTouchEvent(e2);
-                                let difference = Math.trunc((e2.clientX - e1.clientX) / (e2.shiftKey ? 100 : 10)) * (scope.settings.step || 1);
-
-                                if (difference !== lastDifference) {
-                                    let newValue = startValue + difference;
-
-                                    if (!scope.settings.allow_lower && newValue < scope.settings.min) newValue = scope.settings.min;
-                                    if (!scope.settings.allow_higher && newValue > scope.settings.max) newValue = scope.settings.max;
-                                    if (scope.landmarks.length) newValue = scope.snapToMark(newValue, !!e2.altKey);
-
-                                    if (typeof trimFloatNumber !== 'undefined') {
-                                        newValue = trimFloatNumber(newValue, 8);
-                                    } else {
-                                        newValue = Math.round(newValue * 100000000) / 100000000;
-                                    }
-
-                                    scope.setValue(newValue, true, false);
-                                    if (scope.onDrag) scope.onDrag(newValue, e2, true);
-                                    lastDifference = difference;
-                                }
-                            };
-
-                            let stop = e2 => {
-                                if (typeof removeEventListeners !== 'undefined') {
-                                    removeEventListeners(document, 'mousemove touchmove', move);
-                                    removeEventListeners(document, 'mouseup touchend', stop);
-                                }
-                                scope.isDragging = false;
-                                scope.updateResetButton();
-                                if (scope.onAfter) scope.onAfter(e2);
-                            };
-
-                            addEventListeners(document, 'mousemove touchmove', move);
-                            addEventListeners(document, 'mouseup touchend', stop);
-                        });
-                    }
+                    // The <> handle now keeps the cursor inside the application
+                    // by locking it while scrubbing. All ComboSlider consumers
+                    // share this path, even inside compact popups and dialogs.
+                    let handleStartValue = 0, handleLastDifference = 0;
+                    const beginHandle = event => {
+                        handleStartValue = parseFloat(scope.numberInput.value) || 0;
+                        handleLastDifference = 0;
+                        scope.onBefore?.(event);
+                        scope.isDragging = true;
+                    };
+                    const moveHandle = (travel, event) => {
+                        const difference = Math.trunc(travel / (event.shiftKey ? 100 : 10)) * (scope.settings.step || 1);
+                        if (difference === handleLastDifference) return;
+                        let next = handleStartValue + difference;
+                        if (!scope.settings.allow_lower) next = Math.max(scope.settings.min, next);
+                        if (!scope.settings.allow_higher) next = Math.min(scope.settings.max, next);
+                        if (scope.landmarks.length) next = scope.snapToMark(next, !!event.altKey);
+                        next = typeof trimFloatNumber !== 'undefined'
+                            ? trimFloatNumber(next, 8) : Math.round(next * 100000000) / 100000000;
+                        scope.setValue(next, true, false);
+                        scope.onDrag?.(next, event, true);
+                        handleLastDifference = difference;
+                    };
+                    const endHandle = (event, cancelled) => {
+                        scope.isDragging = false;
+                        if (cancelled && !scope.numberHandleDeleting && scope.value !== handleStartValue)
+                            scope.setValue(handleStartValue, true, false);
+                        scope.updateResetButton();
+                        // Even a teardown needs to close the onBefore/onAfter
+                        // transaction; otherwise Undo can remain open after a
+                        // panel rebuild during a locked drag.
+                        scope.onAfter?.(event);
+                    };
+                    this.numberHandleDrag = bindLightflowNumberHandleMouseScrub(numSliderIcon, {
+                        disabled: () => scope.is_disabled || scope.input_toggle?.checked === false,
+                        onStart: beginHandle, onMove: moveHandle, onFinish: endHandle
+                    });
+                    // Touch remains a real touch gesture: it neither hides nor
+                    // locks a mouse cursor. A gesture always cleans up on cancel.
+                    let touchGesture = null;
+                    const touchMove = event => {
+                        if (!touchGesture) return;
+                        const touch = Array.from(event.touches || []).find(item => item.identifier === touchGesture.id);
+                        if (!touch) return;
+                        moveHandle(touch.clientX - touchGesture.startX, event);
+                        event.preventDefault();
+                    };
+                    const stopTouch = (event, cancelled = false) => {
+                        if (!touchGesture) return;
+                        touchGesture = null;
+                        document.removeEventListener('touchmove', touchMove, true);
+                        document.removeEventListener('touchend', touchEnd, true);
+                        document.removeEventListener('touchcancel', touchCancel, true);
+                        window.removeEventListener('blur', touchCancel);
+                        endHandle(event, cancelled);
+                    };
+                    const touchEnd = event => stopTouch(event, false);
+                    const touchCancel = event => stopTouch(event, true);
+                    numSliderIcon.addEventListener('touchstart', event => {
+                        if (touchGesture || scope.is_disabled || scope.input_toggle?.checked === false) return;
+                        const touch = event.changedTouches?.[0];
+                        if (!touch) return;
+                        event.preventDefault();
+                        beginHandle(event);
+                        touchGesture = {id:touch.identifier,startX:touch.clientX};
+                        document.addEventListener('touchmove', touchMove, {capture:true,passive:false});
+                        document.addEventListener('touchend', touchEnd, true);
+                        document.addEventListener('touchcancel', touchCancel, true);
+                        window.addEventListener('blur', touchCancel);
+                    }, {passive:false});
+                    this.stopNumberHandleTouchDrag = stopTouch;
 
                     // Trigger continuous updates without onBefore/onAfter.
                     $inputs.on('input', function (event) {
@@ -16069,6 +18759,10 @@ function initializeLightManagerPlugin() {
 
                     this.updateResetButton();
                     this.updateSliderFill();
+                    if (this.cycleCursor) {
+                        const fraction = (Number(value) - this.settings.min) / (this.settings.max - this.settings.min);
+                        this.cycleCursor.style.left = `${Math.max(0, Math.min(100, fraction * 100))}%`;
+                    }
                     if (this.markNodes) {
                         const selected = this.markNodes.find(({ mark }) => Math.abs(mark.value - value) < 1e-6);
                         this.markNodes.forEach(({ mark, button }) => {
@@ -16110,7 +18804,7 @@ function initializeLightManagerPlugin() {
                     bar.style.background = 'transparent';
 
                     let data = this.options;
-                    this.options_dict = data.options || {};
+                    this.options_dict = normalizeLightflowSelectIcons(data.options);
                     this.values = Object.keys(this.options_dict);
                     this.value = data.value !== undefined ? data.value : (data.default !== undefined ? data.default : this.values[0]);
 
@@ -16208,7 +18902,7 @@ function initializeLightManagerPlugin() {
                             items.push({
                                 id: key,
                                 name: opt.name || key,
-                                icon: opt.icon,
+                                icon: opt.icon ?? null,
                                 color: undefined,
                                 condition: opt.disabled ? false : opt.condition,
                                 marked: key === this.value,
@@ -16313,14 +19007,19 @@ function initializeLightManagerPlugin() {
                     this.value_label.textContent = optName;
 
                     this.icon_wrapper.innerHTML = '';
-                    let iconElement = Blockbench.getIconNode(opt.icon || 'help');
-                    if (this.icon_size !== undefined) {
-                        iconElement.style.fontSize = typeof this.icon_size === 'number' ? `${this.icon_size}px` : this.icon_size;
+                    const hasIcon = opt.icon !== undefined && opt.icon !== null && opt.icon !== '';
+                    this.icon_wrapper.style.display = hasIcon && !this.options.hide_icon ? 'flex' : 'none';
+                    this.value_label.hidden = hasIcon && !this.options.show_value_text;
+                    if (hasIcon) {
+                        const iconElement = Blockbench.getIconNode(opt.icon);
+                        if (this.icon_size !== undefined) {
+                            iconElement.style.fontSize = typeof this.icon_size === 'number' ? `${this.icon_size}px` : this.icon_size;
+                        }
+                        if (opt.color) {
+                            iconElement.style.color = opt.color;
+                        }
+                        this.icon_wrapper.append(iconElement);
                     }
-                    if (opt.color) {
-                        iconElement.style.color = opt.color;
-                    }
-                    this.icon_wrapper.append(iconElement);
                 }
 
                 getValue() {
@@ -16337,7 +19036,7 @@ function initializeLightManagerPlugin() {
                 }
 
                 setOptions(options) {
-                    this.options_dict = options || {};
+                    this.options_dict = normalizeLightflowSelectIcons(options);
                     this.values = Object.keys(this.options_dict);
                     if (!this.options_dict[this.value] && this.values.length > 0) {
                         this.value = (this.options && this.options.default !== undefined && this.options_dict[this.options.default])
@@ -16402,7 +19101,7 @@ function initializeLightManagerPlugin() {
                         });
                         label.append(separator);
                     }
-                    this.options_dict = data.options || {};
+                    this.options_dict = normalizeLightflowSelectIcons(data.options);
                     this.values = Object.keys(this.options_dict);
                     this.value = String(data.value !== undefined
                         ? data.value
@@ -16428,6 +19127,26 @@ function initializeLightManagerPlugin() {
                     this.node = this.select_input.node;
                     this.node.classList.remove('half');
                     this.node.classList.add('light_manager_enum_select_input');
+                    // SelectInput is a div in desktop Blockbench. Preserve its native
+                    // menu while providing the same keyboard access as a select.
+                    this.node.tabIndex = 0;
+                    this.node.setAttribute('role', 'button');
+                    this.node.setAttribute('aria-haspopup', 'menu');
+                    this.node.addEventListener('keydown', event => {
+                        if (this.is_disabled) return;
+                        if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault(); event.stopPropagation(); this.node.click();
+                        } else if (['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) {
+                            event.preventDefault(); event.stopPropagation();
+                            const index = this.values.indexOf(this.value);
+                            const next = event.key === 'Home' ? 0 : event.key === 'End' ? this.values.length - 1
+                                : Math.max(0, Math.min(this.values.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)));
+                            if (this.values[next] === this.value) return;
+                            if (typeof data.onBefore === 'function') data.onBefore();
+                            try { this.setValue(this.values[next]); this.change(); }
+                            finally { if (typeof data.onAfter === 'function') data.onAfter(); }
+                        }
+                    });
                     this.node.setAttribute('aria-label', typeof tl !== 'undefined'
                         ? tl(data.label || data.description || this.id)
                         : (data.label || data.description || this.id));
@@ -16705,7 +19424,7 @@ function initializeLightManagerPlugin() {
                     this.node.style.border = '0';
                     this.node.style.background = 'transparent';
                     Object.values(this.button_nodes).forEach(button => {
-                        Object.assign(button.style, { minWidth: '0', height: '30px', padding: '3px', border: '0', borderRadius: '3px' });
+                        Object.assign(button.style, { minWidth: '0', height: '30px', padding: '3px', border: '0', borderRadius: 'var(--lf-radius-control, 8px)' });
                         button.querySelector('.icon')?.style.setProperty('margin', '0');
                         button.addEventListener('keydown', event => {
                             if (event.key === 'Enter' || event.key === ' ') event.stopPropagation();
@@ -17181,15 +19900,11 @@ function initializeLightManagerPlugin() {
                     let data = this.options;
                     this.onBefore = typeof data.onBefore === 'function' ? data.onBefore : null;
                     this.onAfter = typeof data.onAfter === 'function' ? data.onAfter : null;
-                    const commitVectorChange = (callback, event) => {
-                        this.onBefore?.(event);
-                        try {
-                            return callback();
-                        } finally {
-                            this.onAfter?.(event);
-                        }
-                    };
                     this.value = data.value !== undefined ? !!data.value : (data.default !== undefined ? !!data.default : false);
+                    // A non-collapsible heading can reuse group metadata/search
+                    // without masquerading as an interactive folder.
+                    this.isStaticHeading = data.variant === 'group' && !!data.static_heading;
+                    if (this.isStaticHeading) this.value = true;
                     this.presentation = data.presentation || 'switch';
 
                     // Customization settings.
@@ -17216,8 +19931,12 @@ function initializeLightManagerPlugin() {
                     // Main Interactive Container
                     this.node = document.createElement('div');
                     this.node.className = 'tool widget custom_checkbox';
-                    this.node.tabIndex = 0;
-                    this.node.setAttribute('role', data.variant === 'group' ? 'button' : this.presentation === 'switch' ? 'switch' : 'checkbox');
+                    this.node.tabIndex = this.isStaticHeading ? -1 : 0;
+                    this.node.setAttribute('role', this.isStaticHeading ? 'heading' : data.variant === 'group' ? 'button' : this.presentation === 'switch' ? 'switch' : 'checkbox');
+                    if (this.isStaticHeading) {
+                        this.node.setAttribute('aria-level', '3');
+                        this.node.classList.add('light_manager_static_heading');
+                    }
                     Object.assign(this.node.style, {
                         display: 'flex',
                         alignItems: 'center',
@@ -17225,7 +19944,7 @@ function initializeLightManagerPlugin() {
                         padding: paddingValue,
                         boxSizing: 'border-box',
                         width: '100%',
-                        cursor: 'pointer',
+                        cursor: this.isStaticHeading ? 'default' : 'pointer',
                         userSelect: 'none'
                     });
 
@@ -17270,6 +19989,7 @@ function initializeLightManagerPlugin() {
                     });
 
                     this.icon_wrapper.append(this.icon_node);
+                    if (this.isStaticHeading) this.icon_wrapper.style.display = 'none';
 
                     this.label_node = document.createElement('span');
                     Object.assign(this.label_node.style, {
@@ -17384,7 +20104,7 @@ function initializeLightManagerPlugin() {
 
                     // Click Event Listener
                     this.node.addEventListener('click', event => {
-                        if (this.is_disabled) return;
+                        if (this.is_disabled || this.isStaticHeading) return;
                         this.onBefore?.(event);
                         try {
                             this.setValue(!this.value);
@@ -17393,7 +20113,7 @@ function initializeLightManagerPlugin() {
                         }
                     });
                     this.node.addEventListener('keydown', event => {
-                        if (this.is_disabled) return;
+                        if (this.is_disabled || this.isStaticHeading) return;
                         if (event.key === 'Enter' || event.key === ' ') {
                             event.preventDefault();
                             event.stopPropagation();
@@ -17414,7 +20134,12 @@ function initializeLightManagerPlugin() {
                     const currentIcon = this.value ? this.icon_on : this.icon_off;
                     const currentColor = this.value ? this.icon_color_on : this.icon_color_off;
                     const currentBackground = this.value ? this.background_on : this.background_off;
-                    this.node.setAttribute(this.options.variant === 'group' ? 'aria-expanded' : 'aria-checked', this.value ? 'true' : 'false');
+                    if (this.isStaticHeading) {
+                        this.node.removeAttribute('aria-expanded');
+                        this.node.removeAttribute('aria-checked');
+                    } else {
+                        this.node.setAttribute(this.options.variant === 'group' ? 'aria-expanded' : 'aria-checked', this.value ? 'true' : 'false');
+                    }
 
                     // Reset classes
                     this.icon_node.className = '';
@@ -17450,9 +20175,9 @@ function initializeLightManagerPlugin() {
                 }
 
                 setValue(val, dispatch = true) {
-                    this.value = !!val; // Enforce boolean
+                    this.value = this.isStaticHeading ? true : !!val; // Enforce boolean
                     this.updateVisuals(this.animate);
-                    if (dispatch) this.change(); // Notify form of the change
+                    if (dispatch && !this.isStaticHeading) this.change(); // Notify form of the change
                 }
 
                 getDefault() {
@@ -17483,6 +20208,8 @@ function initializeLightManagerPlugin() {
 
                     this.node = document.createElement('div');
                     this.node.className = 'light_manager_panel_search';
+                    if (data.compact_toolbar) this.node.classList.add('light_manager_panel_search_compact');
+                    if (data.icon_toolbar && !data.compact_toolbar) this.node.classList.add('light_manager_panel_search_icon_toolbar');
                     this.node.setAttribute('role', 'search');
 
                     const searchWrap = document.createElement('label');
@@ -17502,7 +20229,8 @@ function initializeLightManagerPlugin() {
                         this.filter_mode = 'all';
                         this.filter_select.set('all');
                         this.setValue('');
-                        this.form.update();
+                        if (data.fast_filter) this.applyFilter();
+                        else this.form.update();
                         this.input.focus();
                     };
                     this.clear_button = document.createElement('button');
@@ -17520,25 +20248,86 @@ function initializeLightManagerPlugin() {
                     this.clear_button.addEventListener('click', clearFilter);
                     searchWrap.append(this.clear_button);
 
-                    this.filter_select = new Interface.CustomElements.SelectInput(`lightflow_filter_${this.id}`, {
-                        value: 'all',
-                        options: {
-                            all: translateLightManager('light_manager.ui.filter_all'),
-                            active: translateLightManager('light_manager.ui.filter_active'),
-                            modified: translateLightManager('light_manager.ui.filter_modified'),
-                            favorites: translateLightManager('light_manager.ui.filter_favorites')
-                        },
-                        onInput: () => {
-                            this.filter_mode = this.filter_select.node.getAttribute('value') || 'all';
-                            this.form.update();
-                        }
-                    });
-                    this.active_button = this.filter_select.node;
+                    const filterOptions = {
+                        all: translateLightManager('light_manager.ui.filter_all'),
+                        active: translateLightManager('light_manager.ui.filter_active'),
+                        modified: translateLightManager('light_manager.ui.filter_modified'),
+                        favorites: translateLightManager('light_manager.ui.filter_favorites')
+                    };
+                    const filterIcons = {all:'filter_list',active:'visibility',
+                        modified:'edit',favorites:'star'};
+                    if (data.compact_toolbar) {
+                        // Actual Blockbench Menu, not an OS or HTML <select> popup.
+                        // Anchored to an icon-only toolbar button.
+                        const button = document.createElement('button');
+                        button.type = 'button';
+                        button.className = 'tool light_manager_panel_filter_compact';
+                        button.setAttribute('aria-haspopup', 'menu');
+                        const updateTitle = () => {
+                            button.title = `${translateLightManager('light_manager.ui.filter_label')}: ${filterOptions[this.filter_mode] || filterOptions.all}`;
+                            button.setAttribute('value', this.filter_mode);
+                        };
+                        const choose = value => {
+                            if (!Object.prototype.hasOwnProperty.call(filterOptions, value)) return;
+                            this.filter_mode = value;
+                            updateTitle();
+                            if (data.fast_filter) this.applyFilter();
+                            else this.form.update();
+                            if (button.isConnected) button.focus({preventScroll:true});
+                        };
+                        button.addEventListener('click', event => {
+                            // Blockbench's native menu uses the event coordinates.
+                            // Place this narrow menu inside the left inspector,
+                            // rather than letting it protrude over the viewport.
+                            const bounds = button.getBoundingClientRect();
+                            const anchor = new MouseEvent('click', {
+                                detail: 1,
+                                clientX: Math.max(4, bounds.right - 160),
+                                clientY: bounds.bottom - 2
+                            });
+                            new Menu(Object.entries(filterOptions).map(([value, label]) => ({
+                                id: `lightflow_panel_filter_${value}`,
+                                name: label,
+                                icon: filterIcons[value],
+                                marked: value === this.filter_mode,
+                                click: () => choose(value)
+                            }))).open(anchor);
+                        });
+                        button.addEventListener('keydown', event => {
+                            if (event.key !== 'Enter' && event.key !== ' ') return;
+                            event.preventDefault();
+                            event.stopPropagation();
+                            const rect = button.getBoundingClientRect();
+                            button.dispatchEvent(new MouseEvent('click', {
+                                bubbles: false, detail: 1, clientX: rect.right, clientY: rect.bottom
+                            }));
+                        });
+                        this.filter_select = {node:button, set:value => {
+                            if (!Object.prototype.hasOwnProperty.call(filterOptions, value)) return;
+                            this.filter_mode = value;
+                            updateTitle();
+                        }};
+                        this.active_button = button;
+                        updateTitle();
+                    } else {
+                        this.filter_select = new Interface.CustomElements.SelectInput(`lightflow_filter_${this.id}`, {
+                            value: 'all',
+                            options: filterOptions,
+                            onInput: () => {
+                                this.filter_mode = this.filter_select.node.getAttribute('value') || 'all';
+                                this.form.update();
+                            }
+                        });
+                        this.active_button = this.filter_select.node;
+                    }
                     this.active_button.classList.remove('half');
                     this.active_button.style.width = '100%';
                     this.active_button.style.setProperty('min-width', '0', 'important');
                     this.active_button.style.setProperty('max-width', '100%', 'important');
                     this.active_button.classList.add('light_manager_panel_search_active');
+                    if (data.icon_toolbar && !data.compact_toolbar) {
+                        this.active_button.classList.add('light_manager_panel_search_icon_filter');
+                    }
                     this.active_button.setAttribute('aria-label', translateLightManager('light_manager.ui.filter_label'));
 
                     this.collapse_button = document.createElement('button');
@@ -17549,8 +20338,6 @@ function initializeLightManagerPlugin() {
 
                     const collapse_icon_node = Blockbench.getIconNode('close_fullscreen');
                     collapse_icon_node.style.fontSize = '18px';
-                    collapse_icon_node.style.paddingLeft = '3px';
-                    collapse_icon_node.style.paddingTop = '1px';
                     collapse_icon_node.style.textShadow = 'none';
                     this.collapse_button.append(collapse_icon_node);
 
@@ -17598,7 +20385,8 @@ function initializeLightManagerPlugin() {
                         });
                         bar[bindingKey] = onContextMenu;
                     };
-                    this.node.append(searchWrap, this.active_button, this.collapse_button);
+                    this.node.append(searchWrap, this.active_button);
+                    if (!data.hide_collapse) this.node.append(this.collapse_button);
                     bar.append(this.node);
                     this.empty_node = document.createElement('div');
                     this.empty_node.className = 'lightflow_search_empty';
@@ -17651,10 +20439,25 @@ function initializeLightManagerPlugin() {
                             element.bar.classList.toggle('light_manager_panel_filter_hidden', !visible);
                             element.bar.style.display = visible ? '' : 'none';
                             if (rows[index].group) {
+                                const origin = element.options?.search_origin;
+                                const showOrigin = !!(origin && filtering && visible
+                                    && element.options.panel_category_visible === false);
+                                if (showOrigin && !element.searchOriginNode && element.label_container) {
+                                    element.searchOriginNode = document.createElement('span');
+                                    element.searchOriginNode.className = 'light_manager_search_origin';
+                                    element.label_container.append(element.searchOriginNode);
+                                }
+                                if (element.searchOriginNode) {
+                                    element.searchOriginNode.textContent = showOrigin
+                                        ? (typeof tl === 'function' ? tl(origin) : origin) : '';
+                                    element.searchOriginNode.style.display = showOrigin ? '' : 'none';
+                                }
                                 element.bar.classList.toggle('lightflow_search_expanded', filtering && visible);
                                 const expanded = (filtering && visible) || !!element.getValue?.();
-                                element.node?.setAttribute('aria-expanded', String(expanded));
-                                if (element.icon_node) element.icon_node.textContent = expanded ? element.icon_on : element.icon_off;
+                                if (!element.isStaticHeading) {
+                                    element.node?.setAttribute('aria-expanded', String(expanded));
+                                    if (element.icon_node) element.icon_node.textContent = expanded ? element.icon_on : element.icon_off;
+                                }
                             }
                         });
                         this.active_button.classList.toggle('selected', this.filter_mode !== 'all');
@@ -17667,7 +20470,8 @@ function initializeLightManagerPlugin() {
                     this.applyFilter = applyFilter;
                     this.input.addEventListener('input', () => {
                         this.value = this.input.value;
-                        this.form.update();
+                        if (data.fast_filter) this.applyFilter();
+                        else this.form.update();
                     });
                     this.input.addEventListener('keydown', event => {
                         if (event.key !== 'Escape') return;
@@ -17677,7 +20481,7 @@ function initializeLightManagerPlugin() {
                     this.collapse_button.addEventListener('click', () => {
                         const changedKeys = [];
                         Object.values(this.form?.form_data || {}).forEach(element => {
-                            if (element === this || element?.options?.variant !== 'group' || element.getValue?.() === false || element.bar?.style.display === 'none') return;
+                            if (element === this || element?.isStaticHeading || element?.options?.variant !== 'group' || element.getValue?.() === false || element.bar?.style.display === 'none') return;
                             element.setValue?.(false);
                             changedKeys.push(element.id);
                         });
@@ -18080,6 +20884,17 @@ function initializeLightManagerPlugin() {
                     let data = this.options;
                     this.onBefore = typeof data.onBefore === 'function' ? data.onBefore : null;
                     this.onAfter = typeof data.onAfter === 'function' ? data.onAfter : null;
+                    // Context-menu edits and the vector reset must use the same
+                    // single undo bracket as direct typing and dragging. This
+                    // callback belongs to custom_vector (not custom_checkbox).
+                    const commitVectorChange = (callback, event) => {
+                        this.onBefore?.(event);
+                        try {
+                            return callback();
+                        } finally {
+                            this.onAfter?.(event);
+                        }
+                    };
                     this.dimensions = data.dimensions || 3;
                     const translatedLabel = data.label
                         ? (typeof tl !== 'undefined' ? tl(data.label) : data.label)
@@ -18211,7 +21026,7 @@ function initializeLightManagerPlugin() {
 
                     this.updateResetButtonVisibility = updateResetButtonVisibility;
 
-                    bar.append(labelWrapper);
+                    if (data.hide_header !== true) bar.append(labelWrapper);
 
                     // Input container.
                     this.inputs_container = document.createElement('div');
@@ -18244,7 +21059,7 @@ function initializeLightManagerPlugin() {
                             rowContainer = document.createElement('div');
                             rowContainer.style = hasAnyRange
                                 ? 'display: flex; flex-direction: row; align-items: center; height: 30px; width: 100%; box-sizing: border-box;'
-                                : 'display: flex; flex: 1 1 0; flex-direction: row; align-items: center; height: 30px; min-width: 0; width: auto; box-sizing: border-box;';
+                                : 'display: flex; flex: 1 1 0; flex-direction: row; align-items: center; height: 28px; min-width: 0; width: auto; box-sizing: border-box;';
 
                             let axisLabel = document.createElement('span');
                             axisLabel.style = 'margin-right: 5px; font-size: 13px; color: var(--color-text); font-weight: bold; white-space: nowrap; display: flex; align-items: center; width: 14px; justify-content: center; font-family: monospace;';
@@ -18520,7 +21335,12 @@ function initializeLightManagerPlugin() {
                                 });
                                 nativeSlider.jq_inner.css({
                                     'font-size': '13px',
-                                    'line-height': '28px'
+                                    'line-height': 'normal',
+                                    'display': 'flex',
+                                    'align-items': 'center',
+                                    'justify-content': 'center',
+                                    'height': '100%',
+                                    'padding': '0 6px'
                                 });
 
                                 if (rowContainer) {
@@ -18558,7 +21378,12 @@ function initializeLightManagerPlugin() {
                             nslideInner.setAttribute('aria-valuenow', String(val));
                             nslideInner.innerText = typeof trimFloatNumber !== 'undefined' ? trimFloatNumber(parseFloat(val) || 0) : val;
                             nslideInner.style.fontSize = '13px';
-                            nslideInner.style.lineHeight = '28px';
+                            nslideInner.style.lineHeight = 'normal';
+                            nslideInner.style.display = 'flex';
+                            nslideInner.style.alignItems = 'center';
+                            nslideInner.style.justifyContent = 'center';
+                            nslideInner.style.height = '100%';
+                            nslideInner.style.padding = '0 6px';
                             numSliderNode.append(nslideInner);
 
                             const $outer = $(numSliderNode);
@@ -21007,17 +23832,10 @@ function initializeLightManagerPlugin() {
             });
             window.applyIndestructibleFormGroups = applyIndestructibleFormGroups;
             const taskDialogs = new Set();
+            deletables.push(addLightManagerSharedPanelSearchStyles());
             deletables.push(Blockbench.addCSS(`
-                .lightflow_task_dialog .light_manager_panel_search { display:grid; grid-template-columns:minmax(0,1fr) 100px; gap:4px; width:100%; }
-                .lightflow_task_dialog .light_manager_panel_search_input { display:flex; align-items:center; gap:5px; padding:0 6px; min-width:0; border:1px solid var(--color-border); background:var(--color-back); }
-                .lightflow_task_dialog .light_manager_panel_search_input > .icon { font-size:18px; margin:0!important; flex:0 0 auto; }
-                .lightflow_task_dialog .light_manager_panel_search_input input { width:100%; min-width:0; height:29px; border:0; padding:0; background:transparent; }
-                .lightflow_task_dialog .light_manager_panel_search_active { height:31px; width:100%!important; margin:0; }
+                .lightflow_task_dialog .light_manager_panel_search { grid-template-columns:minmax(0,1fr) 100px; }
                 .lightflow_task_dialog .light_manager_panel_search_collapse { display:none!important; }
-                .lightflow_task_dialog .light_manager_panel_search_clear { display:grid!important; place-items:center; flex:0 0 22px!important; width:22px!important; min-width:22px!important; max-width:22px!important; height:24px!important; min-height:24px!important; max-height:24px!important; padding:0!important; margin:0!important; background:transparent!important; border:0!important; }
-                .lightflow_task_dialog .light_manager_panel_search_clear[hidden] { display:none!important; }
-                .lightflow_task_dialog .light_manager_panel_search_clear > .icon { margin:0!important; font-size:16px; }
-                .lightflow_task_dialog .light_manager_panel_search_input:focus-within { outline:1px solid var(--color-accent); }
                 .lightflow_task_dialog .custom_checkbox { min-height:30px; height:auto!important; }
                 .lightflow_task_dialog .custom_checkbox > span > span { white-space:normal!important; line-height:1.3; }
             `));
@@ -21071,9 +23889,13 @@ function initializeLightManagerPlugin() {
             };
             deletables.push(installLightflowTerrainModifierHints());
             lightManagerUIApi = {
+                requestMinecraftEula,
                 designVersion: 4,
                 removeToolbarAction: removeLightflowToolbarAction,
-                controls: Object.freeze({ version: 1, bindNumberEdit: bindLightflowNumberEdit, mountNumberEditors: mountLightflowNumberEditors, positionOverlay: positionLightflowOverlay }),
+                controls: Object.freeze({ version: 1, bindNumberEdit: bindLightflowNumberEdit,
+                    createInlineNumberField: createLightflowInlineNumberField,
+                    mountNumberEditors: mountLightflowNumberEditors, positionOverlay: positionLightflowOverlay }),
+                viewportScrubber: Object.freeze({version:1,create:createLightflowViewportScrubber}),
                 mediaViewer: Object.freeze({version:1, mount:mountLightflowMediaViewer, openImage:openLightflowImageViewer}),
                 state: LightflowUIState,
                 captureFormView: captureLightflowFormView,
@@ -21090,6 +23912,7 @@ function initializeLightManagerPlugin() {
                 markerPresets: LIGHT_MANAGER_UI_MARKER_PRESETS,
                 GridMenu: LightManagerGridMenu,
                 IdentityMenu: LightManagerIdentityMenu,
+                SectionedMenu: LightManagerSectionedMenu,
                 ActionToggle: LightManagerActionToggle,
                 CompactDropdownSelect: CompactDropdownSelect,
                 searchMenu: addNativeSelectSearch,
@@ -21253,8 +24076,8 @@ function initializeLightManagerPlugin() {
                     box-sizing: border-box;
                     pointer-events: none;
                 }
-                ul.light_manager_grid_menu > li.light_manager_grid_menu_item:hover:not(.marked),
-                ul.light_manager_grid_menu > li.light_manager_grid_menu_item.focused:not(.marked) {
+                ul.light_manager_grid_menu > li.light_manager_grid_menu_item:hover:not(.marked, .light_manager_grid_menu_footer),
+                ul.light_manager_grid_menu > li.light_manager_grid_menu_item.focused:not(.marked, .light_manager_grid_menu_footer) {
                     background: color-mix(in srgb, var(--color-accent) 20%, transparent) !important;
                     background-clip: content-box !important;
                 }
@@ -21276,22 +24099,82 @@ function initializeLightManagerPlugin() {
                     transform: scale(1.08);
                     filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.28));
                 }
-                ul.light_manager_grid_menu > li.light_manager_identity_custom_icon_item {
-                    background: color-mix(in srgb, var(--color-axis-y) 22%, transparent) !important;
-                    background-clip: content-box !important;
-                }
-
                 /* Opt-in identity palettes: keep glyphs and swatches unmodified. */
                 ul.light_manager_grid_menu_refined { max-height: min(360px, calc(100vh - 24px)); overflow-y: auto; scrollbar-width: thin; }
-                ul.light_manager_grid_menu_refined > li.light_manager_grid_menu_item { padding: 4px !important; border-radius: 6px; transition: background-color 90ms ease; }
+                ul.light_manager_grid_menu_refined > li.light_manager_grid_menu_item {
+                    padding: 4px !important; border-radius: var(--lf-radius-control, 8px);
+                    background-clip: border-box !important; transition: background-color 90ms ease;
+                }
                 ul.light_manager_grid_menu_refined > li.light_manager_grid_menu_item > .icon { font-size: 22px; }
+                ul.light_manager_grid_menu_refined > li.light_manager_grid_menu_item.focused:not(.marked, .light_manager_grid_menu_footer):not(:hover) { background: transparent !important; }
+                ul.light_manager_grid_menu_refined > li.light_manager_grid_menu_item:hover:not(.marked, .light_manager_grid_menu_footer) {
+                    background: color-mix(in srgb, currentColor 9%, transparent) !important;
+                }
                 ul.light_manager_grid_menu_refined > li.light_manager_grid_menu_item.marked { background: color-mix(in srgb, var(--color-accent) 12%, transparent) !important; }
-                ul.light_manager_grid_menu_refined > li.light_manager_grid_menu_item.marked::after { inset: 2px; border: 1px solid var(--color-accent); box-shadow: none; }
+                ul.light_manager_grid_menu_refined > li.light_manager_grid_menu_item.marked::after { inset: 0; border-radius: inherit; border: 1px solid var(--color-accent); box-shadow: none; }
                 ul.light_manager_grid_menu_refined > li.light_manager_grid_menu_item.marked > .icon { transform: none; filter: none; }
-                ul.light_manager_grid_menu_refined > li.light_manager_grid_menu_item.focused::after { inset: 2px; border: 2px solid var(--color-accent); box-shadow: none; }
+                [data-lightflow-menu-navigation="keyboard"] ul.light_manager_grid_menu_refined > li.light_manager_grid_menu_item.focused::after {
+                    inset: 0; border-radius: inherit; border: 1px dashed currentColor; box-shadow: none;
+                }
                 ul.light_manager_grid_menu_refined > li.light_manager_grid_menu_footer { display: flex !important; width: 100% !important; min-width: 0 !important; height: 32px !important; min-height: 32px !important; margin-top: 4px !important; padding: 4px 6px !important; justify-content: flex-start; gap: 8px; border-top: 1px solid var(--color-border) !important; border-radius: 0; background: transparent !important; }
                 ul.light_manager_grid_menu_refined > li.light_manager_grid_menu_footer > .icon { flex: 0 0 20px; width: 20px !important; height: 20px !important; }
-                ul.light_manager_grid_menu_refined > li.light_manager_grid_menu_footer > span { display: block !important; font-size: 13px; line-height: 20px; }
+                ul.light_manager_grid_menu_refined > li.light_manager_grid_icon_editor {
+                    position: sticky; top: auto !important; bottom: 0; height: 32px !important;
+                    padding: 2px 1px 0 !important; cursor: text;
+                    color: inherit !important; background: var(--color-bright_ui) !important;
+                    border-top-color: color-mix(in srgb, currentColor 22%, transparent) !important;
+                    border-bottom: 0 !important;
+                }
+                ul.light_manager_grid_menu_refined > li.light_manager_grid_icon_editor::after { content: none; }
+                .light_manager_grid_icon_field {
+                    display: flex; align-items: center; flex: 1; min-width: 0; height: 28px;
+                    border-radius: var(--lf-radius-control, 8px);
+                }
+                .light_manager_grid_icon_field:hover {
+                    background: color-mix(in srgb, currentColor 9%, transparent);
+                }
+                .light_manager_grid_icon_field:focus-within,
+                [data-lightflow-menu-navigation="keyboard"] ul.light_manager_grid_menu_refined > li.light_manager_grid_icon_editor.focused > .light_manager_grid_icon_field {
+                    box-shadow: inset 0 0 0 2px var(--color-accent);
+                }
+                .light_manager_grid_icon_field > input {
+                    font-size: 13px; color: inherit; background: transparent;
+                    border: 0; padding: 0 6px; outline: none !important; box-shadow: none;
+                }
+                .light_manager_grid_icon_field > input::placeholder { color: currentColor; opacity: 0.6; }
+                .light_manager_grid_icon_field > button {
+                    display: grid; place-items: center; flex: 0 0 28px; width: 28px; min-width: 0; height: 28px;
+                    padding: 0; border: 0; border-radius: var(--lf-radius-control, 8px);
+                    background: transparent; color: inherit; cursor: pointer; box-shadow: none;
+                }
+                .light_manager_grid_icon_field > button > .icon {
+                    position: static; margin: 0; font-size: 20px; max-width: 20px; max-height: 20px;
+                    overflow: hidden;
+                }
+                .light_manager_grid_icon_field > button:disabled { opacity: 1; cursor: default; }
+                .light_manager_grid_icon_field > button:focus-visible {
+                    outline: 1px dashed currentColor; outline-offset: -4px;
+                }
+                ul.light_manager_grid_menu_refined.light_manager_grid_menu_swatches > li.light_manager_grid_menu_item {
+                    background: transparent !important;
+                }
+                ul.light_manager_grid_menu_refined.light_manager_grid_menu_swatches > li.light_manager_grid_menu_item:hover {
+                    background: color-mix(in srgb, currentColor 9%, var(--color-bright_ui)) !important;
+                }
+                ul.light_manager_grid_menu_refined.light_manager_grid_menu_swatches > li.light_manager_grid_menu_item::after {
+                    border: 0; box-shadow: none;
+                }
+                [data-lightflow-menu-navigation="keyboard"] ul.light_manager_grid_menu_refined.light_manager_grid_menu_swatches > li.focused::after {
+                    border: 1px dashed currentColor;
+                }
+                ul.light_manager_grid_menu_swatches > li.light_manager_grid_menu_item.marked > .light_manager_grid_swatch_check {
+                    position: absolute; z-index: 1; top: 2px; right: 2px; width: 15px; height: 15px;
+                    border: 1px solid var(--color-bright_ui); border-radius: 50%;
+                    background: currentColor; color: inherit; font-size: 0;
+                }
+                ul.light_manager_grid_menu_swatches > li.light_manager_grid_menu_item.marked > .light_manager_grid_swatch_check::before {
+                    content: 'check'; color: var(--color-bright_ui); font-size: 11px;
+                }
 
                 .horizontal_select_widget.light_manager_horizontal_select {
                     display: flex;
@@ -21448,9 +24331,18 @@ function initializeLightManagerPlugin() {
                     return copy;
                 }
 
-                forEachChild(callback, type = OutlinerElement, includeSelf = false) {
-                    if (includeSelf && this instanceof type) callback(this);
-                    const visit = child => { if (child instanceof type) callback(child); for (const nested of child.children || []) visit(nested); };
+                forEachChild(callback, type, includeSelf = false) {
+                    // Blockbench passes null when moving mixed Outliner selections.
+                    // Match the native Group contract: no filter means every node,
+                    // array filters are supported, and includeSelf is unconditional.
+                    if (includeSelf) callback(this);
+                    const visit = child => {
+                        if (!type || (Array.isArray(type)
+                            ? type.some(nodeType => child instanceof nodeType)
+                            : child instanceof type)) callback(child);
+                        if (typeof child.forEachChild === 'function') child.forEachChild(callback, type);
+                        else if (Array.isArray(child.children)) child.children.forEach(visit);
+                    };
                     this.children.forEach(visit);
                 }
                 openUp() {
@@ -21530,8 +24422,8 @@ function initializeLightManagerPlugin() {
                 new Property(LightElement, 'vector', 'aim_target', { default: [0, 0, 0] }),
                 new Property(LightElement, 'vector', 'color', { default: [255, 255, 255] }),
                 new Property(LightElement, 'vector', 'render_color', { default: [255, 255, 255] }),
-                new Property(LightElement, 'number', 'intensity', { default: 1, min: 0 }),
-                new Property(LightElement, 'number', 'render_intensity', { default: 1, min: 0 }),
+                new Property(LightElement, 'number', 'intensity', { default: 1, min: -100000 }),
+                new Property(LightElement, 'number', 'render_intensity', { default: 1, min: -100000 }),
                 new Property(LightElement, 'boolean', 'key_light_enabled', { default: true }),
                 new Property(LightElement, 'number', 'key_light_weight', { default: 1, min: 0, max: 100 }),
                 new Property(LightElement, 'number', 'temperature', { default: 6500, min: 2700, max: 6500 }),
@@ -21697,6 +24589,8 @@ function initializeLightManagerPlugin() {
                 new Property(ArtKeyElement, 'boolean', 'key_light_enabled', { default: true }),
                 new Property(ArtKeyElement, 'number', 'key_light_weight', { default: 1, min: 0, max: 100 }),
                 new Property(ArtKeyElement, 'string', 'art_mode', { default: 'point' }),
+                new Property(ArtKeyElement, 'string', 'art_glow_color_source', { default: 'light' }),
+                new Property(ArtKeyElement, 'number', 'art_glow_texture_mix', { default: 50, min: 0, max: 100 }),
                 new Property(ArtKeyElement, 'number', 'art_radius', { default: 8, min: 0 }),
                 new Property(ArtKeyElement, 'string', 'art_scope', { default: 'box' }),
                 new Property(ArtKeyElement, 'array', 'art_include', { default: [] }),
@@ -22042,7 +24936,7 @@ function initializeLightManagerPlugin() {
                     };
                     mesh.intensityMarker.onBeforeRender = (_renderer, _scene, camera) => {
                         mesh.intensityMarker.quaternion.copy(camera.getWorldQuaternion(new THREE.Quaternion())).premultiply(mesh.getWorldQuaternion(new THREE.Quaternion()).invert());
-                        const pixels = 8 + Math.min(10, Math.log2(Math.max(2, element.intensity) / 2) * 3);
+                        const pixels = 8 + Math.min(10, Math.log2(Math.max(2, Math.abs(element.intensity)) / 2) * 3);
                         mesh.intensityMarker.scale.setScalar(getLightManagerScreenWorldSize(mesh, camera, _renderer, pixels) / mesh.scale.x);
                     };
 
@@ -22155,7 +25049,7 @@ function initializeLightManagerPlugin() {
                     if (mesh.gizmo) mesh.gizmo.visible = lightManagerUIApi.workspace.helperVisible({ visible: element.visibility !== false, selected: !!element.selected });
                     mesh.sprite.visible = lightManagerUIApi.workspace.helperVisible({ visible: element.visibility !== false, selected: !!element.selected, kind: 'marker' });
                     mesh.directionMarker.visible = mesh.sprite.visible && !element.selected && ['spot', 'directional'].includes(element.light_type);
-                    mesh.intensityMarker.visible = mesh.sprite.visible && !element.selected && Number(element.intensity) > 2;
+                    mesh.intensityMarker.visible = mesh.sprite.visible && !element.selected && Math.abs(Number(element.intensity)) > 2;
                     for (const marker of [mesh.directionMarker, mesh.intensityMarker]) { marker.material.color.setRGB(r, g, b); marker.material.opacity = .35; }
 
                     mesh.sprite.material.depthTest = !element.selected;
@@ -22257,15 +25151,19 @@ function initializeLightManagerPlugin() {
             const originalZDefault = KeyframeDataPoint.properties.z.default;
 
             const lightManagerYCondition = point => {
+                if (point.keyframe.animator?.channels[point.keyframe.channel]?.lightflowScalar) return false;
                 if (point.keyframe.animator?.type === 'light' && point.keyframe.channel === 'intensity') return false;
                 return typeof originalYCondition === 'function' ? originalYCondition(point) : true;
             };
             const lightManagerZCondition = point => {
+                if (point.keyframe.animator?.channels[point.keyframe.channel]?.lightflowScalar) return false;
                 if (point.keyframe.animator?.type === 'light' && point.keyframe.channel === 'intensity') return false;
                 return typeof originalZCondition === 'function' ? originalZCondition(point) : true;
             };
 
             const lightManagerXDefault = point => {
+                const scalar = point.keyframe.animator?.channels[point.keyframe.channel];
+                if (scalar?.lightflowScalar) return scalar.defaultValue?.(point.keyframe.animator) ?? 0;
                 if (point.keyframe.animator?.type !== 'light') return typeof originalXDefault === 'function' ? originalXDefault(point) : (originalXDefault || 0);
                 let el = point.keyframe.animator.element;
                 if (point.keyframe.channel === 'intensity') return el?.intensity ?? 1;
@@ -22293,6 +25191,7 @@ function initializeLightManagerPlugin() {
             KeyframeDataPoint.properties.x.default = lightManagerXDefault;
             KeyframeDataPoint.properties.y.default = lightManagerYDefault;
             KeyframeDataPoint.properties.z.default = lightManagerZDefault;
+            deletables.push(installLightflowScalarChannels());
 
             deletables.push({
                 delete: () => {
@@ -22410,9 +25309,9 @@ function initializeLightManagerPlugin() {
                 displayIntensity(arr, multiplier = 1) {
                     let mesh = this.element.mesh;
                     if (arr && mesh) {
-                        let baseIntensity = LightManagerUtils.num(this.element.intensity, 1, 0, 100000);
-                        let finalIntensity = Math.max(0, baseIntensity + (arr[0] - baseIntensity) * multiplier);
-                        let baseScale = Math.max(0.1, Math.sqrt(finalIntensity));
+                        let baseIntensity = LightManagerUtils.num(this.element.intensity, 1, -100000, 100000);
+                        let finalIntensity = LightManagerUtils.num(baseIntensity + (arr[0] - baseIntensity) * multiplier, baseIntensity, -100000, 100000);
+                        let baseScale = Math.max(0.1, Math.sqrt(Math.abs(finalIntensity)));
                         mesh.scale.setScalar(this.element.selected ? baseScale * 1.2 : baseScale);
                         this.element.render_intensity = finalIntensity;
                     }
@@ -23226,7 +26125,7 @@ function initializeLightManagerPlugin() {
                                 value: firstLight.light_type
                             },
                             color: { label: translateLightManager('light_manager.property.color'), type: 'color', value: currentHex },
-                            intensity: { label: translateLightManager('light_manager.property.brightness'), type: 'number', value: firstLight.intensity, min: 0, step: 0.1 },
+                            intensity: { label: translateLightManager('property.light_intensity'), description: translateLightManager('property.light_intensity.desc'), type: 'number', value: firstLight.intensity, min: -8, step: 0.1 },
                             key_light_enabled: { label: translateLightManager('light_manager.property.key_light_enabled'), type: 'checkbox', value: firstLight.key_light_enabled !== false },
                             key_light_weight: { label: translateLightManager('light_manager.property.key_light_weight'), description: translateLightManager('light_manager.property.key_light_weight.desc'), type: 'number', value: firstLight.key_light_weight ?? 1, min: 0, max: 100, step: 0.25, condition: form => form.key_light_enabled !== false },
                             distance: {
@@ -23335,7 +26234,7 @@ function initializeLightManagerPlugin() {
                     fields.angle.condition = fields.penumbra.condition = form => form.light_type === 'spot';
                     fields.shadow_bounds.condition = form => form.light_type === 'directional';
                     for (const [key, max] of Object.entries({ intensity: 8, distance: 128, angle: 89.9, penumbra: 1, shadow_softness: 16, key_light_weight: 10 })) {
-                        Object.assign(fields[key], { type: 'combo_slider', max, full_track: true, allow_higher: ['intensity', 'distance', 'key_light_weight'].includes(key) });
+                        Object.assign(fields[key], { type: 'combo_slider', max, full_track: true, allow_lower: key === 'intensity', allow_higher: ['intensity', 'distance', 'key_light_weight'].includes(key) });
                     }
                     lightDialogConfig.width = 560;
                     lightDialogConfig.form = taskDialogForm(fields, [
@@ -23436,13 +26335,15 @@ function initializeLightManagerPlugin() {
 
             const normalizeLightPanelValue = (light, property, value) => {
                 switch (property) {
+                    case 'art_glow_color_source': return ['texture', 'mix'].includes(value) ? value : 'light';
+                    case 'art_glow_texture_mix': return LightManagerUtils.num(value, light.art_glow_texture_mix ?? 50, 0, 100);
                     case 'art_radius': return LightManagerUtils.num(value, light.art_radius ?? 8, 0, 100000);
                     case 'light_type':
                         return LightManagerUtils.lightType(value);
                     case 'color':
                         return LightManagerUtils.colorArray(value, light.color);
                     case 'intensity':
-                        return LightManagerUtils.num(value, light.intensity, 0, 100000);
+                        return LightManagerUtils.num(value, light.intensity, -100000, 100000);
                     case 'temperature':
                         return LightManagerUtils.num(value, light.temperature || 6500, 2700, 6500);
                     case 'distance':
@@ -23554,6 +26455,8 @@ function initializeLightManagerPlugin() {
                     const nextValue = normalizeLightPanelValue(light, property, value);
                     const disableZeroKey = property === 'key_light_weight' && Number(nextValue) <= 0 && light.key_light_enabled !== false;
                     const restoreZeroKey = property === 'key_light_enabled' && nextValue === true && Number(light.key_light_weight) <= 0;
+                    const restoreWeightedKey = property === 'key_light_weight' && Number(nextValue) > 0 &&
+                        Number(light.key_light_weight) <= 0 && light.key_light_enabled === false;
                     const updateAutomaticNormalBias = (
                         LIGHT_MANAGER_AUTO_NORMAL_BIAS_PROPERTIES.includes(property) &&
                         light.shadow_normal_bias_auto !== false
@@ -23579,8 +26482,9 @@ function initializeLightManagerPlugin() {
                         normalBiasNeedsAutoUpdate,
                         disableZeroKey,
                         restoreZeroKey,
+                        restoreWeightedKey,
                         activatesDistanceSoftness,
-                        willChange: valueChanged || activatesDistanceSoftness || normalBiasNeedsAutoUpdate || disableZeroKey || restoreZeroKey
+                        willChange: valueChanged || activatesDistanceSoftness || normalBiasNeedsAutoUpdate || disableZeroKey || restoreZeroKey || restoreWeightedKey
                     };
                 }).filter(plan => plan.willChange);
                 if (!plans.length) return false;
@@ -23596,7 +26500,7 @@ function initializeLightManagerPlugin() {
                 let automaticNormalBiasChanged = false;
                 let keyParticipationChanged = false;
                 plans.forEach(plan => {
-                    const { light, nextValue, updateAutomaticNormalBias, nextAutomaticNormalBias, disableZeroKey, restoreZeroKey, activatesDistanceSoftness } = plan;
+                    const { light, nextValue, updateAutomaticNormalBias, nextAutomaticNormalBias, disableZeroKey, restoreZeroKey, restoreWeightedKey, activatesDistanceSoftness } = plan;
                     if (property === 'shadow_region_locked' && nextValue && !light.shadow_region_locked) {
                         light.shadow_region_bounds = LightManagerShadowRegions.captureRegion(window.three_lights?.[light.uuid], light);
                     }
@@ -23610,6 +26514,9 @@ function initializeLightManagerPlugin() {
                         keyParticipationChanged = true;
                     } else if (restoreZeroKey) {
                         light.key_light_weight = 1;
+                        keyParticipationChanged = true;
+                    } else if (restoreWeightedKey) {
+                        light.key_light_enabled = true;
                         keyParticipationChanged = true;
                     }
                     if (updateAutomaticNormalBias) {
@@ -23704,7 +26611,7 @@ function initializeLightManagerPlugin() {
             // the current selection. This mirrors Atmosphere's panel contract and
             // prevents controls for a previously selected light from going stale.
             const lightPanelSectionStorageKey = 'lightflow_light_panel_sections_v1';
-            const lightPanelSectionsOpen = { shape: true, shadows: false, advanced: false, art_shape: true, art_scope: false };
+            const lightPanelSectionsOpen = { shape: true, key_light: false, shadows: true, shadow_details: false, advanced: false, art_shape: true, art_scope: false };
             try {
                 const savedSections = JSON.parse(lightManagerSafeGet(lightPanelSectionStorageKey, '{}') || '{}');
                 Object.keys(lightPanelSectionsOpen).forEach(key => {
@@ -23804,6 +26711,8 @@ function initializeLightManagerPlugin() {
                         value: tinycolor(LightManagerUtils.colorHex(light.color)),
                         title: tl('property.light_color'),
                         description: tl('property.light_color'),
+                        expand_control: true,
+                        fill_available: true,
                         alpha: false,
                         show_condition: () => { return selectedLightCondition(); }
                     },
@@ -23895,10 +26804,11 @@ function initializeLightManagerPlugin() {
                         value: light.intensity,
                         resettable: true,
                         reset_value: 1.0,
-                        min: 0.0,
+                        min: -10.0,
                         max: 10.0,
                         step: 0.1,
                         allow_higher: true,
+                        allow_lower: true,
                         onBefore: () => beginLightEdit(translateLightManager('light_manager.undo.change_intensity')),
                         onAfter: () => finishLightEdit(translateLightManager('light_manager.undo.change_intensity')),
                         show_condition: () => { return physicalLightCondition(); },
@@ -23919,6 +26829,19 @@ function initializeLightManagerPlugin() {
                         description: tl('property.shadow_settings'),
                         show_condition: physicalLightCondition
                     }),
+                    _light_section_key_light: LightManagerFormDesign.group({
+                        label: translateLightManager('light_manager.ui.key_light_section'),
+                        label_icon: 'lightflow:key-light-rim',
+                        value: lightPanelSectionsOpen.key_light,
+                        description: translateLightManager('light_manager.property.key_light_weight.desc'),
+                        show_condition: physicalLightCondition
+                    }),
+                    _light_section_shadow_details: LightManagerFormDesign.group({
+                        label: translateLightManager('light_manager.ui.shadow_details_section'),
+                        label_icon: 'tune',
+                        value: lightPanelSectionsOpen.shadow_details,
+                        show_condition: physicalLightCondition
+                    }),
                     _light_section_advanced: LightManagerFormDesign.group({
                         label: translateLightManager('light_manager.ui.advanced'),
                         label_icon: 'settings',
@@ -23934,7 +26857,7 @@ function initializeLightManagerPlugin() {
                         condition: artLightCondition, show_condition: artLightCondition
                     },
                     art_strength: {
-                        type: 'combo_slider', label: artLabel('strength'), value: light.intensity, min: 0, max: 10, step: 0.1, resettable: true, reset_value: 1,
+                        type: 'combo_slider', label: artLabel('strength'), value: light.intensity, min: 0, max: 10, step: 0.1, allow_higher: true, resettable: true, reset_value: 1,
                         color: 'var(--color-axis-w)', slider_fill: true,
                         onBefore: () => beginLightEdit(artLabel('edit')), onAfter: () => finishLightEdit(artLabel('edit')),
                         condition: artLightCondition, show_condition: artLightCondition
@@ -23943,6 +26866,20 @@ function initializeLightManagerPlugin() {
                         type: 'select', label: artLabel('source'), value: light.art_mode || 'point',
                         options: { point: artLabel('point'), direction: artLabel('direction') },
                         condition: artLightCondition, show_condition: artLightCondition
+                    },
+                    art_glow_color_source: {
+                        type: 'select', label: artLabel('glow_color_source'), description: artLabel('glow_color_source.desc'),
+                        value: light.art_glow_color_source || 'light',
+                        options: { light: artLabel('glow_color_light'), texture: artLabel('glow_color_texture'), mix: artLabel('glow_color_mix') },
+                        condition: artLightCondition, show_condition: artLightCondition
+                    },
+                    art_glow_texture_mix: {
+                        type: 'combo_slider', label: artLabel('glow_texture_mix'), description: artLabel('glow_texture_mix.desc'),
+                        value: light.art_glow_texture_mix ?? 50, min: 0, max: 100, step: 1, unit: '%',
+                        slider_fill: true, resettable: true, reset_value: 50,
+                        onBefore: () => beginLightEdit(artLabel('edit')), onAfter: () => finishLightEdit(artLabel('edit')),
+                        condition: result => artLightCondition() && (result.art_glow_color_source ?? getSelectedLight()?.art_glow_color_source) === 'mix',
+                        show_condition: result => artLightCondition() && (result.art_glow_color_source ?? getSelectedLight()?.art_glow_color_source) === 'mix'
                     },
                     art_radius: {
                         type: 'combo_slider', label: artLabel('radius'), description: artLabel('radius.desc'), value: light.art_radius ?? 8,
@@ -24308,16 +27245,40 @@ function initializeLightManagerPlugin() {
 
                 const sectionControls = {
                     shape: ['light_distance', 'light_cone_angle', 'light_cone_penumbra'],
-                    shadows: ['cast_shadows', 'shadow_scene_fit', 'shadow_region_locked', 'shadow_resolution', 'studio_shadow_resolution', 'shadow_camera_quality', 'shadow_camera_distance', 'shadow_softness_mode', 'shadow_blur', 'shadow_softness'],
-                    advanced: ['key_light_enabled', 'key_light_weight', 'shadow_near', 'shadow_far', 'shadow_bounds', 'shadow_bias', 'shadow_normal_bias_auto', 'shadow_normal_bias'],
-                    art_shape: ['art_mode', 'art_radius'],
+                    shadows: ['cast_shadows', 'shadow_resolution', 'studio_shadow_resolution', 'shadow_softness_mode', 'shadow_blur', 'shadow_softness', 'shadow_scene_fit', 'shadow_region_locked', 'shadow_camera_quality', 'shadow_camera_distance', 'shadow_near', 'shadow_far', 'shadow_bounds'],
+                    advanced: ['shadow_bias', 'shadow_normal_bias_auto', 'shadow_normal_bias'],
+                    key_light: ['key_light_weight'],
+                    art_shape: ['art_mode', 'art_radius', 'art_glow_color_source', 'art_glow_texture_mix'],
                     art_scope: ['art_influence', 'art_scope', 'art_targets', 'art_softness']
                 };
                 form._light_section_art_shape = LightManagerFormDesign.group({ label: translateLightManager('light_manager.ui.art_source_section'), label_icon: 'wb_incandescent', value: lightPanelSectionsOpen.art_shape, show_condition: artLightCondition });
                 form._light_section_art_scope = LightManagerFormDesign.group({ label: translateLightManager('light_manager.ui.art_scope_section'), label_icon: 'filter_alt', value: lightPanelSectionsOpen.art_scope, show_condition: artLightCondition });
+                // An automatically fitted/locked directional shadow region owns
+                // its clip values. Show the fields in Shadows, but disable them
+                // rather than silently removing their row or section ownership.
+                for (const key of ['shadow_near', 'shadow_far', 'shadow_bounds']) {
+                    const control = form[key];
+                    if (!control) continue;
+                    const originalDisabled = control.disable_condition;
+                    control.disable_condition = () => {
+                        const selected = getSelectedLight();
+                        const managed = selected?.light_type === 'directional' &&
+                            (selected.shadow_scene_fit || selected.shadow_region_locked);
+                        return !!managed || (typeof originalDisabled === 'function' ? !!originalDisabled() : !!originalDisabled);
+                    };
+                    control.disable_desc = translateLightManager('light_manager.ui.shadow_clip_managed');
+                }
                 Object.entries(sectionControls).forEach(([section, keys]) => keys.forEach(key => {
                     if (form[key]) form[key] = inLightPanelSection(section, form[key]);
                 }));
+                // Quality and clipping are less common than enabling and
+                // softening shadows. Keep the complete catalog in Shadows,
+                // with a second, contextual disclosure for deeper adjustments.
+                const detailedShadows = ['shadow_region_locked', 'shadow_camera_quality', 'shadow_camera_distance', 'shadow_near', 'shadow_far', 'shadow_bounds'];
+                detailedShadows.forEach(key => {
+                    if (form[key]) form[key] = inLightPanelSection('shadow_details', form[key]);
+                });
+                form._light_section_shadow_details = inLightPanelSection('shadows', form._light_section_shadow_details);
                 // Viewport actions now live on the contextual rail.
                 ['light_gizmo_label', 'light_gizmo_action', 'light_focus_action', 'light_bounds_action', 'light_reset_gizmo_action']
                     .forEach(key => delete form[key]);
@@ -24338,25 +27299,24 @@ function initializeLightManagerPlugin() {
                     '_light_section_art_shape', ...sectionControls.art_shape,
                     '_light_section_art_scope', ...sectionControls.art_scope,
                     '_light_section_shape', ...sectionControls.shape,
-                    '_light_section_shadows', ...sectionControls.shadows,
+                    '_light_section_key_light', 'key_light_enabled', ...sectionControls.key_light,
+                    '_light_section_shadows', ...sectionControls.shadows.slice(0, 7),
+                    '_light_section_shadow_details', ...sectionControls.shadows.slice(7),
                     '_light_section_advanced', ...sectionControls.advanced
                 ];
                 form.light_target_state = {
-                    type: 'action_button', semantic_button: true, text: translateLightManager('light_manager.target.fixed'),
-                    icon: 'my_location', description: translateLightManager('light_manager.target.hint'),
-                    show_condition: () => window.LightManagerViewportControls.hasAimTarget(getSelectedLight()),
-                    click: () => BarItems.light_manager_target_position?.trigger?.()
+                    ...LightManagerFormDesign.vector({
+                        label: translateLightManager('light_manager.target.position'),
+                        description: translateLightManager('light_manager.target.hint'),
+                        dimensions: 3, axis_labels: true, step: 0.25,
+                        resettable: false,
+                        value: (light.aim_target || [0, 0, 0]).slice(),
+                        onBefore: () => beginLightEdit(translateLightManager('light_manager.target.undo')),
+                        onAfter: () => finishLightEdit(translateLightManager('light_manager.target.undo'))
+                    }),
+                    show_condition: () => window.LightManagerViewportControls.hasAimTarget(getSelectedLight())
                 };
                 const orderedForm = {};
-                for (const key of ['shadow_near', 'shadow_far', 'shadow_bounds']) {
-                    const control = form[key], previousShow = control?.show_condition;
-                    if (!control) continue;
-                    control.show_condition = () => {
-                        const selected = getSelectedLight();
-                        if (selected?.light_type === 'directional' && (selected.shadow_scene_fit || selected.shadow_region_locked)) return false;
-                        return typeof previousShow === 'function' ? previousShow() : previousShow !== false;
-                    };
-                }
                 orderedKeys.forEach(key => {
                     if (form[key]) orderedForm[key] = form[key];
                 });
@@ -24413,7 +27373,7 @@ function initializeLightManagerPlugin() {
                     flex: {
                         light_properties_label: '1 1 auto',
                         light_type: '0 0 auto',
-                        light_color: '0 0 auto'
+                        light_color: '1 1 0%'
                     }
                 },
                 {
@@ -24453,11 +27413,11 @@ function initializeLightManagerPlugin() {
                     flex: { art_enabled: '0 0 30px', art_strength: '1 1 0%' }
                 },
                 {
-                    elements: ['art_mode'],
+                    elements: ['art_mode', '#', 'art_glow_color_source', '#', 'art_glow_texture_mix'],
                     gap: '4px',
                     class_name: 'lf-light-toolbar-row lf-art-key-mode-row',
                     aria_label: translateLightManager('light_manager.art.source'),
-                    flex: { art_mode: '1 1 100%' }
+                    flex: { art_mode: '1 1 100%', art_glow_color_source: '1 1 100%', art_glow_texture_mix: '1 1 100%' }
                 },
                 {
                     elements: ['art_radius'],
@@ -24494,7 +27454,18 @@ function initializeLightManagerPlugin() {
                     }
                 },
                 {
-                    elements: ['_light_section_shadows', 'cast_shadows', '#', 'shadow_resolution', 'studio_shadow_resolution', '#', 'shadow_softness_mode', 'shadow_blur', 'shadow_softness'],
+                    elements: ['_light_section_key_light', 'key_light_enabled', '#', 'key_light_weight'],
+                    gap: '0',
+                    class_name: 'lf-light-section-row lf-light-key-section',
+                    aria_label: translateLightManager('light_manager.ui.key_light_section'),
+                    flex: {
+                        _light_section_key_light: '1 1 calc(100% - 30px)',
+                        key_light_enabled: '0 0 30px',
+                        key_light_weight: '1 1 100%'
+                    }
+                },
+                {
+                    elements: ['_light_section_shadows', 'cast_shadows', '#', 'shadow_resolution', 'studio_shadow_resolution', '#', 'shadow_softness_mode', 'shadow_blur', 'shadow_softness', '#', 'shadow_scene_fit', '_light_section_shadow_details', 'shadow_region_locked', 'shadow_camera_quality', 'shadow_camera_distance', '#', 'shadow_near', 'shadow_far', 'shadow_bounds'],
                     gap: '0',
                     class_name: 'lf-light-section-row lf-light-shadows-section',
                     aria_label: tl('property.shadow_settings'),
@@ -24505,21 +27476,24 @@ function initializeLightManagerPlugin() {
                         studio_shadow_resolution: '1 1 50%',
                         shadow_softness_mode: '1 1 100%',
                         shadow_blur: '1 1 100%',
-                        shadow_softness: '1 1 100%'
+                        shadow_softness: '1 1 100%',
+                        shadow_scene_fit: '1 1 100%',
+                        _light_section_shadow_details: '1 1 100%',
+                        shadow_region_locked: '1 1 100%',
+                        shadow_camera_quality: '1 1 100%',
+                        shadow_camera_distance: '1 1 100%',
+                        shadow_near: '1 1 100%',
+                        shadow_far: '1 1 100%',
+                        shadow_bounds: '1 1 100%'
                     }
                 },
                 {
-                    elements: ['_light_section_advanced', 'key_light_enabled', '#', 'key_light_weight', '#', 'shadow_near', '#', 'shadow_far', '#', 'shadow_bounds', '#', 'shadow_bias', '#', 'shadow_normal_bias_auto', '#', 'shadow_normal_bias'],
+                    elements: ['_light_section_advanced', 'shadow_bias', '#', 'shadow_normal_bias_auto', '#', 'shadow_normal_bias'],
                     gap: '0',
                     class_name: 'lf-light-section-row lf-light-advanced-section',
                     aria_label: translateLightManager('light_manager.ui.advanced'),
                     flex: {
-                        _light_section_advanced: '1 1 calc(100% - 30px)',
-                        key_light_enabled: '0 0 30px',
-                        key_light_weight: '1 1 100%',
-                        shadow_near: '1 1 100%',
-                        shadow_far: '1 1 100%',
-                        shadow_bounds: '1 1 100%',
+                        _light_section_advanced: '1 1 100%',
                         shadow_bias: '1 1 100%',
                         shadow_normal_bias: '1 1 100%'
                     }
@@ -24561,80 +27535,7 @@ function initializeLightManagerPlugin() {
                     box-shadow: 0 1px 0 color-mix(in srgb, var(--color-border) 78%, transparent);
                     box-sizing: border-box;
                 }
-                #panel_light_properties .light_manager_panel_search {
-                    display: grid;
-                    grid-template-columns: minmax(0, 1fr) minmax(0, 80px) 30px;
-                    gap: 4px;
-                    width: 100% !important;
-                    min-width: 0;
-                }
-                #panel_light_properties .light_manager_panel_search_input,
-                #panel_light_properties .light_manager_panel_search_active,
-                #panel_light_properties .light_manager_panel_search_collapse {
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    min-height: 29px;
-                    min-width: 0;
-                    border: 1px solid var(--color-border);
-                    border-radius: 3px;
-                    background: var(--color-back);
-                    color: var(--color-subtle_text);
-                }
-
-                #panel_light_properties .light_manager_panel_search_input {
-                    justify-content: flex-start;
-                    gap: 5px;
-                    padding: 0 6px;
-                }
-                #panel_light_properties .light_manager_panel_search_input input {
-                    flex: 1 1 0; width: 0; min-width: 0; height: 26px; padding: 0; border: 0;
-                    outline: 0; background: transparent; color: var(--color-text); font: inherit;
-                }
-                #panel_light_properties .light_manager_panel_search_active,
-                #panel_light_properties .light_manager_panel_search_collapse {
-                    gap: 4px; padding: 0 6px; font: inherit; cursor: pointer;
-                }
-                #panel_light_properties .light_manager_panel_search_collapse {
-                    flex: 0 0 29px;
-                    width: 29px;
-                    height: 29px;
-                    min-width: 29px;
-                    min-height: 29px;
-                    padding: 0;
-                    box-sizing: border-box;
-                    text-align: center;
-                }
-                #panel_light_properties .light_manager_panel_search_collapse > i {
-                    display: block;
-                    line-height: 1;
-                }
-                #panel_light_properties .light_manager_panel_search_active:hover,
-                #panel_light_properties .light_manager_panel_search_collapse:hover {
-                    border-color: color-mix(in srgb, var(--color-accent) 45%, var(--color-border));
-                    background: color-mix(in srgb, var(--color-accent) 10%, var(--color-back));
-                    color: var(--color-accent) !important;
-                }
-                #panel_light_properties .light_manager_panel_search_active.selected {
-                    border-color: var(--color-accent);
-                    color: var(--color-text) !important;
-                    background: color-mix(in srgb, var(--color-accent) 18%, var(--color-back));
-                }
-
-                #panel_light_properties .light_manager_panel_search_active:focus-visible,
-                #panel_light_properties .light_manager_panel_search_collapse:focus-visible,
-                #panel_light_properties .light_manager_panel_search_input:focus-within {
-                    color: var(--color-accent);
-                    outline: 2px solid var(--color-accent);
-                    outline-offset: -2px;
-                }
-                #panel_light_properties .light_manager_panel_filter_hidden {
-                    display: none !important;
-                }
-                #panel_light_properties .light_manager_panel_search_active.bb-select {
-                    justify-content: flex-start; padding: 0 24px 0 8px;
-                    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-                }
+                /* Light inspector reuses the shared search geometry and states. */
                 #panel_light_properties .lf-light-toolbar-row,
                 #panel_light_properties .lf-light-value-row {
                     width: 100% !important;
@@ -24722,6 +27623,13 @@ function initializeLightManagerPlugin() {
                     padding: 2px 6px !important;
                     font-weight: 600;
                 }
+                #panel_light_properties .lf-light-shadows-section > .form_bar__light_section_shadow_details {
+                    background: transparent !important;
+                }
+                #panel_light_properties .lf-light-shadows-section > .form_bar__light_section_shadow_details .custom_checkbox {
+                    padding-left: 14px !important;
+                    font-weight: 500;
+                }
                 #panel_light_properties .lf-light-section-row .light_manager_form_separator.linebreak {
                     flex-basis: 100% !important;
                     width: 100% !important;
@@ -24766,6 +27674,50 @@ function initializeLightManagerPlugin() {
                     min-height: 28px !important;
                     border-radius: 3px;
                 }
+                /* Primary Light controls: hover belongs to the actual rounded
+                   select, not the larger square FormElement wrapper. */
+                #panel_light_properties .lf-light-primary-row > :is(.form_bar_light_type,.form_bar_light_color) {
+                    min-width: 0 !important;
+                    border-radius: 8px;
+                    background: transparent !important;
+                }
+                #panel_light_properties .lf-light-primary-row .form_bar_light_type .lf-dropdown-row {
+                    padding: 0 !important;
+                }
+                #panel_light_properties .lf-light-primary-row .form_bar_light_type .compact_dropdown_select {
+                    width: 76px;
+                    min-width: 76px !important;
+                    height: 30px;
+                    border-radius: 8px !important;
+                    background: var(--color-button) !important;
+                }
+                #panel_light_properties .lf-light-primary-row .form_bar_light_type .compact_dropdown_select:hover {
+                    background: color-mix(in srgb, var(--color-accent) 12%, var(--color-button)) !important;
+                }
+                #panel_light_properties .lf-light-primary-row .form_bar_light_color {
+                    flex: 1 1 0% !important;
+                    width: 100% !important;
+                }
+                /* Art Keys do not have a physical light-type selector. The
+                   remaining color picker must not land in the narrow first
+                   track of the two-column Light layout and collapse to a caret. */
+                #panel_light_properties .lf-light-primary-row:has(> .form_bar_light_type.light_manager_panel_filter_hidden),
+                #right_bar.lightflow-right-workspace #panel_light_properties .lf-light-primary-row:has(> .form_bar_light_type.light_manager_panel_filter_hidden) {
+                    grid-template-columns: minmax(0, 1fr) !important;
+                }
+                #panel_light_properties .lf-light-primary-row:has(> .form_bar_light_type.light_manager_panel_filter_hidden) > .form_bar_light_color {
+                    grid-column: 1 / -1 !important;
+                    justify-self: stretch !important;
+                }
+                #panel_light_properties .lf-light-primary-row .form_bar_light_color .light_manager_advanced_color_control {
+                    flex: 1 1 auto !important;
+                    width: 100% !important;
+                    min-width: 0 !important;
+                    max-width: none !important;
+                }
+                #panel_light_properties .lf-light-primary-row .form_bar_light_color .sp-replacer {
+                    border-radius: 8px !important;
+                }
                 #panel_light_properties .lf-light-toolbar-row .compact_dropdown_select {
                     min-width: 28px;
                     padding-left: 2px !important;
@@ -24774,13 +27726,8 @@ function initializeLightManagerPlugin() {
                 #panel_light_properties .lf-light-toolbar-row .compact_dropdown_select .dropdown_arrow {
                     margin-left: 2px;
                 }
-                #panel_light_properties .lf-light-toolbar-row > .dialog_bar:not(.form_bar_light_properties_label):not(.form_bar_shadow_properties_label):hover {
+                #panel_light_properties .lf-light-toolbar-row > .dialog_bar:not(.form_bar_light_properties_label):not(.form_bar_shadow_properties_label):not(.form_bar_light_type):not(.form_bar_light_color):hover {
                     background: color-mix(in srgb, var(--color-button) 72%, transparent) !important;
-                }
-                #panel_light_properties .lf-light-toolbar-row > .dialog_bar:focus-within,
-                #panel_light_properties .lf-light-value-row > .dialog_bar:focus-within {
-                    outline: 1px solid var(--color-accent);
-                    outline-offset: -1px;
                 }
                 #panel_light_properties .lf-light-toolbar-row .light_manager_form_separator.border {
                     width: 1px !important;
@@ -24975,10 +27922,17 @@ function initializeLightManagerPlugin() {
                 colorpicker.onAfter = () => finishLightEdit(translateLightManager('light_manager.undo.change_color'));
             };
             bindLightPanelColorControl();
-            const lightPropertiesPanelListener = lightPropertiesPanel.form.on('change', ({ result, changed_keys }) => {
+            const lightPropertiesPanelListener = lightPropertiesPanel.form.on('change', ({ result: formResult, changed_keys }) => {
                 if (syncingLightSettings) return;
 
                 const changedKeys = Array.isArray(changed_keys) ? changed_keys : [];
+                // Native forms return all controls, including hidden aliases and
+                // temperature. Only commit the fields edited in this event:
+                // replaying temperature overwrites a custom color, and hidden
+                // Key Light controls can undo the visible Art Key edit.
+                const result = changedKeys.length
+                    ? Object.fromEntries(changedKeys.map(key => [key, formResult[key]]))
+                    : formResult;
                 const changedSections = changedKeys.filter(key => key.startsWith('_light_section_'));
                 if (changedSections.length) {
                     changedSections.forEach(key => {
@@ -24995,18 +27949,40 @@ function initializeLightManagerPlugin() {
                     applyLightPanelValue('light_type', result.light_type, translateLightManager('light_manager.undo.change_type'));
                 }
 
+                if (result.light_target_state !== undefined && changedKeys.includes('light_target_state')) {
+                    const light = getSelectedLight();
+                    const target = result.light_target_state;
+                    const controls = window.LightManagerViewportControls;
+                    if (light && !light.locked && controls?.hasAimTarget(light) &&
+                        Array.isArray(target) && target.length === 3 && target.every(value => Number.isFinite(Number(value)))) {
+                        const position = target.map(Number);
+                        if (position.some((value, index) => value !== light.aim_target[index])) {
+                            const directUndo = !activeLightUndoLabel;
+                            if (directUndo) Undo.initEdit({ elements: [light] });
+                            light.aim_target = position;
+                            controls.refreshLight(light, 'aim_target');
+                            if (directUndo) Undo.finishEdit(translateLightManager('light_manager.target.undo'));
+                            Blockbench.dispatchEvent('lightflow_aim_target_changed');
+                        }
+                    }
+                }
+
                 if (result.light_color !== undefined) {
                     const newColor = tinycolor(result.light_color);
                     applyLightPanelValue('color', [newColor._r, newColor._g, newColor._b], translateLightManager('light_manager.undo.change_color'));
                 }
 
-                if (result.light_temperature !== undefined) {
+                if (result.light_temperature !== undefined && physicalLightCondition()) {
                     applyLightPanelValue('temperature', result.light_temperature);
                     lightPropertiesPanel.form.form_data.light_temperature.setColor(kelvinToTinyColor(result.light_temperature));
                 }
 
                 if (result.light_intensity !== undefined && !artLightCondition()) {
                     applyLightPanelValue('intensity', result.light_intensity);
+                }
+                if (result.art_glow_texture_mix !== undefined && artLightCondition()) applyLightPanelValue('art_glow_texture_mix', result.art_glow_texture_mix, artLabel('edit'));
+                if (result.art_glow_color_source !== undefined && artLightCondition()) {
+                    applyLightPanelValue('art_glow_color_source', result.art_glow_color_source, artLabel('edit'));
                 }
                 for (const property of ['art_mode', 'art_radius', 'art_scope', 'art_softness']) {
                     if (result[property] !== undefined && artLightCondition()) applyLightPanelValue(property, result[property], artLabel('edit'));
@@ -25024,10 +28000,10 @@ function initializeLightManagerPlugin() {
                 if (result.art_influence !== undefined && artLightCondition() && keyChanged('art_influence')) {
                     applyLightPanelValue('key_light_weight', Math.max(0, Math.min(100, Number(result.art_influence) || 0)), artLabel('edit'));
                 }
-                if (result.key_light_enabled !== undefined && keyChanged('key_light_enabled')) {
+                if (result.key_light_enabled !== undefined && physicalLightCondition() && keyChanged('key_light_enabled')) {
                     applyLightPanelValue('key_light_enabled', result.key_light_enabled, translateLightManager('light_manager.property.key_light_enabled'));
                 }
-                if (result.key_light_weight !== undefined && keyChanged('key_light_weight')) {
+                if (result.key_light_weight !== undefined && physicalLightCondition() && keyChanged('key_light_weight')) {
                     applyLightPanelValue('key_light_weight', Math.max(0, Math.min(100, Number(result.key_light_weight) || 0)));
                 }
 
@@ -25098,7 +28074,7 @@ function initializeLightManagerPlugin() {
                 try {
                     const selectedCount = getSelectedLights().length;
                     lightPropertiesPanel.form.form_data.light_properties_label?.setValue?.(selectedCount > 1 ? `${selectedCount} · ${tl('panel.light_properties')}` : light.name);
-                    for (const property of ['art_mode', 'art_radius', 'art_scope', 'art_softness']) lightPropertiesPanel.form.form_data[property]?.setValue(light[property]);
+                    for (const property of ['art_mode', 'art_radius', 'art_scope', 'art_softness', 'art_glow_color_source', 'art_glow_texture_mix']) lightPropertiesPanel.form.form_data[property]?.setValue(light[property] ?? (property === 'art_glow_color_source' ? 'light' : undefined));
                     lightPropertiesPanel.form.form_data.art_strength?.setValue(light.intensity);
                     lightPropertiesPanel.form.form_data.art_enabled?.setValue(light.key_light_enabled !== false);
                     lightPropertiesPanel.form.form_data.art_influence?.setValue(light.key_light_weight ?? 1);
@@ -25106,6 +28082,7 @@ function initializeLightManagerPlugin() {
                     lightPropertiesPanel.form.form_data.light_intensity?.setValue(light.intensity);
                     lightPropertiesPanel.form.form_data.key_light_enabled?.setValue(light.key_light_enabled !== false);
                     lightPropertiesPanel.form.form_data.key_light_weight?.setValue(light.key_light_weight ?? 1);
+                    lightPropertiesPanel.form.form_data.light_target_state?.setValue((light.aim_target || [0, 0, 0]).slice());
                     lightPropertiesPanel.form.form_data.light_color.setValue(LightManagerUtils.colorHex(light.color));
 
                     let selectedTemp = light.temperature || 6500;
@@ -25384,6 +28361,7 @@ function initializeLightManagerPlugin() {
         },
 
         onunload() {
+            cancelMinecraftEula?.();
             Array.from(lightflowMediaViewers).forEach(dispose => dispose());
             cancelLightManagerElementUpdate();
             cancelScheduledLightManagerTasks();

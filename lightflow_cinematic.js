@@ -931,6 +931,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
     }
 
     const PLUGIN_ID = 'lightflow_cinematic';
+    const CINEMATIC_RUNTIME = Symbol.for('lightflow.cinematic.runtime');
     const PROJECT_PROPERTY = 'lightflow_cinematic_project_json';
     const CINEMATIC_UNDO_ASPECT = 'lightflow_cinematic_document';
     const DOCUMENT_VERSION = 1;
@@ -1027,6 +1028,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
     let cinematicPreviewCachePrepared = false;
     let cinematicAudioProviderFactory = null;
     let unloading = false;
+    let cinematicDisposed = true;
     let openAction;
     let cameraAction;
     let keyframeAction;
@@ -1062,6 +1064,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
     let gizmoVisibilityListener;
     let cinematicFrameEditSequenceId = '';
     let cinematicLibraryVue;
+    let viewportLibraryMenu;
     let cinematicLibraryRenderPatch;
     let cinematicLibraryComponent;
     const cinematicLibraryActions=[];
@@ -1651,8 +1654,9 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         if (!value || typeof value !== 'object') return null;
         return {
             id: String(value.id || createId('sequence_clip')),
-            type: value.type === 'sequence' ? 'sequence' : 'animation',
+            type: ['sequence', 'linked_animation'].includes(value.type) ? value.type : 'animation',
             source_id: String(value.source_id || ''),
+            ...(value.type === 'linked_animation' ? {source_instance_id: String(value.source_instance_id || '')} : {}),
             name: cleanName(value.name, '', 120),
             track: clamp(Math.round(finite(value.track, 0)), 0, 63),
             start_frame: Math.max(0, Math.round(finite(value.start_frame, 0))),
@@ -1695,7 +1699,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
 
     function cinematicClipKeyMarkers(animation,clip,rate,playbackRate) {
         if(!animation)return [];
-        const times=Array.from(new Set(Object.values(animation.animators).flatMap(animator=>animator.keyframes.map(key=>key.time)))).sort((a,b)=>a-b);
+        const times=Array.from(new Set(Object.values(animation.animators || {}).flatMap(animator=>(animator.keyframes || []).map(key=>key.time)))).sort((a,b)=>a-b);
         const end=clip.source_start_seconds+clip.duration_frames/rate*clip.speed,markers=[];
         for(const key of times){
             if(clip.loop&&animation.length>0){
@@ -1915,17 +1919,25 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         for (const sequence of document.sequences) visit(sequence, new Set());
     }
 
+    function resolveSequenceClipSource(clip, doc) {
+        if (clip.type === 'sequence') return doc.sequences.find(item => item.id === clip.source_id);
+        if (clip.type === 'linked_animation') {
+            return window.LightflowSceneLinks?.getLinkedAnimation?.(clip.source_instance_id, clip.source_id);
+        }
+        return getCinematicAnimations().find(item => item.uuid === clip.source_id);
+    }
+
     function addSequenceClip(sequenceId, sourceId, type = 'animation', options = {}) {
         const doc = readDocument(), sequence = getSequence(doc, sequenceId);
-        const source = type === 'sequence' ? doc.sequences.find(item => item.id === sourceId)
-            : getCinematicAnimations().find(item => item.uuid === sourceId);
+        const reference = {type, source_id: sourceId, source_instance_id: options.source_instance_id};
+        const source = resolveSequenceClipSource(reference, doc);
         if (!sequence || !source) return null;
         const length = type === 'sequence' ? sequenceDurationSeconds(source) : Math.max(.001, source.length || 1);
         const clip = normalizeSequenceClip({
-            source_id: sourceId, type, name: source.name,
+            ...reference, name: source.name,
             start_frame: options.start_frame ?? Math.max(0, currentCinematicFrame(sequence) - sequence.start_frame),
             duration_frames: Math.max(1, Math.round(length * frameRateValue(sequence.frame_rate))),
-            track: options.track ?? 0, loop: type === 'animation' && source.loop === 'loop'
+            track: options.track ?? 0, loop: type !== 'sequence' && source.loop === 'loop'
         });
         if(sequenceTrackState(sequence,clip.track).locked)return null;
         updateSequence(sequence.id, {clips: [...sequence.clips, clip],
@@ -2061,7 +2073,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         const rate=frameRateValue(sequence.frame_rate),scale=rate/copied.rate,start=Math.min(...copied.clips.map(clip=>clip.start_frame)),firstTrack=Math.min(...copied.clips.map(clip=>clip.track));
         const baseTrack=track??firstTrack,baseFrame=Math.max(0,Math.round(frame)-sequence.start_frame);
         if(baseTrack<0||baseTrack+Math.max(...copied.clips.map(clip=>clip.track-firstTrack))>63){Blockbench.showQuickMessage(cinematicUI("not_enough_tracks_for_this_selection"));return [];}
-        if(copied.clips.some(clip=>clip.type==='sequence'?!doc.sequences.some(item=>item.id===clip.source_id):!getCinematicAnimations().some(item=>item.uuid===clip.source_id))){Blockbench.showQuickMessage(cinematicUI("a_copied_source_is_missing_relink_it_before_pasting"));return [];}
+        if(copied.clips.some(clip=>!resolveSequenceClipSource(clip,doc))){Blockbench.showQuickMessage(cinematicUI("a_copied_source_is_missing_relink_it_before_pasting"));return [];}
         const clips=copied.clips.map(clip=>normalizeSequenceClip({...clip,id:createId('sequence_clip'),
             start_frame:baseFrame+Math.round((clip.start_frame-start)*scale),track:clip.track-firstTrack+baseTrack,
             duration_frames:Math.max(1,Math.round(clip.duration_frames*scale)),fade_in_frames:Math.round(clip.fade_in_frames*scale),fade_out_frames:Math.round(clip.fade_out_frames*scale),
@@ -2108,12 +2120,15 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
     function buildSequenceComposition(sequence, frame, document = readDocumentView(), ancestors = new Set(), inheritedWeight = 1) {
         if (!sequence || ancestors.has(sequence.id) || ancestors.size >= 16) throw new Error('Invalid recursive sequence reference');
         const path = new Set(ancestors); path.add(sequence.id);
-        const plan = {animations: [], cameras: []}, rate = frameRateValue(sequence.frame_rate), relative = frame - sequence.start_frame;
+        const plan = {animations: [], linkedAnimations: new Map(), cameras: []}, rate = frameRateValue(sequence.frame_rate), relative = frame - sequence.start_frame;
         if (sequence.camera_id) {
             const camera = document.cameras.find(item => item.id === sequence.camera_id);
             if (camera) plan.cameras.push({cameraId: camera.id, state: sampleCamera(camera, frame), weight: inheritedWeight});
         }
         const clips = sequence.clips || [];
+        for (const clip of clips) {
+            if (clip.type === 'linked_animation') plan.linkedAnimations.set(clip.source_instance_id, []);
+        }
         const solo=sequence.tracks?.some(track=>track.solo),baseTrack=sequenceTrackState(sequence,0);
         if (!clips.length && sequence.source_animation_id&&!baseTrack.muted&&(!solo||baseTrack.solo)) {
             const animation = getCinematicAnimations().find(item => item.uuid === sequence.source_animation_id);
@@ -2132,11 +2147,19 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                 time = clip.loop ? time % duration : Math.min(time, Math.max(0, duration - 1e-8));
                 const nested = buildSequenceComposition(child, child.start_frame + time * frameRateValue(child.frame_rate), document, path, weight);
                 plan.animations.push(...nested.animations); plan.cameras.push(...nested.cameras);
+                for (const [instanceId, entries] of nested.linkedAnimations) {
+                    if (!plan.linkedAnimations.has(instanceId)) plan.linkedAnimations.set(instanceId, []);
+                    plan.linkedAnimations.get(instanceId).push(...entries);
+                }
             } else {
-                const animation = getCinematicAnimations().find(item => item.uuid === clip.source_id);
+                const animation = resolveSequenceClipSource(clip, document);
+                if (clip.type === 'linked_animation' && !animation && !activeRenderJob) continue; // The source may still be mounting.
                 if (!animation) throw new Error('Missing animation: ' + clip.name);
                 if (animation.length > 0) time = clip.loop ? time % animation.length : Math.min(time, animation.length);
-                plan.animations.push({animation, time, weight, loop: clip.loop});
+                const entries = clip.type === 'linked_animation'
+                    ? plan.linkedAnimations.get(clip.source_instance_id)
+                    : plan.animations;
+                entries.push({animation, time, weight, loop: clip.loop});
             }
         }
         return plan;
@@ -3277,6 +3300,20 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                         '_',{name:cinematicUI("delete_sequence"),icon:'delete',condition:()=>readDocument().sequences.length>1,click:()=>Blockbench.showMessageBox({title:cinematicUI("delete_sequence"),message:shot.name,buttons:['dialog.confirm','dialog.cancel'],confirm:0,cancel:1},result=>{if(result===0){deleteSequence(shot.id);cinematicLibraryVue?.sync();}})}];
     }
 
+    function openViewportLibraryMenu(entries, actions, anchor, sectionOptions = {}) {
+        const menu = new Menu([...entries, ...actions], {
+            onClose() { if (viewportLibraryMenu === menu) viewportLibraryMenu = null; }
+        });
+        menu.open(anchor);
+        viewportLibraryMenu = menu;
+        // Blockbench drops a leading separator even when it labels the first group.
+        const heading = entries[0]?.menu_node;
+        if (heading?.classList.contains('has_label') && heading.parentNode !== menu.node) menu.node.prepend(heading);
+        window.LightManagerUI?.SectionedMenu?.decorate(menu, {
+            scrollItems: entries.map(entry => entry.id), height: 300, search: entries.length > 8, anchor, ...sectionOptions
+        });
+    }
+
     function openViewportSequenceMenu(event) {
         if(!getActiveProject()||Project.mode!=='animate'||activeRenderJob)return;
         const doc=readDocumentView(),active=getSequence(doc),anchor=event?.currentTarget||event;
@@ -3284,20 +3321,22 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
             if(cinematicFlySession)finishCinematicFly(false);
             cinematicLibraryVue?.select?.(id);
         };
-        new Menu([
-            ...doc.sequences.map(sequence=>({name:sequence.name,icon:sequence.id===active?.id?'radio_button_checked':'theaters',click:()=>select(sequence.id)})),
+        const sequences=doc.sequences.map(sequence=>({id:'lf_cinematic_menu_sequence_'+sequence.id,name:sequence.name,
+            icon:sequence.id===active?.id?'radio_button_checked':'theaters',click:()=>select(sequence.id)}));
+        openViewportLibraryMenu(sequences,[
             '_',
             {name:cinematicUI("create_sequence"),icon:'add',click:()=>{if(cinematicFlySession)finishCinematicFly(false);cinematicLibraryVue?.create?.();}},
             {name:cinematicUI("add_animation_or_sequence"),icon:'playlist_add',click:()=>{setCinematicSequencePreview(true);sequenceAddClipMenu(0,anchor);}},
             {name:cinematicUI("sequence_actions"),icon:'more_horiz',condition:()=>!!active,children:()=>sequenceLibraryMenuItems(active)},
             '_',
             {name:cinematicUI("back_to_animation"),icon:'movie',condition:()=>cinematicSequencePreview,click:()=>setCinematicSequencePreview(false)}
-        ]).open(anchor);
+        ],anchor);
     }
 
     function openViewportCameraMenu(event) {
         if (!getActiveProject() || activeRenderJob) return;
         const doc = readDocumentView();
+        const anchor = event?.currentTarget || event;
         const selected = getSelectedCameraElement();
         const showPanel = cameraId => {
             if(cinematicFlySession&&cinematicFlySession.cameraId!==cameraId)finishCinematicFly(false);
@@ -3307,12 +3346,13 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
             if (cinematicCameraPanel?.folded) cinematicCameraPanel.fold(false);
             cinematicCameraPanel?.inside_vue?.sync?.();
         };
-        new Menu([
-            ...doc.cameras.map(camera => ({
-                name: camera.name,
-                icon: selected?.cinematic_camera_id === camera.id ? 'radio_button_checked' : 'videocam',
-                click: () => showPanel(camera.id)
-            })),
+        const cameras = doc.cameras.map(camera => ({
+            id: 'lf_cinematic_menu_camera_' + camera.id,
+            name: camera.name,
+            icon: selected?.cinematic_camera_id === camera.id ? 'radio_button_checked' : 'videocam',
+            click: () => showPanel(camera.id)
+        }));
+        openViewportLibraryMenu(cameras,[
             ...(doc.cameras.length ? ['_'] : []),
             cameraAction,
             ...(selected ? [
@@ -3323,7 +3363,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                 {name: cinematicUI("camera_motion_path"), icon: cinematicCameraPathVisible ? 'check_box' : 'check_box_outline_blank', click: () => cinematicCameraPanel?.inside_vue?.trail?.()},
                 '_', cameraSettingsAction
             ] : [])
-        ]).open(event?.currentTarget || event);
+        ],anchor);
     }
 
     function syncCinematicCameraPath() {
@@ -3963,8 +4003,11 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         "frame_selection": ["Frame selection","Encuadrar selección"],
         "start_at_playhead": ["Start at playhead","Empezar en el cursor"],
         "mute_clip": ["Mute clip","Silenciar clip"],
-        "blockbench_animation": ["Blockbench animation","Animación de Blockbench"],
-        "existing_sequence": ["Existing sequence","Secuencia existente"],
+        "blockbench_animations": ["Blockbench animations","Animaciones de Blockbench"],
+        "existing_sequences": ["Existing sequences","Secuencias existentes"],
+        "scene_link_group": ["Scene Link","Escena vinculada"],
+        "search_clip_sources": ["Search clips…","Buscar clips…"],
+        "open_linked_clip_source": ["Open source project","Abrir proyecto de origen"],
         "create_animation_in_blockbench": ["Create animation in Blockbench","Crear animación en Blockbench"],
         "move_selected_clips": ["Move selected clips","Mover clips seleccionados"],
         "rename_track": ["Rename track","Renombrar pista"],
@@ -4278,6 +4321,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
     function openSequenceClipSource(sequenceId, clipId) {
         const doc=readDocumentView(),sequence=getSequence(doc,sequenceId),clip=sequence?.clips.find(item=>item.id===clipId);if(!clip)return;
         if(clip.type==='sequence'){setActiveSequence(clip.source_id);setCinematicSequencePreview(true);jumpToSequenceStart(clip.source_id);return;}
+        if(clip.type==='linked_animation')return window.LightflowSceneLinks?.openAnimationSource?.(clip.source_instance_id);
         const animation=getCinematicAnimations().find(item=>item.uuid===clip.source_id);if(!animation)return;
         const frame=currentCinematicFrame(sequence),time=clip.source_start_seconds+Math.max(0,frame-sequence.start_frame-clip.start_frame)/frameRateValue(sequence.frame_rate)*clip.speed;
         setCinematicSequencePreview(false);animation.select();Timeline.setTime(time);Animator.preview();
@@ -4305,7 +4349,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
     function sequenceClipMenu(sequenceId, clip, event) {
         const selection=()=>selectedSequenceClips(sequenceId,clip.id),editable=()=>selection().filter(item=>!sequenceTrackState(getSequence(readDocumentView(),sequenceId),item.track).locked);
         new Menu([
-            {name:cinematicUI("edit_source_keyframes"),icon:'movie',click:()=>openSequenceClipSource(sequenceId,clip.id)},
+            {name:cinematicUI(clip.type==='linked_animation'?'open_linked_clip_source':'edit_source_keyframes'),icon:'movie',click:()=>openSequenceClipSource(sequenceId,clip.id)},
             {name:cinematicUI("clip_timing_and_blend"),icon:'tune',condition:()=>editable().length>0,click:()=>openSequenceClipProperties(sequenceId,clip.id)},
             {name:cinematicUI("slip_source"),icon:'swap_horiz',condition:()=>editable().length===selection().length,click:()=>openSequenceSlipDialog(sequenceId,selection().map(item=>item.id))},
             {name:cinematicUI("marker_color"),icon:'palette',children:cinematicClipColorItems(sequenceId,clip)},
@@ -4323,13 +4367,33 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
 
     function sequenceAddClipMenu(track, event) {
         const doc=readDocumentView(),seq=getSequence(doc);
-        const choose=(id,type)=>{try{addSequenceClip(seq.id,id,type,{track});setCinematicSequencePreview(true);}catch(error){showCinematicError(error);}};
+        if (!seq || sequenceTrackState(seq,track).locked) return;
+        const choose=(id,type,instanceId)=>{try{
+            if (addSequenceClip(seq.id,id,type,{track,source_instance_id:instanceId})) setCinematicSequencePreview(true);
+        }catch(error){showCinematicError(error);}};
         const canNest=id=>{try{const copy=deepClone(doc);getSequence(copy,seq.id).clips.push(normalizeSequenceClip({type:'sequence',source_id:id}));validateSequenceReferences(copy);return true;}catch(_){return false;}};
-        new Menu([
-            {name:cinematicUI("blockbench_animation"),icon:'movie',children:getCinematicAnimations().map(animation=>({name:animation.name,icon:'movie',click:()=>choose(animation.uuid,'animation')}))},
-            {name:cinematicUI("existing_sequence"),icon:'theaters',children:doc.sequences.filter(item=>canNest(item.id)).map(item=>({name:item.name,icon:'theaters',click:()=>choose(item.id,'sequence')}))},
-            '_',{name:cinematicUI("create_animation_in_blockbench"),icon:'add',click(){setCinematicSequencePreview(false);BarItems.add_animation?.trigger();}}
-        ]).open(event);
+        const entries = [], scrollItems = [];
+        const addGroup = (name, sources, type, icon, instanceId) => {
+            if (!sources.length) return;
+            const heading = new MenuSeparator('clip_group_' + entries.length, name);
+            heading.menu_node.querySelector('label').textContent = name;
+            entries.push(heading);
+            for (const source of sources) {
+                const id = 'clip_source_' + scrollItems.length;
+                scrollItems.push(id);
+                entries.push({id, name:source.name, description:name, icon, click:()=>choose(source.id,type,instanceId)});
+            }
+        };
+        addGroup(cinematicUI("blockbench_animations"),getCinematicAnimations().map(animation=>({id:animation.uuid,name:animation.name})),'animation','movie');
+        for (const instance of window.LightflowSceneLinks?.listAnimationGroups?.() || []) {
+            addGroup(cinematicUI("scene_link_group")+' · '+instance.name,instance.animations,'linked_animation','cinematic_blur',instance.id);
+        }
+        addGroup(cinematicUI("existing_sequences"),doc.sequences.filter(item=>canNest(item.id)),'sequence','theaters');
+        const create = {name:cinematicUI("create_animation_in_blockbench"),icon:'add',click(){setCinematicSequencePreview(false);BarItems.add_animation?.trigger();}};
+        const anchor = event?.currentTarget || event;
+        openViewportLibraryMenu(entries, entries.length ? ['_', create] : [create], anchor, {
+            scrollItems, search:true, focusSearch:true, placeholder:cinematicUI("search_clip_sources")
+        });
     }
 
     function mountCinematicSequencer() {
@@ -4345,7 +4409,9 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
             methods:{
                 sync(){
                     const document=readDocumentView(),seq=getSequence(document);if(!seq)return;
-                    const animations=new Map(getCinematicAnimations().map(animation=>[animation.uuid,animation])),sequences=new Map(document.sequences.map(sequence=>[sequence.id,sequence])),keyMarkers=new Map();
+                    const animations=new Map(getCinematicAnimations().map(animation=>[animation.uuid,animation]));
+                    const sequences=new Map(document.sequences.map(sequence=>[sequence.id,sequence]));
+                    const keyMarkers=new Map();
                     if(this.sequenceId!==seq.id){this.selectedIds=[];this.selected='';}
                     this.selectedIds=this.selectedIds.filter(id=>seq.clips.some(clip=>clip.id===id));
                     this.sequenceId=seq.id;this.name=seq.name;this.size=Timeline.vue.size;this.head=Timeline.vue.head_width;this.time=Timeline.time;this.preview=cinematicSequencePreview;this.busy=!!activeRenderJob;
@@ -4356,11 +4422,14 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                     const solo=seq.tracks.some(track=>track.solo);
                     const tracks=Array.from({length:Math.max(1,...seq.clips.map(clip=>clip.track+1),...seq.tracks.map(track=>track.id+1))},(_,index)=>({...sequenceTrackState(seq,index),inactive:sequenceTrackState(seq,index).muted||(solo&&!sequenceTrackState(seq,index).solo),clips:[]}));
                     for(const clip of seq.clips){
-                        const animation=clip.type==='animation'?animations.get(clip.source_id):null;
-                        const source=clip.type==='sequence'?sequences.get(clip.source_id):animation;
-                        const markerKey=[clip.source_id,clip.source_start_seconds,clip.duration_frames,clip.speed,clip.loop].join('|');
+                        const source=clip.type==='sequence'?sequences.get(clip.source_id):
+                            clip.type==='animation'?animations.get(clip.source_id):resolveSequenceClipSource(clip,document);
+                        const animation=clip.type==='sequence'?null:source;
+                        const name=source?.name||clip.name;
+                        const instanceName=clip.type==='linked_animation'?window.OutlinerNode?.uuids?.[clip.source_instance_id]?.name:null;
+                        const markerKey=JSON.stringify([clip.type,clip.source_instance_id,clip.source_id,clip.source_start_seconds,clip.duration_frames,clip.speed,clip.loop]);
                         if(!keyMarkers.has(markerKey))keyMarkers.set(markerKey,cinematicClipKeyMarkers(animation,clip,rate,seq.playback_rate));
-                        tracks[clip.track].clips.push({...clip,name:source?.name||clip.name,missing:!source,ink:cinematicClipColor(clip.color),
+                        tracks[clip.track].clips.push({...clip,name:instanceName?name+' · '+instanceName:name,missing:!source,ink:cinematicClipColor(clip.color),
                             left:seq.source_start_seconds+clip.start_frame*seconds,width:clip.duration_frames*seconds,
                             keys:keyMarkers.get(markerKey),blendShape:cinematicClipBlendShape(clip),
                             locked:tracks[clip.track].locked,inactive:tracks[clip.track].inactive,
@@ -4443,6 +4512,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         const original=native.$options.render;
         const render=function(...args){
             const root=original.apply(this,args);
+            if(unloading)return root;
             const insert=node=>{
                 if(node?.data?.attrs?.id==='timeline_body_inner'){
                     node.children ||= [];
@@ -8366,12 +8436,29 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
             await decoder.tracks.ready;await decoder.completed;
             const count=decoder.tracks.selectedTrack?.frameCount||0;
             if(!count){decoder.close();return;}
-            const canvas=document.createElement('canvas');
-            artifact.timeline={count,fps:frameRateValue(artifact.frameRate),async getFrame(index){
-                const {image}=await decoder.decode({frameIndex:index,completeFramesOnly:true});
-                try {canvas.width=image.displayWidth;canvas.height=image.displayHeight;canvas.getContext('2d').drawImage(image,0,0);return await canvasToPngBlob(canvas);}
-                finally{image.close();}
-            },dispose(){decoder.close();canvas.width=canvas.height=0;}};
+            const decodeFrame = async index => {
+                const { image } = await decoder.decode({ frameIndex: index, completeFramesOnly: true });
+                return image;
+            };
+            artifact.timeline = {
+                count,
+                fps: frameRateValue(artifact.frameRate),
+                decodeFrame,
+                async getFrame(index) {
+                    const image = await decodeFrame(index);
+                    const canvas = document.createElement('canvas');
+                    try {
+                        canvas.width = image.displayWidth;
+                        canvas.height = image.displayHeight;
+                        canvas.getContext('2d').drawImage(image, 0, 0);
+                        return await canvasToPngBlob(canvas);
+                    } finally {
+                        image.close();
+                        canvas.width = canvas.height = 0;
+                    }
+                },
+                dispose() { decoder.close(); }
+            };
         } catch(error){decoder?.close();console.warn('[Lightflow Cinematic] Using animated GIF playback without frame seeking.',error);}
     }
 
@@ -8653,8 +8740,9 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         renderedClipDialog?.hide?.();
         renderedClipDialog = null;
         const url = cinematicArtifactUrl(artifact);
+        const useGifTimeline = artifact.format === 'gif' && artifact.timeline?.decodeFrame && window.LightManagerUI?.mediaViewer?.mount;
         const media = artifact.format === 'gif' || artifact.format === 'png'
-            ? '<img ' + (url ? 'src="' + escapeCinematicHtml(url) + '" ' : '') + 'data-cinematic-preview="true" data-source="' + escapeCinematicHtml(url) + '" alt="Cinematic preview">'
+            ? '<img ' + (url && !useGifTimeline ? 'src="' + escapeCinematicHtml(url) + '" ' : '') + 'data-cinematic-preview="true" data-source="' + escapeCinematicHtml(url) + '" alt="Cinematic preview">'
             : '<video src="' + escapeCinematicHtml(url) + '" autoplay playsinline></video>';
         const saved = artifact.savedPath
             ? translate('lightflow_cinematic.result.saved_to', 'Saved to {path}').replace('{path}', artifact.savedPath)
@@ -9730,10 +9818,13 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
     }
 
     function frameRateOptions(rate) {
-        const options = Object.fromEntries(Object.entries(FRAME_RATE_PRESETS).map(([key, value]) => [key, value.label]));
+        // Native BarSelect creates help_outline for option labels without an
+        // icon. FPS is numeric text, so render text-only menu entries.
+        const options = Object.fromEntries(Object.entries(FRAME_RATE_PRESETS).map(([key, value]) =>
+            [key, {name: value.label, icon: null}]));
         if (rate != null) {
             const key = frameRateKey(rate);
-            if (!options[key]) options[key] = Number(frameRateValue(rate).toFixed(6)) + ' fps';
+            if (!options[key]) options[key] = {name: Number(frameRateValue(rate).toFixed(6)) + ' fps', icon: null};
         }
         return options;
     }
@@ -10932,6 +11023,11 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
     }
 
     function unloadPlugin() {
+        if(cinematicDisposed)return;
+        cinematicDisposed=true;
+        if (viewportLibraryMenu && Menu.open === viewportLibraryMenu) viewportLibraryMenu.hide();
+        viewportLibraryMenu = null;
+        if(window[CINEMATIC_RUNTIME]?.delete===unloadPlugin)delete window[CINEMATIC_RUNTIME];
         renderedMediaViewerDispose?.(); renderedMediaViewerDispose = null;
         renderedResultProgressControl?.delete(); renderedResultProgressControl=null;
         setCinematicCameraView(null);deleteCinematicLookFrame();
@@ -10955,7 +11051,7 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         cinematicSequencerVue=null;cinematicSequencerNode=null;
         window.document?.getElementById('timeline_body_inner')?.classList.remove('lf-cine-composing');
         cinematicNativeStackPatch?.delete();cinematicNativeStackPatch=null;
-        cinematicNativeTimelinePatches.forEach(patch=>patch.delete());cinematicNativeTimelinePatches=[];
+        cinematicNativeTimelinePatches.splice(0).reverse().forEach(patch=>patch.delete());
         cinematicCameraPanel?.delete();cinematicCameraPanel=null;cinematicOutlinerColors?.delete();cinematicOutlinerColors=null;
         cinematicKeyframeInspectorPatch?.delete();cinematicKeyframeInspectorPatch=null;cinematicCameraKeyframePointType=null;
         cinematicCameraPath?.parent?.remove(cinematicCameraPath);
@@ -11122,6 +11218,9 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
         min_version: '4.9.0',
         variant: 'both',
         onload() {
+            window[CINEMATIC_RUNTIME]?.delete?.();
+            cinematicDisposed=false;
+            window[CINEMATIC_RUNTIME]={delete:unloadPlugin};
             unloading = false;
             // This local development package is one JS file, not a repository
             // folder with about.md. Let the native loader use its single-file path.
@@ -11573,6 +11672,9 @@ if (typeof module === "object" && typeof module.exports === "object") Object.ass
                 createSequence,
                 updateSequence,
                 addSequenceClip,
+                getLinkedAnimationFrame(instanceId) {
+                    return cinematicCompositionPlan?.linkedAnimations.get(instanceId);
+                },
                 updateSequenceClip,
                 deleteSequenceClip,
                 updateSequenceClips,

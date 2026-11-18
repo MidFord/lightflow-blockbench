@@ -4,9 +4,14 @@
 // primitive library. The adapter reads geometry/UV and state rules from the
 // user's own extracted assets, never its checkerboard test textures. Bedrock
 // textures continue to come from the selected Bedrock resource pack.
-const fs = require('node:fs');
-const path = require('node:path');
-const os = require('node:os');
+let fs, path, os;
+function loadPrimitiveNativeModules() {
+    if (fs === undefined) fs = require('node:fs');
+    if (!fs) return false;
+    path ||= require('node:path');
+    os ||= require('node:os');
+    return Boolean(path && os);
+}
 const {getMinecraftJar} = require('./bedrock_java_model_jar.js');
 
 const FACE_VERTICES = {
@@ -71,9 +76,29 @@ function modelQuads(model, transform = {}, materialSelector = null) {
     const textureHeight = Number(model.uvHeight || 16);
     for (let elementIndex = 0; elementIndex < (model.elements || []).length; elementIndex++) {
         const element = model.elements[elementIndex];
+        let solidPlanes=null;
+        if(element.to.every((n,i)=>n>element.from[i])) {
+            const volumeFaces=Object.values(FACE_VERTICES).map(verticesForFace=>verticesForFace(element.from,element.to).map(point=> {
+                let p=point;
+                if(element.rotation)p=rotate(p,element.rotation.axis,element.rotation.angle,element.rotation.origin,element.rotation.rescale);
+                if(transform.x)p=rotate(p,'x',transform.x);
+                if(transform.y)p=rotate(p,'y',transform.y);
+                return p;
+            }));
+            const all=volumeFaces.flat(),center=[0,1,2].map(i=>all.reduce((sum,p)=>sum+p[i],0)/all.length);
+            solidPlanes=volumeFaces.map(face=> {
+                const a=face[1].map((n,i)=>n-face[0][i]),b=face[2].map((n,i)=>n-face[0][i]);
+                let n=[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
+                const length=Math.hypot(...n);n=n.map(v=>v/length);
+                let d=n.reduce((sum,v,i)=>sum+v*face[0][i],0);
+                if(n.reduce((sum,v,i)=>sum+v*center[i],0)>d){n=n.map(v=>-v);d=-d;}
+                return [...n,d];
+            });
+        }
         for (const [face, definition] of Object.entries(element.faces || {})) {
             const verticesForFace = FACE_VERTICES[face];
             if (!verticesForFace) continue;
+            if (transform.pinkPetals && (face === 'down' || (elementIndex > 0 && (face === 'west' || face === 'south')))) continue;
             // Java campfire fire planes each author two opposite faces. Emit
             // one explicitly double-sided quad to avoid coplanar duplicates.
             if (transform.campfireLit && elementIndex >= 5 && !['north','west'].includes(face)) continue;
@@ -106,13 +131,27 @@ function modelQuads(model, transform = {}, materialSelector = null) {
                 ...(textureWidth !== 16 || textureHeight !== 16
                     ? {uvTextureSize:[textureWidth,textureHeight]} : {}),
                 ...(materialSelector ? {materialInstance: materialSelector(elementIndex, face, definition)} : {}),
+                ...(solidPlanes ? {solidPlanes} : {}),
             };
+            // Fluid exclusion needs the occupied volume of authored cuboids,
+            // even when their visible representation consists entirely of quads.
+            if (!element.rotation || Number(element.rotation.angle || 0) % 90 === 0) {
+                let corners = FACE_VERTICES.up(element.from,element.to).concat(FACE_VERTICES.down(element.from,element.to));
+                if(element.rotation)corners=corners.map(v=>rotate(v,element.rotation.axis,element.rotation.angle,element.rotation.origin));
+                if(transform.x)corners=corners.map(v=>rotate(v,'x',transform.x));
+                if(transform.y)corners=corners.map(v=>rotate(v,'y',transform.y));
+                if(Number(transform.x||0)%90===0 && Number(transform.y||0)%90===0) {
+                    quad.solidBox=[0,1,2].map(i=>Math.min(...corners.map(v=>v[i])))
+                        .concat([0,1,2].map(i=>Math.max(...corners.map(v=>v[i]))));
+                }
+            }
             if (transform.campfireLit && elementIndex >= 5) {
                 quad.doubleSided = true;
                 // The crossed flame is a one-tile billboard, not a tiling log
                 // face. Keep its no-repeat rule separate from the static base.
                 quad.noTextureRepeat = true;
             }
+            if (transform.pinkPetals) quad.doubleSided = true;
             if (transform.lanternHandle && elementIndex >= 2) quad.doubleSided = true;
             if (!quad.materialInstance) delete quad.materialInstance;
             quads.push(quad);
@@ -148,10 +187,10 @@ function translateStates(name, bedrock = {}, originalName = name) {
             : ['south','west','north','east'];
     values.facing = typeof direction === 'string' ? direction.replace(/^minecraft:/,'')
         : Number.isInteger(legacyDirection) && legacyDirection >= 0 && legacyDirection <= 3
-            ? legacyCompass[legacyDirection] : 'north';
+            ? legacyCompass[legacyDirection] : /(?:lightning_rod|end_rod)$/.test(originalName) ? 'up' : 'north';
     const directional = Number(value('facing_direction'));
-    if (Number.isInteger(directional) && directional >= 2 && directional <= 5) {
-        values.facing = {2:'north',3:'south',4:'west',5:'east'}[directional];
+    if (Number.isInteger(directional) && directional >= 0 && directional <= 5) {
+        values.facing = {0:'down',1:'up',2:'north',3:'south',4:'west',5:'east'}[directional];
     }
     if (value('upper_block_bit', 'upper_block') !== undefined) values.half = flag('upper_block_bit','upper_block') ? 'upper' : 'lower';
     else if (value('upside_down_bit', 'top_slot_bit') !== undefined) values.half = flag('upside_down_bit','top_slot_bit') ? 'top' : 'bottom';
@@ -161,9 +200,40 @@ function translateStates(name, bedrock = {}, originalName = name) {
     values.hinge = flag('door_hinge_bit') ? 'right' : 'left';
     values.open = flag('open_bit', 'open') ? 'true' : 'false';
     if (value('extinguished') !== undefined) values.lit = flag('extinguished') ? 'false' : 'true';
-    else values.lit = flag('lit_bit','lit') ? 'true' : 'false';
+    else if (value('lit_bit','lit') !== undefined) values.lit = flag('lit_bit','lit') ? 'true' : 'false';
+    else values.lit = /^(?:soul_)?campfire$/.test(originalName) ? 'true' : 'false';
+    if (originalName === 'vine') {
+        const bits = Number(value('vine_direction_bits')) || 0;
+        for (const [direction, bit] of [['south',1], ['west',2], ['north',4], ['east',8]]) {
+            if (value(direction) === undefined) values[direction] = String((bits & bit) !== 0);
+        }
+    }
     const count = value('candles', 'candle_count');
     values.candles = String(Math.max(1, Math.min(4, count === undefined ? 1 : Number(count) + 1)));
+    // Bedrock encodes several count/age properties differently from the Java
+    // reference-model blockstates. Without this translation the first Java
+    // variant is chosen for every Bedrock permutation, so changing the state
+    // in Terrain has no visual effect.
+    if (originalName === 'sea_pickle') {
+        const clusters = Number(value('cluster_count') ?? 0);
+        values.pickles = String(Math.max(1, Math.min(4, Math.floor(clusters) + 1)));
+    }
+    if (originalName === 'turtle_egg') {
+        const eggs = {one_egg:1,two_egg:2,three_egg:3,four_egg:4};
+        const cracks = {no_cracks:0,cracked:1,max_cracked:2};
+        const eggCount = String(value('turtle_egg_count') ?? 'one_egg');
+        const cracked = String(value('cracked_state') ?? 'no_cracks');
+        values.eggs = String(eggs[eggCount] ?? 1);
+        values.hatch = String(cracks[cracked] ?? 0);
+    }
+    if (originalName === 'composter') {
+        const level = Number(value('composter_fill_level') ?? 0);
+        values.level = String(Math.max(0, Math.min(8, Math.floor(level))));
+    }
+    if (originalName === 'chiseled_bookshelf' && value('books_stored') !== undefined) {
+        const mask = Math.max(0, Math.min(63, Number(value('books_stored')) | 0));
+        for (let slot = 0; slot < 6; slot++) values[`slot_${slot}_occupied`] = String(Boolean(mask & (1 << slot)));
+    }
     const attachment = value('attachment');
     const attachmentName = attachment == null ? 'floor' : String(attachment).replace(/^minecraft:/, '');
     values.attachment = {standing:'floor',hanging:'ceiling',side:'single_wall',multiple:'double_wall'}[attachmentName]
@@ -180,6 +250,9 @@ function translateStates(name, bedrock = {}, originalName = name) {
     values.in_wall = flag('in_wall', 'in_wall_bit') ? 'true' : 'false';
     values.rotation = String(value('ground_sign_direction', 'rotation') ?? 0);
     values.waterlogged = flag('waterlogged', 'waterlogged_bit') ? 'true' : 'false';
+    if (originalName === 'sea_pickle' && value('dead_bit') !== undefined) {
+        values.waterlogged = String(!flag('dead_bit'));
+    }
     values.powered = originalName.startsWith('powered_') ? 'true'
         : originalName.startsWith('unpowered_') || originalName === 'unlit_redstone_torch' ? 'false'
         : value('output_lit_bit') !== undefined ? String(flag('output_lit_bit'))
@@ -210,6 +283,12 @@ function translateStates(name, bedrock = {}, originalName = name) {
         values.age = name === 'sweet_berry_bush'
             ? String(Math.max(0,Math.min(3,Math.floor(growth / 2))))
             : String(value('growth','age'));
+    }
+    if (originalName === 'pink_petals') {
+        const amount = value('flower_amount');
+        const growth = Number(value('growth') ?? 0);
+        values.flower_amount = String(Math.max(1, Math.min(4,
+            amount === undefined ? growth + 1 : Number(amount) || 1)));
     }
     if (value('tip') !== undefined) values.tip = String(flag('tip'));
     const sculkPhase = value('sculk_sensor_phase');
@@ -277,6 +356,7 @@ class PrimitiveLibrary {
         this.faceTextureCache = new Map();
         this.primitiveFiles = new Map();
         if (!root) return; // Browser: JAR provides original models and states.
+        if (!loadPrimitiveNativeModules()) throw new Error('Native primitive library requires filesystem access');
         for (const entry of fs.readdirSync(path.join(root, '01_PRIMITIVES'), {withFileTypes: true})) {
             if (!entry.isDirectory()) continue;
             for (const folder of fs.readdirSync(path.join(root, '01_PRIMITIVES', entry.name))) {
@@ -390,7 +470,7 @@ class PrimitiveLibrary {
                 }
                 return 'campfire_log';
             };
-            quads.push(...modelQuads(model, {...target, campfireLit,
+            quads.push(...modelQuads(model, {...target, campfireLit, pinkPetals:originalName === 'pink_petals',
                 lanternHandle: /lantern$/.test(originalName)}, selector));
         }
         // Bell supports are block models; the bell itself is a separately
@@ -469,7 +549,7 @@ function setBrowserJar(jar) {
 }
 function getLibrary() {
     if (cachedLibrary !== undefined) return cachedLibrary;
-    if (!fs) return null;
+    if (!loadPrimitiveNativeModules()) return null;
     const root = (typeof process !== 'undefined' ? process.env?.LIGHTFLOW_PRIMITIVE_LIBRARY : null)
         || path.join(os.homedir(), 'Minecraft', 'Extras', 'Minecraft_26.2_Primitive_Model_Library');
     try {
