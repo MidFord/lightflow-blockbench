@@ -108,7 +108,7 @@ function shaderArchitectInlineText(key) { return typeof tl === 'function' ? tl(k
         // Refresh it from the selected material instead of retaining the value
         // of a previously installed mode on native or external geometry.
         if (lower === 'ulightwrap') return false;
-        if (lower === 'sa_native_brightness') return true;
+        if (lower === 'sa_native_brightness' || lower === 'sa_shadow_sample') return true;
         return ['max_light_number', 'map', 'lightside', 'shade', 'emissive', 'lightcolor', 'uambient', 'uambientcolor', 'utime', 'uworldnormalmatrix', 'texture_size', 'sa_alpha_cutoff', 'sa_rendercraft_output_mode', 'sa_studio_linear_output', 'sa_studio_render_sample_scale', 'sa_studio_render_frame_scale', 'sa_native_pbr_studio_sample_scale'].includes(lower) ||
             lower.startsWith('sa_bevel_join_') ||
             lower.startsWith('sa_screen_') ||
@@ -1641,7 +1641,16 @@ function shaderArchitectInlineText(key) { return typeof tl === 'function' ? tl(k
         "shader_architect.uniform.uUseToneMapping": "Tone Map",
         "shader_architect.uniform.uUseToneMapping.desc": "Algorithm for mapping high dynamic range color values",
         "shader_architect.uniform.uCineShadowRolloff": "Shadow Rolloff",
-        "shader_architect.uniform.uCineShadowRolloff.desc": "Recover low-light texture detail with the CineFlow curve while preserving black and color ratios",
+        "shader_architect.uniform.uCineShadowRolloff.desc": "Gently recover dark texture detail with the CineFlow curve",
+        "shader_architect.viewport_gamma.title": "Viewport Gamma",
+        "shader_architect.viewport_gamma.label": "Gamma",
+        "shader_architect.viewport_gamma.desc": "Adjust this monitor’s preview. Above 1 brightens midtones; below 1 darkens them. Exports use the scene’s colors.",
+        "shader_architect.viewport_gamma.black": "Black",
+        "shader_architect.viewport_gamma.black.desc": "The dark stripes should be just visible against black.",
+        "shader_architect.viewport_gamma.gray": "Gray",
+        "shader_architect.viewport_gamma.gray.desc": "Step back and adjust gamma until the solid gray and checkerboard look equally bright.",
+        "shader_architect.viewport_gamma.white": "White",
+        "shader_architect.viewport_gamma.white.desc": "The light stripes should be just visible against white.",
         "shader_architect.uniform.uFollowEnvironmentLighting": "Follow Environment",
         "shader_architect.uniform.uFollowEnvironmentLighting.desc": "When Environment is enabled, use its ambient lighting instead of adding Blockbench viewport brightness",
         "shader_architect.uniform.uStylizedNormalInfluence": "Shape",
@@ -2622,7 +2631,16 @@ function shaderArchitectInlineText(key) { return typeof tl === 'function' ? tl(k
         "shader_architect.uniform.uUseToneMapping": "Mapeo",
         "shader_architect.uniform.uUseToneMapping.desc": "Curva de color final",
         "shader_architect.uniform.uCineShadowRolloff": "Transición de sombras",
-        "shader_architect.uniform.uCineShadowRolloff.desc": "Recupera detalle en poca luz con la curva CineFlow, conservando el negro y las proporciones de color",
+        "shader_architect.uniform.uCineShadowRolloff.desc": "Recupera suavemente el detalle oscuro con la curva CineFlow",
+        "shader_architect.viewport_gamma.title": "Gamma del visor",
+        "shader_architect.viewport_gamma.label": "Gamma",
+        "shader_architect.viewport_gamma.desc": "Ajusta la vista para este monitor. Más de 1 aclara los medios tonos y menos de 1 los oscurece. Las exportaciones usan el color de la escena.",
+        "shader_architect.viewport_gamma.black": "Negro",
+        "shader_architect.viewport_gamma.black.desc": "Las franjas oscuras apenas deben distinguirse del negro.",
+        "shader_architect.viewport_gamma.gray": "Gris",
+        "shader_architect.viewport_gamma.gray.desc": "Aléjate un poco y ajusta la gamma hasta que el gris liso y el tramado parezcan igual de claros.",
+        "shader_architect.viewport_gamma.white": "Blanco",
+        "shader_architect.viewport_gamma.white.desc": "Las franjas claras apenas deben distinguirse del blanco.",
         "shader_architect.uniform.uFollowEnvironmentLighting": "Seguir Environment",
         "shader_architect.uniform.uFollowEnvironmentLighting.desc": "Con Environment activo, usa su ambiente sin sumar el brillo del visor de Blockbench",
         "shader_architect.uniform.uStylizedNormalInfluence": "Forma",
@@ -5532,6 +5550,8 @@ uniform float PROMO_RIM_WIDTH;
     float saMRTReflectionMask = (uSSREnabled && uSSRIntensity > 0.0)
         ? clamp(uSSRIntensity, 0.0, 1.0)
         : 0.0;
+    if (uSAEnvironmentReflectionEnabled && specularScale > 0.0)
+        saMRTReflectionMask *= saEnvironmentSsrWeight(roughness);
     saMRTSurface = vec4(saMRTResolvedNormal * 0.5 + 0.5, clamp(roughness, 0.0, 1.0));
     vec3 saMRTRendercraftEmission = rcResolveBloomEmissionFromNative(
         nativeEmission,
@@ -5585,6 +5605,8 @@ uniform float PROMO_RIM_WIDTH;
             1.0
         )
         : 0.0;
+    if (uSAEnvironmentReflectionEnabled && uEnvSpecularStrength > 0.0)
+        saMRTPbrReflectionMask *= saEnvironmentSsrWeight(roughness);
     vec3 saMRTPbrEmission = log2(
         vec3(1.0) + clamp(emissive, vec3(0.0), vec3(16.0))
     ) * 0.2446505421;
@@ -6390,6 +6412,8 @@ vec3 saApplyNativePBRNormal(vec3 normal, vec2 uv, vec3 worldPos) {
         return target;
     }
 
+    const lightflowShadowSampleUniform = { value: new THREE.Vector3() };
+
     function createMaterialLightingUniforms() {
         return {
             AFFECTED_BY_LIGHT: { type: 'bool', value: true, expose: true },
@@ -6417,6 +6441,7 @@ vec3 saApplyNativePBRNormal(vec3 normal, vec2 uv, vec3 worldPos) {
             uLightPointShadowLightIndex: { type: 'intv', value: Array(16).fill(-1), expose: false },
             uLFPixelatedShadowTypeMask: { type: 'vec3', value: new THREE.Vector3(1, 1, 1), expose: false },
             uLightShadowSourceScale: { type: 'floatv', value: Array(16).fill(0.0), expose: false },
+            SA_SHADOW_SAMPLE: { type: 'vec3', value: new THREE.Vector3(), expose: false },
             uLightShadowDisk: { type: 'vec3v', value: Array.from({ length: 12 }, (_, i) => {
                 const area = (i + 0.5) / 12, radius = Math.sqrt(area), angle = i * 2.399963229728653;
                 // Reciprocal sum of the twelve Gaussian weights; normalize once in CPU.
@@ -7130,6 +7155,35 @@ vec4 saApplyScreenSpaceReflection(vec4 sourceColor, vec3 viewNormal, vec3 viewPo
     );
     sourceColor.rgb = sourceColor.rgb * (1.0 - reflection.a) + reflection.rgb;
     return sourceColor;
+}
+`;
+
+    const LIGHTFLOW_ANALYTIC_ENVIRONMENT_FRAGMENT = /* glsl */`
+uniform bool uSAEnvironmentReflectionEnabled;
+uniform vec3 uSAEnvironmentReflectionZenith;
+uniform vec3 uSAEnvironmentReflectionHorizon;
+uniform vec3 uSAEnvironmentReflectionGround;
+uniform vec3 uSAEnvironmentReflectionKeyDirection;
+uniform vec3 uSAEnvironmentReflectionKeyColor;
+
+// Analytic split-sum GGX environment BRDF (Lazarov's fit).
+vec3 saEnvironmentSpecular(vec3 normal, vec3 viewDirection, vec3 f0, float roughness, float ndotv) {
+    vec3 reflection = reflect(-viewDirection, normal);
+    float sharpness = 1.0 - roughness * roughness;
+    float elevation = clamp(abs(reflection.y), 0.0, 1.0);
+    vec3 pole = reflection.y >= 0.0 ? uSAEnvironmentReflectionZenith : uSAEnvironmentReflectionGround;
+    vec3 irradiance = mix(uSAEnvironmentReflectionHorizon, pole, elevation * mix(0.35, 1.0, sharpness));
+    float alignment = max(dot(reflection, uSAEnvironmentReflectionKeyDirection), 0.0);
+    irradiance += uSAEnvironmentReflectionKeyColor *
+        pow(alignment, mix(2.0, 72.0, sharpness * sharpness)) * mix(0.12, 1.0, sharpness);
+    vec4 r = roughness * vec4(-1.0, -0.0275, -0.572, 0.022) + vec4(1.0, 0.0425, 1.04, -0.04);
+    float a004 = min(r.x * r.x, exp2(-9.28 * ndotv)) * r.x + r.y;
+    vec2 ab = vec2(-1.04, 1.04) * a004 + r.zw;
+    return irradiance * max(f0 * ab.x + ab.y, vec3(0.0));
+}
+
+float saEnvironmentSsrWeight(float roughness) {
+    return 1.0 - smoothstep(0.45, 0.72, roughness);
 }
 `;
 
@@ -8048,9 +8102,9 @@ uniform float uShadowFloor;
 #define LF_SHADOW_LIGHT_SPOT 2
 
 #define LF_SHADOW_DEPTH_EPSILON 1e-5
-#define LF_SHADOW_CONTACT_TEXELS 0.75
-#define LF_SHADOW_MAX_FILTER_TEXELS 24.0
-#define LF_SHADOW_MAX_SEARCH_TEXELS 12.0
+#define LF_SHADOW_CONTACT_TEXELS 0.5
+#define LF_SHADOW_MAX_FILTER_TEXELS 48.0
+#define LF_SHADOW_MAX_SEARCH_TEXELS 16.0
 
 // Three r129 only declares cubeToUV/texture2DCompare with active shadow maps.
 #ifdef USE_SHADOWMAP
@@ -8061,6 +8115,7 @@ float lfShadowStoredDepth(sampler2D shadowMap, vec2 uv) {
 #if NUM_DIR_LIGHT_SHADOWS > 0 || NUM_SPOT_LIGHT_SHADOWS > 0
 void lfAccumulateProjectedBlocker(sampler2D shadowMap, vec2 uv, float compareDepth,
     inout float blockerDepthSum, inout float blockerCount) {
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return;
     float storedDepth = lfShadowStoredDepth(shadowMap, uv);
     if (storedDepth < compareDepth) {
         blockerDepthSum += storedDepth;
@@ -8095,6 +8150,17 @@ void lfAccumulatePointBlocker(sampler2D shadowMap, vec3 direction, float texelSi
 #ifdef USE_SHADOWMAP
 // CPU-precomputed disk offsets and Gaussian weights, shared by all receivers.
 uniform vec3 uLightShadowDisk[12];
+#if LF_DISTANCE_FILTER_ENABLED == 1
+// XY is the tile's physical bottom-left origin; Z is the Studio sample index.
+uniform vec3 SA_SHADOW_SAMPLE;
+mat2 lfDistanceShadowRotation() {
+    vec2 pixel = gl_FragCoord.xy + SA_SHADOW_SAMPLE.xy;
+    float noise = fract(52.9829189 * fract(dot(pixel, vec2(0.06711056, 0.00583715))));
+    float angle = noise * 6.28318530718 + SA_SHADOW_SAMPLE.z * 2.39996323;
+    vec2 direction = vec2(cos(angle), sin(angle));
+    return mat2(direction.x, direction.y, -direction.y, direction.x);
+}
+#endif
 // Bilinear interpolation of comparisons, never of packed RGBA depth.
 float lfArtisticProjectedCompare(sampler2D shadowMap, vec2 uv, vec2 mapSize, float compareDepth, bool smoothTap) {
     if (!smoothTap) return texture2DCompare(shadowMap, clamp(uv, vec2(0.5) / mapSize, vec2(1.0) - vec2(0.5) / mapSize), compareDepth);
@@ -8109,10 +8175,10 @@ float lfArtisticProjectedCompare(sampler2D shadowMap, vec2 uv, vec2 mapSize, flo
     float d = texture2DCompare(shadowMap, clamp(baseUv + texel, low, high), compareDepth);
     return mix(mix(a, b, fraction.x), mix(c, d, fraction.x), fraction.y);
 }
-// A small stable rotation breaks repeated bands without grainy full rotations.
+// Stable rotation in shadow space breaks repeated bands.
 vec2 lfArtisticRotation(vec2 position) {
     vec2 cell = floor(position * 2048.0);
-    float angle = fract(sin(dot(cell, vec2(12.9898, 78.233))) * 43758.5453) * 0.8;
+    float angle = fract(sin(dot(cell, vec2(12.9898, 78.233))) * 43758.5453) * 6.28318530718;
     return vec2(cos(angle), sin(angle));
 }
 float lfGetArtisticProjectedShadow(sampler2D shadowMap, vec2 shadowMapSize, float shadowBias,
@@ -8159,6 +8225,19 @@ float lfGetArtisticProjectedShadow(sampler2D shadowMap, vec2 shadowMapSize, floa
 }
 // Offset in a tangent frame and remap every point-light tap through cubeToUV.
 // This preserves atlas face seams instead of blurring unrelated atlas tiles.
+vec3 lfPointShadowTangent(vec3 direction) {
+    vec3 up = abs(direction.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    return normalize(cross(up, direction));
+}
+float lfPointContactShadow(sampler2D shadowMap, vec3 center, float texelSizeY,
+    float compareDepth, vec3 tangent, vec3 bitangent) {
+    vec3 dx = tangent * texelSizeY * 0.5;
+    vec3 dy = bitangent * texelSizeY * 0.5;
+    return 0.25 * (texture2DCompare(shadowMap, cubeToUV(center - dx - dy, texelSizeY), compareDepth)
+        + texture2DCompare(shadowMap, cubeToUV(center + dx - dy, texelSizeY), compareDepth)
+        + texture2DCompare(shadowMap, cubeToUV(center - dx + dy, texelSizeY), compareDepth)
+        + texture2DCompare(shadowMap, cubeToUV(center + dx + dy, texelSizeY), compareDepth));
+}
 float lfGetArtisticPointShadow(sampler2D shadowMap, vec2 shadowMapSize, float shadowBias,
     vec4 shadowCoord, float shadowCameraNear, float shadowCameraFar, float encodedRadius) {
     float distanceToLight = length(shadowCoord.xyz);
@@ -8169,41 +8248,19 @@ float lfGetArtisticPointShadow(sampler2D shadowMap, vec2 shadowMapSize, float sh
     float texelSizeY = 0.5 / resolution;
     vec3 center = shadowCoord.xyz / distanceToLight;
     float radius = max(0.0, -encodedRadius - 2.0);
+    vec3 tangent = lfPointShadowTangent(center);
+    vec3 bitangent = cross(center, tangent);
     if (radius <= 1e-5) {
-        // Remap each direction separately so the cube atlas never bleeds tiles.
-        vec3 tangentAA = normalize(cross(abs(center.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0), center));
-        vec3 dxAA = tangentAA * texelSizeY * 0.5;
-        vec3 dyAA = cross(center, tangentAA) * texelSizeY * 0.5;
-        return 0.25 * (texture2DCompare(shadowMap, cubeToUV(center - dxAA - dyAA, texelSizeY), compareDepth)
-            + texture2DCompare(shadowMap, cubeToUV(center + dxAA - dyAA, texelSizeY), compareDepth)
-            + texture2DCompare(shadowMap, cubeToUV(center - dxAA + dyAA, texelSizeY), compareDepth)
-            + texture2DCompare(shadowMap, cubeToUV(center + dxAA + dyAA, texelSizeY), compareDepth));
+        return lfPointContactShadow(shadowMap, center, texelSizeY, compareDepth, tangent, bitangent);
     }
     #if LF_ARTISTIC_FILTER_ENABLED == 0
     return texture2DCompare(shadowMap, cubeToUV(center, texelSizeY), compareDepth);
     #else
-    vec3 tangent = normalize(cross(abs(center.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0), center));
-    vec3 bitangent = cross(center, tangent);
     vec2 direction = lfArtisticRotation(center.xy + center.z);
     float visibility = 0.0;
     mat2 rotation = mat2(direction.x, direction.y, -direction.y, direction.x);
-    vec3 dx = tangent * texelSizeY * 0.5, dy = bitangent * texelSizeY * 0.5;
     #pragma unroll_loop_start
-    for ( int i = 0; i < 4; i ++ ) {
-      {
-        vec3 tap = uLightShadowDisk[i];
-        vec2 offset = rotation * tap.xy * radius * texelSizeY;
-        vec3 sampleDirection = center + tangent * offset.x + bitangent * offset.y;
-        float sampleVisibility = texture2DCompare(shadowMap, cubeToUV(sampleDirection - dx - dy, texelSizeY), compareDepth);
-        sampleVisibility += texture2DCompare(shadowMap, cubeToUV(sampleDirection + dx - dy, texelSizeY), compareDepth);
-        sampleVisibility += texture2DCompare(shadowMap, cubeToUV(sampleDirection - dx + dy, texelSizeY), compareDepth);
-        sampleVisibility += texture2DCompare(shadowMap, cubeToUV(sampleDirection + dx + dy, texelSizeY), compareDepth);
-        visibility += sampleVisibility * 0.25 * tap.z;
-      }
-    }
-    #pragma unroll_loop_end
-    #pragma unroll_loop_start
-    for ( int i = 4; i < 12; i ++ ) {
+    for ( int i = 0; i < 12; i ++ ) {
       {
         vec3 tap = uLightShadowDisk[i];
         vec2 offset = rotation * tap.xy * radius * texelSizeY;
@@ -8212,6 +8269,10 @@ float lfGetArtisticPointShadow(sampler2D shadowMap, vec2 shadowMapSize, float sh
       }
     }
     #pragma unroll_loop_end
+    if (radius < 1.5) {
+        float contact = lfPointContactShadow(shadowMap, center, texelSizeY, compareDepth, tangent, bitangent);
+        return mix(contact, visibility, smoothstep(0.0, 1.5, radius));
+    }
     return visibility;
     #endif
 }
@@ -8237,7 +8298,6 @@ float lfGetProjectedDistanceShadow(
     float compareDepth = receiverDepth + shadowBias;
     float centerDepth = lfShadowStoredDepth(shadowMap, centerUv);
     float centerVisibility = step(compareDepth, centerDepth);
-    if (sourceScale <= LF_SHADOW_DEPTH_EPSILON) return centerVisibility;
     #if LF_DISTANCE_FILTER_ENABLED == 0
     return centerVisibility;
     #else
@@ -8246,31 +8306,35 @@ float lfGetProjectedDistanceShadow(
     float searchRadius = min(min(LF_SHADOW_MAX_SEARCH_TEXELS, maxFilterRadius),
         max(1.5, sourceScale * 0.10));
     vec2 searchStep = texelSize * searchRadius;
+    mat2 rotation = lfDistanceShadowRotation();
     float blockerDepthSum = 0.0;
     float blockerCount = 0.0;
     if (centerDepth < compareDepth) {
         blockerDepthSum += centerDepth;
         blockerCount += 1.0;
     }
-    lfAccumulateProjectedBlocker(shadowMap, centerUv + vec2(-0.613, 0.354) * searchStep * 0.40,
+    lfAccumulateProjectedBlocker(shadowMap, centerUv + rotation * vec2(-0.613, 0.354) * searchStep * 0.40,
         compareDepth, blockerDepthSum, blockerCount);
-    lfAccumulateProjectedBlocker(shadowMap, centerUv + vec2(0.494, -0.716) * searchStep * 0.72,
+    lfAccumulateProjectedBlocker(shadowMap, centerUv + rotation * vec2(0.494, -0.716) * searchStep * 0.72,
         compareDepth, blockerDepthSum, blockerCount);
-    lfAccumulateProjectedBlocker(shadowMap, centerUv + vec2(0.727, 0.571) * searchStep,
+    lfAccumulateProjectedBlocker(shadowMap, centerUv + rotation * vec2(0.727, 0.571) * searchStep,
         compareDepth, blockerDepthSum, blockerCount);
-    if (blockerCount < 0.5) return 1.0;
-    float blockerDepth = blockerDepthSum / blockerCount;
+    float blockerDepth = blockerDepthSum / max(blockerCount, 1.0);
     float separation = max(receiverDepth - blockerDepth, 0.0);
-    float filterRadius = min(maxFilterRadius, sourceScale * separation);
-    if (filterRadius <= LF_SHADOW_CONTACT_TEXELS) return centerVisibility;
-    vec2 filterStep = texelSize * filterRadius;
-    float shadow = centerVisibility;
-    shadow += texture2DCompare(shadowMap, centerUv + vec2(-0.840, -0.074) * filterStep, compareDepth);
-    shadow += texture2DCompare(shadowMap, centerUv + vec2(-0.696, 0.457) * filterStep, compareDepth);
-    shadow += texture2DCompare(shadowMap, centerUv + vec2(0.962, 0.195) * filterStep, compareDepth);
-    shadow += texture2DCompare(shadowMap, centerUv + vec2(0.295, 0.955) * filterStep, compareDepth);
-    shadow += texture2DCompare(shadowMap, centerUv + vec2(0.342, -0.875) * filterStep, compareDepth);
-    return shadow / 6.0;
+    float filterRadius = blockerCount > 0.5 ? min(maxFilterRadius, sourceScale * separation) : 0.0;
+    float shadow = 0.0;
+    if (filterRadius > LF_SHADOW_CONTACT_TEXELS) {
+        vec2 filterStep = texelSize * filterRadius;
+        shadow = centerVisibility;
+        shadow += texture2DCompare(shadowMap, centerUv + rotation * vec2(-0.840, -0.074) * filterStep, compareDepth);
+        shadow += texture2DCompare(shadowMap, centerUv + rotation * vec2(-0.696, 0.457) * filterStep, compareDepth);
+        shadow += texture2DCompare(shadowMap, centerUv + rotation * vec2(0.962, 0.195) * filterStep, compareDepth);
+        shadow += texture2DCompare(shadowMap, centerUv + rotation * vec2(0.295, 0.955) * filterStep, compareDepth);
+        shadow += texture2DCompare(shadowMap, centerUv + rotation * vec2(0.342, -0.875) * filterStep, compareDepth);
+        if (filterRadius >= 1.5) return shadow / 6.0;
+    }
+    float contact = lfArtisticProjectedCompare(shadowMap, centerUv, shadowMapSize, compareDepth, true);
+    return mix(contact, shadow / 6.0, smoothstep(LF_SHADOW_CONTACT_TEXELS, 1.5, filterRadius));
     #endif
 }
 #endif
@@ -8295,47 +8359,56 @@ float lfGetPointDistanceShadow(
     float compareDepth = receiverDepth + shadowBias;
     float centerDepth = lfShadowStoredDepth(shadowMap, cubeToUV(direction, texelSizeY));
     float centerVisibility = step(compareDepth, centerDepth);
-    if (sourceScale <= LF_SHADOW_DEPTH_EPSILON) return centerVisibility;
     #if LF_DISTANCE_FILTER_ENABLED == 0
     return centerVisibility;
     #else
+    vec3 tangent = lfPointShadowTangent(direction);
+    vec3 bitangent = cross(direction, tangent);
     float maxFilterRadius = min(LF_SHADOW_MAX_FILTER_TEXELS,
         max(2.0, min(shadowMapSize.x, shadowMapSize.y) * 0.03125));
     float searchRadius = min(min(LF_SHADOW_MAX_SEARCH_TEXELS, maxFilterRadius),
         max(1.5, sourceScale * 0.10));
-    float searchStep = texelSizeY * searchRadius;
+    mat2 rotation = lfDistanceShadowRotation();
+    vec3 diskX = tangent * rotation[0].x + bitangent * rotation[0].y;
+    vec3 diskY = tangent * rotation[1].x + bitangent * rotation[1].y;
+    vec3 searchX = diskX * (texelSizeY * searchRadius);
+    vec3 searchY = diskY * (texelSizeY * searchRadius);
     float blockerDepthSum = 0.0;
     float blockerCount = 0.0;
     if (centerDepth < compareDepth) {
         blockerDepthSum += centerDepth;
         blockerCount += 1.0;
     }
-    lfAccumulatePointBlocker(shadowMap, direction + vec3(-1.0, 1.0, 1.0) * searchStep * 0.40,
+    lfAccumulatePointBlocker(shadowMap, direction - 0.2452 * searchX + 0.1416 * searchY,
         texelSizeY, compareDepth, blockerDepthSum, blockerCount);
-    lfAccumulatePointBlocker(shadowMap, direction + vec3(1.0, -1.0, 1.0) * searchStep * 0.72,
+    lfAccumulatePointBlocker(shadowMap, direction + 0.35568 * searchX - 0.51552 * searchY,
         texelSizeY, compareDepth, blockerDepthSum, blockerCount);
-    lfAccumulatePointBlocker(shadowMap, direction + vec3(1.0, 1.0, -1.0) * searchStep,
+    lfAccumulatePointBlocker(shadowMap, direction + 0.727 * searchX + 0.571 * searchY,
         texelSizeY, compareDepth, blockerDepthSum, blockerCount);
-    if (blockerCount < 0.5) return 1.0;
-    float blockerDepth = blockerDepthSum / blockerCount;
+    float blockerDepth = blockerDepthSum / max(blockerCount, 1.0);
     float blockerDistance = shadowCameraNear + blockerDepth * depthRange;
     float denominator = max(blockerDistance * receiverDistance, LF_SHADOW_DEPTH_EPSILON);
     float separationRatio = max(receiverDistance - blockerDistance, 0.0) / denominator;
-    float filterRadius = min(maxFilterRadius, sourceScale * separationRatio);
-    if (filterRadius <= LF_SHADOW_CONTACT_TEXELS) return centerVisibility;
-    float filterStep = texelSizeY * filterRadius;
-    float shadow = centerVisibility;
-    shadow += texture2DCompare(shadowMap, cubeToUV(direction + vec3(-1.0, 1.0, 1.0) * filterStep,
-        texelSizeY), compareDepth);
-    shadow += texture2DCompare(shadowMap, cubeToUV(direction + vec3(1.0, 1.0, 1.0) * filterStep,
-        texelSizeY), compareDepth);
-    shadow += texture2DCompare(shadowMap, cubeToUV(direction + vec3(-1.0, 1.0, -1.0) * filterStep,
-        texelSizeY), compareDepth);
-    shadow += texture2DCompare(shadowMap, cubeToUV(direction + vec3(1.0, -1.0, 1.0) * filterStep,
-        texelSizeY), compareDepth);
-    shadow += texture2DCompare(shadowMap, cubeToUV(direction + vec3(1.0, -1.0, -1.0) * filterStep,
-        texelSizeY), compareDepth);
-    return shadow / 6.0;
+    float filterRadius = blockerCount > 0.5 ? min(maxFilterRadius, sourceScale * separationRatio) : 0.0;
+    float shadow = 0.0;
+    if (filterRadius > LF_SHADOW_CONTACT_TEXELS) {
+        vec3 filterX = diskX * (texelSizeY * filterRadius);
+        vec3 filterY = diskY * (texelSizeY * filterRadius);
+        shadow = centerVisibility;
+        shadow += texture2DCompare(shadowMap, cubeToUV(direction - 0.840 * filterX - 0.074 * filterY,
+            texelSizeY), compareDepth);
+        shadow += texture2DCompare(shadowMap, cubeToUV(direction - 0.696 * filterX + 0.457 * filterY,
+            texelSizeY), compareDepth);
+        shadow += texture2DCompare(shadowMap, cubeToUV(direction + 0.962 * filterX + 0.195 * filterY,
+            texelSizeY), compareDepth);
+        shadow += texture2DCompare(shadowMap, cubeToUV(direction + 0.295 * filterX + 0.955 * filterY,
+            texelSizeY), compareDepth);
+        shadow += texture2DCompare(shadowMap, cubeToUV(direction + 0.342 * filterX - 0.875 * filterY,
+            texelSizeY), compareDepth);
+        if (filterRadius >= 1.5) return shadow / 6.0;
+    }
+    float contact = lfPointContactShadow(shadowMap, direction, texelSizeY, compareDepth, tangent, bitangent);
+    return mix(contact, shadow / 6.0, smoothstep(LF_SHADOW_CONTACT_TEXELS, 1.5, filterRadius));
     #endif
 }
 #endif
@@ -8745,6 +8818,8 @@ float lfGetLightShadow(
             // as SSR enable/intensity must never alter a program recipe/key.
             return Object.freeze({
                 bevel,
+                alphaBevel: bevel && alphaClass !== 'opaque' && enabled(shader, 'BEVEL_ALPHA_ENABLED', true),
+                alphaOutline: !bloom && alphaClass !== 'opaque' && enabled(shader, 'OUTLINE_ALPHA_ENABLED', false),
                 // Glow and Connected Clip are uniform-controlled branches of the
                 // bevel family. Keeping their capability compiled avoids a new
                 // program whenever an artist toggles either control.
@@ -8782,6 +8857,8 @@ float lfGetLightShadow(
         const featureKey = features => [
             features.bloom ? 'bloom' : 'beauty',
             features.bevel ? 'bevel' : 'flat',
+            features.alphaBevel ? 'alpha-bevel' : '',
+            features.alphaOutline ? 'alpha-outline' : '',
             features.fullBlendModes ? 'blend-full' : 'blend-fast',
             features.relief ? 'relief' : 'norelief',
             features.shadows
@@ -8791,10 +8868,12 @@ float lfGetLightShadow(
             features.dynamicLightLoop
                 ? `lights-dynamic${features.lightSlots}`
                 : `lights${features.lightSlots}`
-        ].join('+');
+        ].filter(Boolean).join('+');
         const getStructuralFeatures = features => Object.freeze({
             bloom: features.bloom,
             bevel: features.bevel,
+            alphaBevel: features.alphaBevel,
+            alphaOutline: features.alphaOutline,
             fullBlendModes: features.fullBlendModes,
             relief: features.relief,
             shadows: features.shadows,
@@ -11225,39 +11304,25 @@ void main() {
     // sum of native viewport fill and Environment contribution.
     vec3 ambientLight = uFollowEnvironmentLighting && uSAEnvironmentEnabled == 1
         ? vec3(0.0)
-        : rcSRGBToLinear(max(uAmbientColor, vec3(0.0))) * max(uAmbient, 0.0);
+        : rcSRGBToLinear(max(uAmbientColor, 0.0)) * max(uAmbient, 0.0);
+    float skyWeight = clamp(surfaceNormal.y * 0.5 + 0.5, 0.0, 1.0);
     if (uSAEnvironmentEnabled == 1) {
-        ambientLight +=
-            rcSRGBToLinear(
-                clamp(
-                    uSAEnvironmentHemisphere ? mix(uSAEnvironmentGround, uSAEnvironmentSky,
-                        clamp(surfaceNormal.y * 0.5 + 0.5, 0.0, 1.0)) : uSAEnvironmentAmbient,
-                    vec3(0.0),
-                    vec3(1.0)
-                )
-            ) *
-            max(uSAEnvironmentStrength, 0.0);
+        vec3 fill = uSAEnvironmentHemisphere
+            ? mix(uSAEnvironmentGround, uSAEnvironmentSky, skyWeight) : uSAEnvironmentAmbient;
+        ambientLight += rcSRGBToLinear(clamp(fill, 0.0, 1.0)) * max(uSAEnvironmentStrength, 0.0);
     }
-    vec3 ambientFresnel = rcFresnelRoughness(
-        f0,
-        normalDotView,
-        roughness
-    );
     // An art-directed hemispherical fill gives shaded planes distinct colors.
     // Physical world normals keep the fill stable when an element rotates;
     // the existing ambient/AO path still owns its intensity and occlusion.
-    float skyWeight = clamp(surfaceNormal.y * 0.5 + 0.5, 0.0, 1.0);
     vec3 hemisphereTint = mix(
-        rcSRGBToLinear(clamp(RENDERCRAFT_GROUND_COLOR, vec3(0.0), vec3(1.0))),
-        rcSRGBToLinear(clamp(RENDERCRAFT_SKY_COLOR, vec3(0.0), vec3(1.0))), skyWeight);
+        rcSRGBToLinear(clamp(RENDERCRAFT_GROUND_COLOR, 0.0, 1.0)),
+        rcSRGBToLinear(clamp(RENDERCRAFT_SKY_COLOR, 0.0, 1.0)), skyWeight);
     ambientLight *= mix(vec3(1.0), hemisphereTint, clamp(RENDERCRAFT_HEMISPHERE_STRENGTH, 0.0, 1.0));
     vec3 ambientDiffuse = ambientLight * diffuseAlbedo * ambientOcclusion;
-    vec3 ambientSpecular =
-        ambientLight *
-        ambientFresnel *
-        (0.22 + 0.78 * (1.0 - roughness)) *
-        ambientOcclusion *
-        specularScale;
+    vec3 ambientSpecular = uSAEnvironmentReflectionEnabled
+        ? saEnvironmentSpecular(normal, viewDirection, f0, roughness, normalDotView)
+        : ambientLight * rcFresnelRoughness(f0, normalDotView, roughness) * (0.22 + 0.78 * (1.0 - roughness));
+    ambientSpecular *= ambientOcclusion * specularScale;
 
 #if SA_TEXTURE_ALPHA_TRANSLUCENT == 1
     float translucentMask = 1.0 - smoothstep(
@@ -11490,6 +11555,11 @@ void main() {
             }
             sourceCacheMisses++;
             const blendModule = features.fullBlendModes ? CREATIVE_BLEND : CREATIVE_BLEND_FAST;
+            // These two modules contain flat, alpha-only preprocessor blocks.
+            const selectAlphaEdges = (source, active) => active ? source
+                : source.replace(/\n#if SA_TEXTURE_ALPHA_OPAQUE == 0\n[\s\S]*?\n#endif/g, '');
+            const bevelModule = features.bevel ? selectAlphaEdges(BEVEL, features.alphaBevel) : '';
+            const outlineModule = selectAlphaEdges(OUTLINE, features.alphaOutline);
             const defines = [
                 `#define RC_BEVEL ${features.bevel ? 1 : 0}`,
                 `#define RC_GLOW ${features.glow ? 1 : 0}`,
@@ -11522,7 +11592,7 @@ void main() {
                     LIGHTFLOW_TEXTURE_TILING,
                     NATIVE_PBR_SURFACE_FRAGMENT,
                     COMMON,
-                    features.bevel ? BEVEL : '',
+                    bevelModule,
                     '#ifdef SA_RENDERCRAFT_RIM_GLOW',
                     features.bevel ? blendModule : '',
                     BEAUTY_COLOR,
@@ -11539,12 +11609,13 @@ void main() {
                     features.nativeDetail ? NATIVE_PBR_DETAIL_FRAGMENT : '',
                     COMMON,
                     (features.bevel || features.relief) ? blendModule : '',
-                    features.bevel ? BEVEL : '',
+                    bevelModule,
                     BEAUTY_COLOR,
+                    LIGHTFLOW_ANALYTIC_ENVIRONMENT_FRAGMENT,
                     BEAUTY_LIGHTING,
                     features.relief ? RELIEF : '',
                     TRANSPARENCY,
-                    OUTLINE,
+                    outlineModule,
                     BEAUTY_MAIN
                 ];
             // Keep source modules readable in this file, but hand the driver a
@@ -11656,7 +11727,14 @@ void main() {
         const INLINE_SSR_MODULE_MARKER = '// SA_PBR_INLINE_SSR_MODULE';
         const COLOR_OUTPUT_MARKER = '// SA_PBR_COLOR_OUTPUT';
         const EXTERNAL_COLOR_OUTPUT = `${COLOR_OUTPUT_MARKER}\n    gl_FragColor = vec4(color, EMISSIVE ? 1.0 : texel.a);`;
-        const INLINE_COLOR_OUTPUT = `${COLOR_OUTPUT_MARKER}\n    gl_FragColor = saApplyScreenSpaceReflection(\n        vec4(color, EMISSIVE ? 1.0 : texel.a),\n        vSA_SSRViewNormal,\n        vSA_SSRViewPosition,\n        vSA_SSRClipPosition,\n        roughness,\n        max(uEnvSpecularStrength, uSpecularIntensity)\n    );`;
+        const INLINE_COLOR_OUTPUT = `${COLOR_OUTPUT_MARKER}
+    float ssrWeight = uSAEnvironmentReflectionEnabled && uEnvSpecularStrength > 0.0
+        ? saEnvironmentSsrWeight(roughness) : 1.0;
+    gl_FragColor = saApplyScreenSpaceReflection(
+        vec4(color, EMISSIVE ? 1.0 : texel.a),
+        vSA_SSRViewNormal, vSA_SSRViewPosition, vSA_SSRClipPosition,
+        roughness, max(uEnvSpecularStrength, uSpecularIntensity) * ssrWeight
+    );`;
 
         const getUniformValue = (shader, name, fallback) => {
             const uniform = shader?.uniforms?.[name];
@@ -16547,6 +16625,7 @@ uniform float uCineShadowRolloff;
 uniform bool uSAEnvironmentHemisphere;
 uniform vec3 uSAEnvironmentSky;
 uniform vec3 uSAEnvironmentGround;
+${LIGHTFLOW_ANALYTIC_ENVIRONMENT_FRAGMENT}
 
 uniform bool uAOEnabled;
 uniform float uAOStrength;
@@ -16796,19 +16875,18 @@ vec3 applyOutputMapping(vec3 color) {
         // compressed HDR excess converges gradually toward display white.
         color *= max(uExposure, 0.001);
         float peak = max(color.r, max(color.g, color.b));
-        // A smooth toe recovers texture detail in low light. Zero remains zero,
-        // and scaling every channel together avoids a gray pedestal in shadows.
+        // Limit recovery at the toe to a proportional gain so near-black
+        // detail stays dark and the input channel ratios are preserved.
         const float toeEnd = 0.18;
+        const float toeGain = 0.35;
         float toeWeight = 1.0 - clamp(peak / toeEnd, 0.0, 1.0);
-        float toePeak = mix(peak, sqrt(peak * toeEnd),
-            clamp(uCineShadowRolloff, 0.0, 1.0) * toeWeight * toeWeight);
-        color *= peak > 0.0000001 ? toePeak / peak : 1.0;
-        peak = toePeak;
-        // Trailer material/light probes: preserve diffuse color longer, then
-        // converge compressed HDR highlights toward display white.
-        // Midtones/shadows and the other output operators keep their contracts.
-        const float shoulder = 0.85;
-        const float highlightDesaturation = 2.0;
+        float recovery = 1.0 + toeGain * clamp(uCineShadowRolloff, 0.0, 1.0) * toeWeight * toeWeight;
+        color *= recovery;
+        peak *= recovery;
+        // Start rolling off bright surfaces earlier. Reserve the stronger
+        // shift toward neutral white for the highest HDR peaks.
+        const float shoulder = 0.74;
+        const float highlightDesaturation = 0.65;
         if (peak > shoulder) {
             float headroom = 1.0 - shoulder;
             float mappedPeak = 1.0 - headroom * headroom /
@@ -17450,10 +17528,11 @@ void main() {
             max(uSAEnvironmentStrength, 0.0);
     }
 
-    vec3 F_ambient = F_SchlickRoughness(F0, NdotV, roughness);
     vec3 ambientDiffuse = ambientLight * baseColor * (1.0 - metallic) * ambientOcclusion;
-    vec3 ambientSpecular = ambientLight * F_ambient * max(uEnvSpecularStrength, 0.0) * (0.25 + 0.75 * (1.0 - roughness));
-    ambientSpecular *= mix(vec3(1.0), baseColor, metallic) * ambientOcclusion;
+    vec3 ambientSpecular = uSAEnvironmentReflectionEnabled
+        ? saEnvironmentSpecular(N, V, F0, roughness, NdotV)
+        : ambientLight * F_SchlickRoughness(F0, NdotV, roughness) * (0.25 + 0.75 * (1.0 - roughness));
+    ambientSpecular *= max(uEnvSpecularStrength, 0.0) * ambientOcclusion;
 
     vec3 specularLighting = ambientSpecular;
     specularLighting += directSpecular * specAO;
@@ -17651,6 +17730,7 @@ void main() {
                     "uLightShadowIndex": { type: "intv", value: Array(16).fill(-1), expose: false },
                     "uLightShadowSourceScale": { type: "floatv", value: Array(16).fill(0.0), expose: false },
                     "uLightShadowDisk": createMaterialLightingUniforms().uLightShadowDisk,
+                    "SA_SHADOW_SAMPLE": createMaterialLightingUniforms().SA_SHADOW_SAMPLE,
 
                     // Ambient
                     "uAmbient": { type: "float", value: 0.3, expose: true, min: 0.0, max: 1.0, step: 0.05, allow_higher: true, allow_lower: false },
@@ -17918,6 +17998,7 @@ void main() {
                     uniforms.uLightPointShadowLightIndex = lightingUniforms.uLightPointShadowLightIndex;
                     uniforms["uLightShadowSourceScale"] = lightingUniforms.uLightShadowSourceScale;
                     uniforms["uLightShadowDisk"] = lightingUniforms.uLightShadowDisk;
+                    uniforms.SA_SHADOW_SAMPLE = lightingUniforms.SA_SHADOW_SAMPLE;
                     uniforms["uShadowStrength"] = lightingUniforms.uShadowStrength;
                     uniforms["uShadowFloor"] = lightingUniforms.uShadowFloor;
 
@@ -20401,7 +20482,6 @@ void main() {
                     }
 
                     void main() {
-                        vec4 sourceColor = texture2D(uSA_SSRScene, vUv);
                         float reflectionMask = texture2D(tEmission, vUv).a;
                         float depth = texture2D(uSA_SSRDepth, vUv).x;
                         if (
@@ -20412,6 +20492,7 @@ void main() {
                             gl_FragColor = vec4(0.0);
                             return;
                         }
+                        vec4 sourceColor = texture2D(uSA_SSRScene, vUv);
                         vec4 surface = texture2D(tSurface, vUv);
                         vec3 viewNormal = surface.xyz * 2.0 - 1.0;
                         float normalLengthSquared = dot(viewNormal, viewNormal);
@@ -23201,9 +23282,13 @@ void main() {
                         // in linear space, then restore that coverage for presentation.
                         vec3 straightColor = color.a > 0.000001
                             ? color.rgb / color.a : vec3(0.0);
-                        vec3 shadedColor = aoEncodeDisplay(
-                            aoDecodeDisplay(straightColor) * contactAO
-                        );
+                        vec3 linearColor = aoDecodeDisplay(straightColor);
+                        // Without a direct-light buffer, luminance can only
+                        // estimate where post AO would muddy a highlight.
+                        float highlight = smoothstep(0.22, 0.82,
+                            dot(linearColor, vec3(0.2126, 0.7152, 0.0722)));
+                        contactAO = mix(contactAO, 1.0, highlight * 0.75);
+                        vec3 shadedColor = aoEncodeDisplay(linearColor * contactAO);
                         gl_FragColor = vec4(shadedColor * color.a, color.a);
                     }
                 `
@@ -33117,6 +33202,9 @@ void main() {
 
         bindSharedFrameUniforms(material) {
             if (!material?.uniforms) return;
+            if (material.uniforms.SA_SHADOW_SAMPLE) {
+                material.uniforms.SA_SHADOW_SAMPLE = lightflowShadowSampleUniform;
+            }
             [
                 'uTime', 'SHADE', 'LIGHTSIDE', 'LIGHTCOLOR', 'uAmbientColor', 'uAmbient',
                 'SA_BEVEL_ZOOM_SCALE', 'SA_NATIVE_BRIGHTNESS'
@@ -33130,6 +33218,17 @@ void main() {
         bindSharedLightUniforms(material) {
             if (!material?.uniforms) return;
             if (!this.sharedLightUniforms) this.sharedLightUniforms = {};
+            if (material.fragmentShader?.includes('uniform bool uSAEnvironmentReflectionEnabled;')) {
+                this.sharedEnvironmentReflectionUniforms ||= {
+                    uSAEnvironmentReflectionEnabled: { value: false },
+                    uSAEnvironmentReflectionZenith: { value: new THREE.Vector3() },
+                    uSAEnvironmentReflectionHorizon: { value: new THREE.Vector3() },
+                    uSAEnvironmentReflectionGround: { value: new THREE.Vector3() },
+                    uSAEnvironmentReflectionKeyDirection: { value: new THREE.Vector3(0, 1, 0) },
+                    uSAEnvironmentReflectionKeyColor: { value: new THREE.Vector3() }
+                };
+                Object.assign(material.uniforms, this.sharedEnvironmentReflectionUniforms);
+            }
             // A shared light group can be updated through any shader family.
             // Seed these on every member so a Classic/PBR first member cannot
             // leave Rendercraft-only lighting inputs at their default values.
@@ -40730,6 +40829,37 @@ void main() {
             return { success, durationMs };
         },
 
+        getRepeatedCubeWarmupKey(element, mesh, shader, suffix) {
+            const geometry = mesh.geometry;
+            // Restrict this to native, non-planar cuboids. Linked meshes,
+            // morphs and custom depth hooks still go through exact preparation.
+            if (
+                typeof Cube === 'undefined' || element.constructor !== Cube ||
+                mesh.constructor !== THREE.Mesh || !geometry.isBufferGeometry ||
+                geometry.getAttribute('position')?.count !== 24 || geometry.index?.count !== 36 ||
+                Object.keys(geometry.morphAttributes || {}).length ||
+                mesh.userData?.lightflowSourceElement ||
+                mesh.customDepthMaterial && !mesh.customDepthMaterial.isMeshDepthMaterial ||
+                mesh.customDistanceMaterial && !mesh.customDistanceMaterial.isMeshDistanceMaterial ||
+                !element.from?.every((value, axis) => Math.abs(value - element.to[axis]) > 1e-6) ||
+                Object.keys(MaterialManager.getCubeFaceMaterialInstanceOverrides(element)).length
+            ) return null;
+            const textures = MATERIAL_SLOT_FACE_ORDER.map(name => element.faces?.[name]?.texture);
+            if (textures.some(texture => typeof texture !== 'string' || !texture)) return null;
+            const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+            return JSON.stringify([
+                this.getMaterialPoolObjectId(shader), suffix,
+                Array.isArray(mesh.material), mesh.userData?.saOriginalMaterialSlotCount,
+                element[ELEMENT_CAST_SHADOW_PROP] !== false, mesh.castShadow, mesh.receiveShadow,
+                textures, materials.map(material => this.getMaterialPoolObjectId(material)),
+                this.getNativeCubeUvAttributeSignature(element),
+                geometry.groups.map(({start, count, materialIndex}) => [start, count, materialIndex]),
+                Object.entries(geometry.attributes).map(([name, attribute]) =>
+                    [name, attribute.itemSize, attribute.count, attribute.normalized])
+                    .sort(([left], [right]) => left.localeCompare(right))
+            ]);
+        },
+
         createIncrementalSceneWarmupPlan(
             preview = this.getShaderWarmupPreview(),
             options = {}
@@ -41044,7 +41174,10 @@ void main() {
             ).trim();
             let exactTargetWarmup = true;
             let syntheticGlobalTargetCount = 0;
+            const targetPreparation = { candidates: 0, prepared: 0, repeated: 0, durationMs: 0 };
             if (targetRenderMode) {
+                const targetStartedAt = performance.now();
+                const preparedCubeKeys = new Set();
                 const globalTargetMaterial = MaterialManager.getRenderMaterial(
                     MaterialManager.materials?.[targetRenderMode] || targetRenderMode
                 );
@@ -41056,6 +41189,12 @@ void main() {
                     clearMaterialOverrides = false
                 ) => {
                     if (!sourceMesh?.geometry || !sourceMesh?.material || !targetMaterial) return false;
+                    targetPreparation.candidates++;
+                    const cubeKey = this.getRepeatedCubeWarmupKey(element, sourceMesh, targetMaterial, suffix);
+                    if (cubeKey !== null && preparedCubeKeys.has(cubeKey)) {
+                        targetPreparation.repeated++;
+                        return false;
+                    }
                     const targetMesh = cloneWarmupObjectShell(sourceMesh);
                     // applyToMesh may add/update Lightflow UV/autotile attributes.
                     // Never let a warm-up mutate the geometry used by the live viewport.
@@ -41124,6 +41263,8 @@ void main() {
                         addRenderUnit(targetMesh, material, suffix);
                     });
                     addShadowUnitsForObject(targetMesh);
+                    targetPreparation.prepared++;
+                    if (cubeKey !== null) preparedCubeKeys.add(cubeKey);
                     return true;
                 };
 
@@ -41158,6 +41299,7 @@ void main() {
                         )) syntheticGlobalTargetCount += 1;
                     }
                 });
+                targetPreparation.durationMs = performance.now() - targetStartedAt;
                 if (!exactTargetWarmup) {
                     while (warmupGroup.children.length) {
                         warmupGroup.remove(warmupGroup.children[warmupGroup.children.length - 1]);
@@ -41306,6 +41448,7 @@ void main() {
                 shadowRenderTarget,
                 auxiliaryUnits,
                 targetRenderMode,
+                targetPreparation,
                 syntheticGlobalTargetCount,
                 batchSize: hasRendercraft ? 1 : 4,
                 createIsolatedCompilationScene,
@@ -41689,6 +41832,17 @@ void main() {
                 return currentGeneration !== contextGenerationAtStart;
             };
             const hasRenderTargetOverride = Object.prototype.hasOwnProperty.call(options, 'renderTarget');
+            const compileTiming = options.compileTiming;
+            const now = () => typeof performance !== 'undefined' ? performance.now() : Date.now();
+            const submitCompile = () => {
+                if (!compileTiming) return renderer.compile(scene, camera);
+                const startedAt = now();
+                try {
+                    return renderer.compile(scene, camera);
+                } finally {
+                    compileTiming.submitMs += Math.max(0, now() - startedAt);
+                }
+            };
             const compileWithRenderTarget = callback => {
                 if (!hasRenderTargetOverride || typeof renderer.setRenderTarget !== 'function') {
                     return callback();
@@ -41710,7 +41864,7 @@ void main() {
                 // without throwing when debug.checkShaderErrors is disabled; validate
                 // LINK_STATUS explicitly before this warm-up unit may be considered ready.
                 try {
-                    compileWithRenderTarget(() => renderer.compile(scene, camera));
+                    compileWithRenderTarget(submitCompile);
                     if (!gl || typeof gl.getProgramParameter !== 'function') return Promise.resolve(false);
                     // Three r129 recreates WebGLProperties/WebGLPrograms during
                     // webglcontextrestored. Never validate a program handle that
@@ -41722,7 +41876,7 @@ void main() {
                     if (validation.failure?.reason === 'stale_program_handle') {
                         const recovered = this.recoverStaleRendererScenePrograms(renderer, scene);
                         if (recovered > 0 && !gl?.isContextLost?.()) {
-                            compileWithRenderTarget(() => renderer.compile(scene, camera));
+                            compileWithRenderTarget(submitCompile);
                             validation = this.validateRendererSceneProgramLinks(renderer, scene);
                         }
                     }
@@ -41768,7 +41922,6 @@ void main() {
                 Math.min(4, Math.floor(Number(options.maxStaleProgramRetries) || 2))
             );
 
-            const now = () => typeof performance !== 'undefined' ? performance.now() : Date.now();
             const activeTask = task || this.shaderWarmupCurrentTask || { type: 'parallel' };
             const pendingRegistry = this.shaderWarmupPendingProgramRefs instanceof Map
                 ? this.shaderWarmupPendingProgramRefs
@@ -41778,6 +41931,7 @@ void main() {
                 : null;
             let registeredPendingProgram = null;
             let pendingProgramWait = null;
+            let pendingProgramStartedAt = null;
             const describePendingProgramWait = program => {
                 if (!programWaitTimings || !program) return null;
                 let cacheKey = '';
@@ -41799,6 +41953,10 @@ void main() {
                 };
             };
             const finishPendingProgramWait = status => {
+                if (pendingProgramStartedAt !== null) {
+                    compileTiming.khrWaitMs += Math.max(0, now() - pendingProgramStartedAt);
+                    pendingProgramStartedAt = null;
+                }
                 if (!pendingProgramWait || !programWaitTimings) return;
                 programWaitTimings.push({
                     cacheKeyHash: pendingProgramWait.cacheKeyHash,
@@ -41822,6 +41980,7 @@ void main() {
                 unregisterPendingProgram();
                 pendingRegistry.set(program, (Number(pendingRegistry.get(program)) || 0) + 1);
                 registeredPendingProgram = program;
+                if (compileTiming) pendingProgramStartedAt = now();
                 pendingProgramWait = describePendingProgramWait(program);
                 stats.pendingPrograms = pendingRegistry.size;
                 stats.peakPendingPrograms = Math.max(stats.peakPendingPrograms, pendingRegistry.size);
@@ -42016,7 +42175,7 @@ void main() {
                             return previousGetProgramParameter.call(this, program, pname);
                         };
                         if (renderer.debug) renderer.debug.checkShaderErrors = false;
-                        compileWithRenderTarget(() => renderer.compile(scene, camera));
+                        compileWithRenderTarget(submitCompile);
                     } catch (error) {
                         if (error !== sentinel) {
                             finish(false, error);
@@ -42212,7 +42371,10 @@ void main() {
                 (typeof performance !== 'undefined' ? performance.now() : Date.now()) - planStartedAt
             );
             this.shaderWarmupParallelStats.lastPlanBuildMs = planBuildMs;
-            if (task) task.planBuildMs = planBuildMs;
+            if (task) {
+                task.planBuildMs = planBuildMs;
+                task.targetPreparation = plan?.targetPreparation || null;
+            }
             if (!plan) {
                 // Do not silently fall back to a whole live-scene renderer.compile().
                 // That path is exactly what produced multi-second UI stalls in r129.
@@ -42919,6 +43081,7 @@ void main() {
                         const fragmentChars = Number(descriptorMetaForCompile.fragmentLength) || 0;
                         const cooperativeOptions = {
                             preview,
+                            compileTiming: { submitMs: 0, khrWaitMs: 0 },
                             submissionQueue,
                             abortSignal,
                             allowExternalPreview: options.allowExternalPreview === true,
@@ -43003,6 +43166,8 @@ void main() {
                                 definesHash: descriptorMeta.definesHash || '',
                                 customProgramKeyHash: descriptorMeta.customProgramKeyHash || '',
                                 durationMs: Math.max(0, unitFinishedAt - unitStartedAt),
+                                compileSubmitMs: cooperativeOptions.compileTiming.submitMs,
+                                khrWaitMs: cooperativeOptions.compileTiming.khrWaitMs,
                                 realizationMs: unitRealizationMs,
                                 programDelta: unitProgramsBefore !== null && unitProgramsAfter !== null
                                     ? Math.max(0, unitProgramsAfter - unitProgramsBefore)
@@ -43511,14 +43676,11 @@ void main() {
                 lightweightPrimeCollection: true,
                 resourceContract
             });
-            const units = this.coalesceAuxiliaryPrimeUnits(collectedUnits);
             stats.auxiliaryPrimes += 1;
-            stats.lastAuxiliaryPrimeUnitCount = units.length;
-            stats.lastAuxiliaryPrimeProgramFamilyCount = units.reduce(
-                (total, unit) => total + Math.max(1, Number(unit.programFamilyCount) || 1),
-                0
-            );
-            stats.lastAuxiliaryPrimeMaterialCount = units.reduce(
+            const collectedContextKeys = collectedUnits.map(unit => this.getAuxiliaryPrimeContextKey(unit));
+            stats.lastAuxiliaryPrimeUnitCount = new Set(collectedContextKeys).size;
+            stats.lastAuxiliaryPrimeProgramFamilyCount = collectedUnits.length;
+            stats.lastAuxiliaryPrimeMaterialCount = collectedUnits.reduce(
                 (total, unit) => total + Math.max(1, Number(unit.familySize) || 1),
                 0
             );
@@ -43532,9 +43694,9 @@ void main() {
             const exactPrimeSignature = this.hashMaterialShader([
                 resourceContract.key,
                 collectedUnits
-                    .map(unit => [
+                    .map((unit, index) => [
                         unit.familyKey || this.getAuxiliaryWarmupFamilyKey(unit),
-                        this.getAuxiliaryPrimeContextKey(unit),
+                        collectedContextKeys[index],
                         ...(unit.materials || [unit.material])
                             .filter(Boolean)
                             .map(material => this.getMaterialPoolObjectId(material))
@@ -43560,6 +43722,8 @@ void main() {
                 return Promise.resolve(true);
             }
 
+            // A cache hit needs no cloned lights or reparented compile anchors.
+            const units = this.coalesceAuxiliaryPrimeUnits(collectedUnits);
             if (!units.length) {
                 stats.lastAuxiliaryPrimeMs = 0;
                 stats.lastAuxiliaryPrimeProgramDelta = 0;
@@ -43598,6 +43762,7 @@ void main() {
                     const unit = units[unitIndex];
                     const compileOptions = {
                         preview,
+                        compileTiming: { submitMs: 0, khrWaitMs: 0 },
                         maxWallTimeMs: 45000,
                         ...this.getShaderWarmupSourceBounds(unit.materials || [unit.material]),
                         programWaitTimings: []
@@ -43671,6 +43836,8 @@ void main() {
                         familySize: Number(unit.familySize) || 1,
                         programFamilyCount: Number(unit.programFamilyCount) || 1,
                         durationMs: Math.max(0, unitFinishedAt - unitStartedAt),
+                        compileSubmitMs: compileOptions.compileTiming.submitMs,
+                        khrWaitMs: compileOptions.compileTiming.khrWaitMs,
                         realizationMs: realization.durationMs,
                         programDelta: unitProgramsBefore !== null && unitProgramsAfter !== null
                             ? Math.max(0, unitProgramsAfter - unitProgramsBefore)
@@ -44567,6 +44734,7 @@ void main() {
                             concurrency: Number(parallelStats.lastConcurrency) || 0,
                             peakPendingPrograms: Number(parallelStats.lastTaskPeakPendingPrograms) || 0,
                             planBuildMs: Number(task.planBuildMs) || 0,
+                            targetPreparation: task.targetPreparation ? { ...task.targetPreparation } : null,
                             schedulerWallMs: Number(parallelStats.lastSchedulerWallMs) || 0,
                             liveScenePrimeMs: Number(task.liveScenePrimeMs) || 0,
                             liveScenePrimeProgramDelta: Number(task.liveScenePrimeProgramDelta) || 0,
@@ -48342,7 +48510,9 @@ ${stochasticAlpha
 
             this.updateWorldNormalMatrices();
             this.updateLightUniforms(cause, {
-                render: !this.lightTopologyTransactionActive
+                // A filter-family rebuild queues one exact scene barrier below.
+                // Its light packet sync must not queue a second topology compile.
+                render: !this.lightTopologyTransactionActive && !this.shadowFilterFamilyRefreshActive
             });
             MinecraftPromotionalSilhouetteManager.invalidateGroups();
 
@@ -48355,7 +48525,7 @@ ${stochasticAlpha
             Blockbench.dispatchEvent('shader_update_complete', eventData);
             if (
                 options.scheduleWarmup !== false &&
-                this.sceneUpdateRequiresShaderWarmup(cause, options.causes) &&
+                (this.shadowFilterFamilyRefreshActive || this.sceneUpdateRequiresShaderWarmup(cause, options.causes)) &&
                 !this.lightTopologyTransactionActive
             ) {
                 // Scene mutations must keep the viewport behind the barrier until
@@ -48541,14 +48711,16 @@ ${stochasticAlpha
                     this.hashMaterialShader(renderShader.fragment), lightStructure].join('|');
             }
             if (RendercraftProgramCompiler.isRendercraft(renderShader)) {
+                // A single instance can serve opaque and alpha-textured faces.
+                const alphaSource = { alphaClass: 'cutout' };
                 const beautyFeatures = RendercraftProgramCompiler.resolveFeatures(
                     renderShader,
-                    {},
+                    alphaSource,
                     'beauty'
                 );
                 const bloomFeatures = RendercraftProgramCompiler.resolveFeatures(
                     renderShader,
-                    {},
+                    alphaSource,
                     'studio_bloom'
                 );
                 return [
@@ -48599,7 +48771,7 @@ ${stochasticAlpha
                 return residentCount > 0;
             }
             if (!instance || !RendercraftProgramCompiler.isRendercraft(renderShader)) return false;
-            const required = RendercraftProgramCompiler.resolveFeatures(renderShader, {}, 'beauty');
+            const required = RendercraftProgramCompiler.resolveFeatures(renderShader, { alphaClass: 'cutout' }, 'beauty');
             const requiresLights = !!renderShader.enableShadows &&
                 renderShader?.uniforms?.AFFECTED_BY_LIGHT?.value !== false;
             let residentCount = 0;
@@ -48612,6 +48784,9 @@ ${stochasticAlpha
                     const features = material?.userData?.lightflowProgramRecipe?.recipe?.features;
                     if (!features) return false;
                     if (required.bevel && features.bevel !== true) return false;
+                    const opaque = material.fragmentShader?.includes('#define SA_TEXTURE_ALPHA_OPAQUE 1');
+                    if (!opaque && required.alphaBevel && features.alphaBevel !== true) return false;
+                    if (!opaque && required.alphaOutline && features.alphaOutline !== true) return false;
                     if (required.fullBlendModes && features.fullBlendModes !== true) return false;
                     if (required.relief && features.relief !== true) return false;
                     if (required.shadows && features.shadows !== true) return false;
@@ -49574,6 +49749,32 @@ ${stochasticAlpha
             const updatedUniformGroups = scratch.updatedUniformGroups;
             const updatedLinearColorUniforms = scratch.updatedLinearColorUniforms;
             const environmentState = window.LightflowEnvironment?.getLightingState?.();
+            const reflection = this.sharedEnvironmentReflectionUniforms;
+            if (reflection) {
+                const intensity = Math.max(0, Number(environmentState?.environmentIntensity) || 0);
+                const enabled = !!environmentState?.enabled && intensity > 0;
+                reflection.uSAEnvironmentReflectionEnabled.value = enabled;
+                if (enabled) {
+                    const linearChannel = channel => {
+                        const srgb = Math.max(0, Number(channel) || 0);
+                        return srgb <= 0.04045 ? srgb / 12.92 : Math.pow((srgb + 0.055) / 1.055, 2.4);
+                    };
+                    const copy = (uniform, channels, scale) => {
+                        uniform.value.set(
+                            linearChannel(channels?.[0]),
+                            linearChannel(channels?.[1]),
+                            linearChannel(channels?.[2])
+                        ).multiplyScalar(scale);
+                    };
+                    copy(reflection.uSAEnvironmentReflectionZenith, environmentState.zenithColor, intensity);
+                    copy(reflection.uSAEnvironmentReflectionHorizon, environmentState.horizonColor, intensity);
+                    copy(reflection.uSAEnvironmentReflectionGround, environmentState.groundColor, intensity);
+                    reflection.uSAEnvironmentReflectionKeyDirection.value
+                        .fromArray(environmentState.celestialDirection || [0, 1, 0]).normalize();
+                    const keyStrength = Math.max(0, Number(environmentState.sunIntensity) || 0);
+                    copy(reflection.uSAEnvironmentReflectionKeyColor, environmentState.sunColor, intensity * keyStrength);
+                }
+            }
             this.getLightUniformMaterials().forEach(mat => {
                 if (!mat || !mat.uniforms) return;
 
@@ -52433,6 +52634,152 @@ ${stochasticAlpha
         });
     }
 
+    function registerViewportGamma() {
+        const key = 'lightflow_viewport_gamma';
+        const min = 0.7, max = 1.4;
+        const normalize = value => {
+            const number = Number(value);
+            return value == null || !Number.isFinite(number) || number <= 0
+                ? 1 : Math.max(min, Math.min(max, number));
+        };
+        let saved = normalize(localStorage.getItem(key));
+        let dialog;
+        let svg, style, channels;
+        const setPreview = value => {
+            const gamma = normalize(value);
+            if (gamma === 1) {
+                if (style) style.textContent = '';
+                return;
+            }
+            if (!svg) {
+                const ns = 'http://www.w3.org/2000/svg';
+                svg = document.createElementNS(ns, 'svg');
+                svg.setAttribute('width', '0');
+                svg.setAttribute('height', '0');
+                svg.setAttribute('aria-hidden', 'true');
+                svg.style.position = 'absolute';
+                const filter = document.createElementNS(ns, 'filter');
+                filter.id = 'sa_viewport_gamma_filter';
+                filter.setAttribute('color-interpolation-filters', 'sRGB');
+                const transfer = document.createElementNS(ns, 'feComponentTransfer');
+                channels = ['R', 'G', 'B'].map(channel => {
+                    const element = document.createElementNS(ns, 'feFunc' + channel);
+                    element.setAttribute('type', 'gamma');
+                    transfer.append(element);
+                    return element;
+                });
+                filter.append(transfer);
+                svg.append(filter);
+                document.body.append(svg);
+                style = document.createElement('style');
+                document.head.append(style);
+            }
+            for (const channel of channels) channel.setAttribute('exponent', String(1 / gamma));
+            if (!style.textContent) {
+                // This affects DOM presentation only. Readbacks, Studio and video
+                // encoding continue using the unfiltered canvas pixels.
+                style.textContent = '.preview > canvas, #sa_viewport_gamma_dialog .sa-gamma-pattern { filter: url(#sa_viewport_gamma_filter); }';
+            }
+        };
+        const chartStyle = Blockbench.addCSS(`
+            #sa_viewport_gamma_dialog .sa-gamma-chart {
+                display: grid; gap: 12px; padding-bottom: 16px;
+                margin-bottom: 14px; border-bottom: 1px solid var(--color-border);
+            }
+            #sa_viewport_gamma_dialog .sa-gamma-title {
+                display: block; margin-bottom: 4px; font-size: 13px;
+            }
+            #sa_viewport_gamma_dialog .sa-gamma-pattern {
+                height: 30px; border: 1px solid var(--color-border); border-radius: 4px;
+            }
+            #sa_viewport_gamma_dialog .sa-gamma-gray {
+                background: repeating-conic-gradient(#000 0 25%, #fff 0 50%) 0 0 / 4px 4px;
+            }
+            #sa_viewport_gamma_dialog .sa-gamma-gray::after {
+                content: ''; display: block; width: 50%; height: 100%; margin: auto; background: #bcbcbc;
+            }
+            #sa_viewport_gamma_dialog .sa-gamma-hint {
+                margin: 5px 0 0; color: var(--color-subtle_text); font-size: 12px; line-height: 1.35;
+            }
+        `);
+        const showChart = form => {
+            const chart = document.createElement('div');
+            chart.className = 'sa-gamma-chart';
+            // Endpoint references are shared by both display and chart. Codes
+            // 188 and a 50% black/white checker have equal ideal sRGB luminance.
+            for (const [tone, base, subtle, strong] of [
+                ['black', '#000', '#080808', '#151515'],
+                ['gray'],
+                ['white', '#fff', '#f7f7f7', '#eaeaea']
+            ]) {
+                const row = document.createElement('div');
+                const title = document.createElement('strong');
+                title.className = 'sa-gamma-title';
+                title.textContent = tl('shader_architect.viewport_gamma.' + tone);
+                const pattern = document.createElement('div');
+                pattern.className = 'sa-gamma-pattern sa-gamma-' + tone;
+                pattern.setAttribute('aria-hidden', 'true');
+                if (base) {
+                    pattern.style.background = `linear-gradient(90deg, ${base} 0 20%, ${subtle} 20% 38%, ${base} 38% 62%, ${strong} 62% 80%, ${base} 80%)`;
+                }
+                const hint = document.createElement('p');
+                hint.className = 'sa-gamma-hint';
+                hint.textContent = tl('shader_architect.viewport_gamma.' + tone + '.desc');
+                row.append(title, pattern, hint);
+                chart.append(row);
+            }
+            form.prepend(chart);
+        };
+        setPreview(saved);
+        const action = new Action('sa_viewport_gamma', {
+            name: tl('shader_architect.viewport_gamma.title'),
+            description: tl('shader_architect.viewport_gamma.desc'),
+            icon: 'contrast',
+            category: 'view',
+            click() {
+                if (dialog) return;
+                const close = () => {
+                    dialog?.delete();
+                    dialog = null;
+                };
+                dialog = new Dialog('sa_viewport_gamma_dialog', {
+                    title: 'shader_architect.viewport_gamma.title',
+                    width: 420,
+                    form: (window.LightManagerUI?.prepareForm || (form => form))({
+                        gamma: {
+                            label: 'shader_architect.viewport_gamma.label',
+                            description: 'shader_architect.viewport_gamma.desc',
+                            type: FormElement.types?.combo_slider ? 'combo_slider' : 'range',
+                            value: saved, min, max, step: 0.01, resettable: true, reset_value: 1,
+                            marks: [{value: 1, label: '1.00'}]
+                        }
+                    }),
+                    onFormChange(result) { setPreview(result.gamma); },
+                    onCancel() {
+                        setPreview(saved);
+                        close();
+                    },
+                    onConfirm(result) {
+                        saved = normalize(result.gamma);
+                        localStorage.setItem(key, String(saved));
+                        setPreview(saved);
+                        close();
+                    }
+                });
+                dialog.show();
+                const gammaBar = dialog.form?.form_data?.gamma?.bar;
+                if (gammaBar?.parentElement) showChart(gammaBar.parentElement);
+            }
+        });
+        MenuBar.addAction(action, 'view');
+        deletables.push(action, {delete() {
+            dialog?.delete();
+            style?.remove();
+            svg?.remove();
+            chartStyle?.delete();
+        }});
+    }
+
     function publishWindowBinding(name, value) {
         if (!publishedWindowBindings.has(name)) {
             publishedWindowBindings.set(name, {
@@ -53205,6 +53552,16 @@ ${stochasticAlpha
                 'ShaderArchitectSetStudioRenderSampleScale',
                 (value, frameScale, sampleIndex) => ShaderEngine.setStudioRenderSampleScale(value, frameScale, sampleIndex)
             );
+            publishWindowBinding('ShaderArchitectWithStudioShadowSample', (x, y, sampleIndex, draw) => {
+                const sample = lightflowShadowSampleUniform.value;
+                const { x: previousX, y: previousY, z: previousIndex } = sample;
+                sample.set(x, y, sampleIndex);
+                try {
+                    return draw();
+                } finally {
+                    sample.set(previousX, previousY, previousIndex);
+                }
+            });
             publishWindowBinding(
                 'ShaderArchitectGetStudioRenderCapabilities',
                 () => ShaderEngine.getStudioRenderCapabilities()
@@ -53834,6 +54191,7 @@ ${stochasticAlpha
             });
             MenuBar.addAction(openStudioAction, 'view');
             deletables.push(openStudioAction);
+            registerViewportGamma();
 
             const openPerformanceAction = new Action('sa_open_performance', {
                 name: tl('shader_architect.menu.performance'),

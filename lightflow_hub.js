@@ -1567,6 +1567,9 @@
         return {kind: 'github', value: assertPluginSourceFilename(module.id, rawUrl(currentRef, module.file))};
     }
 
+    function needsPluginWrite(view, requestedIds, force) {
+        return !view.installed || view.updateAvailable || view.sourceMismatch || (force && requestedIds.includes(view.id));
+    }
 
     async function installModules(requestedIds, preferences, options = {}) {
         const snapshot = {...preferences};
@@ -1574,7 +1577,7 @@
         const plan = dependencyOrder(manifestState.modules, requestedIds).map(module => {
             if (!isCompatible(module)) throw new Error(`${module.title}: ${tr('incompatible')} (Blockbench ${module.min_blockbench}+)`);
             const view = moduleView(module, snapshot);
-            return {module, view, source: moduleSource(module, snapshot), needsWrite: !view.installed || view.updateAvailable || view.sourceMismatch || options.force};
+            return {module, view, source: moduleSource(module, snapshot), needsWrite: needsPluginWrite(view, requestedIds, options.force)};
         });
         const writes = plan.filter(item => item.needsWrite);
         // Verify the entire batch before unloading any installed tool.
@@ -2291,7 +2294,7 @@
                     if (this.busy || !this.sourceReady) return;
                     if (!options.sourceApproved) {
                         const plan = dependencyOrder(manifestState.modules, ids).map(module => moduleView(module, this.preferences));
-                        const replacements = plan.filter(module => module.installed && (module.updateAvailable || module.sourceMismatch || options.force));
+                        const replacements = plan.filter(module => module.installed && needsPluginWrite(module, ids, options.force));
                         if (replacements.length && !await confirmBox(tr('confirmUpdateMany', {count: replacements.length}), tr('update'))) return;
                         options = {...options, sourceApproved: true};
                     }

@@ -4222,6 +4222,17 @@ const LightManagerCameraShadows = {
 #ifdef USE_SHADOWMAP
 // CPU-precomputed disk offsets and Gaussian weights, shared by all receivers.
 uniform vec3 uLightShadowDisk[12];
+#if LF_DISTANCE_FILTER_ENABLED == 1
+// XY is the tile's physical bottom-left origin; Z is the Studio sample index.
+uniform vec3 SA_SHADOW_SAMPLE;
+mat2 lfDistanceShadowRotation() {
+    vec2 pixel = gl_FragCoord.xy + SA_SHADOW_SAMPLE.xy;
+    float noise = fract(52.9829189 * fract(dot(pixel, vec2(0.06711056, 0.00583715))));
+    float angle = noise * 6.28318530718 + SA_SHADOW_SAMPLE.z * 2.39996323;
+    vec2 direction = vec2(cos(angle), sin(angle));
+    return mat2(direction.x, direction.y, -direction.y, direction.x);
+}
+#endif
 // Bilinear interpolation of comparisons, never of packed RGBA depth.
 float lfArtisticProjectedCompare(sampler2D shadowMap, vec2 uv, vec2 mapSize, float compareDepth, bool smoothTap) {
     if (!smoothTap) return texture2DCompare(shadowMap, clamp(uv, vec2(0.5) / mapSize, vec2(1.0) - vec2(0.5) / mapSize), compareDepth);
@@ -4236,10 +4247,10 @@ float lfArtisticProjectedCompare(sampler2D shadowMap, vec2 uv, vec2 mapSize, flo
     float d = texture2DCompare(shadowMap, clamp(baseUv + texel, low, high), compareDepth);
     return mix(mix(a, b, fraction.x), mix(c, d, fraction.x), fraction.y);
 }
-// A small stable rotation breaks repeated bands without grainy full rotations.
+// Stable rotation in shadow space breaks repeated bands.
 vec2 lfArtisticRotation(vec2 position) {
     vec2 cell = floor(position * 2048.0);
-    float angle = fract(sin(dot(cell, vec2(12.9898, 78.233))) * 43758.5453) * 0.8;
+    float angle = fract(sin(dot(cell, vec2(12.9898, 78.233))) * 43758.5453) * 6.28318530718;
     return vec2(cos(angle), sin(angle));
 }
 float lfGetArtisticProjectedShadow(sampler2D shadowMap, vec2 shadowMapSize, float shadowBias,
@@ -4286,6 +4297,19 @@ float lfGetArtisticProjectedShadow(sampler2D shadowMap, vec2 shadowMapSize, floa
 }
 // Offset in a tangent frame and remap every point-light tap through cubeToUV.
 // This preserves atlas face seams instead of blurring unrelated atlas tiles.
+vec3 lfPointShadowTangent(vec3 direction) {
+    vec3 up = abs(direction.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    return normalize(cross(up, direction));
+}
+float lfPointContactShadow(sampler2D shadowMap, vec3 center, float texelSizeY,
+    float compareDepth, vec3 tangent, vec3 bitangent) {
+    vec3 dx = tangent * texelSizeY * 0.5;
+    vec3 dy = bitangent * texelSizeY * 0.5;
+    return 0.25 * (texture2DCompare(shadowMap, cubeToUV(center - dx - dy, texelSizeY), compareDepth)
+        + texture2DCompare(shadowMap, cubeToUV(center + dx - dy, texelSizeY), compareDepth)
+        + texture2DCompare(shadowMap, cubeToUV(center - dx + dy, texelSizeY), compareDepth)
+        + texture2DCompare(shadowMap, cubeToUV(center + dx + dy, texelSizeY), compareDepth));
+}
 float lfGetArtisticPointShadow(sampler2D shadowMap, vec2 shadowMapSize, float shadowBias,
     vec4 shadowCoord, float shadowCameraNear, float shadowCameraFar, float encodedRadius) {
     float distanceToLight = length(shadowCoord.xyz);
@@ -4296,41 +4320,19 @@ float lfGetArtisticPointShadow(sampler2D shadowMap, vec2 shadowMapSize, float sh
     float texelSizeY = 0.5 / resolution;
     vec3 center = shadowCoord.xyz / distanceToLight;
     float radius = max(0.0, -encodedRadius - 2.0);
+    vec3 tangent = lfPointShadowTangent(center);
+    vec3 bitangent = cross(center, tangent);
     if (radius <= 1e-5) {
-        // Remap each direction separately so the cube atlas never bleeds tiles.
-        vec3 tangentAA = normalize(cross(abs(center.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0), center));
-        vec3 dxAA = tangentAA * texelSizeY * 0.5;
-        vec3 dyAA = cross(center, tangentAA) * texelSizeY * 0.5;
-        return 0.25 * (texture2DCompare(shadowMap, cubeToUV(center - dxAA - dyAA, texelSizeY), compareDepth)
-            + texture2DCompare(shadowMap, cubeToUV(center + dxAA - dyAA, texelSizeY), compareDepth)
-            + texture2DCompare(shadowMap, cubeToUV(center - dxAA + dyAA, texelSizeY), compareDepth)
-            + texture2DCompare(shadowMap, cubeToUV(center + dxAA + dyAA, texelSizeY), compareDepth));
+        return lfPointContactShadow(shadowMap, center, texelSizeY, compareDepth, tangent, bitangent);
     }
     #if LF_ARTISTIC_FILTER_ENABLED == 0
     return texture2DCompare(shadowMap, cubeToUV(center, texelSizeY), compareDepth);
     #else
-    vec3 tangent = normalize(cross(abs(center.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0), center));
-    vec3 bitangent = cross(center, tangent);
     vec2 direction = lfArtisticRotation(center.xy + center.z);
     float visibility = 0.0;
     mat2 rotation = mat2(direction.x, direction.y, -direction.y, direction.x);
-    vec3 dx = tangent * texelSizeY * 0.5, dy = bitangent * texelSizeY * 0.5;
     #pragma unroll_loop_start
-    for ( int i = 0; i < 4; i ++ ) {
-      {
-        vec3 tap = uLightShadowDisk[i];
-        vec2 offset = rotation * tap.xy * radius * texelSizeY;
-        vec3 sampleDirection = center + tangent * offset.x + bitangent * offset.y;
-        float sampleVisibility = texture2DCompare(shadowMap, cubeToUV(sampleDirection - dx - dy, texelSizeY), compareDepth);
-        sampleVisibility += texture2DCompare(shadowMap, cubeToUV(sampleDirection + dx - dy, texelSizeY), compareDepth);
-        sampleVisibility += texture2DCompare(shadowMap, cubeToUV(sampleDirection - dx + dy, texelSizeY), compareDepth);
-        sampleVisibility += texture2DCompare(shadowMap, cubeToUV(sampleDirection + dx + dy, texelSizeY), compareDepth);
-        visibility += sampleVisibility * 0.25 * tap.z;
-      }
-    }
-    #pragma unroll_loop_end
-    #pragma unroll_loop_start
-    for ( int i = 4; i < 12; i ++ ) {
+    for ( int i = 0; i < 12; i ++ ) {
       {
         vec3 tap = uLightShadowDisk[i];
         vec2 offset = rotation * tap.xy * radius * texelSizeY;
@@ -4339,6 +4341,10 @@ float lfGetArtisticPointShadow(sampler2D shadowMap, vec2 shadowMapSize, float sh
       }
     }
     #pragma unroll_loop_end
+    if (radius < 1.5) {
+        float contact = lfPointContactShadow(shadowMap, center, texelSizeY, compareDepth, tangent, bitangent);
+        return mix(contact, visibility, smoothstep(0.0, 1.5, radius));
+    }
     return visibility;
     #endif
 }
@@ -4368,8 +4374,7 @@ float lfGetArtisticPointShadow(sampler2D shadowMap, vec2 shadowMapSize, float sh
                 if (fragment[end] === '}') depth--;
                 end++;
             }
-            // Reuse SA's bounded 4-probe/6-sample distance filter; specialize
-            // only depth reads for receiver-plane correction in detail maps.
+            // Reuse the distance filter with receiver-plane depth correction.
             distanceModule = fragment.slice(from, end)
                 .replace('lfGetProjectedDistanceShadow(', 'lfCameraDistanceShadow(')
                 .replace(/float sourceScale\s*\)/, 'float sourceScale, vec2 receiverSlope)')
@@ -4377,7 +4382,9 @@ float lfGetArtisticPointShadow(sampler2D shadowMap, vec2 shadowMapSize, float sh
                 .replace(/lfAccumulateProjectedBlocker\(/g, 'lfCameraAccumulatePlaneBlocker(')
                 .replace(/compareDepth,\s*blockerDepthSum,\s*blockerCount\)/g, 'compareDepth, blockerDepthSum, blockerCount, centerUv, shadowMapSize.x, receiverSlope)')
                 .replace(/texture2DCompare\(/g, 'lfCameraPlaneCompare(')
-                .replace(/,\s*compareDepth\)/g, ', compareDepth, centerUv, shadowMapSize.x, receiverSlope)');
+                .replace(/,\s*compareDepth\)/g, ', compareDepth, centerUv, shadowMapSize.x, receiverSlope)')
+                .replaceAll('lfArtisticProjectedCompare(shadowMap, centerUv, shadowMapSize, compareDepth, true)',
+                    'lfCameraArtisticCompare(shadowMap, centerUv, shadowMapSize, compareDepth, true, centerUv, receiverSlope)');
             const constants = new Map(Array.from(fragment.matchAll(/^#define\s+(LF_SHADOW_\w+)\s+([^\r\n]+)/gm), match => [match[1], match[2]]));
             distanceModule = distanceModule.replace(/\bLF_SHADOW_\w+\b/g, name => constants.get(name) || name);
             // lfCameraFilter dispatches authored styles before entering this
@@ -4498,6 +4505,7 @@ float lfCameraPlaneCompare(sampler2D map, vec2 uv, float compareDepth, vec2 orig
 }
 void lfCameraAccumulatePlaneBlocker(sampler2D map, vec2 uv, float compareDepth,
     inout float sum, inout float count, vec2 origin, float resolution, vec2 slope) {
+    if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return;
     float depth = lfCameraPlaneDepth(map, uv, origin, resolution, slope);
     if (depth < compareDepth) { sum += depth; count += 1.0; }
 }
@@ -9229,22 +9237,18 @@ function getTinyColorFromCssVar(cssVariable, element = document.documentElement)
 
 const lightIconSources = {};
 
-[
+const lightManagerStaticWindowBindings = new Map([
     'generateIconBase64',
     'LightManagerMarkShadowsDirty',
     'LightManagerDebugShadows',
     'LightManagerSyncLights',
     'LightManagerPrepareRender',
-    'LightManagerCameraShadows',
-    'LightManagerShadowRegions',
-    'LightManagerFlushAnimatedLights',
     'LightManagerAreaGizmos',
     'LightManagerArtKeys',
-    'ArtKeyElement',
     'LightManagerViewportControls',
     'LightManagerFitTool',
     'update_light_element_callback'
-].forEach(trackLightManagerWindowBinding);
+].map(name => [name, window[name]]));
 
 /**
  * @name Light Manager
@@ -15669,6 +15673,12 @@ function initializeLightManagerPlugin() {
 
         onload() {
             if(this.source==='file')this.new_repository_format=false;
+            // Blockbench re-enables a plugin by calling onload on the same script.
+            for (const [name, value] of lightManagerStaticWindowBindings) {
+                if (value === undefined || (window[name] !== undefined && window[name] !== value)) continue;
+                window[name] = value;
+                trackLightManagerWindowBinding(name);
+            }
             window.LightManagerIcons = lightManagerIconsApi;
             installLightManagerIconBridge();
             disposeLightManagerResources();
@@ -28339,6 +28349,9 @@ function initializeLightManagerPlugin() {
             [
                 'LIGHT_MANAGER_LOADED',
                 'LightManagerMarkShadowsDirty',
+                'LightManagerCameraShadows',
+                'LightManagerShadowRegions',
+                'LightManagerFlushAnimatedLights',
                 'ComboSlider',
                 'CompactDropdownSelect',
                 'BarDisplay',

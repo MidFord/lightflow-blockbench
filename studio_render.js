@@ -2915,6 +2915,17 @@
         window.LightflowParticleScene?.updateFacingRotation?.(camera);
     }
 
+    function withStudioShadowSample(tile, sampleIndex, draw) {
+        const scope = window.ShaderArchitectWithStudioShadowSample;
+        if (typeof scope !== 'function') return draw();
+        // Sample coordinates are physical output pixels. viewX/Y can instead
+        // be in source-camera units for a framed capture. WebGL starts at the
+        // bottom of the tile, including its rendered overlap.
+        const x = tile.sampleX - tile.cropX;
+        const y = tile.cropY - tile.sampleY - tile.renderHeight;
+        return scope(x, y, sampleIndex, draw);
+    }
+
     function renderPreviewWithExactCameraPose(renderPreview, options = {}) {
         const camera = renderPreview?.camera;
         const controls = renderPreview?.controls;
@@ -9456,7 +9467,7 @@
                             }
 
                             beginStudioWebGLErrorScope(renderPreview.renderer);
-                            renderPreviewWithExactCameraPose(renderPreview, studioBloomGpuEnabled || temporalTile ? {
+                            withStudioShadowSample(tile, sampleIndex, () => renderPreviewWithExactCameraPose(renderPreview, studioBloomGpuEnabled || temporalTile ? {
                                 requiredResources: studioBloomGpuEnabled ? ['sceneColor', 'sceneDepth', 'sceneEmission'] : ['sceneColor', 'sceneDepth'],
                                 onFrameResources: resources => {
                                     if (sampleIndex === 0 && temporalTile) temporalTile.captureDepth(resources.depthTexture, sampleJitters[0]);
@@ -9467,7 +9478,7 @@
                                         sampleCount
                                     );
                                 }
-                            } : {});
+                            } : {}));
                             freezeStudioShadowMapAfterFirstTile(renderPreview, renderSession);
                             if (index === 0 && sampleIndex === 0) {
                                 // The first beauty submission also fills native
@@ -9513,13 +9524,13 @@
                                 bloomMaskContext.save();
                                 bloomMaskContext.globalCompositeOperation = 'lighter';
                                 bloomMaskContext.globalAlpha = 1 / sampleCount;
-                                renderBloomMaskTileFallback(
+                                withStudioShadowSample(tile, sampleIndex, () => renderBloomMaskTileFallback(
                                     renderPreview,
                                     bloomMaskContext,
                                     tile,
                                     rasterScale,
                                     renderSession
-                                );
+                                ));
                                 bloomMaskContext.restore();
                             }
 
