@@ -170,6 +170,25 @@ for (const [name, getter] of Object.entries(component.computed)) {
     await viewModel.refresh();
     assert.strictEqual(viewModel.sourceReady, false, 'Stable must not silently fall through to main when no release exists');
     assert(viewModel.error, 'Unavailable stable releases must be explained in the UI');
+    const originalFetch = context.fetch;
+    const requests = [];
+    context.fetch = async url => {
+        requests.push(String(url));
+        if (String(url).includes('/releases?')) {
+            return {ok:false, status:403, headers:{get:name=>name === 'x-ratelimit-remaining' ? '0' : null}};
+        }
+        return {ok:true, json:async()=>manifest};
+    };
+    await viewModel.refresh();
+    assert.strictEqual(viewModel.sourceReady, true, 'Stable must work when GitHub limits the release list');
+    assert.strictEqual(context.LightflowHub.getState().ref, 'refs/tags/lightflow-hub-v1.0.1');
+    assert.strictEqual(requests.length, 2);
+    assert(requests[1].includes('/refs/tags/lightflow-hub-v1.0.1/'));
+    viewModel.preferences.releaseTag = 'explicit-release';
+    await viewModel.changeRelease();
+    assert.strictEqual(viewModel.sourceReady, false, 'A pinned release must never be substituted');
+    viewModel.preferences.releaseTag = '';
+    context.fetch = originalFetch;
     viewModel.preferences.channel = 'main';
     await viewModel.refresh();
     assert.strictEqual(viewModel.sourceReady, true, 'Main fallback must remain installable when its manifest is not online yet');
