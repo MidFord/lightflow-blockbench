@@ -13692,6 +13692,9 @@ vec3 saApplyBlockbenchRenderModeEmission(vec3 litColor, vec3 baseColor, float al
             this.fragment = props.fragment || "";
             this.uniforms = props.uniforms || {};
             this.isCustom = props.isCustom !== undefined ? props.isCustom : true;
+            if (typeof props.baseMaterialId === 'string' && /^[a-zA-Z0-9_-]{1,96}$/.test(props.baseMaterialId)) {
+                this.baseMaterialId = props.baseMaterialId;
+            }
             this.enableShadows = props.enableShadows !== undefined ? props.enableShadows : false;
             this.overrideOnly = props.overrideOnly === true;
             this.supportsScreenSpaceReflections = props.supportsScreenSpaceReflections !== undefined
@@ -13727,6 +13730,7 @@ vec3 saApplyBlockbenchRenderModeEmission(vec3 litColor, vec3 baseColor, float al
                 name: this.name,
                 icon: this.icon,
                 isCustom: this.isCustom,
+                ...(this.baseMaterialId ? { baseMaterialId: this.baseMaterialId } : {}),
                 enableShadows: this.enableShadows,
                 supportsScreenSpaceReflections: this.supportsScreenSpaceReflections,
                 screenAccess: this.screenAccess,
@@ -13761,6 +13765,7 @@ vec3 saApplyBlockbenchRenderModeEmission(vec3 litColor, vec3 baseColor, float al
                 name: data.name,
                 icon: data.icon,
                 isCustom: data.isCustom,
+                baseMaterialId: data.baseMaterialId,
                 enableShadows: data.enableShadows,
                 supportsScreenSpaceReflections: data.supportsScreenSpaceReflections,
                 screenAccess: data.screenAccess,
@@ -43987,6 +43992,65 @@ void main() {
             return warmupScene;
         },
 
+        inspectDraftMaterialProgram(draft) {
+            const preview = this.getShaderWarmupPreview();
+            const renderer = preview?.renderer;
+            const gl = renderer?.getContext?.();
+            if (!renderer?.compile || !preview?.camera || !gl || gl.isContextLost()) return null;
+
+            const scene = this.createPresetWarmupScene(preview, { targetViewMode: 'lightflow' });
+            if (!scene || scene === Canvas.scene) return null;
+            const geometry = new THREE.BoxGeometry(1, 1, 1);
+            const source = new THREE.MeshBasicMaterial({ map: this.getFallbackTexture() });
+            const mesh = new THREE.Mesh(geometry, source);
+            const element = { uuid: 'sa_draft_validation', type: 'shader_warmup', mesh };
+            const debug = renderer.debug.checkShaderErrors;
+            try {
+                if (!this.applyToMesh(element, draft, { ignoreViewMode: true, warmup: true })) return null;
+                scene.add(mesh);
+                renderer.debug.checkShaderErrors = false;
+                renderer.compile(scene, preview.camera);
+                const materials = new Set(this.getMaterialList(mesh.material));
+                const records = this.collectRendererSceneProgramRecords(renderer, scene, { currentOnly: true })
+                    .filter(record => materials.has(record.material));
+                if (!records.length || gl.isContextLost()) return null;
+                const errors = [];
+                const cleanLog = value => String(value || '').replace(/\0/g, '').trim();
+                for (const { rawProgram } of records) {
+                    if (gl.getProgramParameter(rawProgram, gl.LINK_STATUS)) continue;
+                    const start = errors.length;
+                    for (const shader of gl.getAttachedShaders(rawProgram) || []) {
+                        if (gl.getShaderParameter(shader, gl.COMPILE_STATUS)) continue;
+                        const type = gl.getShaderParameter(shader, gl.SHADER_TYPE) === gl.VERTEX_SHADER ? 'vertex' : 'fragment';
+                        const submittedLines = String(gl.getShaderSource(shader) || '').split('\n');
+                        const originalLines = String(draft[type] || '').split('\n');
+                        for (const message of cleanLog(gl.getShaderInfoLog(shader)).split('\n').filter(Boolean)) {
+                            const match = message.match(/ERROR:\s*\d+:(\d+):\s*(.*)/);
+                            const text = match && submittedLines[Number(match[1]) - 1]?.trim();
+                            // An injected engine line has no reliable location in the editor.
+                            const first = text && originalLines.findIndex(line => line.trim() === text);
+                            const unique = Number.isInteger(first) && first >= 0 &&
+                                !originalLines.slice(first + 1).some(line => line.trim() === text);
+                            errors.push({ type, line: unique ? first + 1 : null, message: match?.[2] || message, severity: 'error' });
+                        }
+                    }
+                    if (errors.length === start) {
+                        errors.push({ type: 'linker', line: null, message: cleanLog(gl.getProgramInfoLog(rawProgram)) || tl('shader_architect.message.link_failed'), severity: 'error' });
+                    }
+                }
+                return errors;
+            } finally {
+                renderer.debug.checkShaderErrors = debug;
+                this.invalidateRendererSceneLightBindings(renderer, scene);
+                scene.remove(mesh);
+                ShaderWarmupLightResources.disposeScene(scene);
+                const owned = new Set([source, ...this.getMaterialList(mesh.material), mesh.customDepthMaterial, mesh.customDistanceMaterial]);
+                owned.forEach(material => material?.dispose());
+                mesh.geometry.dispose();
+                if (mesh.geometry !== geometry) geometry.dispose();
+            }
+        },
+
         compilePresetProgram(entry, preview = this.getShaderWarmupPreview()) {
             const renderer = preview?.renderer;
             const scene = typeof Canvas !== 'undefined' ? Canvas.scene : null;
@@ -50746,165 +50810,21 @@ ${stochasticAlpha
                         ShaderEngine.updateAllCubes('material_studio_live_apply');
                         Blockbench.showToastNotification({ text: tl('shader_architect.toast.applied'), expire: 1500 });
                     },
-                    preprocessShader(code, isVertex, capabilities = {}) {
-                        if (typeof THREE === 'undefined') return { code, lineMap: (line => line) };
-                        if (!isVertex) code = injectScreenAccessFragmentSupport(code);
-
-                        let prefix = `precision highp float; precision highp int; uniform mat4 modelMatrix; uniform mat4 modelViewMatrix; uniform mat4 projectionMatrix; uniform mat4 viewMatrix; uniform mat3 normalMatrix; uniform vec3 cameraPosition; `;
-                        if (isVertex) {
-                            prefix += `attribute vec3 position; attribute vec3 normal; attribute vec2 uv; `;
-                        }
-
-                        let lines = code.split('\n');
-                        let processedLines = [];
-                        let lineMap = []; // lineMap[compiledLineIndex] = originalLineNum (1-based)
-
-                        // First pass: extract any #version or #extension directives to prepend before the prefix
-                        let headerLines = [];
-                        let bodyLines = [];
-
-                        lines.forEach((line, idx) => {
-                            let trimmed = line.trim();
-                            if (trimmed.startsWith('#version') || trimmed.startsWith('#extension')) {
-                                headerLines.push({ line, originalLineNum: idx + 1 });
-                            } else {
-                                bodyLines.push({ line, originalLineNum: idx + 1 });
-                            }
-                        });
-
-                        // The live ShaderMaterial enables derivatives. Validation
-                        // must use the same capability before reporting user errors.
-                        if (!isVertex && capabilities.derivatives && !/^\s*#version\s+300/m.test(code)
-                            && !headerLines.some(item => /GL_OES_standard_derivatives/.test(item.line))) {
-                            headerLines.push({line: '#extension GL_OES_standard_derivatives : enable', originalLineNum: 1});
-                        }
-
-                        // 1. Add header lines (e.g. #version, #extension)
-                        headerLines.forEach(item => {
-                            processedLines.push(item.line);
-                            lineMap[processedLines.length] = item.originalLineNum;
-                        });
-
-                        // 2. Add prefix line
-                        processedLines.push(prefix);
-                        lineMap[processedLines.length] = 1; // map prefix line to user line 1
-
-                        // 3. Add body lines (and resolve #include)
-                        bodyLines.forEach(item => {
-                            let trimmed = item.line.trim();
-                            let includeMatch = trimmed.match(/^#include\s+<([\w_]+)>/);
-                            if (includeMatch) {
-                                let chunkName = includeMatch[1];
-                                let chunkContent = (THREE.ShaderChunk && THREE.ShaderChunk[chunkName]) || "";
-                                let chunkLines = chunkContent.split('\n');
-                                chunkLines.forEach(cl => {
-                                    processedLines.push(cl);
-                                    lineMap[processedLines.length] = item.originalLineNum;
-                                });
-                            } else {
-                                processedLines.push(item.line);
-                                lineMap[processedLines.length] = item.originalLineNum;
-                            }
-                        });
-
-                        return {
-                            code: processedLines.join('\n'),
-                            lineMap: (lineNum) => {
-                                return lineMap[lineNum] !== undefined ? lineMap[lineNum] : lineNum;
-                            }
-                        };
-                    },
                     validateShader(showFeedback = true) {
                         if (!this.activeMat) return;
                         this.validating = true;
-
                         try {
-                            if (!this._validationGL || this._validationGL.isContextLost()) {
-                                const canvas = document.createElement('canvas');
-                                this._validationGL = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
-                            }
-                            const gl = this._validationGL;
-                            if (!gl) throw new Error(tl('shader_architect.message.validation_webgl_unavailable'));
-                            const capabilities = {derivatives: !!gl.getExtension('OES_standard_derivatives')};
-
-                            let errors = [];
-
-                            // Preprocess vertex shader
-                            const prepVS = this.preprocessShader(this.activeMat.vertex, true, capabilities);
-                            let vs = gl.createShader(gl.VERTEX_SHADER);
-                            gl.shaderSource(vs, prepVS.code);
-                            gl.compileShader(vs);
-                            let vsSuccess = gl.getShaderParameter(vs, gl.COMPILE_STATUS);
-                            if (!vsSuccess) {
-                                let log = gl.getShaderInfoLog(vs);
-                                let lines = log.split('\n').filter(l => l.trim());
-                                lines.forEach(line => {
-                                    let match = line.match(/ERROR:\s*\d+:(\d+):\s*(.*)/);
-                                    let errLine = match ? parseInt(match[1]) : null;
-                                    let mappedLine = errLine ? prepVS.lineMap(errLine) : null;
-                                    errors.push({
-                                        type: 'vertex',
-                                        line: mappedLine,
-                                        message: match ? match[2] : line,
-                                        severity: 'error'
-                                    });
-                                });
-                            }
-
-                            // Preprocess fragment shader
-                            const prepFS = this.preprocessShader(this.activeMat.fragment, false, capabilities);
-                            let fs = gl.createShader(gl.FRAGMENT_SHADER);
-                            gl.shaderSource(fs, prepFS.code);
-                            gl.compileShader(fs);
-                            let fsSuccess = gl.getShaderParameter(fs, gl.COMPILE_STATUS);
-                            if (!fsSuccess) {
-                                let log = gl.getShaderInfoLog(fs);
-                                let lines = log.split('\n').filter(l => l.trim());
-                                lines.forEach(line => {
-                                    let match = line.match(/ERROR:\s*\d+:(\d+):\s*(.*)/);
-                                    let errLine = match ? parseInt(match[1]) : null;
-                                    let mappedLine = errLine ? prepFS.lineMap(errLine) : null;
-                                    errors.push({
-                                        type: 'fragment',
-                                        line: mappedLine,
-                                        message: match ? match[2] : line,
-                                        severity: 'error'
-                                    });
-                                });
-                            }
-
-                            // Link shaders
-                            if (vsSuccess && fsSuccess) {
-                                let program = gl.createProgram();
-                                gl.attachShader(program, vs);
-                                gl.attachShader(program, fs);
-                                gl.linkProgram(program);
-                                if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-                                    let log = gl.getProgramInfoLog(program);
-                                    errors.push({
-                                        type: 'linker',
-                                        line: null,
-                                        message: log || tl('shader_architect.message.link_failed'),
-                                        severity: 'error'
-                                    });
-                                }
-                                gl.deleteProgram(program);
-                                program = null;
-                            }
-
+                            const errors = ShaderEngine.inspectDraftMaterialProgram(this.activeMat);
+                            if (!errors) throw new Error(tl('shader_architect.message.validation_webgl_unavailable'));
                             const hadErrors = this.validationErrors.length > 0;
                             this.validationErrors = errors;
                             if (errors.length && !hadErrors) this.problemsCollapsed = false;
                             else if (!errors.length && hadErrors) this.problemsCollapsed = true;
-
-                            if (errors.length === 0 && showFeedback) {
+                            if (!errors.length && showFeedback) {
                                 Blockbench.showToastNotification({ text: tl('shader_architect.toast.validation_ok'), expire: 2000 });
                             }
-
-                            gl.deleteShader(vs);
-                            gl.deleteShader(fs);
-                        } catch (e) {
-                            this.validationErrors = [{ type: 'system', line: null, message: e.message, severity: 'error' }];
+                        } catch (error) {
+                            this.validationErrors = [{ type: 'system', line: null, message: error.message, severity: 'error' }];
                             this.problemsCollapsed = false;
                         } finally {
                             this.validating = false;
@@ -51859,8 +51779,6 @@ ${stochasticAlpha
                     this._studioResize?.disconnect(); this._studioResize = null;
                     this.closeMaterialMenu();
                     if (this.validationTimeout) clearTimeout(this.validationTimeout);
-                    this._validationGL?.getExtension('WEBGL_lose_context')?.loseContext();
-                    this._validationGL = null;
                     this._editorInputRevision = (this._editorInputRevision || 0) + 1;
                     if (this._caretRestoreFrame) {
                         cancelAnimationFrame(this._caretRestoreFrame);

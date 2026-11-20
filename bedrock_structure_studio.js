@@ -20756,7 +20756,6 @@ const BedrockStructureStudioPlugin = (() => {
             'bedrock_structure.ui.navigation.sensitivity': 'Mouse sensitivity',
             'bedrock_structure.ui.navigation.units': 'blocks/s',
             'bedrock_structure.ui.navigation.help': 'Right-drag: grab and move terrain directly with the mouse (1:1 on screen) · Hold right mouse and tap W to fly · WASD: move · Space / Shift: up / down · Ctrl: faster · Release right mouse: return to Terrain grab navigation · Wheel: zoom · Esc: cancel',
-            'bedrock_structure.ui.shape': 'Shape',
             'bedrock_structure.ui.shape.box': 'Box',
             'bedrock_structure.ui.shape.ellipsoid': 'Sphere / ellipsoid',
             'bedrock_structure.ui.shape.circle': 'Circle',
@@ -21242,7 +21241,6 @@ const BedrockStructureStudioPlugin = (() => {
             'bedrock_structure.ui.navigation.sensitivity': 'Sensibilidad del ratón',
             'bedrock_structure.ui.navigation.units': 'bloques/s',
             'bedrock_structure.ui.navigation.help': 'Arrastra con clic derecho para agarrar y desplazar el terreno directamente con el mouse (1:1 en pantalla) · Sin soltar clic derecho, pulsa W una vez para volar · WASD: mover · Espacio / Shift: subir / bajar · Ctrl: acelerar · Suelta clic derecho: volver al desplazamiento de Terrain · Rueda: zoom · Esc: cancelar',
-            'bedrock_structure.ui.shape': 'Forma',
             'bedrock_structure.ui.shape.box': 'Caja',
             'bedrock_structure.ui.shape.ellipsoid': 'Esfera / elipsoide',
             'bedrock_structure.ui.shape.circle': 'Círculo',
@@ -25723,29 +25721,30 @@ const BedrockStructureStudioPlugin = (() => {
     const WORLD_BRUSH_LIBRARY_KEY = 'lightflow_world_brush_library_v1';
     const WORLD_BRUSH_EXTENSION = 'lightflow.brush.json';
     const worldBrushProjects = new WeakMap();
+    const worldBrushWorkspaces = new WeakMap();
     let worldBrushBuiltins, worldBrushPreview, worldBrushApplication, worldBrushRegionDialog, worldBrushNonce;
     let worldBrushPanel = null, worldBrushPanelContext = null;
     let worldBrushPresetMenu, worldBrushPresetDialog;
 
-    function worldBrushState(project = Project) {
+    function worldBrushSavedState(project = Project) {
         let state = worldBrushProjects.get(project);
         if (!state) {
             const api = getWorldBrushModule();
             worldBrushBuiltins ||= api.builtinRecipes();
-            const fallback = {recipe: worldBrushBuiltins[0], presets: [], layer: 0};
+            const source = project.mcstructure_world_brush_json;
+            const fallback = {recipe: worldBrushBuiltins[0], presets: [], layer: 0, source};
             state = fallback;
             try {
-                const source = project.mcstructure_world_brush_json;
                 if (source && source.length <= 2 * 1024 * 1024) {
                     const data = JSON.parse(source);
                     if (data.version === 1 && Array.isArray(data.presets)) {
                         const restored = api.validate(data.recipe);
                         const recipe = api.migrateBuiltinRecipe(restored);
                         state = {recipe, presets: data.presets.slice(0, 64).map(api.validate),
-                            layer: data.layer === 1 ? 1 : 0};
+                            layer: data.layer === 1 ? 1 : 0, source};
                         // Upgrade the stored active built-in as well; otherwise
                         // saving and reopening the project restores the old rule.
-                        if (recipe.version !== restored.version) storeWorldBrushState(state, project);
+                        if (recipe.version !== restored.version) state = storeWorldBrushState(state, project);
                     }
                 }
             } catch (error) { warnOnce('read World Brush project', error); }
@@ -25754,13 +25753,57 @@ const BedrockStructureStudioPlugin = (() => {
         return state;
     }
 
-    function storeWorldBrushState(next, project = Project) {
+    function worldBrushState(project = Project) {
+        let session = worldBrushWorkspaces.get(project);
+        if (!session) {
+            const {recipe, layer} = worldBrushSavedState(project);
+            session = {recipe, original: recipe, layer, page: 'shape', pass: 0, entry: 0, rule: 0,
+                relation: 0, path: [], fieldPath: [], logicView: 'rules', scope: 'all', search: '', category: '', favoriteOnly: false};
+            worldBrushWorkspaces.set(project, session);
+        }
+        return session;
+    }
+
+    function storeWorldBrushState({recipe, layer, presets}, project = Project) {
+        const next = {recipe, layer, presets};
         const serialized = JSON.stringify({version: 1, ...next});
         if (serialized.length > 2 * 1024 * 1024) throw Error('Project brushes exceed the storage budget.');
+        next.source = serialized;
         worldBrushProjects.set(project, next);
         project.mcstructure_world_brush_json = serialized;
         project.saved = false;
-        cancelWorldBrushPreview();
+        return next;
+    }
+
+    function setWorldBrushActive(project, recipe, layer) {
+        const session = worldBrushState(project);
+        if (recipe === session.recipe && layer === session.layer) return;
+        const saved = worldBrushSavedState(project);
+        if (saved.presets.some(preset => preset.id === recipe.id)) {
+            if (saved.recipe !== recipe || saved.layer !== layer) {
+                storeWorldBrushState({recipe, layer, presets: saved.presets.map(preset => preset.id === recipe.id ? recipe : preset)}, project);
+            }
+        }
+        const refreshLabel = recipe.name !== session.recipe.name || recipe.shape.radius !== session.recipe.shape.radius || layer !== session.layer;
+        Object.assign(session, {recipe, layer});
+        if (Project === project && structureToolKind() === 'world_brush') {
+            if (refreshLabel) refreshStructureHotbar();
+            updateStructureToolPreview();
+        }
+    }
+
+    function reviseWorldBrush(project, candidate, layer) {
+        const {recipe} = worldBrushState(project);
+        if (JSON.stringify(candidate) === JSON.stringify(recipe)) {
+            setWorldBrushActive(project, recipe, layer);
+            return;
+        }
+        if (recipe.id.startsWith('builtin:')) {
+            const suffix = ' · ' + structurePackText('Copy', 'Copia');
+            candidate = getWorldBrushModule().validate({...candidate, id: 'user:' + guid(), version: 1,
+                name: candidate.name.slice(0, 100 - suffix.length) + suffix});
+        }
+        setWorldBrushActive(project, candidate, layer);
     }
 
     function worldBrushLibrary() {
@@ -25808,7 +25851,7 @@ const BedrockStructureStudioPlugin = (() => {
             ...api.FEATURED_BUILTIN_IDS.map(id => ({scope: 'builtin', group: byId.get(id)?.category, preset: byId.get(id)})),
             ...history.map(preset => ({scope: 'builtin', group: 'legacy', preset})),
             ...library.presets.map(preset => ({scope: 'local', group: 'local', preset})),
-            ...worldBrushState(project).presets.map(preset => ({scope: 'project', group: 'project', preset}))
+            ...worldBrushSavedState(project).presets.map(preset => ({scope: 'project', group: 'project', preset}))
         ].filter(entry => entry.preset);
         const query = session.search.trim().toLowerCase();
         const matches = all.filter(({scope, preset}) => (session.scope === 'all' || scope === session.scope)
@@ -25818,7 +25861,7 @@ const BedrockStructureStudioPlugin = (() => {
         return {all, matches, labels, favorites: library.favorites};
     }
 
-    function openWorldBrushPresetMenu(anchor, {project, session, current, reopen, openRecipe, readDraft, deriveRecipe, error}) {
+    function openWorldBrushPresetMenu(anchor, {project, session, current, reopen, openRecipe, readDraft, newBrush, deriveRecipe, error}) {
         closeWorldBrushPresetMenu();
         const api = getWorldBrushModule(), text = structurePackText;
         const {all, matches, labels, favorites} = worldBrushPresetEntries(project, session);
@@ -25835,9 +25878,11 @@ const BedrockStructureStudioPlugin = (() => {
                 const library = worldBrushLibrary();
                 storeWorldBrushLibrary({...library, presets: update(library.presets)});
             } else {
-                const state = worldBrushState(project), presets = update(state.presets);
+                const state = worldBrushSavedState(project), presets = update(state.presets);
                 if (presets.length > 64) throw Error(text('The project brush library is full.', 'La biblioteca de pinceles del proyecto está llena.'));
-                storeWorldBrushState({...state, presets}, project);
+                const recipe = presets.find(entry => entry.id === state.recipe.id) ??
+                    (state.presets.some(entry => entry.id === state.recipe.id) ? worldBrushBuiltins[0] : state.recipe);
+                storeWorldBrushState({...state, recipe, presets}, project);
             }
         };
         const editPreset = (preset, {title, scope = 'local', update = false, activate = true}) => {
@@ -25863,9 +25908,9 @@ const BedrockStructureStudioPlugin = (() => {
                         writePresets(result.destination || scope, entries => update
                             ? entries.map(entry => entry.id === preset.id ? candidate : entry) : [...entries, candidate]);
                         if (activate) openRecipe(candidate);
-                        else if (session.original.id === preset.id) {
+                        else if (update && session.recipe.id === preset.id) {
                             session.original = candidate;
-                            session.recipe = api.validate({...session.recipe, ...metadata, version: candidate.version});
+                            setWorldBrushActive(project, api.validate({...session.recipe, ...metadata, version: candidate.version}), session.layer);
                         }
                         reopen();
                     } catch (failure) {
@@ -25904,7 +25949,7 @@ const BedrockStructureStudioPlugin = (() => {
         // Blockbench drops a MenuSeparator when it is the very first item.
         // An invisible disabled lead item allows the Terrain group caption to
         // remain a real native separator, including in the scrollable section.
-        const items = [{id: 'world_brush_gallery_lead', name: '', disabled: true, click() {}}];
+        const items = [{...action(text('New empty brush', 'Nuevo pincel vacío'), 'add', newBrush), id: 'world_brush_new'}];
         let lastGroup = null;
         matches.forEach(({preset, scope, group}, index) => {
             if (group !== lastGroup) {
@@ -25952,20 +25997,24 @@ const BedrockStructureStudioPlugin = (() => {
             );
             items.push({
                 id: 'world_brush_preset_' + index, name: preset.name, icon: favorite ? 'star' : preset.icon,
-                marked: session.original.id === preset.id,
-                click: guard(() => { openRecipe(preset); reopen(); }),
+                marked: session.recipe.id === preset.id,
+                click: guard(() => {
+                    if (session.recipe.id !== preset.id) openRecipe(preset);
+                    reopen();
+                    selectStructureTool(STRUCTURE_TOOL_IDS.world_brush);
+                }),
                 children
             });
         });
         if (!matches.length) items.push({id: 'world_brush_preset_empty', name: text('No matching presets', 'No hay preajustes que coincidan'), icon: 'search', disabled: true, click() {}});
-        const saved = all.find(({scope, preset}) => scope !== 'builtin' && preset.id === session.recipe.id);
-        if (saved) items.push('_', action(text('Update saved preset…', 'Actualizar preajuste guardado…'), 'save', () => {
+        const local = all.find(({scope, preset}) => scope === 'local' && preset.id === session.recipe.id);
+        if (local) items.push('_', action(text('Update local preset…', 'Actualizar preajuste local…'), 'save', () => {
             readDraft();
-            editPreset(session.recipe, {title: text('Update brush preset', 'Actualizar preajuste de pincel'), scope: saved.scope, update: true});
+            editPreset(session.recipe, {title: text('Update local preset', 'Actualizar preajuste local'), scope: local.scope, update: true});
         }));
         items.push(
             '_',
-            action(text('Save draft as new preset…', 'Guardar borrador como preajuste…'), 'add_circle', () => {
+            action(text('Save a copy…', 'Guardar una copia…'), 'content_copy', () => {
                 readDraft();
                 editPreset(session.recipe, {title: text('New brush preset', 'Nuevo preajuste de pincel')});
             }),
@@ -25979,13 +26028,13 @@ const BedrockStructureStudioPlugin = (() => {
             action(text('Create from selection', 'Crear desde selección'), 'analytics', () => {
                 readDraft(); deriveRecipe();
             }),
-            action(text('Export draft', 'Exportar borrador'), 'file_save', () => { readDraft(); exportPreset(session.recipe); }),
-            action(text('Reset draft', 'Restaurar borrador'), 'restart_alt', () => { openRecipe(session.original); reopen(); })
+            action(text('Export active brush', 'Exportar pincel activo'), 'file_save', () => { readDraft(); exportPreset(session.recipe); })
         );
+        if (session.recipe !== session.original && !worldBrushSavedState(project).presets.some(preset => preset.id === session.recipe.id)) {
+            items.push(action(text('Reset draft', 'Restaurar borrador'), 'restart_alt', () => { openRecipe(session.original); reopen(); }));
+        }
         const menu = worldBrushPresetMenu = new Menu('bedrock_world_brush_presets', items);
         menu.open(anchor);
-        const lead = menu.node?.querySelector('[menu_item="world_brush_gallery_lead"]');
-        if (lead) {lead.hidden = true; lead.style.display = 'none'; lead.setAttribute('aria-hidden', 'true');}
         matches.forEach(({preset, scope, group}, index) => window.LightManagerUI.IdentityMenu.decorateItem(
             menu, 'world_brush_preset_' + index, null, {
                 title: [preset.name, groups[group] || labels[scope], galleryHints[preset.id] || preset.description]
@@ -26296,7 +26345,7 @@ const BedrockStructureStudioPlugin = (() => {
             || structureBuildModifiers.altKey || structureBuildModifiers.ctrlKey || structureBuildModifiers.metaKey) {
             cancelWorldBrushPreview(); refreshStructureToolStatus(); return;
         }
-        const {recipe, layer} = worldBrushState();
+        const {recipe, layer} = gesture ? {recipe: gesture.recipe, layer: gesture.snapshot.layer} : worldBrushState();
         let snapshot = gesture?.snapshot;
         const request = {stamps: gesture?.stroke.preview() ?? [stamp], nonce: gesture?.nonce ?? currentWorldBrushNonce()};
         // Retain the current reader and plan for identical hover/gesture input.
@@ -26448,7 +26497,7 @@ const BedrockStructureStudioPlugin = (() => {
         const panel = worldBrushPanel;
         if (!panel?.form || !isStructureProject() || !isStructureModeSelected() || !getWorldBrushModule()) return;
         migrateWorldBrushDock(panel);
-        const api = getWorldBrushModule(), text = structurePackText, project = Project, saved = worldBrushState(project);
+        const api = getWorldBrushModule(), text = structurePackText, project = Project;
         if (!session && worldBrushPanelContext?.project === project) {
             if (reveal) {
                 panel.fold(false);
@@ -26456,8 +26505,7 @@ const BedrockStructureStudioPlugin = (() => {
             }
             return;
         }
-        session ||= {recipe: saved.recipe, original: saved.recipe, layer: saved.layer, page: 'shape', pass: 0, entry: 0, rule: 0,
-            relation: 0, path: [], fieldPath: [], logicView: 'rules', scope: 'all', search: '', category: '', favoriteOnly: false};
+        session ||= worldBrushState(project);
         if (session.page === 'library') session.page = 'shape';
         if (session.page === 'rules' || session.page === 'relations') {
             session.logicView = session.page;
@@ -26501,30 +26549,61 @@ const BedrockStructureStudioPlugin = (() => {
             section: design.tabs({type: 'tab_select', presentation: 'inline', dock: false,
                 label: text('Brush sections', 'Secciones del pincel'), value: page, options: pages}),
             use_brush: null,
-            apply_region: null
+            apply_region: null,
+            save_project_brush: null
         };
         const error = e => Blockbench.showQuickMessage(e.message, 4800);
         const controls = () => panel.form.getResult();
         const reopen = () => { if (current()) showWorldBrushStudio(session, false); };
-        const commitDraft = () => {
-            storeWorldBrushState({...worldBrushState(project), recipe: session.recipe, layer: session.layer}, project);
-            refreshStructureHotbar();
-        };
         const resetEditor = () => { session.pass = session.entry = session.rule = session.relation = 0; session.path = []; session.fieldPath = []; };
         const openRecipe = chosen => {
-            session.recipe = chosen;
+            setWorldBrushActive(project, chosen, session.layer);
             session.original = chosen;
             resetEditor();
-            // The viewport reads the project's active recipe, not the editor
-            // draft. Choosing a preset must switch the live brush as well.
-            commitDraft();
-            if (structureToolKind() === 'world_brush') updateStructureToolPreview();
+        };
+        const saveWithProject = () => {
+            worldBrushPresetDialog?.hide();
+            const draft = session.recipe;
+            worldBrushPresetDialog = createStructureDialog({
+                id: 'bedrock_structure_world_brush_save_project',
+                title: text('Keep brush in this project', 'Conservar pincel en este proyecto'),
+                form: {name: {type: 'text', label: text('Name', 'Nombre'), value: draft.id.startsWith('builtin:')
+                    ? draft.name.slice(0, 90) + ' · ' + text('Copy', 'Copia') : draft.name}},
+                onConfirm(result) {
+                    if (!current()) return false;
+                    try {
+                        const saved = worldBrushSavedState(project);
+                        if (saved.presets.length >= 64) throw Error(text('The project brush library is full.', 'La biblioteca de pinceles del proyecto está llena.'));
+                        const candidate = api.validate({...draft, name: result.name, id: 'user:' + guid(), version: 1});
+                        storeWorldBrushState({recipe: candidate, layer: session.layer, presets: [...saved.presets, candidate]}, project);
+                        setWorldBrushActive(project, candidate, session.layer);
+                        session.original = candidate;
+                        reopen();
+                        Blockbench.showQuickMessage(text('Brush included. Save the project to keep it.',
+                            'Pincel incluido. Guarda el proyecto para conservarlo.'), 2400);
+                    } catch (failure) { showStructureFormError(this, failure); return false; }
+                }
+            });
+            worldBrushPresetDialog.show();
+        };
+        const newBrush = () => {
+            openRecipe(api.validate({schema: 1, id: 'user:' + guid(), name: text('Untitled brush', 'Pincel sin nombre'),
+                passes: [{id: 'pass_1', mode: 'surface'}]}));
+            session.page = 'palette';
+            session.logicView = 'rules';
+            reopen();
+            selectStructureTool(STRUCTURE_TOOL_IDS.world_brush);
         };
         let edit = () => {};
+        let formValues = {};
         const remember = r => {
+            const changed = key => JSON.stringify(r[key]) !== JSON.stringify(formValues[key]);
+            if (!Object.keys(r).some(key => !['draft', 'section', 'advanced'].includes(key) && changed(key))) return;
             const copy = JSON.parse(JSON.stringify(session.recipe));
-            edit(r, copy, copy.passes[session.pass]);
-            session.recipe = api.validate(copy);
+            edit(r, copy, copy.passes[session.pass], changed);
+            reviseWorldBrush(project, api.validate(copy), page === 'shape' ? Number(r.layer) : session.layer);
+            formValues = structuredClone(r);
+            owner.refreshValues?.();
         };
         const run = (fn, save = true, refresh = true) => () => {
             if (!current()) return;
@@ -26536,8 +26615,11 @@ const BedrockStructureStudioPlugin = (() => {
             } catch (e) { error(e); }
         };
         const button = (label, icon, click, condition) => ({type: 'action_button', text: label, icon, click, condition, semantic_button: true});
-        const change = fn => { const copy = JSON.parse(JSON.stringify(session.recipe)); fn(copy, copy.passes[session.pass]); session.recipe = api.validate(copy); };
-        const linkedState = () => worldBrushState(project);
+        const change = fn => {
+            const copy = JSON.parse(JSON.stringify(session.recipe));
+            fn(copy, copy.passes[session.pass]);
+            reviseWorldBrush(project, api.validate(copy), session.layer);
+        };
         const deriveRecipe = () => {
             const bounds = currentStructureSelectionBounds();
             if (!bounds) throw Error(text('Select a terrain region first.', 'Primero selecciona una región.'));
@@ -26576,7 +26658,7 @@ const BedrockStructureStudioPlugin = (() => {
             title: text('Brush presets', 'Preajustes de pincel'),
             click: (event, field) => {
                 if (current()) openWorldBrushPresetMenu(event.currentTarget || field.node, {
-                    project, session, current, reopen, openRecipe, readDraft: () => remember(controls()), deriveRecipe, error
+                    project, session, current, reopen, openRecipe, readDraft: () => remember(controls()), newBrush, deriveRecipe, error
                 });
             }
         };
@@ -26617,14 +26699,17 @@ const BedrockStructureStudioPlugin = (() => {
                 change(copy => { copy.mask = {minimum: bounds.minimum, maximum: bounds.maximum}; });
             }), () => session.advanced);
             form.clear_mask = button(text('Clear mask', 'Quitar máscara'), 'clear', run(() => change(copy => { delete copy.mask; })), () => session.advanced && !!recipe.mask);
-            edit = (r, copy) => {
+            edit = (r, copy, _, changed) => {
                 const fields = {type: r.shape, radius: r.radius, width: r.width, height: r.height, depth: r.depth, rotation: r.rotation,
                     orientation: r.orientation, falloff: r.falloff, hardness: r.hardness, spacing: r.spacing, variation: r.variation};
-                for (const [k, v] of Object.entries(fields)) if (v !== undefined) {
+                for (const [k, v] of Object.entries(fields)) if (v !== undefined && changed(k === 'type' ? 'shape' : k)) {
                     copy.shape[k] = ['falloff', 'hardness', 'variation'].includes(k) ? Number(v) / 100 : v;
                 }
-                copy.seed = Number(r.seed); copy.policy = r.policy; session.layer = Number(r.layer);
-                if (r.shape === 'connected') copy.shape.axes = [r.axis_x ?? shape.axes[0], r.axis_y ?? shape.axes[1], r.axis_z ?? shape.axes[2]];
+                if (changed('seed')) copy.seed = Number(r.seed);
+                if (changed('policy')) copy.policy = r.policy;
+                if (r.shape === 'connected' && ['axis_x', 'axis_y', 'axis_z'].some(changed)) {
+                    copy.shape.axes = [r.axis_x ?? shape.axes[0], r.axis_y ?? shape.axes[1], r.axis_z ?? shape.axes[2]];
+                }
             };
         }
 
@@ -26663,19 +26748,24 @@ const BedrockStructureStudioPlugin = (() => {
                 form.remove_entry = button(text('Remove material', 'Quitar material'), 'delete', run(() => {
                     change((_, p) => p.palette.splice(session.entry, 1)); session.entry = 0;
                 }), !entry.locked);
-                edit = (r, _, p) => {
+                edit = (r, _, p, changed) => {
                     const v = p.palette[session.entry];
                     v.locked = r.locked ?? v.locked;
                     if (entry.locked) return;
                     const block = (r.entry_block ?? v.block).trim();
-                    Object.assign(v, {block, weight: r.weight === undefined ? v.weight : Number(r.weight),
-                        probability: r.probability === undefined ? v.probability : Number(r.probability) / 100,
-                        priority: r.priority === undefined ? v.priority : Number(r.priority), enabled: r.enabled ?? v.enabled,
-                        group: r.group ?? v.group, orientation: r.orientation ?? v.orientation});
-                    if (r.orientation === 'vector') v.vector = r.vector;
-                    if (picked?.block === block) { v.states = JSON.parse(picked.statesJson); v.variants = []; }
-                    else if (block === entry.block) v.states = JSON.parse(structureStatesFromForm(statesJson, r, 'world_brush_state_', block));
-                    else { v.states = {}; v.variants = []; }
+                    for (const key of ['weight', 'priority', 'probability', 'enabled', 'group', 'orientation']) {
+                        if (!changed(key)) continue;
+                        v[key] = key === 'probability' ? Number(r[key]) / 100 : ['weight', 'priority'].includes(key) ? Number(r[key]) : r[key];
+                    }
+                    if (r.orientation === 'vector' && (changed('vector') || changed('orientation'))) v.vector = r.vector;
+                    if (picked?.block === block) {
+                        v.states = JSON.parse(picked.statesJson); v.variants = []; picked = null;
+                    } else if (block !== v.block) {
+                        v.states = {}; v.variants = [];
+                    } else if (Object.keys(r).some(key => key.startsWith('world_brush_state_') && changed(key))) {
+                        v.states = JSON.parse(structureStatesFromForm(statesJson, r, 'world_brush_state_', block));
+                    }
+                    v.block = block;
                 };
             } else form.empty = info(text('Add a block to the palette to start painting.', 'Añade un bloque a la paleta para empezar a pintar.'));
             form.add_entry = button(text('Add material', 'Añadir material'), 'add', run(() => {
@@ -26793,14 +26883,18 @@ const BedrockStructureStudioPlugin = (() => {
                 ? text('Active procedural layer', 'Capa procedural activa') + ' · ' + terrainLayerName(active)
                 : text('The result will be stored in a new Terrain layer.', 'El resultado se guardará en una capa nueva.'));
             form.create = button(text('Create procedural layer', 'Crear capa procedural'), 'layers', run(() => {
-                commitDraft(); previewWorldBrushRegion(session.recipe, 0, 'create');
+                previewWorldBrushRegion(session.recipe, 0, 'create');
             }, false, false));
             if (active?.worldBrush) {
                 form.load_layer = button(text('Load layer recipe', 'Cargar receta de capa'), 'folder_open', run(() => {
-                    openRecipe(api.validate(active.worldBrush.recipe)); session.page = 'shape';
+                    let recipe = api.validate(active.worldBrush.recipe);
+                    if (worldBrushSavedState(project).presets.some(preset => preset.id === recipe.id)) {
+                        recipe = api.validate({...recipe, id: 'user:' + guid(), version: 1});
+                    }
+                    openRecipe(recipe); session.page = 'shape';
                 }, false));
                 form.recalc = button(text('Recalculate layer', 'Recalcular capa'), 'refresh', run(() => {
-                    commitDraft(); previewWorldBrushRegion(session.recipe, 0, 'recalculate', active);
+                    previewWorldBrushRegion(session.recipe, 0, 'recalculate', active);
                 }, false, false));
                 form.copy_layer = button(text('Duplicate layer', 'Duplicar capa'), 'content_copy', run(() => {
                     const target = createTerrainLayer(project, terrainLayerName(active) + ' · ' + text('Copy', 'Copia'));
@@ -26827,13 +26921,15 @@ const BedrockStructureStudioPlugin = (() => {
         }
 
         form.apply_region = {...button(text('Preview region', 'Vista previa'), 'select_all', run(() => {
-            commitDraft(); previewWorldBrushRegion(session.recipe, session.layer);
+            previewWorldBrushRegion(session.recipe, session.layer);
         }, true, false), page !== 'layers'), title: text('Preview selected region', 'Previsualizar región seleccionada')};
         form.use_brush = {...button(text('Use brush', 'Usar pincel'), 'brush', run(() => {
-            commitDraft();
             selectStructureTool(STRUCTURE_TOOL_IDS.world_brush);
             updateStructureToolPreview();
-        }, true, false)), background: 'var(--color-selected)'};
+        }, true, false), () => structureToolKind() !== 'world_brush')};
+        const projectBrush = () => worldBrushSavedState(project).presets.some(preset => preset.id === session.recipe.id);
+        form.save_project_brush = {...button(text('Keep in project…', 'Conservar en proyecto…'), 'save', run(saveWithProject, true, false),
+            () => !projectBrush()), title: text('Include this brush when saving the project', 'Incluir este pincel al guardar el proyecto')};
         owner.flush = () => { if (current()) remember(controls()); };
         owner.onChange = result => {
                 if (!current() || owner.building) return;
@@ -26846,12 +26942,11 @@ const BedrockStructureStudioPlugin = (() => {
                 const relationChanged = page === 'logic' && session.logicView === 'relations' && relation && result.relation_type && result.relation_type !== relation.type;
                 const paletteLockChanged = page === 'palette' && palette[session.entry] &&
                     result.locked !== undefined && result.locked !== palette[session.entry].locked;
-                if (!section && !detailChanged && !fieldChanged && !ruleChanged && !relationChanged && !paletteLockChanged) return;
                 try {
                     remember(result);
                     if (section) session.page = section;
                     else if (detailChanged) session.advanced = Boolean(result.advanced);
-                    reopen();
+                    if (section || detailChanged || fieldChanged || ruleChanged || relationChanged || paletteLockChanged) reopen();
                 } catch (e) { error(e); }
         };
         const focused = panel.node.contains(document.activeElement) ? document.activeElement : null;
@@ -26876,6 +26971,7 @@ const BedrockStructureStudioPlugin = (() => {
             while (section.bar.nextElementSibling) content.append(section.bar.nextElementSibling);
             panel.form.node.append(content);
             panel.form.updateValues?.({cause: 'setup'});
+            formValues = structuredClone(controls());
             applyStructurePanelLayouts();
             for (const label of content.querySelectorAll('label.name_space_left')) {
                 if (!label.title) label.title = label.textContent?.trim() || '';
@@ -26893,8 +26989,9 @@ const BedrockStructureStudioPlugin = (() => {
                 presetAnchor.append(chevron);
                 const openPresets = () => openWorldBrushPresetMenu(presetAnchor, {
                     project, session, current, reopen, openRecipe,
-                    readDraft: () => remember(controls()), deriveRecipe, error
+                    readDraft: () => remember(controls()), newBrush, deriveRecipe, error
                 });
+                owner.refreshValues = () => panel.form.form_data.draft.setValue(session.recipe.name);
                 presetAnchor.addEventListener('click', openPresets);
                 presetAnchor.addEventListener('keydown', event => {
                     if (event.key !== 'Enter' && event.key !== ' ') return;
@@ -27104,10 +27201,21 @@ const BedrockStructureStudioPlugin = (() => {
                         : `${entry.type} · ${structureBlockDisplayName(entry.subject)}`;
                     const detail = document.createElement('span');
                     detail.className = 'bedrock_world_brush_logic_item_detail';
-                    detail.textContent = isRule
-                        ? `${text('IF', 'SI')} ${conditionText(entry.when)} → ${entry.action.type} ${entry.action.block || ''}`
-                        : `${structureBlockDisplayName(entry.subject)} → ${structureBlockDisplayName(entry.target)} · ${entry.radius} ${text('blocks', 'bloques')}`;
-                    item.title = detail.textContent;
+                    const refreshDetails = value => {
+                        detail.textContent = isRule
+                            ? `${text('IF', 'SI')} ${conditionText(value.when)} → ${value.action.type} ${value.action.block || ''}`
+                            : `${structureBlockDisplayName(value.subject)} → ${structureBlockDisplayName(value.target)} · ${value.radius} ${text('blocks', 'bloques')}`;
+                        if (isRule) headline.textContent = `${text('Rule', 'Regla')} ${index + 1}${value.enabled ? '' : ' · ⏸'}`;
+                        item.title = detail.textContent;
+                    };
+                    refreshDetails(entry);
+                    if (selected) {
+                        const refreshIdentity = owner.refreshValues;
+                        owner.refreshValues = () => {
+                            refreshIdentity?.();
+                            refreshDetails(session.recipe.passes[session.pass][session.logicView][index]);
+                        };
+                    }
                     if (!isRule) {
                         const header = document.createElement('span');
                         header.className = 'bedrock_world_brush_logic_item_header';
@@ -27226,7 +27334,7 @@ const BedrockStructureStudioPlugin = (() => {
                     owner.disposeMaterialObserver = () => { if (frame) cancelAnimationFrame(frame); };
                 }
             }
-            const footer = content.querySelector('.bedrock_world_brush_action_row:has(.form_bar_use_brush)');
+            const footer = content.querySelector('.bedrock_world_brush_action_row:has(.form_bar_save_project_brush)');
             if (footer) {
                 footer.classList.add('bedrock_world_brush_footer');
                 panel.form.node.append(footer);
@@ -27362,7 +27470,7 @@ const BedrockStructureStudioPlugin = (() => {
         form.remove_rule = button(text('Remove', 'Eliminar'), 'delete', run(() => {
             change((_, p) => p.rules.splice(session.rule, 1)); session.rule = 0; session.path = [];
         }));
-        return (r, _, p) => {
+        return (r, _, p, changedControl) => {
             p.iterations = r.iterations ?? p.iterations;
             const changed = p.rules[session.rule];
             Object.assign(changed, {enabled: r.enabled ?? rule.enabled,
@@ -27386,8 +27494,11 @@ const BedrockStructureStudioPlugin = (() => {
                 if (rangeCondition(r)) next.value = [r.min_value, r.max_value];
                 if (next.op === 'chance') next.value = Number(r.chance) / 100;
             }
-            if (!path.length) changed.when = next;
-            else conditionAt(changed.when, path.slice(0, -1)).children[path.at(-1)] = next;
+            if (['condition_op', 'query', 'query_radius', 'query_metric', 'query_offset', 'quantifier', 'count', 'condition_block',
+                'condition_set', 'condition_trait', 'state_name', 'state_value', 'context', 'min_value', 'max_value', 'chance'].some(changedControl)) {
+                if (!path.length) changed.when = next;
+                else conditionAt(changed.when, path.slice(0, -1)).children[path.at(-1)] = next;
+            }
             const action = {type: r.action, offset: r.action === 'decorate' ? rule.action.type === 'decorate' ? rule.action.offset : [0, 1, 0]
                 : r.action === 'tag' ? [0, 0, 0] : r.action_offset};
             if (['replace', 'place', 'decorate'].includes(r.action)) {
@@ -27395,13 +27506,17 @@ const BedrockStructureStudioPlugin = (() => {
                 if (action.block === rule.action.block) action.states = rule.action.states;
             }
             if (r.action === 'states') {
-                action.states = {...rule.action.states};
-                if (state !== r.action_state.trim()) delete action.states[state];
-                action.states[r.action_state.trim()] = rule.action.type === 'states' && r.action_value === String(value) ? value : simpleValue(r.action_value);
+                const prior = changed.action.states ?? {};
+                const [priorState, priorValue] = Object.entries(prior)[0] ?? [state, value];
+                action.states = {...prior};
+                if (priorState !== r.action_state.trim()) delete action.states[priorState];
+                action.states[r.action_state.trim()] = changed.action.type === 'states' && r.action_value === String(priorValue) ? priorValue : simpleValue(r.action_value);
             }
             if (r.action === 'tag') action.tag = r.action_tag.trim();
             if (r.action === 'rule') action.rule = r.target_rule;
-            changed.action = action;
+            if (['action', 'action_block', 'action_state', 'action_value', 'action_offset', 'action_tag', 'target_rule'].some(changedControl)) {
+                changed.action = action;
+            }
         };
     }
 
@@ -32765,6 +32880,10 @@ const BedrockStructureStudioPlugin = (() => {
                 if (alias.startsWith('java:')) {
                     const original = alias.slice(5).replace(/^minecraft:/,'');
                     const terrainName = original.replace(/^block\//,'');
+                    // Half-specific texture aliases are not block IDs. Keep
+                    // the plant's biome tint and cutout when resolving them.
+                    const tintedPlantHalf = /^(?:tall_grass|large_fern)_(?:top|bottom)$/.test(terrainName)
+                        && vanillaTintMethod(blockName, states) === 'grass';
                     const names = [terrainName, original];
                     const door = /^([a-z_]+)_door_(bottom|top)$/.exec(terrainName);
                     if (door) {
@@ -32776,7 +32895,8 @@ const BedrockStructureStudioPlugin = (() => {
                     // older legacy aliases for logs/planks.
                     if (legacyTextureNameMap[terrainName]) names.push(legacyTextureNameMap[terrainName]);
                     for (const name of names) {
-                        const descriptor = resolveFaceUncached(`minecraft:${name}`,states,fallbackFace,position,renderOptions,false);
+                        const descriptor = resolveFaceUncached(`minecraft:${name}`, states, fallbackFace, position, renderOptions,
+                            false, null, tintedPlantHalf ? blockName : undefined);
                         if (descriptor?.material) return descriptor;
                     }
                     // A Bedrock resource pack may not contain Java's separate
@@ -32820,20 +32940,22 @@ const BedrockStructureStudioPlugin = (() => {
                         }
                     }
                     if (texture) {
-                        const mode = original.startsWith('entity/') ? 'opaque'
+                        const mode = tintedPlantHalf ? blockRenderMode(blockName, renderOptions, states)
+                            : original.startsWith('entity/') ? 'opaque'
                             : /^block\/mangrove_roots_/.test(original) ? 'alpha_test_single_sided'
                             : /(?:door|torch|lantern|fire|flower|petals|grass|leaves|mangrove_roots|vine|moss|sapling|candle|sculk_sensor_tendril)/.test(original)
                                 ? 'alpha_test' : 'opaque';
                         const flipbook = flipbookDefinitionFor(`java:${original}`,filePath||original,javaJar);
                         // Block/entity atlases (e.g. the bell's 32x32 box UVs)
                         // must not be collapsed to a 16x16 terrain tile.
-                        const javaTint = original === 'block/pink_petals_stem' ? grassTintColor() : '#ffffff';
+                        const plantTint = tintedPlantHalf && renderOptions?.inventoryCarried !== true;
+                        const javaTint = plantTint || original === 'block/pink_petals_stem' ? grassTintColor() : '#ffffff';
                         const atlas = original.startsWith('entity/') || flipbook ? null
                             : atlasAppearance({texture,filePath:filePath||original,
                                 path:filePath||original,mode,tint:javaTint,opacity:1});
                         if (atlas?.page?.material) return {
                             key: atlas.page.key, material:atlas.page.material,
-                            texture, alias:`java:${original}`, path:filePath, mode,
+                            texture, alias:`java:${original}`, path:filePath, mode, tint:javaTint,
                             uvQuarterTurns:0,uvRect:atlas.uvRect,atlasPage:atlas.page.id,
                             get atlasReady() {return atlas.ready;}, inventoryAtlasEntry:atlas,
                         };
@@ -32843,7 +32965,7 @@ const BedrockStructureStudioPlugin = (() => {
                         });
                         if (material) return {
                             key:`java-local:${texture.uuid}:${mode}`,material,texture,
-                            alias:`java:${original}`,path:filePath,mode,uvQuarterTurns:0,
+                            alias:`java:${original}`,path:filePath,mode,tint:javaTint,uvQuarterTurns:0,
                             flipbookAnimation:material.userData?.bedrockFlipbookAnimation || null,
                         };
                     }
@@ -33147,7 +33269,8 @@ const BedrockStructureStudioPlugin = (() => {
             return animation;
         }
 
-        function resolveFaceUncached(blockName, states, face, position = [0,0,0], renderOptions = null, allowJavaFallback = true, textureOverride = null) {
+        function resolveFaceUncached(blockName, states, face, position = [0,0,0], renderOptions = null,
+            allowJavaFallback = true, textureOverride = null, appearanceBlockName = blockName) {
             const solidWater = solidWaterDescriptor(blockName);
             if (solidWater) return solidWater;
             const javaFallback = () => {
@@ -33223,7 +33346,7 @@ const BedrockStructureStudioPlugin = (() => {
             const texture = getTexture(filePath);
             if (!texture) return null;
 
-            const mode = blockRenderMode(blockName, renderOptions, states);
+            const mode = blockRenderMode(appearanceBlockName, renderOptions, states);
             const identifier = String(blockName).replace(/^.*:/, '');
             const isGrassBlock = identifier === 'grass_block' || identifier === 'grass';
             const isGrassTop = isGrassBlock && (alias === 'grass_top' || face === 'up');
@@ -33231,7 +33354,7 @@ const BedrockStructureStudioPlugin = (() => {
                 && ['north', 'south', 'east', 'west'].includes(face)
                 && (alias === 'grass_side' || /grass_side(?:\.|$)/.test(String(variant.path || '')));
             const tintMethod = renderOptions?.inventoryCarried === true || snowyGrassSide ? 'none'
-                : vanillaTintMethod(blockName, states, alias || '', String(variant.path || ''), face);
+                : vanillaTintMethod(appearanceBlockName, states, alias || '', String(variant.path || ''), face);
             let tint = tintMethod !== 'none'
                 ? tintColorForMethod(tintMethod)
                 : (variant.overlayColor || '#ffffff');
@@ -35760,12 +35883,10 @@ form.on('change',({result})=>{if(editable){const index=ids.indexOf(id);ids[index
                     const radius = Math.max(1, Math.min(32, source.shape.radius + (action === 'radius_up' ? 1 : -1)));
                     if (radius !== source.shape.radius) {
                         const recipe = getWorldBrushModule().validate({...source, shape: {...source.shape, radius}});
-                        storeWorldBrushState({...state, recipe, layer: owner?.project === Project ? owner.session.layer : state.layer});
+                        reviseWorldBrush(Project, recipe, state.layer);
                         if (owner?.project === Project) {
-                            owner.session.recipe = recipe;
                             showWorldBrushStudio(owner.session, false);
                         }
-                        refreshStructureHotbar(); updateStructureToolPreview();
                     }
                 } catch (failure) { showError('World Brush radius', failure); }
             }
@@ -37168,7 +37289,7 @@ form.on('change',({result})=>{if(editable){const index=ids.indexOf(id);ids[index
             applyGroups(worldBrushPanel.form, [
                 {elements: ['draft', 'presets'], gap: '2px', class_name: 'bedrock_world_brush_identity',
                     flex: {draft: '1 1 auto', presets: '0 0 auto'}, aria_label: text('Brush preset', 'Preajuste del pincel')},
-                actionGroup(text('Brush actions', 'Acciones del pincel'), 'use_brush', 'apply_region'),
+                actionGroup(text('Brush actions', 'Acciones del pincel'), 'use_brush', 'apply_region', 'save_project_brush'),
                 actionGroup(text('Recipe mask', 'Máscara de receta'), 'mask', 'clear_mask'),
                 actionGroup(text('Manage passes', 'Gestionar pasadas'), 'add_pass', 'remove_pass'),
                 actionGroup(text('Edit material', 'Editar material'), 'copy_entry', 'remove_entry'),
@@ -39421,7 +39542,14 @@ form.on('change',({result})=>{if(editable){const index=ids.indexOf(id);ids[index
                 }
                 if (!targetProject.mcstructure_world_brush_json && typeof model?.mcstructure_world_brush_json === 'string') {
                     targetProject.mcstructure_world_brush_json = model.mcstructure_world_brush_json;
+                }
+                if (worldBrushProjects.get(targetProject)?.source !== targetProject.mcstructure_world_brush_json) {
                     worldBrushProjects.delete(targetProject);
+                    worldBrushWorkspaces.delete(targetProject);
+                    if (worldBrushPanelContext?.project === targetProject) {
+                        worldBrushPanelContext.disposeMaterialObserver?.();
+                        worldBrushPanelContext = null;
+                    }
                 }
                 const runtime = ensureLogicalRuntime(targetProject);
                 if (!runtime) return;

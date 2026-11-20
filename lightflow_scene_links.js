@@ -484,6 +484,63 @@
         }
         return {version:1,groups};
     }
+    function groupLocalOrigin(group,byId) {
+        const parent=byId.get(group.parentId);
+        return group.origin.map((value,i)=>value-(parent?.origin[i]||0));
+    }
+    function uniquePoseIndex(items,keyFor) {
+        const index=new Map();
+        for(const item of items){
+            const key=keyFor(item);
+            index.set(key,index.has(key)?null:item);
+        }
+        return index;
+    }
+    function rigPosePaths(groups) {
+        const paths=new Map();
+        for(const group of groups)paths.set(group.id,[...(paths.get(group.parentId)||[]),group.name]);
+        return paths;
+    }
+    function retargetRigPose(groups,pose,rotationFor) {
+        const byId=new Map(groups.map(group=>[group.id,group])),paths=rigPosePaths(groups);
+        const pathKey=path=>JSON.stringify(path),boneName=bone=>bone.path.at(-1);
+        const targetPaths=uniquePoseIndex(groups,group=>pathKey(paths.get(group.id)));
+        const targetNames=uniquePoseIndex(groups,group=>group.name);
+        const posePaths=uniquePoseIndex(pose.bones,bone=>pathKey(bone.path));
+        const poseNames=uniquePoseIndex(pose.bones,boneName);
+        const matched=new Map(),used=new Set();
+        for(const [path,group] of targetPaths){
+            const bone=posePaths.get(path);
+            if(group&&bone){matched.set(group,bone);used.add(bone);}
+        }
+        for(const [name,group] of targetNames){
+            const bone=poseNames.get(name);
+            if(group&&bone&&!matched.has(group)&&!used.has(bone))matched.set(group,bone);
+        }
+        const snapshot=Object.create(null);
+        for(const [group,bone] of matched)snapshot[group.id]={
+            position:groupLocalOrigin(group,byId).map((value,i)=>value+bone.offset[i]),
+            rotation:rotationFor(bone.rotation),scale:bone.scale
+        };
+        return normalizePoseSnapshot({version:1,groups:snapshot});
+    }
+    function retargetLegacyPose(groups,data) {
+        const byId=new Map(groups.map(group=>[group.id,group]));
+        const names=uniquePoseIndex(groups,group=>group.name),compact=uniquePoseIndex(groups,group=>group.name.replace(/\s/g,''));
+        const entries=new Map();
+        for(const group of groups){
+            const name=group.name,short=name.replace(/\s/g,'');
+            if(names.get(name)===group&&Object.hasOwn(data,name))entries.set(group.id,data[name]);
+            else if(compact.get(short)===group&&Object.hasOwn(data,short))entries.set(group.id,data[short]);
+        }
+        const snapshot=Object.create(null);
+        for(const [id,entry] of entries){
+            const group=byId.get(id),parentOffset=entries.get(group.parentId)?.offset;
+            snapshot[id]={position:groupLocalOrigin(group,byId).map((value,i)=>value+(entry.offset?.[i]||0)-(parentOffset?.[i]||0)),
+                rotation:Array.isArray(entry)?entry:entry.rotation,scale:group.scale};
+        }
+        return normalizePoseSnapshot({version:1,groups:snapshot});
+    }
     const animationSupport=new WeakMap();
     function animationSupported(animation) {
         if(!plain(animation))return false;
@@ -761,7 +818,7 @@
         return walk(start);
     }
 
-    return {VERSION,textureMeshTexture,updateTextureMeshGeometry,patchTerrainMapSamples,terrainGridOffset,terrainFaceRanges,createTerrainInstanceGeometry,createTerrainBufferOwnerGeometry,parseBBModel,terrainSections,inspectBBModel,sourceMaterialDefinitions,linkedMaterialDefinition,linkedTextureReferences,linkedTextureBindings,normalizePose,portablePathAPI,quaternionFromDegrees,resolveGroupPose,normalizePoseSnapshot,animationSupported,normalizeLinkedAnimations,sampleAnimationChannel,linkedAnimationTime,reconcilePoses,makeLinkReference,resolveLinkReference,rebaseLinkReference,canonicalPathKey,sourceCacheKey,readLinkedFile,readLinkedSource,buildSceneBundle,sourceDisplayStatus,detectReferenceCycle};
+    return {VERSION,textureMeshTexture,updateTextureMeshGeometry,patchTerrainMapSamples,terrainGridOffset,terrainFaceRanges,createTerrainInstanceGeometry,createTerrainBufferOwnerGeometry,parseBBModel,terrainSections,inspectBBModel,sourceMaterialDefinitions,linkedMaterialDefinition,linkedTextureReferences,linkedTextureBindings,normalizePose,portablePathAPI,quaternionFromDegrees,resolveGroupPose,normalizePoseSnapshot,groupLocalOrigin,rigPosePaths,retargetRigPose,retargetLegacyPose,animationSupported,normalizeLinkedAnimations,sampleAnimationChannel,linkedAnimationTime,reconcilePoses,makeLinkReference,resolveLinkReference,rebaseLinkReference,canonicalPathKey,sourceCacheKey,readLinkedFile,readLinkedSource,buildSceneBundle,sourceDisplayStatus,detectReferenceCycle};
 });
 
 if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
@@ -811,7 +868,8 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 "choose_key_pose": ["Choose pose for keyframe…","Elegir pose del keyframe…"],
                 "pose_channel": ["Pose","Pose"],
                 "select_local_animation": ["Select or create a local animation first.","Selecciona o crea primero una animación local."],
-                "pose_source_changed": ["The linked skin changed. Select the pose again.","La skin vinculada cambió. Selecciona la pose de nuevo."],
+                "pose_source_changed": ["The linked source changed. Select the pose again.","El origen vinculado cambió. Selecciona la pose de nuevo."],
+                "pose_no_matching_bones": ["This pose has no matching bones in the linked source.","Esta pose no tiene huesos que coincidan con el origen vinculado."],
                 "pose_zero_scale": ["This bone has a zero-scale base. Use the Pose channel instead.","Este hueso tiene una escala base cero. Usa el canal Pose."],
                 "pose_current": ["Current pose","Pose actual"],
                 "multiple_poses": ["Multiple poses","Varias poses"],
@@ -887,13 +945,16 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 "choose_file": ["Choose file","Elegir archivo"],
                 "the_source_remains_editable_in_its_own_tab": ["The source remains editable in its own tab.","El origen se puede seguir editando en su propia pestaña."],
                 "close": ["Close","Cerrar"],
-                "apply_skin_pose": ["Apply skin pose","Aplicar pose de skin"],
+                "apply_skin_pose": ["Apply pose","Aplicar pose"],
+                "linked_pose": ["Poses","Poses"],
                 "skin_pose": ["Skin pose","Pose de skin"],
                 "cannot_apply_pose": ["Cannot apply pose","No se puede aplicar la pose"],
                 "saved_poses": ["Saved poses","Poses guardadas"],
                 "project_skin_poses": ["Project poses","Poses del proyecto"],
                 "source_skin_poses": ["Source file poses…","Poses del archivo de origen…"],
+                "import_source_poses": ["Import source poses into this project…","Importar poses del origen a este proyecto…"],
                 "source_skin_poses_empty": ["The source has no saved poses","El origen no tiene poses guardadas"],
+                "no_saved_poses": ["Save or import a pose first.","Guarda o importa una pose primero."],
                 "restore_source_pose": ["Restore source pose","Restaurar pose del origen"],
                 "reset_local_pose": ["Reset local pose","Restablecer pose local"],
                 "instance_settings": ["Instance settings","Ajustes de instancia"],
@@ -1207,6 +1268,8 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
             window.LightflowScenePoseElement=ScenePoseElement;
             const rootOf=element=>{let node=element;while(node&&node!=='root'){if(node.type==='lightflow_scene_instance')return node;node=node.parent;}return null;};
             const isSkinRoot=root=>root?.type==='lightflow_scene_instance'&&(root._lightflowManifest?.format||root.source_model_format)==='skin';
+            const hasPoseRig=root=>root?.type==='lightflow_scene_instance'&&
+                (root._lightflowManifest?root._lightflowManifest.groups.length>0:isSkinRoot(root)||root.children.some(child=>child.type==='lightflow_pose_group'));
             const recordFor=element=>sourceForPose.get(element)||null;
             const setupNode=(element,controller)=>{
                 const node=new THREE.Group();node.name=element.uuid;node.type=element.type;node.isElement=true;
@@ -1228,14 +1291,14 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
             }
             LinkedNodeAnimator.prototype.type='lightflow_scene_pose_animation';
             const poseChannel='lightflow_pose';
-            const skinChannels={...BoneAnimator.prototype.channels,[poseChannel]:{name:t('pose_channel'),mutable:true,transform:true,max_data_points:1}};
+            const poseChannels={...BoneAnimator.prototype.channels,[poseChannel]:{name:t('pose_channel'),mutable:true,transform:true,max_data_points:1}};
             class LinkedInstanceAnimator extends LinkedNodeAnimator {
                 constructor(...args){super(...args);this[poseChannel]||=[];this.muted[poseChannel]??=false;}
-                get channels(){return isSkinRoot(OutlinerNode.uuids[this.uuid])?skinChannels:BoneAnimator.prototype.channels;}
+                get channels(){return hasPoseRig(OutlinerNode.uuids[this.uuid])?poseChannels:BoneAnimator.prototype.channels;}
                 displayFrame(multiplier=1){if(disposed)return;this._lightflowPoseWeight=multiplier;return super.displayFrame(multiplier);}
                 createKeyframe(value,time,channel,undo,select){
                     if(channel===poseChannel){
-                        if(!isSkinRoot(this.getGroup()))return;
+                        if(!hasPoseRig(this.getGroup()))return;
                         if(!value?.lightflow_pose_snapshot){
                             if(!activeMounts.has(this.getGroup())){Blockbench.showQuickMessage(t('source_unavailable'));return;}
                             value={lightflow_pose_snapshot:captureLinkedPose(this.getGroup()),lightflow_pose_label:t('pose_current')};
@@ -2310,7 +2373,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 const keys=[];
                 for(const key of animator[poseChannel]||[]){try{keys.push({key,snapshot:core.normalizePoseSnapshot(key.lightflow_pose_snapshot)});}catch{/* Ignore malformed or future snapshots. */}}
                 if(!keys.length)return null;
-                const groups={},order=window.Format?.euler_order||root._lightflowEulerOrder||'ZYX';
+                const groups={},order=root._lightflowEulerOrder||'ZYX';
                 const neutralMesh={fix_rotation:new THREE.Euler(0,0,0,order),rotation:new THREE.Euler(0,0,0,order)};
                 const lastValues=Animator._last_values;
                 Animator._last_values=Object.fromEntries(Object.entries(lastValues||{}).map(([channel,values])=>[channel,Array.isArray(values)?values.slice():values]));
@@ -2342,7 +2405,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 updatingAnimatedTree=true;
                 try{
                     const frames=[];
-                    if(Modes.animate&&isSkinRoot(element))for(const animation of Animator.animations){
+                    if(Modes.animate&&hasPoseRig(element))for(const animation of Animator.animations){
                         const animator=animation.animators?.[element.uuid];
                         if(!animation.playing||!animator||animator.muted?.[poseChannel]||!animator[poseChannel]?.length)continue;
                         const groups=sampleNativePoseKeyframes(animator,element);
@@ -2702,24 +2765,83 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 pickerDialog=picker;picker.show();
             };
             const addAction=new Action('lightflow_scene_link_add',{name:'lightflow_links.add',icon:'kid_star',category:'edit',condition:()=>!!Project,click:showSourcePicker});
-            const buildSkinPoseSnapshot=async(root,preset,data)=>{
-                if(!isSkinRoot(root))throw Error(t('pose_source_changed'));
-                const receiver=Project,reference=root.source_link,revision=root.source_revision,result=await readSource(root);
-                if(disposed||Project!==receiver||OutlinerNode.uuids[root.uuid]!==root||root.source_link!==reference||root.source_revision!==revision)return null;
-                if(result.status!=='ready'||result.model.meta?.model_format!=='skin')throw Error(t('pose_source_changed'));
-                const posed=await prepareSourceModel({...result.model,skin_pose:'',skin_pose_data:data},preset);
-                if(disposed||Project!==receiver||OutlinerNode.uuids[root.uuid]!==root||root.source_link!==reference||root.source_revision!==revision)return null;
-                const desired=core.inspectBBModel(posed),targets=new Map(desired.groups.map(group=>[group.id,group])),groups={};
-                for(const pose of treeFor(root).values()){
-                    const target=targets.get(pose.source_group_id);if(!target)continue;
-                    const parent=target.parentId?targets.get(target.parentId):null;
-                    groups[pose.source_group_id]={position:target.origin.map((value,i)=>value-(parent?.origin[i]||0)),rotation:target.rotation.slice(),scale:(target.scale||[1,1,1]).slice()};
+            const skinLibraryMenus=new Set();
+            let poseMenuRequest=0;
+            const poseMenuPosition=event=>{
+                if(Number.isFinite(event?.clientX)&&Number.isFinite(event?.clientY)&&(event.clientX||event.clientY))
+                    return {clientX:event.clientX,clientY:event.clientY};
+                const anchor=event?.currentTarget?.getBoundingClientRect?.();
+                return anchor?.width?{clientX:anchor.left,clientY:anchor.bottom}:'mouse';
+            };
+            const closePoseMenus=()=>{
+                poseMenuRequest++;
+                for(const menu of skinLibraryMenus)if(Menu.open===menu)menu.hide();
+                skinLibraryMenus.clear();
+            };
+            const requestPoseMenu=position=>{
+                const request=++poseMenuRequest,parentMenu=Menu.open;
+                return async(active,open)=>{
+                    // Blockbench closes the clicked menu in a bubbling handler.
+                    // Mount the next menu after that handler releases Menu.open.
+                    await new Promise(resolve=>setTimeout(resolve,0));
+                    if(request!==poseMenuRequest||!active()||(Menu.open&&Menu.open!==parentMenu))return;
+                    const menu=open(position);
+                    if(menu){skinLibraryMenus.clear();skinLibraryMenus.add(menu);}
+                };
+            };
+            const poseTargetGuard=root=>{
+                const receiver=Project,reference=root.source_link,revision=root.source_revision;
+                return ()=>!disposed&&Project===receiver&&OutlinerNode.uuids[root.uuid]===root&&root.source_link===reference&&root.source_revision===revision;
+            };
+            const unposedGroups=async({model,manifest})=>manifest.format==='skin'
+                ?core.inspectBBModel(await prepareSourceModel({...model,skin_pose:'',skin_pose_data:{}})).groups
+                :manifest.groups;
+            const captureLibraryPose=async root=>{
+                const active=poseTargetGuard(root),result=activeMounts.get(root)?.result;
+                if(!result||!hasPoseRig(root))throw Error(t('source_unavailable'));
+                const order=root._lightflowEulerOrder||'ZYX',snapshot=captureLinkedPose(root);
+                const groups=await unposedGroups(result);
+                if(!active())return null;
+                const byId=new Map(groups.map(group=>[group.id,group])),paths=core.rigPosePaths(groups),bones=[];
+                for(const [id,transform] of Object.entries(snapshot.groups)){
+                    const group=byId.get(id);if(!group)continue;
+                    const base=core.groupLocalOrigin(group,byId);
+                    bones.push({path:paths.get(id),rotation:transform.rotation,scale:transform.scale,offset:transform.position.map((value,i)=>value-base[i])});
                 }
-                if(!Object.keys(groups).length)throw Error(t('pose_source_changed'));
-                return core.normalizePoseSnapshot({version:1,groups});
+                return {schema:'lightflow_linked_pose',version:1,order,bones};
+            };
+            const buildSkinPoseSnapshot=async(root,preset,data)=>{
+                if(!hasPoseRig(root))throw Error(t('pose_source_changed'));
+                const active=poseTargetGuard(root),result=await readSource(root);
+                if(!active())return null;
+                if(result.status!=='ready'||result.revision!==root.source_revision)throw Error(t('pose_source_changed'));
+                const {manifest,model}=result,library=window.LightflowSkinPoses;
+                const isSkin=manifest.format==='skin';
+                let snapshot;
+                if(library?.core.isLinkedPose(data)){
+                    const pose=library.core.data(data),groups=await unposedGroups(result),order=root._lightflowEulerOrder||'ZYX';
+                    const rotationFor=rotation=>pose.order===order?rotation:new THREE.Euler(...rotation.map(Math.degToRad),pose.order)
+                        .reorder(order).toArray().slice(0,3).map(Math.radToDeg);
+                    snapshot=core.retargetRigPose(groups,pose,rotationFor);
+                }else if(isSkin){
+                    if(data&&Object.keys(data).length&&!Object.keys(core.retargetLegacyPose(manifest.groups,data).groups).length)throw Error(t('pose_no_matching_bones'));
+                    const posed=await prepareSourceModel({...model,skin_pose:'',skin_pose_data:data},preset);
+                    const groups=core.inspectBBModel(posed).groups,byId=new Map(groups.map(group=>[group.id,group]));
+                    snapshot=core.normalizePoseSnapshot({version:1,groups:Object.fromEntries(groups.map(group=>[group.id,{
+                        position:core.groupLocalOrigin(group,byId),rotation:group.rotation,scale:group.scale
+                    }]))});
+                }else{
+                    if(!data||preset)throw Error(t('pose_no_matching_bones'));
+                    snapshot=core.retargetLegacyPose(manifest.groups,data);
+                }
+                if(!active())return null;
+                const mounted=treeFor(root);
+                for(const id of Object.keys(snapshot.groups))if(!mounted.has(id))delete snapshot.groups[id];
+                if(!Object.keys(snapshot.groups).length)throw Error(t('pose_no_matching_bones'));
+                return snapshot;
             };
             const poseKeyContext=(root,keys=null)=>{
-                if(disposed||!Modes.animate||!isSkinRoot(root)||!window.Format?.animation_mode)return null;
+                if(disposed||!Modes.animate||!hasPoseRig(root)||!window.Format?.animation_mode)return null;
                 const animation=Animation.selected;
                 if(!animation||animation._lightflowSceneLinkClock){Blockbench.showQuickMessage(t('select_local_animation'));return null;}
                 return {root,project:Project,animation,time:Timeline.snapTime(Timeline.time),keys};
@@ -2727,7 +2849,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
             const insertSkinPoseKeys=async(context,preset,data,name,mode='bones')=>{
                 if(!context||disposed||!Modes.animate)return [];
                 const {root,project,animation,time,keys}=context,snapshot=await buildSkinPoseSnapshot(root,preset,data);
-                if(!snapshot||disposed||!Modes.animate||Project!==project||Animation.selected!==animation||OutlinerNode.uuids[root.uuid]!==root||!isSkinRoot(root))return [];
+                if(!snapshot||disposed||!Modes.animate||Project!==project||Animation.selected!==animation||OutlinerNode.uuids[root.uuid]!==root||!hasPoseRig(root))return [];
                 if(!keys&&Math.abs(Timeline.snapTime(Timeline.time)-time)>1e-7)return [];
                 if(keys&&!keys.every(key=>key.animator?.animation===animation&&key.animator[poseChannel]?.includes(key)))return [];
                 const created=[];
@@ -2758,30 +2880,33 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
                 (keys?.[0]||created[0])?.select();TickUpdates.keyframe_selection=true;Animator.preview();
                 return keys||created;
             };
-            const chooseSkinPose=async(root,choose,event)=>{
-                const position=event?.currentTarget?.isConnected?event.currentTarget:Number.isFinite(event?.clientX)?{clientX:event.clientX,clientY:event.clientY}:'mouse';
-                const receiver=Project,reference=root.source_link,library=window.LightflowSkinPoses,result=await readSource(root);
-                if(disposed||!Modes.animate||Project!==receiver||OutlinerNode.uuids[root.uuid]!==root||root.source_link!==reference||!isSkinRoot(root))return;
-                const items=[new MenuSeparator('lightflow_pose_presets',t('skin_pose')),
-                    ...['none','natural','walking','crouching','sitting','jumping','aiming'].map(id=>({id:'preset_'+id,name:tl('panel.skin_pose.'+id),icon:'accessibility_new',click:()=>choose(id,undefined,tl('panel.skin_pose.'+id))}))];
+            const chooseLinkedPose=async(root,choose,event)=>{
+                const open=requestPoseMenu(poseMenuPosition(event));
+                const receiver=Project,active=poseTargetGuard(root),library=window.LightflowSkinPoses,result=await readSource(root);
+                if(!active()||!Modes.animate||!hasPoseRig(root)||window.LightflowSkinPoses!==library)return;
+                const pick=(...args)=>{if(active()&&Modes.animate)choose(...args);};
+                const items=[];
+                if(isSkinRoot(root))items.push(new MenuSeparator('lightflow_pose_presets',t('skin_pose')),
+                    ...skinPresets.map(id=>({id:'preset_'+id,name:tl('panel.skin_pose.'+id),icon:'accessibility_new',click:()=>pick(id,undefined,tl('panel.skin_pose.'+id))})));
                 const saved=StateMemory.get('skin_poses')||[];
-                if(saved.length)items.push(new MenuSeparator('lightflow_pose_global',t('saved_poses')),...saved.map((pose,index)=>({id:'global_'+index,name:pose.name,icon:'accessibility',click:()=>choose(undefined,JSON.parse(JSON.stringify(pose.data)),pose.name)})));
+                if(saved.length)items.push(new MenuSeparator('lightflow_pose_global',t('saved_poses')),...saved.map((pose,index)=>({id:'global_'+index,name:pose.name,icon:'accessibility',click:()=>pick(undefined,JSON.parse(JSON.stringify(pose.data)),pose.name)})));
                 if(library){
-                    const append=(model,prefix)=>{const entries=library.menuItems(model,(data,pose)=>choose(undefined,data,pose?.name||t('pose_channel')));
+                    const append=(model,prefix)=>{const entries=library.menuItems(model,(data,pose)=>pick(undefined,data,pose?.name||t('pose_channel')));
                         items.push(...entries.map(item=>item instanceof MenuSeparator?new MenuSeparator(prefix+'_'+item.id,prefix+' · '+item.label):{...item,id:prefix+'_'+item.id}));};
                     append(receiver,t('project_skin_poses'));if(result.status==='ready')append(result.model,t('source_skin_poses').replace(/…$/,''));
                 }
-                const menu=library?.openMenu?library.openMenu(items,position):new Menu(items,{searchable:true}).open(position);
-                skinLibraryMenus.clear();skinLibraryMenus.add(menu);
+                if(!items.length){Blockbench.showQuickMessage(t('no_saved_poses'));return;}
+                await open(()=>active()&&Modes.animate&&window.LightflowSkinPoses===library,
+                    anchor=>library?.openMenu?library.openMenu(items,anchor):new Menu(items,{searchable:true}).open(anchor));
             };
             const runPosePicker=(context,mode,event)=>{
                 if(!context)return;
                 const report=error=>{if(!disposed&&Project===context.project)Blockbench.showMessageBox({title:t('cannot_apply_pose'),message:String(error.message||error)});};
-                chooseSkinPose(context.root,(preset,data,name)=>insertSkinPoseKeys(context,preset,data,name,mode).catch(report),event).catch(report);
+                chooseLinkedPose(context.root,(preset,data,name)=>insertSkinPoseKeys(context,preset,data,name,mode).catch(report),event).catch(report);
             };
-            const poseKeysAction=new Action('lightflow_scene_link_pose_keys',{name:t('pose_keyframes'),icon:'key',condition:()=>!!Modes.animate&&!!window.Format?.animation_mode&&isSkinRoot(rootOf(selected())),click:event=>runPosePicker(poseKeyContext(rootOf(selected())),'bones',event)});
-            const poseTrackAction=new Action('lightflow_scene_link_pose_track',{name:t('pose_keyframe'),icon:'add',condition:()=>!!Modes.animate&&!!window.Format?.animation_mode&&isSkinRoot(rootOf(selected())),click:event=>runPosePicker(poseKeyContext(rootOf(selected())),'pose',event)});
-            const selectedPoseKeys=()=>disposed?[]:Timeline.selected.filter(key=>key.channel===poseChannel&&isSkinRoot(rootOf(key.animator?.getGroup?.())));
+            const poseKeysAction=new Action('lightflow_scene_link_pose_keys',{name:t('pose_keyframes'),icon:'key',condition:()=>!!Modes.animate&&!!window.Format?.animation_mode&&hasPoseRig(rootOf(selected())),click:event=>runPosePicker(poseKeyContext(rootOf(selected())),'bones',event)});
+            const poseTrackAction=new Action('lightflow_scene_link_pose_track',{name:t('pose_keyframe'),icon:'add',condition:()=>!!Modes.animate&&!!window.Format?.animation_mode&&hasPoseRig(rootOf(selected())),click:event=>runPosePicker(poseKeyContext(rootOf(selected())),'pose',event)});
+            const selectedPoseKeys=()=>disposed?[]:Timeline.selected.filter(key=>key.channel===poseChannel&&hasPoseRig(rootOf(key.animator?.getGroup?.())));
             const keyPoseAction=new Action('lightflow_scene_link_key_pose',{name:t('choose_key_pose'),icon:'accessibility',condition:()=>!!Modes.animate&&selectedPoseKeys().length>0,click:event=>{
                 const keys=selectedPoseKeys(),root=keys[0]?.animator?.getGroup();if(!root||!keys.every(key=>key.animator.getGroup()===root))return;
                 runPosePicker(poseKeyContext(root,keys),'pose',event);
@@ -2813,7 +2938,7 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
             if(typeof originalKeyframeRender==='function'){
                 const render=function(...args){
                     const tree=originalKeyframeRender.apply(this,args);
-                    if(disposed||!Modes.animate||this.channel!==poseChannel||!this.keyframes.length||!this.keyframes.every(key=>key.channel===poseChannel&&isSkinRoot(key.animator?.getGroup?.())))return tree;
+                    if(disposed||!Modes.animate||this.channel!==poseChannel||!this.keyframes.length||!this.keyframes.every(key=>key.channel===poseChannel&&hasPoseRig(key.animator?.getGroup?.())))return tree;
                     // Pose values are names/snapshots; retain Blockbench's interpolation toolbar.
                     const hideValues=node=>{if(node?.data?.staticClass==='keyframe_data_point')node.children=[];else node?.children?.forEach(hideValues);};hideValues(tree);
                     tree.children||=[];
@@ -2827,67 +2952,65 @@ if (typeof Plugin !== 'undefined' && typeof Blockbench !== 'undefined') {
             owned.push(Blockbench.on('update_keyframe_selection',updatePoseKeyPanel));
             owned.push(Blockbench.addCSS('#panel_keyframe .lf-links-pose-key-properties{padding:3px 8px}#panel_keyframe .lf-links-pose-key-row{display:flex;align-items:center;gap:7px;margin:4px 0;min-width:0}#panel_keyframe .lf-links-pose-key-row>label{flex:0 0 80px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--color-subtle_text)}#panel_keyframe .lf-links-pose-key-row>.bb-select{flex:1;min-width:0;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}#panel_keyframe .lf-links-pose-key-row>.bb-select:focus-visible{outline:1px solid var(--color-accent)}'));
             const applySkinPose=async(root,preset,data)=>{
-                if(!root||root._lightflowManifest?.format!=='skin')return;
-                const receiver=Project,result=await readSource(root);
-                if(result.status!=='ready'||disposed||Project!==receiver)return;
-                const posed=await prepareSourceModel({...result.model,skin_pose:'',skin_pose_data:data},preset);
-                if(disposed||Project!==receiver||OutlinerNode.uuids[root.uuid]!==root)return;
-                const desired=core.inspectBBModel(posed),targets=new Map(desired.groups.map(group=>[group.id,group]));
-                const poses=[...treeFor(root).values()];
+                if(!hasPoseRig(root))return;
+                const active=poseTargetGuard(root),snapshot=await buildSkinPoseSnapshot(root,preset,data);
+                if(!snapshot||!active())return;
+                const poses=[...treeFor(root).values()].filter(pose=>Object.hasOwn(snapshot.groups,pose.source_group_id));
                 Undo.initEdit({elements:poses});
                 for(const pose of poses){
-                    const target=targets.get(pose.source_group_id);if(!target)continue;
+                    const target=snapshot.groups[pose.source_group_id];
                     const parent=pose.parent?.type==='lightflow_pose_group'?recordFor(pose.parent):null;
-                    const targetParent=target.parentId?targets.get(target.parentId):null;
-                    pose.extend({pose_mode:'absolute',position:target.origin.map((value,i)=>value-(targetParent?.origin[i]||0)+(parent?.origin[i]||0)),rotation:target.rotation,scale:target.scale});
+                    pose.extend({pose_mode:'absolute',position:target.position.map((value,i)=>value+(parent?.origin[i]||0)),rotation:target.rotation,scale:target.scale});
                     pose.preview_controller.updateTransform(pose);
                 }
                 Undo.finishEdit(t("apply_skin_pose"));
                 updateOutline();syncPanel();window.updateSelection?.();
             };
+            const skinPresets=['none','natural','walking','crouching','sitting','jumping','aiming'];
             const skinPoseAction=new Action('lightflow_scene_link_skin_pose',{
-                name:t("skin_pose"),icon:'accessibility_new',category:'edit',
-                condition:()=>rootOf(selected())?._lightflowManifest?.format==='skin',
+                name:t("linked_pose"),icon:'accessibility_new',category:'edit',
+                condition:()=>hasPoseRig(rootOf(selected())),
                 children(){
-                    const root=rootOf(selected());
-                    const apply=(preset,data)=>applySkinPose(root,preset,data).catch(error=>{if(!disposed)Blockbench.showMessageBox({title:t("cannot_apply_pose"),message:String(error.message||error)});});
-                    const items=['none','natural','walking','crouching','sitting','jumping','aiming'].map(id=>({name:tl('panel.skin_pose.'+id),icon:'accessibility_new',click:()=>apply(id)}));
+                    const root=rootOf(selected());if(!hasPoseRig(root))return [];
+                    const receiver=Project,active=poseTargetGuard(root);
+                    const report=error=>{if(active())Blockbench.showMessageBox({title:t("cannot_apply_pose"),message:String(error.message||error)});};
+                    const apply=(preset,data)=>{if(active())return applySkinPose(root,preset,data).catch(report);};
+                    const items=isSkinRoot(root)?skinPresets.map(id=>({name:tl('panel.skin_pose.'+id),icon:'accessibility_new',click:()=>apply(id)})):[];
                     const saved=StateMemory.get('skin_poses')||[];
                     if(saved.length)items.push('_',{name:t("saved_poses"),icon:'format_list_bulleted',children:saved.map(pose=>({name:pose.name,icon:'accessibility',click:()=>apply(undefined,JSON.parse(JSON.stringify(pose.data)))}))});
                     const library=window.LightflowSkinPoses;
                     if(library){
-                        const receiver=Project;
-                        const applySaved=data=>{if(!disposed&&Project===receiver&&OutlinerNode.uuids[root.uuid]===root)apply(undefined,data);};
+                        const target={name:root.name,active:()=>active()&&window.LightflowSkinPoses===library,capture:()=>captureLibraryPose(root),apply:data=>apply(undefined,data)};
                         let projectPoses=[];
-                        try{projectPoses=library.menuItems(receiver,applySaved);}
+                        try{projectPoses=library.menuItems(receiver,target.apply);}
                         catch(error){items.push({name:t("cannot_apply_pose"),icon:'error',click:()=>{if(!disposed)Blockbench.showMessageBox({title:t("cannot_apply_pose"),message:String(error.message||error)});}});}
                         if(projectPoses.length)items.push({name:t("project_skin_poses"),icon:'format_list_bulleted',click:(context,event)=>{
-                            if(!disposed&&Project===receiver&&OutlinerNode.uuids[root.uuid]===root&&window.LightflowSkinPoses===library){
-                                const menu=library.openMenu(projectPoses,Number.isFinite(event?.clientX)?{clientX:event.clientX,clientY:event.clientY}:'mouse');
-                                if(menu){skinLibraryMenus.clear();skinLibraryMenus.add(menu);}
-                            }
+                            const open=requestPoseMenu(poseMenuPosition(event||context));
+                            return open(target.active,position=>library.openMenu(projectPoses,position)).catch(report);
                         }});
                         items.push({name:t("source_skin_poses"),icon:'folder_open',click:async(context,event)=>{
-                            const position=Number.isFinite(event?.clientX)&&Number.isFinite(event?.clientY)?{clientX:event.clientX,clientY:event.clientY}:'mouse';
+                            const open=requestPoseMenu(poseMenuPosition(event||context));
                             try{
                                 const result=await readSource(root);
-                                if(disposed||Project!==receiver||OutlinerNode.uuids[root.uuid]!==root||window.LightflowSkinPoses!==library)return;
+                                if(!target.active())return;
                                 if(result.status!=='ready')throw Error(result.message||t("cannot_apply_pose"));
-                                const entries=library.menuItems(result.model,applySaved);
+                                const entries=library.menuItems(result.model,target.apply);
                                 if(!entries.length){Blockbench.showQuickMessage(t("source_skin_poses_empty"));return;}
-                                const menu=library.openMenu(entries,position);if(menu){skinLibraryMenus.clear();skinLibraryMenus.add(menu);}
-                            }catch(error){if(!disposed&&Project===receiver&&OutlinerNode.uuids[root.uuid]===root&&window.LightflowSkinPoses===library)Blockbench.showMessageBox({title:t("cannot_apply_pose"),message:String(error.message||error)});}
+                                if(library.importFromModel)entries.push('_',{name:t('import_source_poses'),icon:'file_upload',click:()=>library.importFromModel(receiver,result.model,target)});
+                                await open(target.active,position=>library.openMenu(entries,position));
+                            }catch(error){if(target.active())report(error);}
                         }});
+                        if(library.linkedActions)items.push('_',...library.linkedActions(receiver,target));
                     }
                     items.push('_',{name:t("restore_source_pose"),icon:'restart_alt',click:()=>{
+                        if(!active())return;
                         const poses=[...treeFor(root).values()];Undo.initEdit({elements:poses});
                         for(const pose of poses){pose.extend({pose_mode:'additive',position:[0,0,0],rotation:[0,0,0],scale:[1,1,1]});pose.preview_controller.updateTransform(pose);}
                         Undo.finishEdit(t("restore_source_pose"));updateOutline();syncPanel();window.updateSelection?.();
                     }});return items;
                 }
             });
-            const skinLibraryMenus=new Set();
-            owned.push({delete(){for(const menu of skinLibraryMenus)if(Menu.open===menu)menu.hide();skinLibraryMenus.clear();}});
+            owned.push({delete:closePoseMenus},Blockbench.on('select_project',closePoseMenus));
             owned.push(skinPoseAction);
             const openAction=new Action('lightflow_scene_link_open',{name:'lightflow_links.open',icon:'open_in_new',category:'edit',condition:()=>!!rootOf(selected()),click:()=>openSource(selected())});
             const refreshAction=new Action('lightflow_scene_link_refresh',{name:'lightflow_links.refresh',icon:'sync',category:'edit',condition:()=>!!rootOf(selected()),click:()=>refreshInstance(rootOf(selected()),true)});

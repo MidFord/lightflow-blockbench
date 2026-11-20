@@ -9332,7 +9332,25 @@ function createLightflowSkinPoseLibrary(makeId) {
         if (!Array.isArray(value) || value.length !== 3 || !value.every(n => typeof n === 'number' && Number.isFinite(n) && Math.abs(n) <= 1e6)) throw Error('Invalid pose vector');
         return value.slice();
     };
+    const isLinkedPose = value => value?.schema === 'lightflow_linked_pose';
     function data(value) {
+        if (isLinkedPose(value)) {
+            const {order, bones} = value;
+            if (value.version !== 1 || !['XYZ', 'YXZ', 'ZXY', 'ZYX', 'YZX', 'XZY'].includes(order) ||
+                !Array.isArray(bones) || !bones.length || bones.length > 512) throw Error('Invalid linked pose');
+            const paths = new Set();
+            return {schema: value.schema, version: 1, order, bones: bones.map(bone => {
+                if (!object(bone) || !Array.isArray(bone.path) || !bone.path.length || bone.path.length > 512) throw Error('Invalid bone path');
+                const path = bone.path.map(part => {
+                    if (typeof part !== 'string' || !part.trim() || part.length > 256) throw Error('Invalid bone name');
+                    return part;
+                });
+                const key = JSON.stringify(path);
+                if (paths.has(key)) throw Error('Duplicate bone path');
+                paths.add(key);
+                return {path, rotation: vector(bone.rotation), offset: vector(bone.offset), scale: vector(bone.scale)};
+            })};
+        }
         if (!object(value) || Object.keys(value).length > 256) throw Error('Invalid pose bones');
         const result = {};
         for (const [key, entry] of Object.entries(value)) {
@@ -9392,12 +9410,12 @@ function createLightflowSkinPoseLibrary(makeId) {
         for (const pose of selected.poses) result.poses.push({...pose, id: makeId(), group: groupMap.get(pose.group) ?? null});
         return parse(result);
     }
-    return {schema, empty, parse, data, subset, merge};
+    return {schema, empty, parse, data, subset, merge, isLinkedPose};
 }
 
 function installLightflowSkinPoses() {
     const action = BarItems.custom_skin_poses, addAction = BarItems.add_custom_skin_pose, codec = Codecs.project;
-    if (!action || !addAction || !codec || !Codecs.skin_model?.getPoseData) return {delete() {}};
+    if (!codec) return {delete() {}};
     const core = createLightflowSkinPoseLibrary(() => guid()), key = core.schema;
     const activeKey = 'lightflow_skin_pose_active';
     const clone = value => JSON.parse(JSON.stringify(value));
@@ -9405,10 +9423,11 @@ function installLightflowSkinPoses() {
     const title = () => text('Skin poses', 'Poses de skin');
     const listeners = [], dialogs = new Set(), menus = new Set();
     const poseNavigation = [];
-    let disposed = false, manager = null, managerProject = null, libraryStyles = null, poseName = null;
+    let disposed = false, manager = null, managerProject = null, managerTarget = null, libraryStyles = null, poseName = null;
     const alive = project => !disposed && Project === project && project?.format?.id === 'skin';
     const read = project => core.parse(project?.[key] || core.empty());
-    const error = reason => { if (!disposed) Blockbench.showMessageBox({title: title(), message: text('Cannot read or save skin poses: ', 'No se pueden leer o guardar las poses: ') + String(reason.message || reason)}); };
+    const available = (project, target) => target ? !disposed && Project === project && target.active() : alive(project);
+    const error = reason => { if (!disposed) Blockbench.showMessageBox({title: text('Pose library', 'Biblioteca de poses'), message: String(reason.message || reason)}); };
     const protect = callback => function(...args) { try { return callback.apply(this, args); } catch (reason) { error(reason); } };
     const poseSignature = value => JSON.stringify(Object.entries(core.data(value)).map(([bone, entry]) => {
         const rotation = Array.isArray(entry) ? entry : entry.rotation, offset = Array.isArray(entry) ? [0, 0, 0] : entry.offset;
@@ -9425,7 +9444,7 @@ function installLightflowSkinPoses() {
         const library = read(Project);
         const poses = [
             ...(StateMemory.get('skin_poses') || []).map((pose, index) => ({...pose, id: null, _lightflowNavigationKey: 'global:' + index})),
-            ...[null, ...library.groups.map(group => group.id)].flatMap(group => library.poses.filter(pose => pose.group === group).map(pose => ({...pose, _lightflowNavigationKey: 'project:' + pose.id})))
+            ...[null, ...library.groups.map(group => group.id)].flatMap(group => library.poses.filter(pose => pose.group === group && !core.isLinkedPose(pose.data)).map(pose => ({...pose, _lightflowNavigationKey: 'project:' + pose.id})))
         ];
         if (!poses.length) return;
         const active = Project[activeKey];
@@ -9448,7 +9467,7 @@ function installLightflowSkinPoses() {
             name = preset && preset !== 'default' ? tl('panel.skin_pose.' + preset) : text('Custom pose', 'Pose personalizada');
         }
         poseName.set(name);
-        const noPoses = !(Project[key]?.poses?.length || (StateMemory.get('skin_poses') || []).length);
+        const noPoses = !(Project[key]?.poses?.some(pose => !core.isLinkedPose(pose?.data)) || (StateMemory.get('skin_poses') || []).length);
         for (const action of poseNavigation) for (const node of new Set([action.node, ...action.nodes])) if (node) {
             node.classList.toggle('disabled', noPoses); node.setAttribute('aria-disabled', String(noPoses));
         }
@@ -9486,7 +9505,7 @@ function installLightflowSkinPoses() {
     }
     function syncManager() {
         const view = manager?.content_vue;
-        if (!view || !alive(managerProject)) return;
+        if (!view || !available(managerProject, managerTarget)) return;
         view.library = read(managerProject);
         view.selection = view.selection.filter(id => view.library.poses.some(pose => pose.id === id));
         if (!['all', 'none'].includes(view.group) && !view.library.groups.some(group => group.id === view.group)) view.group = 'all';
@@ -9494,27 +9513,27 @@ function installLightflowSkinPoses() {
     function listen(owner, event, callback) {
         owner.on(event, callback); listeners.push(() => owner.removeListener(event, callback));
     }
-    function edit(project, callback) {
-        if (!alive(project)) return;
+    function edit(project, callback, target) {
+        if (!available(project, target)) return;
         const before = read(project), next = clone(before); callback(next);
         const validated = core.parse(next);
-        Undo.initEdit({lightflow_skin_pose_library: true, lightflow_skin_pose_state: true});
+        Undo.initEdit({lightflow_skin_pose_library: true, lightflow_skin_pose_state: !target});
         project[key] = validated;
         const active = project[activeKey], savedPose = validated.poses.find(pose => pose.id === active?.id);
-        if (active && savedPose) {
+        if (!target && active && savedPose) {
             const oldPose = before.poses.find(pose => pose.id === active.id);
             project[activeKey] = {...active, name: savedPose.name,
                 signature: oldPose && poseSignature(oldPose.data) !== poseSignature(savedPose.data) ? poseSignature(savedPose.data) : active.signature};
         }
-        Undo.finishEdit(title());
+        Undo.finishEdit(target ? text('Pose library', 'Biblioteca de poses') : title());
         project.saved = false;
         syncManager();
         syncPoseName();
     }
-    function prompt(project, initial, callback) {
-        if (!alive(project)) return;
-        dialog({id: 'lightflow_skin_pose_name', title: title(), form: {name: {label: 'generic.name', type: 'text', value: initial}}, onConfirm(values) {
-            if (!alive(project)) return;
+    function prompt(project, initial, callback, target) {
+        if (!available(project, target)) return;
+        dialog({id: 'lightflow_skin_pose_name', title: target ? text('Pose library', 'Biblioteca de poses') : title(), form: {name: {label: 'generic.name', type: 'text', value: initial}}, onConfirm(values) {
+            if (!available(project, target)) return;
             if (!values.name?.trim() || values.name.length > 128) { error(Error(text('Enter a name (1–128 characters)', 'Escribe un nombre (1–128 caracteres)'))); return false; }
             callback(values.name.trim());
         }});
@@ -9534,6 +9553,7 @@ function installLightflowSkinPoses() {
     }
     function apply(project, pose) {
         if (!alive(project)) return;
+        if (core.isLinkedPose(pose.data)) throw Error(text('Select a Scene Link to apply this pose.', 'Selecciona una escena vinculada para aplicar esta pose.'));
         const data = core.data(pose.data);
         Undo.initEdit({elements: Cube.all, groups: Group.all, lightflow_skin_pose_state: true});
         // Match native applyPose: move cube coordinates with the pivot, then update the entire rig.
@@ -9557,7 +9577,7 @@ function installLightflowSkinPoses() {
     function exportPoses(library, ids, filename) {
         const selected = core.subset(library, ids);
         if (!selected.poses.length) throw Error(text('Select at least one pose', 'Selecciona al menos una pose'));
-        Blockbench.export({resource_id: key, type: title(), extensions: ['json'], name: filename || 'skin_poses', content: JSON.stringify(selected, null, 2)});
+        Blockbench.export({resource_id: key, type: text('Poses', 'Poses'), extensions: ['json'], name: filename || 'skin_poses', content: JSON.stringify(selected, null, 2)});
     }
     function choose(library, importing, callback) {
         if (!library.poses.length) throw Error(text('No poses available', 'No hay poses disponibles'));
@@ -9600,27 +9620,42 @@ function installLightflowSkinPoses() {
             }});
         return selectionDialog;
     }
-    function importPoses(project) {
-        Blockbench.import({resource_id: key, type: title(), extensions: ['json'], readtype: 'text'}, protect(files => {
-            if (!alive(project) || !files?.[0]) return;
-            const incoming = core.parse(files[0].content);
-            choose(incoming, true, (ids, groups) => {
-                if (!alive(project)) return;
-                const merged = core.merge(read(project), incoming, ids, groups);
-                edit(project, library => Object.assign(library, merged));
-            });
+    function importLibrary(project, incoming, target) {
+        if (!available(project, target)) return;
+        choose(incoming, true, (ids, groups) => {
+            edit(project, library => Object.assign(library, core.merge(library, incoming, ids, groups)), target);
+        });
+    }
+    function importPoses(project, target) {
+        Blockbench.import({resource_id: key, type: text('Poses', 'Poses'), extensions: ['json'], readtype: 'text'}, protect(files => {
+            if (available(project, target) && files?.[0]) importLibrary(project, core.parse(files[0].content), target);
         }));
     }
-    function poseItem(project, pose) {
-        return {id: 'lightflow_skin_pose_' + pose.id, name: pose.name, icon: 'accessibility', click: protect(() => apply(project, pose)), children: [
-            {name: 'action.custom_skin_poses.update', icon: 'update', click: protect(() => {
-                if (!alive(project)) return;
-                const data = core.data(Codecs.skin_model.getPoseData());
-                edit(project, library => { const target = library.poses.find(item => item.id === pose.id); if (target) target.data = data; });
-            })},
-            {name: 'generic.rename', icon: 'edit', click: () => prompt(project, pose.name, name => edit(project, library => { const target = library.poses.find(item => item.id === pose.id); if (target) target.name = name; }))},
-            {name: text('Export pose JSON…', 'Exportar pose JSON…'), icon: 'save', click: protect(() => { if (alive(project)) exportPoses(read(project), [pose.id], pose.name); })},
-            {name: 'generic.delete', icon: 'delete', click: protect(() => edit(project, library => { library.poses = library.poses.filter(item => item.id !== pose.id); }))}
+    async function saveCurrentPose(project, target, update) {
+        if (!available(project, target)) return;
+        try {
+            const value = target ? await target.capture() : Codecs.skin_model.getPoseData();
+            if (value && available(project, target)) {
+                const data = core.data(value);
+                edit(project, library => update(library, data), target);
+            }
+        } catch (reason) { if (available(project, target)) error(reason); }
+    }
+    function poseItem(project, pose, target) {
+        const change = callback => edit(project, callback, target);
+        return {id: 'lightflow_skin_pose_' + pose.id, name: pose.name, icon: 'accessibility', click: protect(() => {
+            if (available(project, target)) return target ? target.apply(clone(pose.data)) : apply(project, pose);
+        }), children: [
+            ...(target || !core.isLinkedPose(pose.data) ? [{name: 'action.custom_skin_poses.update', icon: 'update', click: () => saveCurrentPose(project, target, (library, data) => {
+                const saved = library.poses.find(item => item.id === pose.id); if (saved) saved.data = data;
+            })}] : []),
+            {name: 'generic.rename', icon: 'edit', click: () => prompt(project, pose.name, name => change(library => { const saved = library.poses.find(item => item.id === pose.id); if (saved) saved.name = name; }), target)},
+            {name: text('Duplicate pose…', 'Duplicar pose…'), icon: 'content_copy', click: () => prompt(project, (pose.name.slice(0, 120) + text(' copy', ' copia')), name => change(library => {
+                const saved = library.poses.find(item => item.id === pose.id);
+                if (saved) library.poses.push({...saved, id: guid(), name});
+            }), target)},
+            {name: text('Export pose JSON…', 'Exportar pose JSON…'), icon: 'save', click: protect(() => { if (available(project, target)) exportPoses(read(project), [pose.id], pose.name); })},
+            {name: 'generic.delete', icon: 'delete', click: protect(() => change(library => { library.poses = library.poses.filter(item => item.id !== pose.id); }))}
         ]};
     }
     function ensureLibraryStyles() {
@@ -9662,14 +9697,19 @@ function installLightflowSkinPoses() {
         const input = view.$refs.search?.$refs?.input;
         if (input) { input.placeholder = text('Search poses or groups', 'Buscar poses o grupos'); input.setAttribute('aria-label', input.placeholder); }
     }
-    function showLibrary(project) {
-        if (!alive(project)) return;
-        if (manager && managerProject === project) { manager.show(); return; }
+    function showLibrary(project, target) {
+        if (!available(project, target)) return;
+        if (manager && managerProject === project && managerTarget === target) { manager.show(); return; }
+        manager?.cancel();
         ensureLibraryStyles();
         managerProject = project;
-        const menuAt = (items, event) => { if (!alive(project)) return; const menu = new Menu(items); menus.clear(); menus.add(menu); menu.open(event?.currentTarget || 'mouse'); };
-        const release = () => { manager = null; managerProject = null; };
-        manager = dialog({id: 'lightflow_skin_pose_library', title: text('Pose library', 'Biblioteca de poses'), width: 760,
+        managerTarget = target;
+        const active = () => available(project, target);
+        const change = callback => edit(project, callback, target);
+        const ask = (initial, callback) => prompt(project, initial, callback, target);
+        const menuAt = (items, event) => { if (!active()) return; const menu = new Menu(items); menus.clear(); menus.add(menu); menu.open(event?.currentTarget || 'mouse'); };
+        const release = () => { manager = null; managerProject = null; managerTarget = null; };
+        manager = dialog({id: 'lightflow_skin_pose_library', title: text('Pose library', 'Biblioteca de poses') + (target?.name ? ' · ' + target.name : ''), width: 760,
             buttons: ['dialog.close'], confirmIndex: 0, cancelIndex: 0, onConfirm: release, onCancel: release,
             component: {
                 data: () => ({library: read(project), group: 'all', search: '', selection: [], destination: 'none'}),
@@ -9683,20 +9723,21 @@ function installLightflowSkinPoses() {
                     groupName(id) { return this.library.groups.find(group => group.id === id)?.name || text('Ungrouped', 'Sin grupo'); },
                     filter(id) { this.group = id; this.selection = []; },
                     selectAll(event) { this.selection = event.target.checked ? this.visible.map(pose => pose.id) : []; },
-                    selectDestination(event) { const view = this; openPoseMenu([{id: 'none', name: text('Ungrouped', 'Sin grupo')}, ...this.library.groups].map(group => ({id: group.id, name: group.name, icon: 'folder', click: () => { if (alive(project)) view.destination = group.id; }})), event.currentTarget); },
-                    applyPose: protect(pose => apply(project, pose)),
-                    poseMenu(pose, event) { menuAt(poseItem(project, pose).children, event); },
+                    selectDestination(event) { const view = this; openPoseMenu([{id: 'none', name: text('Ungrouped', 'Sin grupo')}, ...this.library.groups].map(group => ({id: group.id, name: group.name, icon: 'folder', click: () => { if (active()) view.destination = group.id; }})), event.currentTarget); },
+                    canApply(pose) { return !!target || !core.isLinkedPose(pose.data); },
+                    applyPose(pose) { return poseItem(project, pose, target).click(); },
+                    poseMenu(pose, event) { menuAt(poseItem(project, pose, target).children, event); },
                     groupMenu(group, event) { menuAt([
-                        {name: 'generic.rename', icon: 'edit', click: () => prompt(project, group.name, name => edit(project, library => { const target = library.groups.find(item => item.id === group.id); if (target) target.name = name; }))},
-                        {name: text('Remove group (keep poses)', 'Quitar grupo (conservar poses)'), icon: 'folder_off', click: protect(() => edit(project, library => { library.groups = library.groups.filter(item => item.id !== group.id); library.poses.forEach(pose => { if (pose.group === group.id) pose.group = null; }); }))}
+                        {name: 'generic.rename', icon: 'edit', click: () => ask(group.name, name => change(library => { const saved = library.groups.find(item => item.id === group.id); if (saved) saved.name = name; }))},
+                        {name: text('Remove group (keep poses)', 'Quitar grupo (conservar poses)'), icon: 'folder_off', click: protect(() => change(library => { library.groups = library.groups.filter(item => item.id !== group.id); library.poses.forEach(pose => { if (pose.group === group.id) pose.group = null; }); }))}
                     ], event); },
-                    addGroup() { prompt(project, text('New group', 'Nuevo grupo'), name => edit(project, library => { library.groups.push({id: guid(), name}); })); },
-                    addPose() { const group = this.group; prompt(project, text('New pose', 'Nueva pose'), name => edit(project, library => library.poses.push({id: guid(), name, group: ['all', 'none'].includes(group) ? null : group, data: core.data(Codecs.skin_model.getPoseData())}))); },
-                    move: protect(function() { const ids = new Set(this.selection), target = this.destination === 'none' ? null : this.destination; edit(project, library => { library.poses.forEach(pose => { if (ids.has(pose.id)) pose.group = target; }); }); }),
-                    remove: protect(function() { const ids = new Set(this.selection); edit(project, library => { library.poses = library.poses.filter(pose => !ids.has(pose.id)); }); }),
-                    importFile: protect(() => importPoses(project)),
-                    exportSelected: protect(function() { if (alive(project)) exportPoses(read(project), this.selection); }),
-                    exportGroup: protect(function() { if (alive(project)) { const current = read(project); exportPoses(current, current.poses.filter(pose => this.group === 'all' || (this.group === 'none' ? !pose.group : pose.group === this.group)).map(pose => pose.id), this.group === 'all' ? 'skin_poses' : this.groupName(this.group)); } })
+                    addGroup() { ask(text('New group', 'Nuevo grupo'), name => change(library => { library.groups.push({id: guid(), name}); })); },
+                    addPose() { savePose(project, target, this.group); },
+                    move: protect(function() { const ids = new Set(this.selection), destination = this.destination === 'none' ? null : this.destination; change(library => { library.poses.forEach(pose => { if (ids.has(pose.id)) pose.group = destination; }); }); }),
+                    remove: protect(function() { const ids = new Set(this.selection); change(library => { library.poses = library.poses.filter(pose => !ids.has(pose.id)); }); }),
+                    importFile: protect(() => importPoses(project, target)),
+                    exportSelected: protect(function() { if (active()) exportPoses(read(project), this.selection); }),
+                    exportGroup: protect(function() { if (active()) { const current = read(project); exportPoses(current, current.poses.filter(pose => this.group === 'all' || (this.group === 'none' ? !pose.group : pose.group === this.group)).map(pose => pose.id), this.group === 'all' ? (target ? 'poses' : undefined) : this.groupName(this.group)); } })
                 },
                 template: `<div class="lf-pose-library">
                     <div class="lf-pose-toolbar"><search-bar ref="search" v-model="search"></search-bar><button type="button" @click="addPose">{{text('New pose','Nueva pose')}}</button><button type="button" @click="importFile">{{text('Import JSON…','Importar JSON…')}}</button></div>
@@ -9708,7 +9749,7 @@ function installLightflowSkinPoses() {
                             <button type="button" @click="addGroup">+ {{text('New group','Nuevo grupo')}}</button>
                         </nav>
                         <div class="lf-pose-list"><label><input type="checkbox" :checked="allSelected" @change="selectAll"> {{text('Select visible','Seleccionar visibles')}}</label>
-                            <div v-for="pose in visible" :key="pose.id" class="lf-pose-row"><input type="checkbox" :value="pose.id" v-model="selection" :aria-label="text('Select ','Seleccionar ')+pose.name"><button type="button" class="lf-pose-apply" @click="applyPose(pose)" :title="text('Apply pose','Aplicar pose')"><strong>{{pose.name}}</strong><small v-if="group==='all'">{{groupName(pose.group)}}</small></button><button type="button" class="tool" :aria-label="text('Pose options: ','Opciones de pose: ')+pose.name" @click="poseMenu(pose,$event)"><i class="material-icons">more_horiz</i></button></div>
+                            <div v-for="pose in visible" :key="pose.id" class="lf-pose-row"><input type="checkbox" :value="pose.id" v-model="selection" :aria-label="text('Select ','Seleccionar ')+pose.name"><button type="button" class="lf-pose-apply" @click="applyPose(pose)" :disabled="!canApply(pose)" :title="canApply(pose)?text('Apply pose','Aplicar pose'):text('Apply from Scene Links','Aplicar desde Escenas vinculadas')"><strong>{{pose.name}}</strong><small v-if="group==='all'">{{groupName(pose.group)}}</small></button><button type="button" class="tool" :aria-label="text('Pose options: ','Opciones de pose: ')+pose.name" @click="poseMenu(pose,$event)"><i class="material-icons">more_horiz</i></button></div>
                             <p v-if="!visible.length" class="lf-pose-empty">{{text('No poses in this view. Add or import a pose.','No hay poses en esta vista. Añade o importa una pose.')}}</p>
                         </div>
                     </div>
@@ -9716,10 +9757,15 @@ function installLightflowSkinPoses() {
                 </div>`
             }});
     }
+    function savePose(project, target, group = null) {
+        prompt(project, text('New pose', 'Nueva pose'), name => saveCurrentPose(project, target, (library, data) => {
+            library.poses.push({id: guid(), name, group: library.groups.some(folder => folder.id === group) ? group : null, data});
+        }), target);
+    }
     function libraryItems(library, callback) {
         return groupedItems(library, pose => ({id: 'lightflow_skin_pose_' + pose.id, name: pose.name, icon: 'accessibility', click: () => { if (!disposed) callback(clone(pose.data), {id: pose.id, name: pose.name, group: pose.group}); }}));
     }
-    const previousChildren = action.children, previousAdd = addAction.click;
+    const previousChildren = action?.children, previousAdd = addAction?.click;
     const children = function(...args) {
         const native = previousChildren.apply(this, args);
         if (!alive(Project)) return native;
@@ -9743,7 +9789,7 @@ function installLightflowSkinPoses() {
         const globalPoses = result.filter(item => item && typeof item === 'object');
         return [
         ...(globalPoses.length ? [new MenuSeparator('lightflow_skin_pose_global', text('Global poses', 'Poses globales')), ...globalPoses] : []),
-        ...groupedItems(library, pose => poseItem(project, pose)),
+        ...groupedItems({...library, poses: library.poses.filter(pose => !core.isLinkedPose(pose.data))}, pose => poseItem(project, pose)),
         '_', 'add_custom_skin_pose',
         {id: 'lightflow_skin_pose_manage', always_show: true, name: text('Manage poses and groups…', 'Gestionar poses y grupos…'), icon: 'folder_open', click: protect(() => showLibrary(project))},
         {id: 'lightflow_skin_pose_export', always_show: true, name: text('Export poses / range JSON…', 'Exportar poses / rango JSON…'), icon: 'save', condition: library.poses.length > 0, click: protect(() => { if (alive(project)) { const library = read(project); choose(library, false, ids => { if (alive(project)) exportPoses(library, ids); }); } })},
@@ -9752,16 +9798,17 @@ function installLightflowSkinPoses() {
     const add = function(...args) {
         if (!alive(Project)) return previousAdd.apply(this, args);
         const project = Project;
-        prompt(project, text('New pose', 'Nueva pose'), name => edit(project, library => library.poses.push({id: guid(), name, group: null, data: core.data(Codecs.skin_model.getPoseData())})));
+        savePose(project);
     };
-    action.children = children; addAction.click = add;
     // Track only menus opened through our wrapper so unload cannot leave callbacks alive.
-    const previousClick = action.click;
+    const previousClick = action?.click;
     const click = function(event) {
         if (!alive(Project)) return previousClick.call(this, event);
         openPoseMenu(children.call(this), event?.target || event);
     };
-    action.click = click;
+    if (action && addAction && Codecs.skin_model?.getPoseData) {
+        action.children = children; action.click = click; addAction.click = add;
+    }
     listen(codec, 'compile', protect(({model}) => {
         if (Project?.[key]) model[key] = clone(Project[key]);
         if (Project?.[activeKey]) model[activeKey] = clone(Project[activeKey]);
@@ -9812,7 +9859,16 @@ function installLightflowSkinPoses() {
     for (const event of ['update_view', 'finish_edit', 'finished_edit', 'select_project', 'update_interface']) listen(Blockbench, event, protect(syncPoseName));
     listen(codec, 'parsed', protect(syncPoseName));
     const previousApi = window.LightflowSkinPoses;
-    const api = {core, read, apply, openMenu: openPoseMenu, menuItems: (model, callback) => libraryItems(read(model), callback)};
+    const api = {core, read, apply, openMenu: openPoseMenu, menuItems: (model, callback) => libraryItems(read(model), callback),
+        importFromModel: protect((project, model, target) => importLibrary(project, read(model), target)),
+        linkedActions(project, target) {
+            return [
+                {name: text('Save current pose…', 'Guardar pose actual…'), icon: 'add', click: protect(() => savePose(project, target))},
+                {name: text('Manage poses and groups…', 'Gestionar poses y grupos…'), icon: 'folder_open', click: protect(() => showLibrary(project, target))},
+                {name: text('Import poses from JSON…', 'Importar poses desde JSON…'), icon: 'file_upload', click: protect(() => { if (available(project, target)) importPoses(project, target); })}
+            ];
+        }
+    };
     window.LightflowSkinPoses = api;
     return {delete() {
         if (disposed) return;
@@ -9844,10 +9900,10 @@ function installLightflowSkinPoses() {
             if (replacement && replacement !== poseName) BarItems[replacement.id] = replacement;
             poseName = null;
         }
-        manager = null; managerProject = null; libraryStyles?.delete(); libraryStyles = null;
-        if (action.children === children) action.children = previousChildren;
-        if (action.click === click) action.click = previousClick;
-        if (addAction.click === add) addAction.click = previousAdd;
+        manager = null; managerProject = null; managerTarget = null; libraryStyles?.delete(); libraryStyles = null;
+        if (action?.children === children) action.children = previousChildren;
+        if (action?.click === click) action.click = previousClick;
+        if (addAction?.click === add) addAction.click = previousAdd;
         if (window.LightflowSkinPoses === api) { if (previousApi === undefined) delete window.LightflowSkinPoses; else window.LightflowSkinPoses = previousApi; }
     }};
 }
@@ -12712,6 +12768,9 @@ function initializeLightManagerPlugin() {
             .light_manager_panel_search_compact {
                 grid-template-columns: minmax(0,1fr) var(--lf-search-size);
             }
+            .light_manager_panel_search_query_only {
+                grid-template-columns: minmax(0, 1fr);
+            }
             .light_manager_panel_search_icon_toolbar {
                 grid-template-columns: minmax(0,1fr) repeat(2,var(--lf-search-size)) !important;
             }
@@ -13970,7 +14029,8 @@ function initializeLightManagerPlugin() {
                         if (!event.repeat && (event.key === 'ContextMenu' || event.shiftKey && event.key === 'F10')) openAoMenu(event);
                     });
                     addWorld('world_ground', 'layers', worldLabels.world_ground);
-                    worldNode.append(divider.cloneNode(), buttons.helpers);
+                    const worldDivider = divider.cloneNode();
+                    worldNode.append(worldDivider, buttons.helpers);
                     addWorld('environment', 'landscape', 'lightflow_environment.field.enabled');
                     worldButtons.environment.addEventListener('click', () => {
                         window.LightflowEnvironment?.setSettings?.({enabled: !window.LightflowEnvironment.settings.enabled}, {cause:'viewport_toggle',syncPanel:true}); sync();
@@ -13981,10 +14041,10 @@ function initializeLightManagerPlugin() {
                     worldNode.addEventListener('dblclick', event => event.stopPropagation());
                     worldNode.addEventListener('keydown', navigateRail);
                     preview.node.append(worldNode);
-                    rails.set(preview, { node, buttons, divider, worldNode, worldButtons, sequenceDivider, scrubbers, renderOrder: [...node.children] });
+                    rails.set(preview, { node, buttons, divider, worldNode, worldButtons, worldDivider, sequenceDivider, scrubbers, renderOrder: [...node.children] });
                     railResize?.observe(preview.node);
                 }
-                const { node, buttons, divider, worldNode, worldButtons, sequenceDivider } = rails.get(preview);
+                const { node, buttons, divider, worldNode, worldButtons, worldDivider, sequenceDivider } = rails.get(preview);
                 rails.get(preview).scrubbers.forEach(scrubber => scrubber.sync());
                 if (node.dataset.lightflowMode !== Project?.mode) {
                     node.dataset.lightflowMode = Project?.mode || '';
@@ -13994,8 +14054,8 @@ function initializeLightManagerPlugin() {
                     order.forEach(child => node.append(child));
                 }
                 const controls = worldControls();
-                const worldActive = active && !editing && (worldKeys.some(key => !!controls?.[key]) || (animating && !!window.LightflowCinematic?.openViewportSequenceMenu));
-                worldNode.hidden = !worldActive;
+                worldNode.hidden = !window.Project;
+                worldDivider.hidden = false;
                 worldButtons.cinematic_sequence.hidden = !animating || !window.LightflowCinematic?.openViewportSequenceMenu;
                 sequenceDivider.hidden = worldButtons.cinematic_sequence.hidden;
                 worldButtons.cinematic_sequence.disabled = !!window.LightflowCinematic?.activeJob;
@@ -14021,7 +14081,6 @@ function initializeLightManagerPlugin() {
                 const snapping = !!window.BarItems?.lightflow_block_snap?.value;
                 buttons.block_snap.classList.toggle('selected', snapping);
                 buttons.block_snap.setAttribute('aria-pressed', String(snapping));
-                buttons.helpers.hidden = editing && !contextual;
                 buttons.gizmos.hidden = animating || !contextual;
                 buttons.selection.hidden = animating || (!contextual && !['art_key', 'lightflow_scene_instance', 'lightflow_pose_group'].includes(type));
                 buttons.focus.hidden = selection().length === 0;
@@ -17928,7 +17987,7 @@ function initializeLightManagerPlugin() {
                         const items=typeof this.options.items==='function'?this.options.items():this.options.items;
                         this.menu?.delete();this.menu=new Menu((items||[]).map(item=>({name:item.name||item.id,icon:item.icon||'folder_special',click:()=>{if(this.options.onChoose)this.options.onChoose(item.id,event);else this.commit(item.id,event);}})));this.menu.open(event||this.node);return;
                     }
-                    const structure = [{
+                    const structure = this.options.allow_import === false ? [] : [{
                         name: 'light_manager.ui.texture_import', icon: 'upload_file', click: () => {
                             Blockbench.import({ extensions: ['png', 'jpg', 'jpeg', 'webp'], type: tl('light_manager.ui.texture_choose'), readtype: 'image' }, async files => {
                                 if (files?.[0]) {
@@ -17939,18 +17998,27 @@ function initializeLightManagerPlugin() {
                         }
                     }];
                     if (window.Texture?.all?.length) {
-                        structure.push(new MenuSeparator());
+                        if (structure.length) structure.push(new MenuSeparator());
                         for (const texture of Texture.all) structure.push({
-                            name: texture.name, icon: LightflowTextureSource.url(texture.uuid) || 'texture', click: async () => {
+                            id: texture.uuid, name: texture.name, icon: LightflowTextureSource.url(texture.uuid) || 'texture', click: async () => {
                                 const source = this.options.project_reference ? texture.uuid : await LightflowTextureSource.fromTexture(texture); if (source) await this.commit(source, event);
                             }
                         });
                     }
-                    if (this.value) structure.push(new MenuSeparator(), { name: 'light_manager.ui.texture_clear', icon: 'clear', click: () => this.commit('', event) });
+                    if (this.value) {
+                        if (structure.length) structure.push(new MenuSeparator());
+                        structure.push({ id: 'clear_texture', name: 'light_manager.ui.texture_clear', icon: 'clear', click: () => this.commit('', event) });
+                    }
+                    if (!structure.length) structure.push({ name: 'light_manager.ui.no_options', disabled: true });
                     this.menu?.delete();
-                    this.menu = new Menu('lightflow_texture_source_menu', structure, { searchable: true });
-                    this.menu.open(this.node);
+                    this.menu = new Menu('lightflow_texture_source_menu', structure, { searchable: !this.options.search_menu });
                     this.menu.node.classList.add('lightflow_texture_source_menu');
+                    if (this.options.menu_class) this.menu.node.classList.add(this.options.menu_class);
+                    this.menu.open(this.node);
+                    if (this.options.search_menu && structure.length > 5) {
+                        const options = Object.fromEntries(structure.filter(item => item.id).map(item => [item.id, item]));
+                        addNativeSelectSearch(this.menu, options, this.node);
+                    }
                 }
                 setValue(value, update_form = true) { this.value = String(value || ''); this.updatePreview(); if (update_form) this.form.updateValues(); return this; }
                 getValue() { return this.value; }
@@ -18934,6 +19002,7 @@ function initializeLightManagerPlugin() {
                     });
                     if (menu.node) {
                         menu.node.classList.add('compact_dropdown_menu');
+                        if (this.options.menu_class) menu.node.classList.add(this.options.menu_class);
                         menu.node.style['min-width'] = this.node.clientWidth + 'px';
                     }
 
@@ -20237,6 +20306,12 @@ function initializeLightManagerPlugin() {
                     searchWrap.append(this.input);
                     const clearFilter = () => {
                         this.filter_mode = 'all';
+                        if (data.query_only) {
+                            this.setValue('');
+                            this.change();
+                            this.input.focus();
+                            return;
+                        }
                         this.filter_select.set('all');
                         this.setValue('');
                         if (data.fast_filter) this.applyFilter();
@@ -20257,6 +20332,33 @@ function initializeLightManagerPlugin() {
                     this.clear_button.hidden = true;
                     this.clear_button.addEventListener('click', clearFilter);
                     searchWrap.append(this.clear_button);
+
+                    if (data.query_only) {
+                        this.node.classList.add('light_manager_panel_search_query_only');
+                        this.node.append(searchWrap);
+                        bar.append(this.node);
+                        this.applyFilter = () => {
+                            this.clear_button.hidden = !this.value;
+                            this.clear_button.style.setProperty('display', this.value ? 'grid' : 'none', 'important');
+                        };
+                        this.setValue(data.value);
+                        this.input.addEventListener('input', () => {
+                            this.value = this.input.value;
+                            this.applyFilter();
+                            this.change();
+                        });
+                        this.input.addEventListener('keydown', event => {
+                            if (event.key === 'Escape') {
+                                event.stopPropagation();
+                                clearFilter();
+                            } else if (event.key === 'Enter' && !event.isComposing && data.onSubmit) {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                data.onSubmit(event);
+                            }
+                        });
+                        return;
+                    }
 
                     const filterOptions = {
                         all: translateLightManager('light_manager.ui.filter_all'),

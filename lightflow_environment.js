@@ -180,7 +180,7 @@
         distance_grade_contrast: 0.85,
         distance_grade_tint: '#c4d6e6',
         distance_grade_tint_strength: 0.15,
-        sun_enabled: true,
+        sun_enabled: false,
         sun_intensity: 2.2,
         sun_light_color_mode: 'sun',
         sun_light_day_color: '#fff7c7',
@@ -1694,7 +1694,7 @@
         result.distance_grade_contrast = clamp(finite(result.distance_grade_contrast, DEFAULT_SETTINGS.distance_grade_contrast), 0, 2);
         result.distance_grade_tint = normalizeHex(result.distance_grade_tint, DEFAULT_SETTINGS.distance_grade_tint);
         result.distance_grade_tint_strength = clamp(finite(result.distance_grade_tint_strength, DEFAULT_SETTINGS.distance_grade_tint_strength), 0, 1);
-        result.sun_enabled = result.sun_enabled !== false;
+        result.sun_enabled = result.sun_enabled === true;
         result.sun_intensity = clamp(finite(result.sun_intensity, 2.2), 0, 20);
         result.sun_light_color_mode = result.sun_light_color_mode === 'time' ? 'time' : 'sun';
         result.sun_light_day_color = normalizeHex(result.sun_light_day_color, DEFAULT_SETTINGS.sun_light_day_color);
@@ -6367,7 +6367,7 @@ void main() {
             ambient_fill_ground_color: "#ffffff",
             ambient_fill_day_multiplier: 1,
             ambient_fill_night_multiplier: 1,
-            sun_enabled: true,
+            sun_enabled: false,
             sun_intensity: 2.45,
             sun_light_color_mode: "time",
             sun_light_day_color: "#fff7c7",
@@ -6510,7 +6510,7 @@ void main() {
             ambient_fill_ground_color: "#ffffff",
             ambient_fill_day_multiplier: 1,
             ambient_fill_night_multiplier: 1.0416666666666667,
-            sun_enabled: true,
+            sun_enabled: false,
             sun_intensity: 0.72,
             sun_light_color_mode: "time",
             sun_light_day_color: "#ffd954",
@@ -6648,7 +6648,7 @@ void main() {
             ambient_fill_ground_color: "#ffffff",
             ambient_fill_day_multiplier: 1,
             ambient_fill_night_multiplier: 1,
-            sun_enabled: true,
+            sun_enabled: false,
             sun_intensity: 2.8,
             sun_light_color_mode: "sun",
             sun_light_day_color: "#fff7c7",
@@ -6804,7 +6804,7 @@ void main() {
                 ] } }
             ] : [],
             environment_strength: vibrant ? 0.92 : (rendercraft ? 0.74 : 0.75),
-            sun_enabled: true,
+            sun_enabled: false,
             sun_intensity: vibrant ? 2.8 : (rendercraft ? 2.45 : 2.2),
             sun_light_color_mode: rendercraft ? 'time' : DEFAULT_SETTINGS.sun_light_color_mode,
             sun_light_day_color: rendercraft ? '#fff7c7' : DEFAULT_SETTINGS.sun_light_day_color,
@@ -10323,7 +10323,7 @@ void main() {
             'lightflow_environment.field.cubemap_fallback': 'Fallback Color',
             'lightflow_environment.field.show_celestials': 'Show Sun and Moon',
             'lightflow_environment.field.light_elevation': 'Light Elevation',
-            'lightflow_environment.field.light_enabled': 'Directional Light',
+            'lightflow_environment.field.light_enabled': 'Key Light',
             'lightflow_environment.field.light_intensity': 'Light Intensity',
             'lightflow_environment.field.light_color': 'Light Color',
             'lightflow_environment.field.cubemap_yaw': 'Cubemap Rotation',
@@ -10418,7 +10418,7 @@ void main() {
             'lightflow_environment.field.distance_grade_contrast': 'Far Contrast',
             'lightflow_environment.field.distance_grade_tint': 'Far Tint',
             'lightflow_environment.field.distance_grade_tint_strength': 'Far Tint Strength',
-            'lightflow_environment.field.sun_enabled': 'Sun / Moon Lighting',
+            'lightflow_environment.field.sun_enabled': 'Key Light (Sun / Moon)',
             'lightflow_environment.field.sun_intensity': 'Sun Intensity',
             'lightflow_environment.field.sun_light_color_mode': 'Sunlight Color',
             'lightflow_environment.option.sun_light_follow_disc': 'Follow Sun Disc',
@@ -10811,7 +10811,7 @@ void main() {
             'lightflow_environment.field.cubemap_fallback': 'Color de respaldo',
             'lightflow_environment.field.show_celestials': 'Mostrar sol y luna',
             'lightflow_environment.field.light_elevation': 'Elevación de la luz',
-            'lightflow_environment.field.light_enabled': 'Luz direccional',
+            'lightflow_environment.field.light_enabled': 'Luz principal',
             'lightflow_environment.field.light_intensity': 'Intensidad de la luz',
             'lightflow_environment.field.light_color': 'Color de la luz',
             'lightflow_environment.field.cubemap_yaw': 'Giro del cubemap',
@@ -10906,7 +10906,7 @@ void main() {
             'lightflow_environment.field.distance_grade_contrast': 'Contraste lejano',
             'lightflow_environment.field.distance_grade_tint': 'Tinte lejano',
             'lightflow_environment.field.distance_grade_tint_strength': 'Intensidad del tinte lejano',
-            'lightflow_environment.field.sun_enabled': 'Iluminación solar y lunar',
+            'lightflow_environment.field.sun_enabled': 'Luz principal (sol / luna)',
             'lightflow_environment.field.sun_intensity': 'Intensidad del sol',
             'lightflow_environment.field.sun_light_color_mode': 'Color de la luz solar',
             'lightflow_environment.option.sun_light_follow_disc': 'Seguir el disco solar',

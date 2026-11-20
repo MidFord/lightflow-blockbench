@@ -48,7 +48,10 @@
         inspector: 'Graph Inspector',
         search_nodes: 'Search nodes',
         empty_title: 'No shader graph in this project',
-        empty_body: 'Create a graph from a production preset or start with an empty surface.',
+        empty_body: 'Start with a textured surface. Edit the nodes, then use Apply to try the material on your model.',
+        start_surface: 'Start with Lightflow Surface',
+        glsl_failed: 'The shader code did not compile. The last working material is still available if one was compiled.',
+        glsl_unavailable: 'Open a 3D viewport with WebGL to check custom shader code.',
         create_graph: 'Create Graph',
         new_graph: 'New Graph',
         import_graph: 'Import Graph',
@@ -95,6 +98,30 @@
         connect_from: 'Start connection from',
         connect_to: 'Connect to',
         connection_failed: 'These ports are not type-compatible.',
+        connection_cycle: 'This connection would create a loop.',
+        graph_files: 'Graph Files',
+        graph_edit: 'Edit Graph',
+        graph_view: 'Graph View',
+        graph_kind: 'Graph Type',
+        material_graph: 'Material Graph',
+        grid_size: 'Grid Size',
+        alpha_opaque: 'Opaque',
+        alpha_cutout: 'Cutout',
+        alpha_blend: 'Blend',
+        alpha_additive: 'Additive',
+        live_preview_help: 'Use Apply to choose where the material appears. Live preview updates those assignments as you edit.',
+        focus_connection: 'Show Connection',
+        subgraph_validated: 'Subgraph validated.',
+        import_partial: 'Some graph files could not be imported.',
+        missing_subgraph_export: 'A required subgraph is missing.',
+        search_nodes: 'Search nodes',
+        no_node_matches: 'No matching nodes.',
+        quick_add: 'Quick Add',
+        subgraph: 'Subgraph',
+        subgraphs: 'Subgraphs',
+        edit_subgraph: 'Open Subgraph',
+        reset_view: 'Reset Zoom',
+        resource_matches: 'Matching Resources',
         surface_output_missing: 'Add one Surface Output or Preset Output node.',
         graph_too_large: 'The graph exceeds the safe import limit.',
         graph_expression_too_complex: 'The generated shader expression is too complex. Split or simplify the repeated branches.',
@@ -179,7 +206,10 @@
         inspector: 'Inspector del Grafo',
         search_nodes: 'Buscar nodos',
         empty_title: 'Este proyecto no tiene un grafo de shaders',
-        empty_body: 'Crea un grafo desde un preset de producción o comienza con una superficie vacía.',
+        empty_body: 'Empieza con una superficie texturizada. Edita los nodos y usa Aplicar para probar el material en tu modelo.',
+        start_surface: 'Empezar con Lightflow Surface',
+        glsl_failed: 'El código del shader no compiló. Si ya había un material compilado, sigue disponible.',
+        glsl_unavailable: 'Abre una vista 3D con WebGL para comprobar el código personalizado.',
         create_graph: 'Crear Grafo',
         new_graph: 'Nuevo Grafo',
         import_graph: 'Importar Grafo',
@@ -226,6 +256,30 @@
         connect_from: 'Iniciar conexión desde',
         connect_to: 'Conectar a',
         connection_failed: 'Estos puertos no son compatibles por tipo.',
+        connection_cycle: 'Esta conexión formaría un ciclo.',
+        graph_files: 'Archivos del grafo',
+        graph_edit: 'Editar grafo',
+        graph_view: 'Vista del grafo',
+        graph_kind: 'Tipo de grafo',
+        material_graph: 'Grafo de material',
+        grid_size: 'Tamaño de cuadrícula',
+        alpha_opaque: 'Opaco',
+        alpha_cutout: 'Recorte',
+        alpha_blend: 'Transparencia',
+        alpha_additive: 'Aditivo',
+        live_preview_help: 'Usa Aplicar para elegir dónde se muestra el material. La vista en vivo actualiza esas asignaciones mientras editas.',
+        focus_connection: 'Mostrar conexión',
+        subgraph_validated: 'Subgrafo validado.',
+        import_partial: 'No se pudieron importar algunos archivos de grafo.',
+        missing_subgraph_export: 'Falta un subgrafo requerido.',
+        search_nodes: 'Buscar nodos',
+        no_node_matches: 'No hay nodos que coincidan.',
+        quick_add: 'Añadir rápido',
+        subgraph: 'Subgrafo',
+        subgraphs: 'Subgrafos',
+        edit_subgraph: 'Abrir subgrafo',
+        reset_view: 'Restablecer zoom',
+        resource_matches: 'Recursos coincidentes',
         surface_output_missing: 'Agrega un nodo Surface Output o Preset Output.',
         graph_too_large: 'El grafo supera el límite seguro de importación.',
         graph_expression_too_complex: 'La expresión generada es demasiado compleja. Divide o simplifica las ramas repetidas.',
@@ -325,9 +379,12 @@
         return String(clean || fallback).slice(0, 96);
     }
 
+    function generatedMaterialId(graphId) {
+        return safeIdentifier(`${GENERATED_MATERIAL_PREFIX}${graphId}`, `${GENERATED_MATERIAL_PREFIX}graph`);
+    }
+
     function materialIdForGraph(graph) {
-        const explicit = safeIdentifier(graph?.settings?.materialId || '', '');
-        return explicit || `${GENERATED_MATERIAL_PREFIX}${safeIdentifier(graph?.id || makeId('graph'), 'graph')}`;
+        return safeIdentifier(graph?.settings?.materialId, '') || generatedMaterialId(graph?.id || makeId('graph'));
     }
 
     function graphOwnerToken(graphId) {
@@ -422,9 +479,10 @@
             port('texture', 'Texture', 'texture', null)
         ], {
             icon: 'image',
-            defaults: { name: 'Texture', expose: true },
+            defaults: { name: 'Texture', textureUuid: '', expose: true },
             properties: [
                 { key: 'name', label: 'Parameter Name', type: 'text' },
+                { key: 'textureUuid', label: 'Texture', type: 'texture' },
                 { key: 'expose', label: 'Expose in Material', type: 'checkbox' }
             ]
         }),
@@ -815,6 +873,7 @@
         }
         if (type === 'float_parameter') normalized.value = clampNumber(normalized.value, -1000000, 1000000, 0);
         if (type === 'bool_parameter') normalized.value = !!normalized.value;
+        if (type === 'texture_parameter') normalized.textureUuid = typeof normalized.textureUuid === 'string' ? normalized.textureUuid.trim() : '';
         if (type === 'custom_expression') {
             normalized.expression = String(normalized.expression || 'A').slice(0, 16384);
             if (!['float', 'vec2', 'vec3', 'vec4', 'color'].includes(normalized.outputType)) normalized.outputType = 'float';
@@ -925,7 +984,7 @@
             nodes: [],
             edges: [],
             settings: {
-                materialId: `${GENERATED_MATERIAL_PREFIX}${safeIdentifier(id, 'graph')}`,
+                materialId: generatedMaterialId(id),
                 livePreview: options.livePreview !== false,
                 alphaMode: options.alphaMode || 'cutout',
                 graphKind: options.graphKind === 'subgraph' ? 'subgraph' : 'material',
@@ -957,7 +1016,7 @@
         graph.id = typeof raw.id === 'string' && raw.id ? raw.id : makeId('graph');
         const rawSettings = raw.settings || {};
         graph.settings = {
-            materialId: safeIdentifier(rawSettings.materialId || graph.settings.materialId, graph.settings.materialId),
+            materialId: safeIdentifier(rawSettings.materialId, generatedMaterialId(graph.id)),
             livePreview: rawSettings.livePreview !== false,
             alphaMode: ['opaque', 'cutout', 'blend', 'additive'].includes(rawSettings.alphaMode) ? rawSettings.alphaMode : 'cutout',
             graphKind: rawSettings.graphKind === 'subgraph' ? 'subgraph' : 'material',
@@ -1015,24 +1074,56 @@
         return graph;
     }
 
-    function serializeGraph(graph) {
+    function serializeGraph(graph, graphs = null) {
+        const registry = graphRegistryMap(graphs);
+        const visited = new Set([graph.id]);
+        const dependencies = [];
+        const pending = [graph];
+        while (pending.length && graphs) {
+            const entry = pending.pop();
+            for (const node of entry.nodes) {
+                if (node.type !== 'subgraph_instance') continue;
+                const id = node.data.targetGraphId;
+                if (visited.has(id)) continue;
+                const dependency = registry.get(id);
+                if (dependency?.settings.graphKind !== 'subgraph') {
+                    throw new Error(`${tr('missing_subgraph_export')} ${node.data.targetGraphName || id}`);
+                }
+                visited.add(id);
+                dependencies.push(sanitizeGraph(dependency));
+                pending.push(dependency);
+            }
+        }
         const serialized = JSON.stringify({
             format: GRAPH_FORMAT,
             formatVersion: GRAPH_FORMAT_VERSION,
-            graph: sanitizeGraph(graph)
+            graph: sanitizeGraph(graph),
+            ...(dependencies.length ? { dependencies } : {})
         }, null, 2);
         if (serialized.length > MAX_GRAPH_BYTES) throw new Error(tr('graph_too_large'));
         return serialized;
     }
 
     function parseGraphFile(content) {
+        return parseGraphDocument(content).graph;
+    }
+
+    function parseGraphDocument(content) {
         if (typeof content !== 'string' || !content.trim()) throw new Error('Shader graph file is empty.');
         if (content.length > MAX_GRAPH_BYTES) throw new Error(tr('graph_too_large'));
         const parsed = JSON.parse(content);
         if (parsed?.format && parsed.format !== GRAPH_FORMAT) throw new Error(tr('invalid_graph_format'));
         if (Number(parsed?.formatVersion || 0) > GRAPH_FORMAT_VERSION) throw new Error(tr('unsupported_graph_version'));
         const graphData = parsed?.format === GRAPH_FORMAT ? (parsed.graph || parsed) : parsed?.graph || parsed;
-        return sanitizeGraph(graphData);
+        if (!Array.isArray(graphData?.nodes) || !Array.isArray(graphData?.edges)) throw new Error(tr('invalid_graph_format'));
+        const graph = sanitizeGraph(graphData);
+        const dependencies = Array.isArray(parsed?.dependencies) ? parsed.dependencies.map(sanitizeGraph) : [];
+        const ids = new Set([graph.id]);
+        for (const dependency of dependencies) {
+            if (dependency.settings.graphKind !== 'subgraph' || ids.has(dependency.id)) throw new Error(tr('invalid_graph_format'));
+            ids.add(dependency.id);
+        }
+        return { graph, dependencies };
     }
 
     function colorHexToArray(hex) {
@@ -1177,6 +1268,7 @@
         else if (type === 'color') nodeType = 'color_parameter';
         else if (type === 'texture') nodeType = 'texture_parameter';
         const data = { name: 'SubGraph Default', expose: false, value: deepClone(value !== undefined ? value : defaultSubgraphValue(type)) };
+        if (type === 'texture' && typeof value === 'string') data.textureUuid = value;
         if (nodeType === 'color_parameter') {
             data.value = Array.isArray(value) ? value.slice(0, 3) : [0, 0, 0];
             data.hex = colorArrayToHex(data.value);
@@ -1692,6 +1784,7 @@ vec3 vsgBumpFromHeight(vec3 worldPosition, vec3 normalValue, float heightValue, 
         const compiling = new Set();
         const attributes = new Map();
         const varyings = new Map();
+        const customCode = { vertex: new Set(), fragment: new Set() };
 
         const glslValueType = type => type === 'color' ? 'vec3' : type;
         const defaultValueForType = type => {
@@ -1784,6 +1877,7 @@ vec3 vsgBumpFromHeight(vec3 worldPosition, vec3 normalValue, float heightValue, 
 
         const inputPortDefinition = (node, portId) => getNodeInputPorts(node, materials).find(entry => entry.id === portId);
 
+        const inputTextures = new Map();
         const readInput = (node, portId, stage, forcedType) => {
             const definition = inputPortDefinition(node, portId) || { id: portId, type: forcedType || 'float', default: 0 };
             const edge = incoming.get(`${node.id}:${portId}`);
@@ -1792,6 +1886,15 @@ vec3 vsgBumpFromHeight(vec3 worldPosition, vec3 normalValue, float heightValue, 
             const requestedType = forcedType || definition.type;
             const resolvedType = requestedType === 'any' ? literalValueType(stored) : requestedType;
             if (resolvedType === 'texture') {
+                if (typeof stored === 'string' && stored) {
+                    const key = `${node.id}:${portId}`;
+                    if (!inputTextures.has(key)) {
+                        inputTextures.set(key, addUniform(`uVSG_${node.id}_${portId}`, {
+                            _owner: key, type: 'sampler2D', value: null, texture_uuid: stored, expose: false
+                        }));
+                    }
+                    return { expr: inputTextures.get(key), type: 'texture' };
+                }
                 uniforms.map = uniforms.map || { type: 'sampler2D', value: null, expose: true, repeat: true };
             }
             return { expr: literalForType(stored, resolvedType), type: resolvedType };
@@ -1833,7 +1936,8 @@ vec3 vsgBumpFromHeight(vec3 worldPosition, vec3 normalValue, float heightValue, 
             } else if (node.type === 'texture_parameter') {
                 const suffix = String(node.id).replace(/[^a-zA-Z0-9]/g, '').slice(-6);
                 const uniformName = addUniform(`uVSG_${safeIdentifier(node.data.name, 'Texture')}_${suffix}`, {
-                    _owner: node.id, type: 'sampler2D', value: null, expose: node.data.expose !== false, repeat: false, label: node.data.name
+                    _owner: node.id, type: 'sampler2D', value: null, expose: node.data.expose !== false, repeat: false, label: node.data.name,
+                    ...(node.data.textureUuid ? { texture_uuid: node.data.textureUuid } : {})
                 });
                 result = { expr: uniformName, type: 'texture' };
             } else if (node.type === 'uv') {
@@ -2110,6 +2214,7 @@ vec3 vsgBumpFromHeight(vec3 worldPosition, vec3 normalValue, float heightValue, 
             } else if (node.type === 'reroute') {
                 result = readInput(node, 'in', stage);
             } else if (node.type === 'custom_expression') {
+                customCode[stage].add(node.id);
                 const a = readInput(node, 'a', stage);
                 const b = readInput(node, 'b', stage);
                 const c = readInput(node, 'c', stage);
@@ -2219,11 +2324,17 @@ vec3 vsgBumpFromHeight(vec3 worldPosition, vec3 normalValue, float heightValue, 
             .map(entry => `    ${entry.name} = ${entry.expression};`).join('\n');
         const vertexFunctions = Array.from(functions.vertex).join('\n');
         const fragmentFunctions = Array.from(functions.fragment).join('\n');
-        const globalCodeForStage = stage => graph.nodes
-            .filter(node => node.type === 'global_expression' && ['both', stage].includes(node.data?.scope || 'both'))
-            .map(node => String(node.data?.code || '').trim())
-            .filter(Boolean)
-            .join('\n\n');
+        const globalCodeForStage = stage => {
+            const blocks = [];
+            for (const node of graph.nodes) {
+                if (node.type !== 'global_expression' || !['both', stage].includes(node.data?.scope || 'both')) continue;
+                const code = String(node.data.code || '').trim();
+                if (!code) continue;
+                customCode[stage].add(node.id);
+                blocks.push(code);
+            }
+            return blocks.join('\n\n');
+        };
         const vertexGlobalCode = globalCodeForStage('vertex');
         const fragmentGlobalCode = globalCodeForStage('fragment');
 
@@ -2386,6 +2497,7 @@ void main() {
             vertex,
             fragment,
             uniforms,
+            customCode: { vertex: [...customCode.vertex], fragment: [...customCode.fragment] },
             enableShadows: outputNode.data.lightingModel !== 'unlit',
             doubleSided: !!outputNode.data.doubleSided,
             depthWrite: outputNode.data.depthWrite !== false,
@@ -2440,6 +2552,7 @@ void main() {
         result.messages = messages;
         result.graphId = graph.id;
         result.graphRevision = graph.revision;
+        result.alphaMode = graph.settings.alphaMode;
         result.expandedNodeCount = expandedGraph.nodes.length;
         return result;
     }
@@ -2481,7 +2594,10 @@ void main() {
 
     function createExactPresetGraph(name, baseMaterialId, controls) {
         const graph = createGraph(name, { withOutput: false });
-        const output = createNode('preset_output', 560, 150, {
+        const columns = Math.max(1, Math.ceil(controls.length / 3));
+        const rows = Math.max(1, Math.ceil(controls.length / columns));
+        const outputY = 60 + Math.max(0, (rows * 124 - (82 + controls.length * 32)) / 2);
+        const output = createNode('preset_output', 110 + columns * 300 + 90, outputY, {
             baseMaterialId,
             uniformPorts: controls.map(control => ({
                 name: control.name,
@@ -2502,7 +2618,8 @@ void main() {
                 step: control.step
             };
             if (type === 'color_parameter') data.hex = colorArrayToHex(control.value);
-            const node = createNode(type, 110, 60 + index * 102, data);
+            const column = Math.floor(index / rows);
+            const node = createNode(type, 110 + column * 300, 60 + index % rows * 124 + column % 2 * 48, data);
             graph.nodes.push(node);
             graph.edges.push(createEdge(node.id, 'value', output.id, `uniform:${control.name}`));
         });
@@ -2533,7 +2650,7 @@ void main() {
         const texture = createNode('project_texture', 70, 110);
         const uvNode = createNode('uv', 70, 280);
         const sample = createNode('sample_texture', 320, 130);
-        const tint = createNode('color_parameter', 320, 390, { name: 'Tint', value: [1, 1, 1], hex: '#ffffff' });
+        const tint = createNode('color_parameter', 320, 420, { name: 'Tint', value: [1, 1, 1], hex: '#ffffff' });
         const multiply = createNode('multiply', 570, 170);
         const roughness = createNode('float_parameter', 570, 410, { name: 'Roughness', value: model === 'pbr' ? 0.62 : 0.78, min: 0.04, max: 1, step: 0.01 });
         const output = createNode('surface_output', 850, 150, { lightingModel: model });
@@ -2732,6 +2849,7 @@ void main() {
     const Runtime = {
         graphs: [],
         activeGraphId: '',
+        statusGraphId: '',
         selectedNodeIds: [],
         selectedEdgeId: '',
         clipboard: null,
@@ -2749,6 +2867,8 @@ void main() {
         hydrationHandle: null,
         compileTimer: null,
         dependencyCompileTimer: null,
+        pendingDependentGraphIds: new Set(),
+        pendingFrameGraphId: '',
         warnedTemporary: false,
         activeProject: null,
         disposed: false,
@@ -2797,6 +2917,16 @@ void main() {
                     console.warn('[Visual Shader Graph] A panel could not center the requested node.', error);
                 }
             });
+            return true;
+        },
+
+        focusEdge(edgeId, options = {}) {
+            const edge = this.activeGraph?.edges.find(entry => entry.id === edgeId);
+            if (!edge) return false;
+            for (const view of this.views) view.centerNode?.(edge.to.node, { focus: false, preserveZoom: true });
+            if (!options.preserveNodes) this.selectedNodeIds = [];
+            this.selectedEdgeId = edge.id;
+            this.refresh();
             return true;
         },
 
@@ -2869,6 +2999,7 @@ void main() {
             this.lastCompileDuration = 0;
             this.lastCompiledAt = 0;
             this.lastRepairCount = repairedConnections;
+            this.showCompileStatus();
             if (options.refresh !== false) this.refresh();
             return graphs;
         },
@@ -2896,11 +3027,15 @@ void main() {
             if (this.activeProject && this.activeProject !== project) this.compiledByGraph.clear();
             this.activeProject = project || null;
             this.cancelCompile();
+            this.cancelDependentCompiles();
+            this.pendingFrameGraphId = '';
             if (deferred || !project) {
                 this.graphs.splice(0);
                 this.activeGraphId = '';
                 this.selectedNodeIds = [];
+                this.selectedEdgeId = '';
                 this.diagnostics = [];
+                this.showCompileStatus();
                 this.refresh();
                 return;
             }
@@ -2909,6 +3044,8 @@ void main() {
                 this.deserializeState(source || '', { refresh: true });
                 if (source && !project[GRAPH_PROJECT_PROPERTY]) project[GRAPH_PROJECT_PROPERTY] = source;
                 this.rebindRegisteredGraphMaterials();
+                this.showCompileStatus();
+                if (project.mode === 'shader_graph' && !this.getCompiledMaterial()) this.scheduleCompile('project_restore');
                 if (this.lastRepairCount > 0) {
                     this.save({ project, markDirty: true, cause: 'repair_preset_connections' });
                     Blockbench.showQuickMessage(`${this.lastRepairCount} ${tr('preset_connections_repaired')}`, 2600);
@@ -2931,9 +3068,16 @@ void main() {
             const load = Blockbench.on('load_undo_save', event => {
                 if (event?.save?.[GRAPH_PROJECT_PROPERTY] === undefined) return;
                 try {
+                    this.cancelCompile();
+                    this.cancelDependentCompiles();
+                    const previousRevisions = new Map(this.graphs.map(graph => [graph.id, graph.revision]));
                     this.deserializeState(event.save[GRAPH_PROJECT_PROPERTY]);
                     this.save({ markDirty: false, cause: 'undo' });
-                    this.scheduleCompile('undo', 0);
+                    for (const graph of this.graphs) {
+                        if (graph.revision === previousRevisions.get(graph.id)) continue;
+                        if (graph.settings.graphKind === 'subgraph') this.scheduleDependentCompiles(graph.id, 'undo', 0);
+                        else if (graph === this.activeGraph) this.scheduleCompile('undo', 0);
+                    }
                 } catch (error) {
                     console.warn('[Visual Shader Graph] Undo state could not be restored.', error);
                 }
@@ -2955,8 +3099,11 @@ void main() {
                 const result = callback();
                 const graph = this.activeGraph;
                 if (graph) {
-                    graph.revision = Math.max(0, Number(graph.revision) || 0) + 1;
                     graph.updatedAt = Date.now();
+                    if (options.compile !== false) {
+                        this.advanceGraphRevision(graph);
+                        if (graph.settings.graphKind === 'subgraph') this.propagateSubgraphChange(graph.id);
+                    }
                 }
                 this.save({ cause: options.cause || 'edit' });
                 Undo.finishEdit(label, aspects);
@@ -2968,17 +3115,35 @@ void main() {
             }
         },
 
+        advanceGraphRevision(graph) {
+            const cached = this.compiledByGraph.get(graph.id);
+            const registered = window.MaterialManager?.materials?.[materialIdForGraph(graph)];
+            const currentMaterialRevision = registered?.vsgGraphId === graph.id ? registered.vsgGraphRevision : 0;
+            graph.revision = Math.max(graph.revision, cached?.revision || 0, currentMaterialRevision || 0) + 1;
+        },
+
         markDirty(cause = 'edit', options = {}) {
-            this.compileState = 'dirty';
-            this.compileMessage = '';
             const graph = this.activeGraph;
-            if (graph?.settings?.graphKind === 'subgraph') {
-                this.propagateSubgraphChange(graph.id);
-                if (options.compile !== false) this.scheduleDependentCompiles(graph.id, cause);
+            if (options.compile !== false) {
+                this.cancelCompile();
+                this.showCompileStatus('dirty');
+                if (graph?.settings.graphKind === 'subgraph') this.scheduleDependentCompiles(graph.id, cause);
+            } else if (this.statusGraphId !== this.activeGraphId) {
+                this.showCompileStatus();
             }
             this.diagnostics = graph ? validateGraph(graph, { materials: window.MaterialManager?.materials, graphs: this.graphs }) : [];
             this.refresh();
             if (options.compile !== false && graph?.settings?.livePreview && graph.settings?.graphKind !== 'subgraph') this.scheduleCompile(cause);
+        },
+
+        showCompileStatus(fallback = 'ready') {
+            const cached = this.compiledByGraph.get(this.activeGraphId);
+            const material = this.getCompiledMaterial();
+            this.statusGraphId = this.activeGraphId;
+            this.compileState = material ? 'compiled' : this.activeGraph ? fallback : 'ready';
+            this.compileMessage = '';
+            this.lastCompileDuration = material && cached?.material === material ? cached.duration || 0 : 0;
+            this.lastCompiledAt = material && cached?.material === material ? cached.timestamp || 0 : 0;
         },
 
         createFromPreset(presetId) {
@@ -2986,10 +3151,11 @@ void main() {
             return this.runUndo('Create visual shader graph', () => {
                 const graph = preset.create();
                 graph.name = this.uniqueGraphName(graph.name);
-                graph.settings.materialId = `${GENERATED_MATERIAL_PREFIX}${safeIdentifier(graph.id, 'graph')}`;
                 this.graphs.push(graph);
                 this.activeGraphId = graph.id;
+                this.pendingFrameGraphId = graph.id;
                 this.selectedNodeIds = [];
+                this.selectedEdgeId = '';
                 return graph;
             }, { cause: 'create_graph' });
         },
@@ -3006,13 +3172,15 @@ void main() {
 
         setActiveGraph(graphId) {
             if (!this.graphs.some(graph => graph.id === graphId)) return false;
+            this.cancelCompile();
             this.activeGraphId = graphId;
             this.selectedNodeIds = [];
             this.selectedEdgeId = '';
             this.diagnostics = validateGraph(this.activeGraph, { materials: window.MaterialManager?.materials, graphs: this.graphs });
+            this.showCompileStatus();
             this.save({ markDirty: false, cause: 'select_graph' });
             this.refresh();
-            if (this.activeGraph?.settings?.livePreview && this.activeGraph?.settings?.graphKind !== 'subgraph') this.scheduleCompile('select_graph', 80);
+            if (this.activeGraph.settings.livePreview && !this.getCompiledMaterial()) this.scheduleCompile('select_graph', 80);
             return true;
         },
 
@@ -3020,31 +3188,12 @@ void main() {
             const source = this.activeGraph;
             if (!source) return null;
             return this.runUndo('Duplicate visual shader graph', () => {
-                const graph = sanitizeGraph(deepClone(source));
-                graph.id = makeId('graph');
+                const graph = reidentifyGraph(source);
                 graph.name = this.uniqueGraphName(`${source.name} Copy`);
-                if (graph.settings.graphKind !== 'subgraph') graph.settings.materialId = `${GENERATED_MATERIAL_PREFIX}${safeIdentifier(graph.id, 'graph')}`;
-                const nodeIdMap = new Map();
-                graph.nodes.forEach(node => {
-                    const previous = node.id;
-                    node.id = makeId('node');
-                    nodeIdMap.set(previous, node.id);
-                });
-                graph.edges.forEach(edge => {
-                    edge.id = makeId('edge');
-                    edge.from.node = nodeIdMap.get(edge.from.node) || edge.from.node;
-                    edge.to.node = nodeIdMap.get(edge.to.node) || edge.to.node;
-                });
-                graph.groups = (graph.groups || []).map(group => ({
-                    id: makeId('group'),
-                    title: group.title,
-                    nodeIds: (group.nodeIds || []).map(nodeId => nodeIdMap.get(nodeId)).filter(Boolean)
-                })).filter(group => group.nodeIds.length);
-                graph.createdAt = graph.updatedAt = Date.now();
-                graph.revision = 0;
                 this.graphs.push(graph);
                 this.activeGraphId = graph.id;
                 this.selectedNodeIds = [];
+                this.selectedEdgeId = '';
                 return graph;
             }, { cause: 'duplicate_graph' });
         },
@@ -3064,6 +3213,7 @@ void main() {
                 this.graphs.splice(index, 1);
                 this.activeGraphId = this.graphs[Math.min(index, this.graphs.length - 1)]?.id || '';
                 this.selectedNodeIds = [];
+                this.selectedEdgeId = '';
                 this.releaseCompiledGraph(graph.id);
                 const restoredMaterial = window.MaterialManager?.materials?.[materialIdForGraph(graph)];
                 if (restoredMaterial?.isCustom && Number(restoredMaterial.uniforms?.uVSGGraphOwner?.value) === graphOwnerToken(graph.id)) {
@@ -3165,9 +3315,29 @@ void main() {
             return !!(source && target && canConnectResolvedTypes(resolvedSourceType, targetEntry.node, target));
         },
 
+        wouldCreateCycle(fromNode, toNode) {
+            const outgoing = new Map();
+            for (const edge of this.activeGraph.edges) {
+                if (!outgoing.has(edge.from.node)) outgoing.set(edge.from.node, []);
+                outgoing.get(edge.from.node).push(edge.to.node);
+            }
+            const pending = [toNode];
+            const seen = new Set();
+            while (pending.length) {
+                const nodeId = pending.pop();
+                if (nodeId === fromNode) return true;
+                if (seen.has(nodeId)) continue;
+                seen.add(nodeId);
+                pending.push(...(outgoing.get(nodeId) || []));
+            }
+            return false;
+        },
+
         connect(fromNode, fromPort, toNode, toPort) {
             const graph = this.activeGraph;
             if (!graph || !this.canConnect(fromNode, fromPort, toNode, toPort)) return false;
+            if (this.wouldCreateCycle(fromNode, toNode)) return false;
+            if (graph.edges.some(edge => edge.to.node === toNode && edge.to.port === toPort && edge.from.node === fromNode && edge.from.port === fromPort)) return true;
             const replacesExistingInput = graph.edges.some(edge => edge.to.node === toNode && edge.to.port === toPort);
             if (graph.edges.length >= MAX_GRAPH_EDGES && !replacesExistingInput) {
                 Blockbench.showToastNotification({ text: tr('graph_too_large'), icon: 'error', expire: 5000 });
@@ -3256,6 +3426,11 @@ void main() {
             return result;
         },
 
+        getAvailableSubgraphs() {
+            const excluded = new Set([this.activeGraphId, ...this.getDependentGraphs(this.activeGraphId).map(graph => graph.id)]);
+            return this.graphs.filter(graph => graph.settings.graphKind === 'subgraph' && !excluded.has(graph.id));
+        },
+
         synchronizeSubgraphInstances(targetGraphId) {
             const target = this.graphs.find(graph => graph.id === targetGraphId && graph.settings?.graphKind === 'subgraph');
             if (!target) return [];
@@ -3286,9 +3461,8 @@ void main() {
             this.synchronizeSubgraphInstances(targetGraphId);
             const dependents = this.getDependentGraphs(targetGraphId);
             dependents.forEach(graph => {
-                graph.revision = Math.max(0, Number(graph.revision) || 0) + 1;
+                this.advanceGraphRevision(graph);
                 graph.updatedAt = Date.now();
-                this.releaseCompiledGraph(graph.id);
             });
             return dependents;
         },
@@ -3300,15 +3474,17 @@ void main() {
                 graph.nodes.push(createNode('subgraph_output', 520, 160, { name: 'Output', valueType: 'float', portId: 'output' }));
                 this.graphs.push(graph);
                 this.activeGraphId = graph.id;
+                this.pendingFrameGraphId = graph.id;
                 this.selectedNodeIds = [];
+                this.selectedEdgeId = '';
                 return graph;
             }, { cause: 'create_subgraph', compile: false });
         },
 
         createSubgraphInstance(targetGraphId, x, y) {
             const graph = this.activeGraph;
-            const target = this.graphs.find(entry => entry.id === targetGraphId && entry.settings?.graphKind === 'subgraph');
-            if (!graph || !target || graph.id === target.id) return null;
+            const target = this.getAvailableSubgraphs().find(entry => entry.id === targetGraphId);
+            if (!graph || !target) return null;
             const iface = getSubgraphInterface(target);
             return this.addNode('subgraph_instance', x, y, {
                 targetGraphId: target.id,
@@ -3465,14 +3641,16 @@ void main() {
             const originX = Math.min(...nodes.map(node => node.x));
             const originY = Math.min(...nodes.map(node => node.y));
             return this.runUndo('Auto layout shader graph', () => {
+                let x = originX;
                 Array.from(columns.entries()).sort((a, b) => a[0] - b[0]).forEach(([rank, column]) => {
                     column.sort((a, b) => a.y - b.y);
                     let y = originY;
                     column.forEach(node => {
-                        node.x = snapGraphValue(graph, originX + rank * 320);
+                        node.x = snapGraphValue(graph, x);
                         node.y = snapGraphValue(graph, y);
                         y += nodeVisualHeight(node, window.MaterialManager?.materials) + 54;
                     });
+                    x += Math.max(...column.map(nodeVisualWidth)) + 80;
                 });
             }, { cause: 'auto_layout', compile: false });
         },
@@ -3492,14 +3670,28 @@ void main() {
             this.compileTimer = null;
         },
 
+        cancelDependentCompiles() {
+            clearTimeout(this.dependencyCompileTimer);
+            this.dependencyCompileTimer = null;
+            this.pendingDependentGraphIds.clear();
+        },
+
         scheduleDependentCompiles(targetGraphId, cause = 'subgraph_edit', delay = 240) {
-            if (this.dependencyCompileTimer) clearTimeout(this.dependencyCompileTimer);
+            this.getDependentGraphs(targetGraphId).forEach(graph => {
+                if (graph.settings.graphKind !== 'subgraph' && graph.settings.livePreview) this.pendingDependentGraphIds.add(graph.id);
+            });
+            clearTimeout(this.dependencyCompileTimer);
+            if (!this.pendingDependentGraphIds.size) return;
             this.dependencyCompileTimer = setTimeout(() => {
+                const ids = [...this.pendingDependentGraphIds];
+                this.pendingDependentGraphIds.clear();
                 this.dependencyCompileTimer = null;
-                this.getDependentGraphs(targetGraphId).filter(graph => graph.settings?.graphKind !== 'subgraph').forEach(graph => {
+                ids.forEach(id => {
+                    const graph = this.graphs.find(entry => entry.id === id);
+                    if (!graph?.settings.livePreview || this.getCompiledMaterial(graph)) return;
                     try {
-                        const material = this.compileMaterialGraph(graph);
-                        if (material && window.ShaderEngine?.globalRenderMode === material.id) window.ShaderEngine.updateAllCubes?.(`visual_shader_graph_${cause}`);
+                        if (graph === this.activeGraph) this.compileActive({ cause, silent: true });
+                        else this.compileMaterialGraph(graph, cause);
                     } catch (error) {
                         console.warn(`[Visual Shader Graph] Dependent graph ${graph.name} could not be recompiled.`, error);
                     }
@@ -3507,26 +3699,43 @@ void main() {
             }, Math.max(0, delay));
         },
 
-        compileMaterialGraph(graph) {
+        compileMaterialGraph(graph, cause = 'compile') {
             if (!graph || graph.settings?.graphKind === 'subgraph') return null;
+            const startedAt = performance.now();
             const compiled = compileGraph(graph, { materials: window.MaterialManager?.materials || {}, graphs: this.graphs });
             const material = createRuntimeMaterial(compiled);
+            const previous = this.compiledByGraph.get(graph.id);
+            const validatedRenderer = checkCustomShaderCode(graph, compiled, material, previous);
             const replacedMaterial = window.MaterialManager.materials[material.id];
             window.MaterialManager.register(material);
             if (replacedMaterial) Blockbench.dispatchEvent('update_global_material_list', { cause: 'visual_shader_graph_compile', action: 'update', materialId: material.id });
-            this.compiledByGraph.set(graph.id, { compiled, material, revision: graph.revision });
+            this.compiledByGraph.set(graph.id, {
+                compiled, material, validatedRenderer, revision: graph.revision, duration: Math.round(performance.now() - startedAt), timestamp: Date.now()
+            });
+            const engine = window.ShaderEngine;
+            if (!engine?.getActiveViewMode || engine.getActiveViewMode() === 'lightflow') {
+                if (engine?.globalRenderMode === material.id) {
+                    engine.updateAllCubes?.(`visual_shader_graph_${cause}`);
+                } else {
+                    const users = this.getRenderableElements().filter(element => {
+                        const resolved = window.MaterialManager.resolveCubeMaterial?.(element, engine?.globalRenderMode);
+                        return resolved === material || resolved?.baseMaterialId === material.id;
+                    });
+                    if (users.length) engine?.updateCubes?.(users, `visual_shader_graph_${cause}`);
+                }
+            }
             return material;
         },
 
         scheduleCompile(cause = 'edit', delay = 220) {
             this.cancelCompile();
-            if (this.activeGraph?.settings?.graphKind === 'subgraph') return;
+            if (!this.activeGraph?.settings.livePreview || this.activeGraph.settings.graphKind === 'subgraph') return;
             const graphId = this.activeGraphId;
             const revision = this.activeGraph?.revision;
             this.compileTimer = setTimeout(() => {
                 this.compileTimer = null;
                 if (this.disposed || graphId !== this.activeGraphId || revision !== this.activeGraph?.revision) return;
-                this.compileActive({ cause, apply: 'global', silent: true });
+                this.compileActive({ cause, silent: true });
             }, Math.max(0, delay));
         },
 
@@ -3534,6 +3743,7 @@ void main() {
             const graph = this.activeGraph;
             if (!graph) return null;
             this.cancelCompile();
+            this.statusGraphId = graph.id;
             const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
             this.compileState = 'compiling';
             this.compileMessage = '';
@@ -3548,14 +3758,14 @@ void main() {
                         throw failure;
                     }
                     this.compileState = 'compiled';
-                    this.compileMessage = 'Sub Graph validated.';
+                    this.compileMessage = tr('subgraph_validated');
                     this.lastCompileDuration = Math.max(0, Math.round((typeof performance !== 'undefined' ? performance.now() : Date.now()) - startedAt));
                     this.lastCompiledAt = Date.now();
                     this.refresh();
-                    if (!options.silent) Blockbench.showQuickMessage('Sub Graph validated.', 1600);
+                    if (!options.silent) Blockbench.showQuickMessage(this.compileMessage, 1600);
                     return null;
                 }
-                const material = this.compileMaterialGraph(graph);
+                const material = this.compileMaterialGraph(graph, options.cause);
                 const compiled = this.compiledByGraph.get(graph.id)?.compiled;
                 this.diagnostics = compiled?.messages || [];
                 this.compileState = 'compiled';
@@ -3582,8 +3792,8 @@ void main() {
         getCompiledMaterial(graph = this.activeGraph) {
             if (!graph) return null;
             const cached = this.compiledByGraph.get(graph.id);
-            if (cached?.revision === graph.revision) return cached.material;
             const registered = window.MaterialManager?.materials?.[materialIdForGraph(graph)];
+            if (cached?.revision === graph.revision && cached.material === registered) return cached.material;
             return registered?.vsgGraphId === graph.id && registered?.vsgGraphRevision === graph.revision
                 ? registered
                 : null;
@@ -3603,13 +3813,9 @@ void main() {
                 if (!material || Number(material.uniforms?.uVSGGraphOwner?.value) !== graphOwnerToken(graph.id)) return;
                 const presetOutput = graph.nodes.find(node => node.type === 'preset_output');
                 const baseMaterialId = presetOutput?.data?.baseMaterialId;
-                if (presetOutput && baseMaterialId && window.MaterialManager?.materials?.[baseMaterialId]) {
-                    material.baseMaterialId = baseMaterialId;
-                } else {
-                    delete material.baseMaterialId;
-                }
+                if (!material.baseMaterialId && baseMaterialId && window.MaterialManager?.materials?.[baseMaterialId]) material.baseMaterialId = baseMaterialId;
                 material.vsgGraphId = graph.id;
-                material.vsgGraphRevision = graph.revision;
+                material.vsgGraphRevision = material.uniforms?.uVSGGraphRevision?.value;
                 const settings = compileGraphRenderState(graph, presetOutput);
                 if (settings) material.vsgRenderState = settings;
             });
@@ -3619,31 +3825,31 @@ void main() {
             if (!material || !window.ShaderEngine) return false;
             const engine = window.ShaderEngine;
             const alreadyActive = engine.globalRenderMode === material.id;
-            engine.activateLightflowViewMode?.('visual_shader_graph_global');
             if (alreadyActive) {
-                // Registering a new material under the same graph ID does not trigger
-                // Shader Architect's global-mode transition. Rebind every live mesh so
-                // it receives the newly compiled shader and uniforms immediately.
-                engine.updateAllCubes('visual_shader_graph_recompile');
+                if (!engine.activateLightflowViewMode?.('visual_shader_graph_global')) engine.updateAllCubes('visual_shader_graph_apply');
             } else {
                 const queued = engine.requestGlobalRenderModeChange(material.id);
                 if (!queued) {
                     engine.globalRenderMode = material.id;
-                    engine.updateAllCubes('visual_shader_graph_apply');
+                    if (!engine.activateLightflowViewMode?.('visual_shader_graph_global')) engine.updateAllCubes('visual_shader_graph_apply');
                 }
             }
             if (!options.silent) Blockbench.showQuickMessage(tr('apply_success'), 1800);
             return true;
         },
 
-        getSelectedRenderableElements() {
+        getRenderableElements(list = 'all') {
             const result = [];
             // window.BedrockBlockElement is published by Bedrock Structure
             // Studio; when absent the entry is simply skipped.
             [window.Cube, window.Mesh, window.TextureMesh, window.BedrockBlockElement].forEach(ElementType => {
-                if (Array.isArray(ElementType?.selected)) result.push(...ElementType.selected);
+                if (Array.isArray(ElementType?.[list])) result.push(...ElementType[list]);
             });
             return [...new Set(result)];
+        },
+
+        getSelectedRenderableElements() {
+            return this.getRenderableElements('selected');
         },
 
         applyMaterialToSelection(material = this.getCompiledMaterial(), options = {}) {
@@ -3659,8 +3865,8 @@ void main() {
                 element.sa_material_instance_id = '';
             });
             Undo.finishEdit('Apply visual shader graph', { elements });
-            window.ShaderEngine.activateLightflowViewMode('visual_shader_graph_selection');
-            window.ShaderEngine.updateCubes(elements, 'visual_shader_graph_selection');
+            const engine = window.ShaderEngine;
+            if (!engine.activateLightflowViewMode?.('visual_shader_graph_selection')) engine.updateCubes(elements, 'visual_shader_graph_selection');
             if (!options.silent) Blockbench.showQuickMessage(tr('apply_success'), 1800);
             return true;
         },
@@ -3668,6 +3874,8 @@ void main() {
         dispose() {
             this.disposed = true;
             this.cancelCompile();
+            this.cancelDependentCompiles();
+            this.pendingFrameGraphId = '';
             this.views.clear();
             try { this.undoHooks?.delete?.(); } catch (error) { console.warn('[Visual Shader Graph] Undo hooks could not be released.', error); }
             try { this.hydrationHandle?.delete?.(); } catch (error) { console.warn('[Visual Shader Graph] Hydration could not be released.', error); }
@@ -3743,6 +3951,12 @@ void main() {
         let uniforms = materializeUniformMap(compiled.uniforms);
         if (compiled.kind === 'preset') uniforms = applyPresetOverrides(uniforms, compiled.overrides);
         uniforms.uVSGGraphOwner = { type: 'float', value: graphOwnerToken(compiled.graphId), expose: false };
+        uniforms.uVSGGraphRevision = { type: 'float', value: compiled.graphRevision, expose: false };
+        const additive = compiled.alphaMode === 'additive';
+        const transparent = additive || compiled.alphaMode === 'blend' || !!compiled.transparent;
+        const flags = Number(!!compiled.doubleSided) + (compiled.depthWrite !== false && !additive ? 2 : 0) +
+            (transparent ? 4 : 0) + (additive ? 8 : 0);
+        uniforms.uVSGGraphRenderFlags = { type: 'float', value: flags, expose: false };
         const material = new window.FancyShaderMaterial({
             id: compiled.materialId,
             name: `[Graph] ${compiled.name}`,
@@ -3775,8 +3989,41 @@ void main() {
         return material;
     }
 
+    function checkCustomShaderCode(graph, compiled, material, previous) {
+        const code = compiled.customCode;
+        if (!code?.vertex.length && !code?.fragment.length) return null;
+        const engine = window.ShaderEngine;
+        const renderer = engine.getShaderWarmupPreview?.()?.renderer;
+        if (!renderer || renderer.getContext().isContextLost()) throw new Error(tr('glsl_unavailable'));
+        if (previous?.validatedRenderer === renderer && previous.compiled.vertex === compiled.vertex &&
+            previous.compiled.fragment === compiled.fragment) return renderer;
+
+        const problems = engine.inspectDraftMaterialProgram?.(material);
+        if (!problems) throw new Error(tr('glsl_unavailable'));
+        if (!problems.length) return renderer;
+        const error = new Error(tr('glsl_failed'));
+        error.messages = problems.map(problem => {
+            const candidates = code[problem.type];
+            const id = candidates?.length === 1 ? candidates[0] : '';
+            const node = graph.nodes.find(node => node.id === id) ||
+                graph.nodes.find(node => node.type === 'subgraph_instance' && id.startsWith(`${node.id}__`));
+            return { severity: 'error', code: problem.type === 'linker' ? 'glsl_link' : 'glsl_compile', nodeId: node?.id, message: problem.message };
+        });
+        throw error;
+    }
+
     function applyGraphRenderStateToMaterial(material) {
         if (!material) return;
+        const flags = material.uniforms?.uVSGGraphRenderFlags?.value;
+        if (Number.isInteger(flags) && flags >= 0 && flags <= 15) {
+            setGraphMaterialState(material, {
+                doubleSided: !!(flags & 1),
+                depthWrite: !!(flags & 2),
+                transparent: !!(flags & 4),
+                additive: !!(flags & 8)
+            });
+            return;
+        }
         const shaderId = material.sa_shader_id || material.name?.replace(/^SA_/, '').split('_')[0];
         let definition = window.MaterialManager?.materials?.[shaderId];
         let graphId = definition?.vsgGraphId;
@@ -3798,10 +4045,20 @@ void main() {
         const graph = graphId && Runtime.graphs.find(entry => entry.id === graphId);
         const state = definition?.vsgRenderState;
         if (!state || !graph) return;
-        material.side = state.doubleSided ? THREE.DoubleSide : THREE.FrontSide;
-        material.depthWrite = graph.settings.alphaMode === 'additive' ? false : state.depthWrite;
-        material.transparent = graph.settings.alphaMode === 'blend' || graph.settings.alphaMode === 'additive' || state.transparent;
-        material.blending = graph.settings.alphaMode === 'additive' ? THREE.AdditiveBlending : THREE.NormalBlending;
+        const additive = graph.settings.alphaMode === 'additive';
+        setGraphMaterialState(material, {
+            doubleSided: state.doubleSided,
+            depthWrite: !additive && state.depthWrite,
+            transparent: additive || graph.settings.alphaMode === 'blend' || state.transparent,
+            additive
+        });
+    }
+
+    function setGraphMaterialState(material, state) {
+        const side = state.doubleSided ? THREE.DoubleSide : THREE.FrontSide;
+        const blending = state.additive ? THREE.AdditiveBlending : THREE.NormalBlending;
+        if (material.side === side && material.blending === blending && material.depthWrite === state.depthWrite && material.transparent === state.transparent) return;
+        Object.assign(material, { side, blending, depthWrite: state.depthWrite, transparent: state.transparent });
         material.needsUpdate = true;
     }
 
@@ -3889,6 +4146,17 @@ void main() {
         return Number.isFinite(number) ? number : fallback;
     }
 
+    function createGraphMenu(id, items, options) {
+        const menu = new Menu(id, items, options);
+        menu.node?.classList.add('vsg-menu');
+        return menu;
+    }
+
+    function showGraphMessage(options, callback) {
+        const dialog = Blockbench.showMessageBox(options, callback);
+        dialog?.object?.classList.add('vsg-dialog');
+    }
+
     function showPresetMenu(target) {
         const exact = Object.entries(PRESET_DEFINITIONS).filter(([, preset]) => preset.family === 'exact');
         const native = Object.entries(PRESET_DEFINITIONS).filter(([, preset]) => preset.family === 'native');
@@ -3900,7 +4168,106 @@ void main() {
                 name: preset.name, icon: preset.icon, click: () => Runtime.createFromPreset(id)
             })) }
         ];
-        new Menu('visual_shader_graph_presets', items).open(target);
+        createGraphMenu('visual_shader_graph_presets', items).open(target);
+    }
+
+    function graphSelect(label, options, searchable = false) {
+        return { type: 'compact_select', label, options, searchable, menu_class: 'vsg-menu',
+            hide_label: true, hide_icon: true, show_value_text: true, expand: true };
+    }
+
+    function graphCheckbox(label, inline = false, descriptionId) {
+        return { type: 'custom_checkbox', label: inline ? '' : label, accessible_label: label, descriptionId };
+    }
+
+    function graphNumber(label, min = 0, max = 1, step = 0.01, unbounded = false, inline = false) {
+        return { type: 'combo_slider', accessible_label: label, min, max, step,
+            allow_lower: unbounded, allow_higher: unbounded, full_track: !inline, density: 'compact' };
+    }
+
+    function graphTexture(label) {
+        return { type: 'texture_source', label, project_reference: true,
+            allow_import: false, search_menu: true, menu_class: 'vsg-menu' };
+    }
+
+    function graphPortControl(port, value) {
+        const type = port.type === 'any' ? literalValueType(value) : port.type;
+        if (type === 'bool') return graphCheckbox(port.name, true);
+        if (type === 'texture') return graphTexture(port.name);
+        if (type === 'color') return { type: 'custom_vector', dimensions: 3, accessible_label: port.name, default: port.default };
+        if (/^vec[234]$/.test(type)) return { type: 'custom_vector', dimensions: Number(type[3]), accessible_label: port.name, default: port.default };
+        return graphNumber(port.name, 0, 1, 0.01, true);
+    }
+
+    function createGraphFieldComponent() {
+        return {
+            props: ['value', 'control'],
+            computed: { signature() { return JSON.stringify(this.control); } },
+            watch: {
+                signature() { this.mountField(); },
+                value(value) {
+                    if (!this._editing && this._field && JSON.stringify(this._field.getValue()) !== JSON.stringify(value)) {
+                        this._field.setValue(deepClone(value), false);
+                    }
+                }
+            },
+            methods: {
+                mountField() {
+                    this.disposeField();
+                    const Field = FormElement.types[this.control.type];
+                    if (!Field) return;
+                    const id = makeId('vsg_field');
+                    const host = document.createElement('div');
+                    this.$el.append(host);
+                    const form = {
+                        form_data: {},
+                        updateValues: () => {
+                            if (!this._editing && this.control.type !== 'code_editor') this.commit();
+                        }
+                    };
+                    const field = new Field(id, {
+                        ...this.control,
+                        value: deepClone(this.value),
+                        onBefore: () => { this._editing = true; },
+                        onAfter: () => { this._editing = false; this.commit(); }
+                    }, form);
+                    this._form = form;
+                    form.form_data[id] = this._field = field;
+                    field.build(host);
+                    field.setup();
+                    const label = this.control.accessible_label || this.control.label;
+                    if (label) {
+                        const primary = field.node?.matches('input,button,[tabindex]') ? field.node : field.node?.querySelector('input,button,[tabindex]');
+                        if (primary && (this.control.accessible_label || !primary.hasAttribute('aria-label'))) primary.setAttribute('aria-label', label);
+                        if (this.control.descriptionId) primary?.setAttribute('aria-describedby', this.control.descriptionId);
+                    }
+                },
+                disposeField() {
+                    const field = this._field;
+                    if (this._form) {
+                        this._form._lightflowDeletingControls = true;
+                        this._form.form_data = {};
+                        this._form = null;
+                    }
+                    this._field = null;
+                    this._editing = false;
+                    field?.delete?.();
+                    this.$el.replaceChildren();
+                },
+                commit() {
+                    if (!this._field) return;
+                    const next = this._field.getValue();
+                    if (JSON.stringify(next) !== JSON.stringify(this.value)) this.$emit('commit', deepClone(next));
+                },
+                onFocusOut(event) {
+                    if (this.control.type === 'code_editor' && !this.$el.contains(event.relatedTarget)) this.commit();
+                },
+                focus() { this._field?.node?.focus(); }
+            },
+            mounted() { this.mountField(); },
+            beforeDestroy() { this.disposeField(); },
+            template: '<div class="vsg-shared-field" @focusout="onFocusOut"></div>'
+        };
     }
 
     function createAdvancedColorControlComponent() {
@@ -3959,6 +4326,7 @@ void main() {
                     }, formBridge);
                     this.formElement.build(host);
                     this.formElement.setup();
+                    this.formElement.colorpicker?.jq?.spectrum('container')?.addClass('vsg-color-popup');
                     host.setAttribute('aria-label', this.label);
                 }
             },
@@ -3972,10 +4340,58 @@ void main() {
         };
     }
 
+    function createGraphCompactTextComponent() {
+        return {
+            props: {
+                value: { type: String, default: '' },
+                label: { type: String, required: true },
+                tooltip: { type: String, default: '' }
+            },
+            computed: { shared() { return !!FormElement.types.compact_text; } },
+            mounted() {
+                const CompactText = FormElement.types.compact_text;
+                if (!CompactText) return;
+                const field = new CompactText(makeId('vsg_text'), {
+                    type: 'compact_text',
+                    value: this.value,
+                    height: 'var(--lf-input-h, 28px)'
+                }, { updateValues: () => this.commit(field.getValue()) });
+                field.build(this.$el);
+                field.setup();
+                this._field = field;
+                this.syncMetadata();
+            },
+            watch: {
+                value(value) { this._field?.setValue(value); },
+                label() { this.syncMetadata(); },
+                tooltip() { this.syncMetadata(); }
+            },
+            beforeDestroy() { this._field?.delete?.(); },
+            methods: {
+                syncMetadata() {
+                    const input = this._field?.node;
+                    if (!input) return;
+                    input.setAttribute('aria-label', this.label);
+                    input.title = this.tooltip || this.label;
+                },
+                commit(value) {
+                    if (value !== this.value) this.$emit('commit', value);
+                    this.$nextTick(() => {
+                        this._field?.setValue(this.value);
+                        if (this.$refs.fallback) this.$refs.fallback.value = this.value;
+                    });
+                }
+            },
+            template: `<div class="vsg-compact-text">
+                <input v-if="!shared" ref="fallback" class="dark_bordered" :value="value" :aria-label="label" :title="tooltip || label" @change="commit($event.target.value)">
+            </div>`
+        };
+    }
+
     function createGraphCanvasComponent() {
         return {
             name: 'visual-shader-graph-canvas',
-            components: { VsgAdvancedColor: createAdvancedColorControlComponent() },
+            components: { VsgAdvancedColor: createAdvancedColorControlComponent(), VsgField: createGraphFieldComponent(), VsgCompactText: createGraphCompactTextComponent() },
             data() {
                 return {
                     runtime: Runtime,
@@ -3994,21 +4410,21 @@ void main() {
                     if (!this.graph) return {};
                     return { transform: `translate(${this.graph.viewport.x}px, ${this.graph.viewport.y}px) scale(${this.graph.viewport.zoom})`, '--vsg-grid-size': `${clampNumber(this.graph.settings?.gridSize, 8, 64, 20)}px` };
                 },
-                graphStatusLabel() {
-                    return tr(this.runtime.compileState) || this.runtime.compileState;
+                visibleEdges() {
+                    const hiddenEdge = this.connectionDraft?.rewire?.edge.id;
+                    const edges = this.graph?.edges || [];
+                    return hiddenEdge ? edges.filter(edge => edge.id !== hiddenEdge) : edges;
                 },
                 zoomLabel() {
                     return `${Math.round((this.graph?.viewport?.zoom || 1) * 100)}%`;
                 },
-                compilePerformanceLabel() {
-                    return this.runtime.lastCompileDuration > 0
-                        ? `${tr('compiled_in')} ${this.runtime.lastCompileDuration} ms`
-                        : tr('not_compiled');
-                }
             },
             watch: {
                 'runtime.activeGraphId'() {
-                    this.$nextTick(() => { if (this.graph) this.frameAll(); });
+                    this.cancelPointerGesture();
+                    this.connectionDraft = null;
+                    this.spacePressed = false;
+                    this.$nextTick(() => this.frameNewGraph());
                 }
             },
             methods: {
@@ -4048,16 +4464,27 @@ void main() {
                     const value = Number(node?.data?.[key]);
                     return Number.isFinite(value) ? value : fallback;
                 },
-                setParameterNumber(node, event) {
+                parameterSlider(node) {
+                    const min = this.parameterRange(node, 'min', 0);
+                    const max = this.parameterRange(node, 'max', 1);
+                    return graphNumber(this.nodeTitle(node), Math.min(min, max), Math.max(min, max),
+                        Math.max(0.0001, this.parameterRange(node, 'step', 0.01)), false, true);
+                },
+                graphPicker() {
+                    return graphSelect(tr('graph_name'), Object.fromEntries(this.runtime.graphs.map(entry => [
+                        entry.id, entry.settings.graphKind === 'subgraph' ? '◇ ' + entry.name : entry.name
+                    ])), true);
+                },
+                graphCheckbox,
+                setParameterNumber(node, number) {
                     const min = this.parameterRange(node, 'min', -1000000);
                     const max = this.parameterRange(node, 'max', 1000000);
-                    const value = clampNumber(event.target.value, Math.min(min, max), Math.max(min, max), node.data.value);
+                    const value = clampNumber(number, Math.min(min, max), Math.max(min, max), node.data.value);
                     Runtime.runUndo('Edit shader parameter', () => {
                         this.$set(node.data, 'value', value);
                     }, { cause: 'parameter_value' });
                 },
-                setParameterBoolean(node, event) {
-                    const value = !!event.target.checked;
+                setParameterBoolean(node, value) {
                     Runtime.runUndo('Edit shader parameter', () => {
                         this.$set(node.data, 'value', value);
                     }, { cause: 'parameter_value' });
@@ -4089,8 +4516,9 @@ void main() {
                         return;
                     }
                     const graph = this.graph;
-                    graph.revision = Math.max(0, Number(graph.revision) || 0) + 1;
+                    Runtime.advanceGraphRevision(graph);
                     graph.updatedAt = Date.now();
+                    if (graph.settings.graphKind === 'subgraph') Runtime.propagateSubgraphChange(graph.id);
                     Runtime.save({ cause: 'parameter_color' });
                     Undo.finishEdit('Edit shader parameter color', state.aspects);
                     Runtime.markDirty('parameter_color');
@@ -4108,8 +4536,8 @@ void main() {
                     const value = node.inputValues?.[port.id] !== undefined ? node.inputValues[port.id] : port.default;
                     return fieldValueAsText(value);
                 },
-                setInputText(node, port, event) {
-                    const value = parseFieldValue(event.target.value, port.type, port.default);
+                setInputText(node, port, text) {
+                    const value = parseFieldValue(text, port.type, port.default);
                     Runtime.runUndo('Edit shader node input', () => {
                         if (!node.inputValues) this.$set(node, 'inputValues', {});
                         this.$set(node.inputValues, port.id, value);
@@ -4131,11 +4559,12 @@ void main() {
                 },
                 focusNodeElement(nodeId) {
                     this.$nextTick(() => {
-                        const element = this.$refs.viewport?.querySelector?.(`[data-node-id="${nodeId}"]`);
+                        const element = this.$refs.viewport?.querySelector?.(`.vsg-node[data-node-id="${CSS.escape(nodeId)}"]`);
                         element?.focus?.({ preventScroll: true });
                     });
                 },
                 handleNodeKey(node, event) {
+                    if (event.target !== event.currentTarget) return;
                     const directions = {
                         ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1]
                     };
@@ -4146,8 +4575,8 @@ void main() {
                     if (event.shiftKey) {
                         const distance = event.ctrlKey || event.metaKey ? 1 : (this.graph.settings?.snapToGrid ? clampNumber(this.graph.settings.gridSize, 8, 64, 20) : 12);
                         Runtime.runUndo('Move shader node', () => {
-                            node.x = snapGraphValue(this.graph, node.x + direction[0] * distance);
-                            node.y = snapGraphValue(this.graph, node.y + direction[1] * distance);
+                            node.x += direction[0] * distance;
+                            node.y += direction[1] * distance;
                         }, { cause: 'keyboard_move_node', compile: false });
                         this.focusNodeElement(node.id);
                         return;
@@ -4161,35 +4590,26 @@ void main() {
                     }).filter(entry => entry.primary > 0).sort((a, b) => a.score - b.score);
                     const next = candidates[0]?.candidate;
                     if (!next) return;
-                    Runtime.selectedNodeIds = [next.id];
-                    Runtime.selectedEdgeId = '';
-                    Runtime.refresh();
-                    this.focusNodeElement(next.id);
+                    Runtime.focusNode(next.id, { preserveZoom: true });
                 },
                 cancelPointerGesture() {
                     this._pointerCleanup?.();
                     this._pointerCleanup = null;
-                    if (this.dragState) Undo.cancelEdit(false);
+                    if (this.dragState) {
+                        this.dragState.initial.forEach(({ node, x, y }) => { node.x = x; node.y = y; });
+                        Undo.cancelEdit(false);
+                    }
                     this.dragState = null;
                     this.panState = null;
-                    const draft = this.connectionDraft;
-                    if (draft?.rewire) {
-                        const { edge, edgeIndex, aspects } = draft.rewire;
-                        if (!this.graph.edges.some(candidate => candidate.id === edge.id)) {
-                            this.graph.edges.splice(Math.min(edgeIndex, this.graph.edges.length), 0, edge);
-                        }
-                        Undo.cancelEdit(false);
-                        this.connectionDraft = null;
-                        this.$forceUpdate();
-                    } else if (draft && !draft.keyboard) {
-                        this.connectionDraft = null;
-                    }
+                    if (!this.connectionDraft?.keyboard) this.connectionDraft = null;
                 },
                 beginNodeDrag(node, event) {
-                    if (event.button !== 0 || event.target.closest('.vsg-port, input, button, select, textarea')) return;
+                    if (event.button !== 0 || event.target.closest('.vsg-port, .vsg-shared-field, input, button, select, textarea')) return;
                     event.preventDefault();
                     this.cancelPointerGesture();
                     this.selectNode(node, event);
+                    if (!Runtime.selectedNodeIds.includes(node.id)) return;
+                    this.focusNodeElement(node.id);
                     const graph = this.graph;
                     const selected = new Set(Runtime.selectedNodeIds);
                     const initial = graph.nodes.filter(entry => selected.has(entry.id)).map(entry => ({ node: entry, x: entry.x, y: entry.y }));
@@ -4217,10 +4637,10 @@ void main() {
                         const state = this.dragState;
                         this.dragState = null;
                         if (!state?.moved) {
+                            initial.forEach(({ node, x, y }) => { node.x = x; node.y = y; });
                             Undo.cancelEdit(false);
                             return;
                         }
-                        graph.revision += 1;
                         graph.updatedAt = Date.now();
                         Runtime.save({ cause: 'move_nodes' });
                         Undo.finishEdit('Move shader nodes', aspects);
@@ -4253,7 +4673,6 @@ void main() {
                         if (this._pointerCleanup === cleanup) this._pointerCleanup = null;
                         if (!moved) return Undo.cancelEdit(false);
                         node.width = Math.round(node.width / 4) * 4;
-                        graph.revision += 1;
                         graph.updatedAt = Date.now();
                         Runtime.save({ cause: 'resize_node' });
                         Undo.finishEdit('Resize shader node', aspects);
@@ -4290,7 +4709,7 @@ void main() {
                         cleanup();
                         if (this._pointerCleanup === cleanup) this._pointerCleanup = null;
                         if (!moved) return Undo.cancelEdit(false);
-                        graph.revision += 1; graph.updatedAt = Date.now();
+                        graph.updatedAt = Date.now();
                         Runtime.save({ cause: 'move_group' });
                         Undo.finishEdit('Move shader node group', aspects);
                         Runtime.markDirty('move_group', { compile: false });
@@ -4384,11 +4803,11 @@ void main() {
                 frameAll() {
                     const graph = this.graph;
                     const viewport = this.$refs.viewport;
-                    if (!graph || !viewport || !graph.nodes.length) return this.resetView();
+                    if (!graph || !viewport?.clientWidth || !viewport.clientHeight || !graph.nodes.length) return;
                     const minX = Math.min(...graph.nodes.map(node => node.x));
                     const minY = Math.min(...graph.nodes.map(node => node.y));
                     const maxX = Math.max(...graph.nodes.map(node => node.x + nodeVisualWidth(node)));
-                    const maxY = Math.max(...graph.nodes.map(node => node.y + 70 + Math.max(this.inputPorts(node).length, this.outputPorts(node).length, 1) * 32));
+                    const maxY = Math.max(...graph.nodes.map(node => node.y + nodeVisualHeight(node, window.MaterialManager?.materials)));
                     const width = Math.max(1, maxX - minX);
                     const height = Math.max(1, maxY - minY);
                     const zoom = clampNumber(Math.min((viewport.clientWidth - 56) / width, (viewport.clientHeight - 56) / height), 0.2, 1.35, 1);
@@ -4397,6 +4816,16 @@ void main() {
                     graph.viewport.y = (viewport.clientHeight - height * zoom) / 2 - minY * zoom;
                     Runtime.save({ markDirty: false, cause: 'frame_graph' });
                     Runtime.refresh();
+                    return true;
+                },
+                frameNewGraph() {
+                    if (this.graph?.id === Runtime.pendingFrameGraphId && this.frameAll()) Runtime.pendingFrameGraphId = '';
+                },
+                insertionPoint() {
+                    const viewport = this.$refs.viewport;
+                    const rect = viewport?.getBoundingClientRect();
+                    if (!rect?.width || !rect.height) return null;
+                    return graphPointFromClient(this.graph, viewport, rect.left + rect.width / 2, rect.top + rect.height / 2);
                 },
                 centerNode(nodeId, options = {}) {
                     const graph = this.graph;
@@ -4409,7 +4838,7 @@ void main() {
                     graph.viewport.y = viewport.clientHeight / 2 - (node.y + height / 2) * graph.viewport.zoom;
                     Runtime.save({ markDirty: false, cause: 'center_node' });
                     Runtime.refresh();
-                    this.focusNodeElement(node.id);
+                    if (options.focus !== false) this.focusNodeElement(node.id);
                     return true;
                 },
                 connectionPath(edge) {
@@ -4458,7 +4887,7 @@ void main() {
                     const connected = this.graph.edges.filter(edge => direction === 'input'
                         ? edge.to.node === node.id && edge.to.port === port.id
                         : edge.from.node === node.id && edge.from.port === port.id);
-                    new Menu(`visual_shader_graph_${direction}_port`, [
+                    createGraphMenu(`visual_shader_graph_${direction}_port`, [
                         {
                             name: direction === 'input' ? tr('disconnect_input') : tr('disconnect_output'),
                             icon: 'link_off',
@@ -4473,7 +4902,7 @@ void main() {
                     Runtime.selectedNodeIds = [];
                     Runtime.selectedEdgeId = edge.id;
                     Runtime.refresh();
-                    new Menu('visual_shader_graph_connection', [
+                    createGraphMenu('visual_shader_graph_connection', [
                         { name: tr('disconnect'), icon: 'link_off', click: () => Runtime.disconnectEdge(edge.id) }
                     ]).open(event);
                 },
@@ -4504,7 +4933,7 @@ void main() {
                         this.connectionDraft = null;
                         if (!target || !draft) return this.$forceUpdate();
                         if (!Runtime.connect(draft.node, draft.port, target.dataset.nodeId, target.dataset.portId)) {
-                            Blockbench.showQuickMessage(tr('connection_failed'), 2200);
+                            this.showConnectionFailure(draft.node, target.dataset.nodeId);
                         }
                     };
                     this._pointerCleanup = cleanup;
@@ -4524,9 +4953,6 @@ void main() {
                     event.preventDefault();
                     event.stopPropagation();
                     this.cancelPointerGesture();
-                    const aspects = { [GRAPH_UNDO_ASPECT]: true };
-                    Undo.initEdit(aspects);
-                    graph.edges.splice(edgeIndex, 1);
                     const viewport = this.$refs.viewport;
                     const startClient = { x: event.clientX, y: event.clientY };
                     const start = {
@@ -4542,9 +4968,6 @@ void main() {
                         keyboard: false,
                         rewire: {
                             edge,
-                            edgeIndex,
-                            aspects,
-                            originalTo: { node: edge.to.node, port: edge.to.port },
                             moved: false
                         }
                     };
@@ -4563,48 +4986,32 @@ void main() {
                         document.removeEventListener('mousemove', move);
                         document.removeEventListener('mouseup', stop);
                     };
-                    const restoreAndCancel = draft => {
-                        const state = draft.rewire;
-                        edge.to = { ...state.originalTo };
-                        if (!graph.edges.some(candidate => candidate.id === edge.id)) {
-                            graph.edges.splice(Math.min(state.edgeIndex, graph.edges.length), 0, edge);
-                        }
-                        Undo.cancelEdit(false);
-                        Runtime.refresh();
-                    };
                     const stop = stopEvent => {
                         cleanup();
                         if (this._pointerCleanup === cleanup) this._pointerCleanup = null;
                         const draft = this.connectionDraft;
                         this.connectionDraft = null;
-                        if (!draft?.rewire) return this.$forceUpdate();
-                        const state = draft.rewire;
-                        if (!state.moved) return restoreAndCancel(draft);
+                        if (!draft?.rewire?.moved || graph !== Runtime.activeGraph || !graph.edges.includes(edge)) return this.$forceUpdate();
 
                         const target = document.elementFromPoint(stopEvent.clientX, stopEvent.clientY)?.closest?.('.vsg-port-input');
-                        if (target) {
-                            const targetNode = target.dataset.nodeId;
-                            const targetPort = target.dataset.portId;
-                            const unchanged = targetNode === state.originalTo.node && targetPort === state.originalTo.port;
-                            if (unchanged) return restoreAndCancel(draft);
-                            if (!Runtime.canConnect(draft.node, draft.port, targetNode, targetPort)) {
-                                restoreAndCancel(draft);
-                                Blockbench.showQuickMessage(tr('connection_failed'), 2200);
-                                return;
-                            }
+                        if (!target) {
+                            Runtime.disconnectEdge(edge.id);
+                            return;
+                        }
+                        const targetNode = target.dataset.nodeId;
+                        const targetPort = target.dataset.portId;
+                        if (targetNode === edge.to.node && targetPort === edge.to.port) return;
+                        if (!Runtime.canConnect(draft.node, draft.port, targetNode, targetPort) || Runtime.wouldCreateCycle(draft.node, targetNode)) {
+                            this.showConnectionFailure(draft.node, targetNode);
+                            return;
+                        }
+                        Runtime.runUndo('Reconnect shader nodes', () => {
                             for (let index = graph.edges.length - 1; index >= 0; index--) {
                                 const candidate = graph.edges[index];
                                 if (candidate.to.node === targetNode && candidate.to.port === targetPort) graph.edges.splice(index, 1);
                             }
                             edge.to = { node: targetNode, port: targetPort };
-                            graph.edges.push(edge);
-                        }
-
-                        graph.revision = Math.max(0, Number(graph.revision) || 0) + 1;
-                        graph.updatedAt = Date.now();
-                        Runtime.save({ cause: target ? 'rewire_connection' : 'disconnect_connection' });
-                        Undo.finishEdit(target ? 'Reconnect shader nodes' : 'Disconnect shader connection', state.aspects);
-                        Runtime.markDirty(target ? 'rewire_connection' : 'disconnect_connection');
+                        }, { cause: 'rewire_connection' });
                     };
                     this._pointerCleanup = cleanup;
                     document.addEventListener('mousemove', move);
@@ -4629,9 +5036,12 @@ void main() {
                     event.stopPropagation();
                     this.connectionDraft = null;
                     if (!Runtime.connect(draft.node, draft.port, node.id, inputPort.id)) {
-                        Blockbench.showQuickMessage(tr('connection_failed'), 2200);
+                        this.showConnectionFailure(draft.node, node.id);
                     }
                     this.$forceUpdate();
+                },
+                showConnectionFailure(fromNode, toNode) {
+                    Blockbench.showQuickMessage(tr(Runtime.wouldCreateCycle(fromNode, toNode) ? 'connection_cycle' : 'connection_failed'), 2400);
                 },
                 draftPath() {
                     const draft = this.connectionDraft;
@@ -4657,16 +5067,16 @@ void main() {
                             .filter(([type]) => this.graph.settings?.graphKind === 'subgraph' ? !['vertex_output', 'surface_output', 'preset_output', 'subgraph_instance'].includes(type) : !['subgraph_input', 'subgraph_output', 'subgraph_instance'].includes(type))
                             .map(([type, definition]) => ({ name: definition.title, icon: definition.icon, click: () => this.addNodeAt(type, point) }))
                     })).filter(item => item.children.length);
-                    const subgraphs = Runtime.graphs.filter(graph => graph.settings?.graphKind === 'subgraph' && graph.id !== this.graph.id);
-                    if (subgraphs.length) items.push({ name: 'Sub Graphs', icon: 'account_tree', children: subgraphs.map(graph => ({ name: graph.name, icon: 'account_tree', click: () => Runtime.createSubgraphInstance(graph.id, point.x, point.y) })) });
-                    new Menu('visual_shader_graph_add_node', items, { searchable: true }).open(event);
+                    const subgraphs = Runtime.getAvailableSubgraphs();
+                    if (subgraphs.length) items.push({ name: tr('subgraphs'), icon: 'account_tree', children: subgraphs.map(graph => ({ name: graph.name, icon: 'account_tree', click: () => Runtime.createSubgraphInstance(graph.id, point.x, point.y) })) });
+                    createGraphMenu('visual_shader_graph_add_node', items, { searchable: true }).open(event);
                 },
                 openNodeMenu(node, event) {
                     event.preventDefault();
                     event.stopPropagation();
                     this.selectNode(node, event);
                     const connected = this.graph.edges.some(edge => edge.from.node === node.id || edge.to.node === node.id);
-                    new Menu('visual_shader_graph_node', [
+                    createGraphMenu('visual_shader_graph_node', [
                         { name: tr('copy_node'), icon: 'content_copy', click: () => Runtime.copySelection() },
                         { name: tr('duplicate_node'), icon: 'control_point_duplicate', click: () => Runtime.duplicateSelection() },
                         { name: tr('disconnect_node'), icon: 'link_off', condition: connected, click: () => Runtime.disconnectNode(node.id) },
@@ -4675,17 +5085,51 @@ void main() {
                         { name: tr('delete_node'), icon: 'delete', click: () => Runtime.removeSelection() }
                     ]).open(event);
                 },
-                selectGraph(event) { Runtime.setActiveGraph(event.target.value); },
+                selectGraph(id) { Runtime.setActiveGraph(id); },
+                startSurface() { Runtime.createFromPreset('lightflow_surface'); },
                 openPresetMenu(event) { showPresetMenu(event.currentTarget); },
+                openFileMenu(event) {
+                    createGraphMenu('visual_shader_graph_files', [
+                        { name: tr('import_graph'), icon: 'file_open', click: () => this.importGraph() },
+                        { name: tr('export_graph'), icon: 'save', condition: () => !!this.graph, click: () => this.exportGraph() },
+                        { name: tr('export_material'), icon: 'data_object', condition: () => this.graph?.settings.graphKind === 'material', click: exportCompiledMaterial }
+                    ]).open(event.currentTarget);
+                },
+                openEditMenu(event) {
+                    const selected = () => Runtime.selectedNodeIds.length > 0;
+                    createGraphMenu('visual_shader_graph_edit', [
+                        { name: tr('auto_layout'), icon: 'auto_fix_high', click: () => this.autoLayout() },
+                        { name: tr('snap_grid'), icon: this.graph.settings.snapToGrid ? 'check_box' : 'check_box_outline_blank', click: () => this.toggleSnap() },
+                        '_',
+                        { name: tr('create_group'), icon: 'folder', condition: selected, click: () => this.groupSelection() },
+                        { name: tr('ungroup'), icon: 'folder_off', condition: selected, click: () => this.ungroupSelection() },
+                        { name: tr('create_subgraph'), icon: 'account_tree', condition: () => this.graph.settings.graphKind === 'material' && selected(), click: () => this.createSubgraphFromSelection() }
+                    ]).open(event.currentTarget);
+                },
+                openViewMenu(event) {
+                    createGraphMenu('visual_shader_graph_view', [
+                        { name: tr('zoom_in'), icon: 'zoom_in', click: () => this.zoomBy(1.2) },
+                        { name: tr('zoom_out'), icon: 'zoom_out', click: () => this.zoomBy(0.8) },
+                        { name: tr('reset_view'), icon: 'center_focus_weak', click: () => this.resetView() },
+                        { name: tr('preview_size'), icon: 'view_in_ar', children: ['small', 'medium', 'large'].map(size => ({
+                            name: tr('preview_' + size), icon: Runtime.previewSize === size ? 'radio_button_checked' : 'radio_button_unchecked', click: () => this.setPreviewSize(size)
+                        })) },
+                        '_',
+                        { name: tr('keyboard_shortcuts'), icon: 'keyboard', click: () => this.showKeyboardHelp() }
+                    ]).open(event.currentTarget);
+                },
+                openDiagnostics() {
+                    Runtime.views.forEach(view => view.openAllDiagnostics?.({ focus: true }));
+                },
                 compile() { Runtime.compileActive({ cause: 'manual_compile' }); },
                 openApplyMenu(event) {
-                    new Menu('visual_shader_graph_apply', [
+                    createGraphMenu('visual_shader_graph_apply', [
                         { name: tr('apply_global'), icon: 'public', click: () => this.applyGlobal() },
                         { name: `${tr('apply_selection')} (${Runtime.getSelectedRenderableElements().length})`, icon: 'select_all', condition: () => Runtime.getSelectedRenderableElements().length > 0, click: () => this.applySelection() }
                     ]).open(event.currentTarget);
                 },
                 showKeyboardHelp() {
-                    Blockbench.showMessageBox({
+                    showGraphMessage({
                         title: tr('keyboard_shortcuts'),
                         icon: 'keyboard',
                         message: `${tr('keyboard_help')}\n\n${tr('move_node_help')}`
@@ -4704,15 +5148,21 @@ void main() {
                 importGraph() { importGraphFile(); },
                 handleKey(event) {
                     if (window.Project?.mode !== 'shader_graph') return;
-                    const interactive = event.target?.closest?.('input, textarea, select, button, [contenteditable="true"], [role="tab"], [role="menuitem"]');
+                    const interactive = event.target?.closest?.('input, textarea, select, button, .vsg-shared-field, [contenteditable="true"], [role="tab"], [role="menuitem"]');
                     const insideCanvas = !!event.target?.closest?.('.vsg-graph-viewport');
-                    if (event.code === 'Space' && insideCanvas && !interactive) this.spacePressed = event.type !== 'keyup';
-                    if (event.type === 'keyup' || interactive || !insideCanvas) return;
+                    if (event.code === 'Space' && event.type === 'keyup') this.spacePressed = false;
+                    if (event.type === 'keyup' || !insideCanvas) return;
                     if (event.key === 'Escape' && this.connectionDraft) {
                         event.preventDefault();
+                        this.cancelPointerGesture();
                         this.connectionDraft = null;
                         this.$forceUpdate();
                         return;
+                    }
+                    if (interactive) return;
+                    if (event.code === 'Space') {
+                        this.spacePressed = true;
+                        event.preventDefault();
                     }
                     const command = event.ctrlKey || event.metaKey;
                     if (event.key === 'Delete' || event.key === 'Backspace') {
@@ -4738,10 +5188,10 @@ void main() {
                 window.addEventListener('keydown', this._keyDown);
                 window.addEventListener('keyup', this._keyUp);
                 this.$nextTick(() => {
-                    if (this.graph) this.frameAll();
-                    if (typeof ResizeObserver !== 'undefined' && this.$refs.viewport) {
-                        this._resizeObserver = new ResizeObserver(() => Runtime.refresh());
-                        this._resizeObserver.observe(this.$refs.viewport);
+                    this.frameNewGraph();
+                    if (typeof ResizeObserver !== 'undefined') {
+                        this._resizeObserver = new ResizeObserver(() => this.frameNewGraph());
+                        this._resizeObserver.observe(this.$el);
                     }
                 });
             },
@@ -4760,41 +5210,34 @@ void main() {
                 if (this._zoomSave) clearTimeout(this._zoomSave);
             },
             template: `
-                <div class="vsg-canvas-panel">
+                <div class="vsg-canvas-panel lf-controls">
                     <div class="vsg-toolbar">
-                        <div class="vsg-toolbar-group vsg-toolbar-graph">
-                            <select class="dark_bordered vsg-graph-select" :value="runtime.activeGraphId" @change="selectGraph" :aria-label="tr('graph_name')">
-                                <option v-for="entry in runtime.graphs" :key="entry.id" :value="entry.id">{{ entry.settings.graphKind === 'subgraph' ? '◇ ' : '' }}{{ entry.name }}</option>
-                            </select>
+                        <div v-if="graph" class="vsg-toolbar-group vsg-toolbar-graph">
+                            <vsg-field class="vsg-graph-select" :control="graphPicker()" :value="runtime.activeGraphId" @commit="selectGraph"></vsg-field>
                         </div>
                         <div class="vsg-toolbar-group vsg-toolbar-files">
-                            <button class="button vsg-toolbar-action" @click="openPresetMenu" :title="tr('new_graph')"><i class="material-icons">add</i><span class="vsg-action-label">{{ tr('new_graph') }}</span></button>
-                            <button class="button vsg-toolbar-action" @click="importGraph" :title="tr('import_graph')"><i class="material-icons">file_open</i><span class="vsg-action-label">{{ tr('import_graph') }}</span></button>
-                            <button class="button vsg-toolbar-action" :disabled="!graph" @click="exportGraph" :title="tr('export_graph')"><i class="material-icons">save</i><span class="vsg-action-label">{{ tr('export_graph') }}</span></button>
+                            <button v-if="graph" class="tool vsg-tool-button" @click="openPresetMenu" aria-haspopup="menu" :title="tr('new_graph')" :aria-label="tr('new_graph')"><i class="material-icons">add</i></button>
+                            <button class="tool vsg-tool-button" @click="openFileMenu" aria-haspopup="menu" :title="tr('graph_files')" :aria-label="tr('graph_files')"><i class="material-icons">folder_open</i></button>
                         </div>
-                        <div class="vsg-toolbar-group vsg-toolbar-compile">
-                            <button class="button confirm vsg-primary-action" :disabled="!graph || runtime.compileState === 'compiling'" @click="compile"><i class="material-icons">memory</i><span>{{ tr('compile') }}</span></button>
-                            <span v-if="graph" class="vsg-status" :class="'is-' + runtime.compileState" role="status" aria-live="polite"><i class="material-icons">{{ runtime.compileState === 'compiled' ? 'check_circle' : runtime.compileState === 'error' ? 'error' : runtime.compileState === 'compiling' ? 'hourglass_top' : 'edit' }}</i>{{ graphStatusLabel }}</span>
-                            <button class="button vsg-apply-action" :disabled="!graph || graph.settings.graphKind === 'subgraph'" @click="openApplyMenu" :title="tr('apply')"><i class="material-icons">publish</i><span>{{ tr('apply') }}</span><i class="material-icons vsg-chevron">arrow_drop_down</i></button>
+                        <div v-if="graph" class="vsg-toolbar-group vsg-toolbar-compile">
+                            <button class="button confirm vsg-primary-action" :disabled="runtime.compileState === 'compiling'" @click="compile"><i class="material-icons" aria-hidden="true">memory</i><span>{{ tr('compile') }}</span></button>
+                            <button v-if="graph.settings.graphKind === 'material'" class="button vsg-apply-action" @click="openApplyMenu" aria-haspopup="menu" :title="tr('apply')" :aria-label="tr('apply')"><i class="material-icons">publish</i><span>{{ tr('apply') }}</span><i class="material-icons vsg-chevron">arrow_drop_down</i></button>
                         </div>
                         <span class="vsg-toolbar-spacer"></span>
-                        <div class="vsg-toolbar-group vsg-toolbar-view">
-                            <button class="tool vsg-tool-button" :disabled="!graph" @click="zoomBy(1.2)" :title="tr('zoom_in')" :aria-label="tr('zoom_in')"><i class="material-icons">zoom_in</i></button>
-                            <button class="tool vsg-tool-button" :disabled="!graph" @click="zoomBy(0.8)" :title="tr('zoom_out')" :aria-label="tr('zoom_out')"><i class="material-icons">zoom_out</i></button>
-                            <button class="tool vsg-tool-button" :disabled="!graph" @click="frameAll" :title="tr('fit_graph')" :aria-label="tr('fit_graph')"><i class="material-icons">fit_screen</i></button>
-                            <button class="tool vsg-tool-button" :disabled="!graph" @click="autoLayout" :title="tr('auto_layout')" :aria-label="tr('auto_layout')"><i class="material-icons">auto_fix_high</i></button>
-                            <button class="tool vsg-tool-button" :class="{active: graph && graph.settings.snapToGrid}" :disabled="!graph" @click="toggleSnap" :title="tr('snap_grid')" :aria-label="tr('snap_grid')"><i class="material-icons">grid_4x4</i></button>
-                            <button class="tool vsg-tool-button" :disabled="!graph || !runtime.selectedNodeIds.length" @click="groupSelection" :title="tr('create_group')"><i class="material-icons">folder</i></button>
-                            <button class="tool vsg-tool-button" :disabled="!graph || !runtime.selectedNodeIds.length" @click="ungroupSelection" :title="tr('ungroup')"><i class="material-icons">folder_off</i></button>
-                            <button class="tool vsg-tool-button" :disabled="!graph || graph.settings.graphKind === 'subgraph' || !runtime.selectedNodeIds.length" @click="createSubgraphFromSelection" :title="tr('create_subgraph')"><i class="material-icons">account_tree</i></button>
-                            <button class="tool vsg-tool-button" @click="showKeyboardHelp" :title="tr('keyboard_shortcuts')" :aria-label="tr('keyboard_shortcuts')"><i class="material-icons">help_outline</i></button>
+                        <div v-if="graph" class="vsg-toolbar-group vsg-toolbar-view">
+                            <button class="tool vsg-tool-button" @click="openEditMenu" aria-haspopup="menu" :title="tr('graph_edit')" :aria-label="tr('graph_edit')"><i class="material-icons">tune</i></button>
+                            <button class="tool vsg-tool-button" @click="frameAll" :title="tr('fit_graph')" :aria-label="tr('fit_graph')"><i class="material-icons">fit_screen</i></button>
+                            <button class="tool vsg-tool-button" @click="openViewMenu" aria-haspopup="menu" :title="tr('graph_view')" :aria-label="tr('graph_view')"><i class="material-icons">more_horiz</i></button>
                         </div>
                     </div>
                     <div v-if="!graph" class="vsg-empty-state">
                         <i class="material-icons">schema</i>
                         <h2>{{ tr('empty_title') }}</h2>
                         <p>{{ tr('empty_body') }}</p>
-                        <button class="button confirm" @click="openPresetMenu">{{ tr('create_graph') }}</button>
+                        <div class="vsg-start-actions">
+                            <button class="button confirm" @click="startSurface">{{ tr('start_surface') }}</button>
+                            <button class="button" @click="openPresetMenu" aria-haspopup="menu">{{ tr('all_presets') }}</button>
+                        </div>
                     </div>
                     <div v-else ref="viewport" class="vsg-graph-viewport" :class="{'is-panning': !!panState}" tabindex="0" role="region" :aria-label="tr('title')" aria-describedby="vsg_keyboard_instructions"
                         @mousedown="beginPan" @touchstart="beginPan" @wheel="zoomGraph" @contextmenu="openCanvasMenu">
@@ -4804,31 +5247,25 @@ void main() {
                                 <div class="vsg-node-group-title" @mousedown="beginGroupDrag(group, $event)"><i class="material-icons">folder_open</i><span>{{ group.title }}</span></div>
                             </div>
                             <svg class="vsg-connections" aria-hidden="true">
-                                <path v-for="edge in graph.edges" :key="edge.id" class="vsg-connection-hit" :d="connectionPath(edge)" @click="selectEdge(edge, $event)" @contextmenu="openEdgeMenu(edge, $event)"></path>
-                                <path v-for="edge in graph.edges" :key="edge.id + '-line'" class="vsg-connection" :class="{selected: runtime.selectedEdgeId === edge.id}" :d="connectionPath(edge)" :stroke="edgeColor(edge)"></path>
-                                <text v-for="edge in graph.edges" v-if="runtime.selectedEdgeId === edge.id" :key="edge.id + '-label'" class="vsg-connection-label" :x="edgeLabelPoint(edge).x" :y="edgeLabelPoint(edge).y">{{ edgeTypeLabel(edge) }}</text>
+                                <path v-for="edge in visibleEdges" :key="edge.id" class="vsg-connection-hit" :d="connectionPath(edge)" @click="selectEdge(edge, $event)" @contextmenu="openEdgeMenu(edge, $event)"></path>
+                                <path v-for="edge in visibleEdges" :key="edge.id + '-line'" class="vsg-connection" :class="{selected: runtime.selectedEdgeId === edge.id}" :d="connectionPath(edge)" :stroke="edgeColor(edge)"></path>
+                                <text v-for="edge in visibleEdges" v-if="runtime.selectedEdgeId === edge.id" :key="edge.id + '-label'" class="vsg-connection-label" :x="edgeLabelPoint(edge).x" :y="edgeLabelPoint(edge).y">{{ edgeTypeLabel(edge) }}</text>
                                 <path v-if="connectionDraft" class="vsg-connection vsg-connection-draft" :d="draftPath()" :stroke="portColor(connectionDraft)"></path>
                             </svg>
                             <article v-for="node in graph.nodes" :key="node.id" class="vsg-node" :class="{selected: runtime.selectedNodeIds.includes(node.id), output: node.type.endsWith('_output')}"
                                 :style="{left: node.x + 'px', top: node.y + 'px', width: nodeWidth(node) + 'px', '--node-color': nodeDefinition(node).color}"
                                 :data-node-id="node.id" :tabindex="nodeTabIndex(node)" role="group" :aria-label="nodeTitle(node) + ', ' + nodeTypeLabel(node)"
-                                @focus="selectNode(node, $event)" @keydown="handleNodeKey(node, $event)" @keydown.enter.stop="selectNode(node, $event)" @mousedown="beginNodeDrag(node, $event)" @click.stop="selectNode(node, $event)" @contextmenu="openNodeMenu(node, $event)">
+                                @focus="selectNode(node, $event)" @keydown="handleNodeKey(node, $event)" @keydown.enter.self.stop="selectNode(node, $event)" @mousedown="beginNodeDrag(node, $event)" @click.stop @contextmenu="openNodeMenu(node, $event)">
                                 <header class="vsg-node-header">
                                     <i class="material-icons">{{ nodeDefinition(node).icon }}</i>
-                                    <span>{{ nodeTitle(node) }}</span>
+                            <span :title="nodeTitle(node)">{{ nodeTitle(node) }}</span>
                                 </header>
                                 <div class="vsg-node-meta">
                                     <span>{{ nodeTypeLabel(node) }}</span>
                                     <vsg-advanced-color v-if="parameterControlKind(node) === 'color'" :value="node.data.hex || '#ffffff'" :label="nodeTitle(node)"
                                         @begin="beginParameterColorEdit(node)" @input="previewParameterColor(node, $event)" @commit="finishParameterColorEdit(node, $event)"></vsg-advanced-color>
-                                    <span v-else-if="parameterControlKind(node) === 'float'" class="vsg-node-number-control">
-                                        <input type="range" :min="parameterRange(node, 'min', 0)" :max="parameterRange(node, 'max', 1)" :step="parameterRange(node, 'step', 0.01)" :value="node.data.value" @change.stop="setParameterNumber(node, $event)" @mousedown.stop :aria-label="nodeTitle(node) + ' ' + tr('control_slider')">
-                                        <input class="dark_bordered vsg-node-number-input" type="number" :min="parameterRange(node, 'min', 0)" :max="parameterRange(node, 'max', 1)" :step="parameterRange(node, 'step', 0.01)" :value="node.data.value" @change.stop="setParameterNumber(node, $event)" @mousedown.stop :aria-label="nodeTitle(node) + ' ' + tr('control_value')">
-                                    </span>
-                                    <label v-else-if="parameterControlKind(node) === 'bool'" class="vsg-node-bool-control">
-                                        <input type="checkbox" :checked="node.data.value" @change.stop="setParameterBoolean(node, $event)" @mousedown.stop :aria-label="nodeTitle(node)">
-                                        <span>{{ node.data.value ? tr('control_on') : tr('control_off') }}</span>
-                                    </label>
+                                    <vsg-field v-else-if="parameterControlKind(node) === 'float'" class="vsg-node-number-control" :control="parameterSlider(node)" :value="node.data.value" @commit="setParameterNumber(node, $event)" @mousedown.native.stop></vsg-field>
+                                    <vsg-field v-else-if="parameterControlKind(node) === 'bool'" class="vsg-node-bool-control" :control="graphCheckbox(nodeTitle(node), true)" :value="node.data.value" @commit="setParameterBoolean(node, $event)" @mousedown.native.stop></vsg-field>
                                     <code v-else-if="nodeSummary(node)">{{ nodeSummary(node) }}</code>
                                 </div>
                                 <div class="vsg-node-body">
@@ -4839,12 +5276,14 @@ void main() {
                                                 :aria-label="tr('connect_to') + ' ' + row.input.name" @click.stop="finishKeyboardConnection(node, row.input, $event)"
                                                 @mousedown="beginInputRewire(node, row.input, $event)"
                                                 @dblclick.stop.prevent="disconnectPort(node, row.input, 'input')" @contextmenu="openPortMenu(node, row.input, 'input', $event)"></button>
-                                            <span v-if="row.input" class="vsg-port-label">{{ row.input.name }}</span>
+                                            <span v-if="row.input" class="vsg-port-label" :title="row.input.name">{{ row.input.name }}</span>
                                         </div>
-                                        <input v-if="row.input && !isInputConnected(node.id, row.input.id) && supportsInlineInput(row.input)" class="dark_bordered vsg-inline-input"
-                                            :value="getInputText(node, row.input)" @change.stop="setInputText(node, row.input, $event)" @mousedown.stop :aria-label="row.input.name">
+                                        <vsg-field v-if="row.input && row.input.type === 'bool' && !isInputConnected(node.id, row.input.id)" class="vsg-inline-input vsg-node-bool-control"
+                                            :control="graphCheckbox(row.input.name, true)" :value="getInputText(node, row.input) === 'true'" @commit="setInputText(node, row.input, $event)" @mousedown.native.stop></vsg-field>
+                                        <vsg-compact-text v-else-if="row.input && !isInputConnected(node.id, row.input.id) && supportsInlineInput(row.input)" class="vsg-inline-input"
+                                            :value="getInputText(node, row.input)" @commit="setInputText(node, row.input, $event)" @mousedown.native.stop :label="row.input.name"></vsg-compact-text>
                                         <div class="vsg-port-side vsg-port-side-output">
-                                            <span v-if="row.output" class="vsg-port-label">{{ row.output.name }}</span>
+                                            <span v-if="row.output" class="vsg-port-label" :title="row.output.name">{{ row.output.name }}</span>
                                             <button v-if="row.output" class="vsg-port vsg-port-output" :style="{'--port-color': portColor(row.output)}"
                                                 :title="row.output.name + ' (' + row.output.type + ')'" :aria-label="tr('connect_from') + ' ' + row.output.name"
                                                 @keydown.enter="beginKeyboardConnection(node, row.output, $event)" @keydown.space="beginKeyboardConnection(node, row.output, $event)" @mousedown="beginConnection(node, row.output, $event)"
@@ -4858,19 +5297,14 @@ void main() {
                     </div>
                     <footer v-if="graph" class="vsg-statusbar">
                         <div class="vsg-statusbar-group">
-                            <span><i class="material-icons">zoom_in</i>{{ tr('zoom') }} {{ zoomLabel }}</span>
-                            <span><i class="material-icons">hub</i>{{ graph.nodes.length }} {{ tr('nodes') }}</span>
-                            <span><i class="material-icons">share</i>{{ graph.edges.length }} {{ tr('connections') }}</span>
-                            <span :class="'is-' + runtime.compileState"><i class="material-icons">{{ runtime.compileState === 'compiled' ? 'circle' : 'schedule' }}</i>{{ compilePerformanceLabel }}</span>
+                            <span class="vsg-build-state" :class="'is-' + runtime.compileState" role="status" aria-live="polite" :title="runtime.compileMessage || tr(runtime.compileState)">
+                                <i class="material-icons" aria-hidden="true">{{ runtime.compileState === 'compiled' ? 'check_circle' : runtime.compileState === 'error' ? 'error' : 'memory' }}</i>{{ tr(runtime.compileState) }}
+                            </span>
+                            <span v-if="runtime.lastCompileDuration" class="vsg-build-time">{{ runtime.lastCompileDuration }} ms</span>
                         </div>
                         <div class="vsg-statusbar-group vsg-statusbar-tools">
-                            <span class="vsg-preview-label">{{ tr('preview_size') }}</span>
-                            <div class="vsg-segmented" role="group" :aria-label="tr('preview_size')">
-                                <button :class="{active: runtime.previewSize === 'small'}" @click="setPreviewSize('small')" :title="tr('preview_small')">S</button>
-                                <button :class="{active: runtime.previewSize === 'medium'}" @click="setPreviewSize('medium')" :title="tr('preview_medium')">M</button>
-                                <button :class="{active: runtime.previewSize === 'large'}" @click="setPreviewSize('large')" :title="tr('preview_large')">L</button>
-                            </div>
-                            <span class="vsg-shortcut-hint">{{ tr('keyboard_shortcuts') }}: <kbd>F</kbd> {{ tr('fit_graph') }} <kbd>?</kbd> Help</span>
+                            <button v-if="runtime.diagnostics.length" class="tool vsg-tool-button vsg-diagnostics-link" @click="openDiagnostics" :title="tr('diagnostics')" :aria-label="tr('diagnostics') + ' (' + runtime.diagnostics.length + ')'"><i class="material-icons">{{ runtime.diagnostics.some(message => message.severity === 'error') ? 'error_outline' : 'warning_amber' }}</i><span>{{ runtime.diagnostics.length }}</span></button>
+                            <button class="tool vsg-tool-button vsg-zoom-label" @click="openViewMenu" aria-haspopup="menu" :title="tr('graph_view')" :aria-label="tr('zoom') + ' ' + zoomLabel">{{ zoomLabel }}</button>
                         </div>
                     </footer>
                 </div>`
@@ -4880,12 +5314,17 @@ void main() {
     function createNodeLibraryComponent() {
         return {
             name: 'visual-shader-graph-library',
+            components: { VsgField: createGraphFieldComponent() },
             data() {
-                return { runtime: Runtime, query: '', openCategories: {} };
+                return { runtime: Runtime, query: '', openCategories: {}, resourcesOpen: false };
             },
             computed: {
+                searching() { return !!this.query.trim(); },
                 isSubgraph() { return this.runtime.activeGraph?.settings?.graphKind === 'subgraph'; },
-                subgraphs() { return this.runtime.graphs.filter(graph => graph.settings?.graphKind === 'subgraph' && graph.id !== this.runtime.activeGraphId); },
+                subgraphs() {
+                    const query = this.query.trim().toLowerCase();
+                    return Runtime.getAvailableSubgraphs().filter(graph => graph.name.toLowerCase().includes(query));
+                },
                 resources() {
                     const staticEntries = [
                         ['UV', 'uv', 'vec2', 'texture'], ['Normalized Face UV', 'normalized_face_uv', 'vec2', 'crop_free'],
@@ -4901,7 +5340,7 @@ void main() {
                     ].map(([title, nodeType, type, icon]) => ({ key: `builtin:${nodeType}`, title, nodeType, type, icon, data: {} }));
                     const uniforms = new Map();
                     Object.values(window.MaterialManager?.materials || {}).forEach(material => Object.entries(material?.uniforms || {}).forEach(([name, definition]) => {
-                        if (uniforms.has(name)) return;
+                        if (uniforms.has(name) || name.startsWith('uVSGGraph')) return;
                         const type = uniformPortType(definition);
                         if (!type) return;
                         uniforms.set(name, { key: `uniform:${name}`, title: definition.label || name, subtitle: name, nodeType: 'uniform_reference', type, icon: 'tune', data: { name, uniformType: type, value: serializeUniformValue(definition.value), expose: false } });
@@ -4956,68 +5395,60 @@ void main() {
                 tr,
                 getPortTypeColor,
                 typeLabel(type) { return TYPE_META[type]?.label || type; },
-                categoryOpen(id) { return !!this.query.trim() || this.openCategories[id] === true; },
+                categoryOpen(id) { return this.searching || this.openCategories[id] === true; },
                 toggleCategory(id) { this.$set(this.openCategories, id, !this.categoryOpen(id)); },
                 insertionPoint() {
                     const graph = Runtime.activeGraph;
-                    const selected = Runtime.selectedNodes[0];
-                    return { x: selected ? selected.x + nodeVisualWidth(selected) + 90 : 260 + (graph?.nodes.length || 0) * 16, y: selected ? selected.y : 180 + (graph?.nodes.length || 0) * 12 };
+                    for (const view of Runtime.views) {
+                        if (view === this) continue;
+                        const center = view.insertionPoint?.();
+                        if (!center) continue;
+                        return center;
+                    }
+                    return { x: 180 + (graph?.nodes.length || 0) * 24, y: 180 };
+                },
+                placeNode(create) {
+                    if (!Runtime.activeGraph) return;
+                    const { x, y } = this.insertionPoint();
+                    const node = create(x, y);
+                    if (node) Runtime.focusNode(node.id, { preserveZoom: true, focus: false });
                 },
                 addNode(type) {
-                    const graph = Runtime.activeGraph;
-                    if (!graph) return;
-                    const point = this.insertionPoint();
-                    Runtime.addNode(type, point.x, point.y);
+                    this.placeNode((x, y) => Runtime.addNode(type, x, y));
                 },
                 addResource(entry) {
-                    const point = this.insertionPoint();
-                    Runtime.addNode(entry.nodeType, point.x, point.y, entry.data || {});
+                    this.placeNode((x, y) => Runtime.addNode(entry.nodeType, x, y, entry.data || {}));
                 },
                 addSubgraph(entry) {
-                    const point = this.insertionPoint();
-                    Runtime.createSubgraphInstance(entry.id, point.x, point.y);
+                    this.placeNode((x, y) => Runtime.createSubgraphInstance(entry.id, x, y));
+                },
+                addFirstMatch(event) {
+                    if (!this.searching || event.isComposing) return;
+                    this.$el.querySelector('.vsg-library-item, .vsg-resource-item, .vsg-subgraph-entry')?.click();
+                },
+                searchControl() {
+                    return { type: 'panel_search', query_only: true, placeholder: tr('search_nodes'), onSubmit: this.addFirstMatch };
                 },
                 newSubgraph() { Runtime.createSubgraph(); },
                 createPreset(id) { Runtime.createFromPreset(id); },
                 openAllPresets(event) { showPresetMenu(event.currentTarget); }
             },
-            mounted() { Runtime.registerView(this); this._lightflowNumbers = window.LightManagerUI?.controls?.mountNumberEditors?.(this.$el); },
-            beforeDestroy() { this._lightflowNumbers?.dispose(); Runtime.unregisterView(this); },
+            mounted() { Runtime.registerView(this); },
+            beforeDestroy() { Runtime.unregisterView(this); },
             template: `
-                <div class="vsg-library">
-                    <div class="vsg-library-search">
-                        <i class="material-icons">search</i>
-                        <input class="dark_bordered" v-model="query" :placeholder="tr('search_nodes_commands')" :aria-label="tr('search_nodes_commands')">
-                    </div>
-                    <section v-if="runtime.activeGraph && !query" class="vsg-library-section vsg-recent-section">
-                        <h3>{{ tr('recent') }}</h3>
+                <div class="vsg-library lf-controls">
+                    <vsg-field v-if="runtime.activeGraph" class="vsg-library-search" :control="searchControl()" :value="query" @commit="query = $event"></vsg-field>
+                    <section v-if="runtime.activeGraph && !searching" class="vsg-library-section vsg-recent-section">
+                        <h3>{{ tr('quick_add') }}</h3>
                         <button v-for="entry in recentNodes" :key="entry.type" class="vsg-recent-item" @click="addNode(entry.type)" :title="entry.definition.title">
                             <span class="vsg-type-dot" :style="{borderColor: getPortTypeColor(entry.portType)}"></span>
                             <span>{{ entry.title }}</span>
                             <small>{{ typeLabel(entry.portType) }}</small>
                         </button>
                     </section>
-                    <section v-if="runtime.activeGraph && filteredResources.length" class="vsg-library-section vsg-resource-section">
-                        <h3>{{ tr('resources') }}</h3>
-                        <button v-for="entry in filteredResources.slice(0, query ? 80 : 24)" :key="entry.key" class="vsg-resource-item" @click="addResource(entry)" :title="entry.subtitle || entry.title">
-                            <i class="material-icons">{{ entry.icon }}</i><span><strong>{{ entry.title }}</strong><small v-if="entry.subtitle">{{ entry.subtitle }}</small></span><span class="vsg-type-chip" :style="{borderColor: getPortTypeColor(entry.type)}">{{ typeLabel(entry.type) }}</span>
-                        </button>
-                    </section>
-                    <section v-if="runtime.activeGraph && !query" class="vsg-library-section vsg-subgraph-section">
-                        <h3>Sub Graphs</h3>
-                        <button v-for="entry in subgraphs" :key="entry.id" class="vsg-preset-button" @click="addSubgraph(entry)"><i class="material-icons">account_tree</i><span>{{ entry.name }}</span><i class="material-icons vsg-add-indicator">add</i></button>
-                        <button class="vsg-library-more" @click="newSubgraph"><span>{{ tr('create_subgraph') }}</span><i class="material-icons">add</i></button>
-                    </section>
-                    <section v-if="!query && !isSubgraph" class="vsg-library-section vsg-preset-section">
-                        <h3>{{ tr('presets') }}</h3>
-                        <button v-for="entry in featuredPresets" :key="entry[0]" class="vsg-preset-button" @click="createPreset(entry[0])">
-                            <i class="material-icons">{{ entry[1].icon }}</i><span>{{ entry[1].name }}</span><i class="material-icons vsg-add-indicator">add</i>
-                        </button>
-                        <button class="vsg-library-more" @click="openAllPresets"><span>{{ tr('all_presets') }}</span><i class="material-icons">chevron_right</i></button>
-                    </section>
                     <section v-if="runtime.activeGraph" class="vsg-library-section">
                         <div v-for="category in categories" :key="category.id" class="vsg-library-category">
-                            <button class="vsg-section-header" @click="toggleCategory(category.id)" :aria-expanded="categoryOpen(category.id)">
+                            <button v-if="!searching" class="vsg-section-header" @click="toggleCategory(category.id)" :aria-expanded="categoryOpen(category.id)">
                                 <i class="material-icons">{{ categoryOpen(category.id) ? 'expand_more' : 'chevron_right' }}</i>
                                 <i class="material-icons vsg-category-icon" :style="{color: category.meta.color}">{{ category.meta.icon }}</i>
                                 <span>{{ category.meta.label }}</span>
@@ -5031,6 +5462,30 @@ void main() {
                                 </button>
                             </div>
                         </div>
+                    </section>
+                    <section v-if="runtime.activeGraph && filteredResources.length" class="vsg-library-section vsg-resource-section">
+                        <button v-if="!searching" class="vsg-section-header" @click="resourcesOpen = !resourcesOpen" :aria-expanded="resourcesOpen">
+                            <i class="material-icons">{{ resourcesOpen ? 'expand_more' : 'chevron_right' }}</i><i class="material-icons">inventory_2</i><span>{{ tr('resources') }}</span>
+                        </button>
+                        <h3 v-else>{{ tr('resource_matches') }}</h3>
+                        <template v-if="searching || resourcesOpen">
+                            <button v-for="entry in filteredResources.slice(0, searching ? 80 : 24)" :key="entry.key" class="vsg-resource-item" @click="addResource(entry)" :title="entry.subtitle || entry.title">
+                                <i class="material-icons">{{ entry.icon }}</i><span><strong>{{ entry.title }}</strong><small v-if="entry.subtitle">{{ entry.subtitle }}</small></span><span class="vsg-type-chip" :style="{borderColor: getPortTypeColor(entry.type)}">{{ typeLabel(entry.type) }}</span>
+                            </button>
+                        </template>
+                    </section>
+                    <section v-if="runtime.activeGraph && (!searching || subgraphs.length)" class="vsg-library-section vsg-subgraph-section">
+                        <h3>{{ tr('subgraphs') }}</h3>
+                        <button v-for="entry in subgraphs" :key="entry.id" class="vsg-preset-button vsg-subgraph-entry" @click="addSubgraph(entry)"><i class="material-icons">account_tree</i><span>{{ entry.name }}</span><i class="material-icons vsg-add-indicator">add</i></button>
+                        <button v-if="!searching" class="vsg-library-more" @click="newSubgraph"><span>{{ tr('create_subgraph') }}</span><i class="material-icons">add</i></button>
+                    </section>
+                    <p v-if="runtime.activeGraph && searching && !categories.length && !filteredResources.length && !subgraphs.length" class="vsg-inspector-empty" role="status">{{ tr('no_node_matches') }}</p>
+                    <section v-if="!runtime.activeGraph" class="vsg-library-section vsg-preset-section">
+                        <h3>{{ tr('presets') }}</h3>
+                        <button v-for="entry in featuredPresets" :key="entry[0]" class="vsg-preset-button" @click="createPreset(entry[0])">
+                            <i class="material-icons">{{ entry[1].icon }}</i><span>{{ entry[1].name }}</span><i class="material-icons vsg-add-indicator">add</i>
+                        </button>
+                        <button class="vsg-library-more" @click="openAllPresets"><span>{{ tr('all_presets') }}</span><i class="material-icons">chevron_right</i></button>
                     </section>
                 </div>`
         };
@@ -5047,11 +5502,16 @@ void main() {
     function createGraphInspectorComponent() {
         return {
             name: 'visual-shader-graph-inspector',
-            components: { VsgAdvancedColor: createAdvancedColorControlComponent() },
+            components: {
+                VsgAdvancedColor: createAdvancedColorControlComponent(),
+                VsgCompactText: createGraphCompactTextComponent(),
+                VsgField: createGraphFieldComponent()
+            },
             data() {
-                return { runtime: Runtime, uniformToAdd: '', activeTab: 'graph' };
+                return { runtime: Runtime, uniformToAdd: '', activeTab: 'graph', panelId: makeId('vsg_inspector'), tabIds: {} };
             },
             computed: {
+                sharedTabs() { return !!(window.LightManagerUI?.formDesign?.tabs && FormElement.types.tab_select); },
                 graph() { return this.runtime.activeGraph; },
                 node() { return this.runtime.selectedNodes[0] || null; },
                 definition() { return this.node ? getNodeDefinition(this.node.type) : null; },
@@ -5061,6 +5521,17 @@ void main() {
                 selectedDiagnostics() {
                     if (!this.node) return [];
                     return this.runtime.diagnostics.filter(message => message.nodeId === this.node.id);
+                },
+                nodeConnections() {
+                    if (!this.node) return [];
+                    const nodes = new Map(this.graph.nodes.map(node => [node.id, node]));
+                    return this.graph.edges.filter(edge => edge.from.node === this.node.id || edge.to.node === this.node.id).map(edge => {
+                        const source = nodes.get(edge.from.node);
+                        const target = nodes.get(edge.to.node);
+                        const output = getNodeOutputPorts(source).find(port => port.id === edge.from.port)?.name || edge.from.port;
+                        const input = getNodeInputPorts(target, window.MaterialManager?.materials).find(port => port.id === edge.to.port)?.name || edge.to.port;
+                        return { id: edge.id, from: `${getNodeDisplayTitle(source)} · ${output}`, to: `${getNodeDisplayTitle(target)} · ${input}` };
+                    });
                 },
                 materialOptions() {
                     return Object.values(window.MaterialManager?.materials || {}).map(material => ({ id: material.id, name: material.name || material.id })).sort((a, b) => a.name.localeCompare(b.name));
@@ -5078,6 +5549,13 @@ void main() {
                 }
             },
             watch: {
+                activeTab(tab) { this._tabs?.setValue(tab); },
+                availableUniforms(options) {
+                    if (this.uniformToAdd && !options.some(entry => entry.name === this.uniformToAdd)) this.uniformToAdd = '';
+                },
+                node(next, previous) {
+                    if (next?.id !== previous?.id) this.uniformToAdd = '';
+                },
                 'runtime.selectedNodeIds': {
                     deep: true,
                     handler(ids) {
@@ -5089,48 +5567,105 @@ void main() {
                 tr,
                 getPortTypeColor,
                 setTab(tab) { this.activeTab = tab; },
-                onTabKey(event) {
-                    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
-                    event.preventDefault();
-                    const tabs = ['graph', 'node', 'diagnostics'];
-                    const current = tabs.indexOf(this.activeTab);
-                    const index = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1
-                        : (current + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
-                    this.setTab(tabs[index]);
-                    this.$nextTick(() => this.$el.querySelector(`#vsg_inspector_tab_${tabs[index]}`)?.focus());
+                mountTabs() {
+                    if (!this.sharedTabs || !this.$refs.tabs) return;
+                    const TabSelect = FormElement.types.tab_select;
+                    const control = new TabSelect(this.panelId, window.LightManagerUI.formDesign.tabs({
+                        presentation: 'flat', dock: false, label: tr('inspector'), value: this.activeTab,
+                        options: {
+                            graph: { name: tr('graph'), icon: 'account_tree' },
+                            node: { name: tr('node'), icon: 'tune' },
+                            diagnostics: { name: tr('diagnostics'), icon: 'fact_check' }
+                        }
+                    }), { updateValues: () => this.setTab(control.getValue()) });
+                    control.build(this.$refs.tabs);
+                    control.setup();
+                    this._tabs = control;
+                    const ids = {};
+                    for (const [key, button] of Object.entries(control.button_nodes)) {
+                        button.setAttribute('aria-controls', `${this.panelId}_${key}`);
+                        ids[key] = button.id;
+                    }
+                    this.tabIds = ids;
+                },
+                syncTabLabels() {
+                    if (!this._tabs) return;
+                    this._tabs.node.setAttribute('aria-label', tr('inspector'));
+                    for (const [key, button] of Object.entries(this._tabs.button_nodes)) {
+                        const label = tr(key);
+                        if (button.title === label) continue;
+                        button.title = label;
+                        button.setAttribute('aria-label', label);
+                        button.querySelector('.horizontal_select_label').textContent = label;
+                    }
                 },
                 diagnosticTitle(message) {
                     const node = message.nodeId && this.graph?.nodes.find(entry => entry.id === message.nodeId);
                     return node ? getNodeDisplayTitle(node) : tr(message.severity || 'warning');
                 },
-                fieldValue(field) {
-                    const value = this.node?.data?.[field.key];
-                    if (field.type === 'vec2' || field.type === 'vec3' || field.type === 'vec4') return fieldValueAsText(value);
-                    return value;
+                graphSelect,
+                graphCheckbox,
+                graphNumber,
+                graphPortControl,
+                alphaControl() {
+                    return graphSelect(tr('alpha_mode'), Object.fromEntries(['opaque', 'cutout', 'blend', 'additive'].map(mode => [mode, tr('alpha_' + mode)])));
                 },
-                fieldOptions(field) {
-                    if (field.type === 'material') return this.materialOptions.reduce((result, entry) => { result[entry.id] = entry.name; return result; }, {});
-                    return field.options || {};
+                tabControl() {
+                    return graphSelect(tr('inspector'), Object.fromEntries(['graph', 'node', 'diagnostics'].map(tab => [tab, tr(tab)])));
                 },
-                updateGraphName(event) {
+                uniformControl() {
+                    const label = tr('add_uniform_port');
+                    return graphSelect(label, Object.fromEntries([['vsg:none', label], ...this.availableUniforms.map(entry => [
+                        entry.name, `${entry.label} (${entry.type})`
+                    ])]), true);
+                },
+                fieldValue(field) { return this.node?.data?.[field.key]; },
+                nodeControl(field) {
+                    const { label, type } = field;
+                    if (type === 'checkbox') return graphCheckbox(label);
+                    if (type === 'texture') return graphTexture(label);
+                    if (type === 'select') return graphSelect(label, field.options, Object.keys(field.options).length > 6);
+                    if (type === 'material') {
+                        const options = Object.fromEntries(this.materialOptions.map(entry => [entry.id, entry.name]));
+                        const current = this.fieldValue(field);
+                        if (current && !Object.hasOwn(options, current)) options[current] = current;
+                        return graphSelect(label, options, true);
+                    }
+                    if (type === 'textarea') return { type: 'code_editor', label, language: 'glsl', height: 180 };
+                    if (/^vec[234]$/.test(type)) {
+                        return { type: 'custom_vector', dimensions: Number(type[3]), accessible_label: label, default: this.definition.defaults[field.key] };
+                    }
+                    if (this.node.type === 'float_parameter' && field.key === 'value') {
+                        const { min, max, step } = this.node.data;
+                        return graphNumber(label, Math.min(min, max), Math.max(min, max), Math.max(0.0001, step), true);
+                    }
+                    return graphNumber(label, 0, 1, 0.01, true);
+                },
+                updateGraphName(text) {
                     if (!this.graph) return;
-                    const value = String(event.target.value || 'Shader Graph').trim().slice(0, 96) || 'Shader Graph';
-                    Runtime.runUndo('Rename visual shader graph', () => { this.graph.name = value; }, { cause: 'rename_graph', compile: false });
+                    const value = String(text).trim().slice(0, 96) || 'Shader Graph';
+                    if (value === this.graph.name) return;
+                    const subgraph = this.graph.settings.graphKind === 'subgraph';
+                    Runtime.runUndo('Rename visual shader graph', () => {
+                        this.graph.name = value;
+                        if (subgraph) Runtime.synchronizeSubgraphInstances(this.graph.id);
+                    }, { cause: 'rename_graph', compile: !subgraph });
                 },
-                updateGraphSetting(key, event, type = 'text') {
+                updateMaterialId(value) { this.updateGraphSetting('materialId', value); },
+                updateGraphSetting(key, value) {
                     if (!this.graph) return;
-                    let value = type === 'checkbox' ? !!event.target.checked : type === 'number' ? Number(event.target.value) : event.target.value;
                     if (key === 'materialId') value = safeIdentifier(value, materialIdForGraph(this.graph));
                     if (key === 'gridSize') value = clampNumber(value, 8, 64, 20);
-                    Runtime.runUndo('Edit shader graph settings', () => { this.$set(this.graph.settings, key, value); }, { cause: 'graph_settings' });
+                    if (this.graph.settings[key] === value) return;
+                    const presentationOnly = ['snapToGrid', 'gridSize', 'livePreview'].includes(key);
+                    Runtime.runUndo('Edit shader graph settings', () => { this.$set(this.graph.settings, key, value); }, { cause: 'graph_settings', compile: !presentationOnly });
+                    if (key === 'livePreview') {
+                        Runtime.cancelCompile();
+                        if (value && !Runtime.getCompiledMaterial()) Runtime.scheduleCompile('live_preview');
+                    }
                 },
-                updateNodeField(field, event) {
+                updateNodeField(field, value) {
                     if (!this.node) return;
-                    let value;
-                    if (field.type === 'checkbox') value = !!event.target.checked;
-                    else if (field.type === 'number') value = Number(event.target.value);
-                    else if (field.type === 'vec2' || field.type === 'vec3' || field.type === 'vec4') value = parseFieldValue(event.target.value, field.type, this.node.data[field.key]);
-                    else value = event.target.value;
                     if (field.type === 'textarea') value = String(value || '').slice(0, 16384);
                     else if (field.type === 'text') value = String(value || '').slice(0, 96);
                     Runtime.runUndo('Edit shader node', () => {
@@ -5153,18 +5688,17 @@ void main() {
                 },
                 updateNodeColor(field, value) {
                     if (String(this.node?.data?.[field.key] || '').toLowerCase() === String(value || '').toLowerCase()) return;
-                    this.updateNodeField(field, { target: { value } });
+                    this.updateNodeField(field, value);
                 },
                 inputConnected(port) {
                     return !!this.graph?.edges.some(edge => edge.to.node === this.node.id && edge.to.port === port.id);
                 },
                 inputValue(port) {
                     const value = this.node.inputValues?.[port.id] !== undefined ? this.node.inputValues[port.id] : port.default;
-                    if (port.type === 'bool') return !!value;
-                    return fieldValueAsText(value);
+                    if (port.type === 'texture') return typeof value === 'string' ? value : '';
+                    return value;
                 },
-                updateInput(port, event) {
-                    const value = port.type === 'bool' ? !!event.target.checked : parseFieldValue(event.target.value, port.type, port.default);
+                updateInput(port, value) {
                     Runtime.runUndo('Edit shader node input', () => {
                         if (!this.node.inputValues) this.$set(this.node, 'inputValues', {});
                         this.$set(this.node.inputValues, port.id, value);
@@ -5200,7 +5734,6 @@ void main() {
                         if (this.node.inputValues) this.$delete(this.node.inputValues, port.id);
                     }, { cause: 'remove_uniform' });
                 },
-                toggleLive(event) { this.updateGraphSetting('livePreview', event, 'checkbox'); },
                 exportMaterial() { exportCompiledMaterial(); },
                 duplicateGraph() { Runtime.duplicateActiveGraph(); },
                 copyMaterialId() {
@@ -5211,17 +5744,18 @@ void main() {
                     Blockbench.showQuickMessage(tr('material_id_copied'), 1400);
                 },
                 openGraphActions(event) {
-                    new Menu('visual_shader_graph_actions', [
+                    createGraphMenu('visual_shader_graph_actions', [
                         { name: tr('duplicate_graph'), icon: 'content_copy', click: () => this.duplicateGraph() },
-                        ...(this.graph?.settings?.graphKind === 'subgraph' ? [] : [{ name: tr('export_material'), icon: 'data_object', click: () => this.exportMaterial() }]),
                         '_',
                         { name: tr('delete_graph'), icon: 'delete', click: () => this.deleteGraph() }
                     ]).open(event.currentTarget);
                 },
                 deleteGraph() {
                     if (!this.graph) return;
-                    Blockbench.showMessageBox({ title: tr('delete_graph'), message: tr('confirm_delete_graph'), buttons: [tr('delete_graph'), 'dialog.cancel'], confirm: 0, cancel: 1 }, result => {
-                        if (result === 0 || result === tr('delete_graph')) Runtime.deleteActiveGraph();
+                    const graph = this.graph;
+                    const project = window.Project;
+                    showGraphMessage({ title: tr('delete_graph'), message: tr('confirm_delete_graph'), buttons: [tr('delete_graph'), 'dialog.cancel'], confirm: 0, cancel: 1 }, result => {
+                        if (project === window.Project && graph === Runtime.activeGraph && (result === 0 || result === tr('delete_graph'))) Runtime.deleteActiveGraph();
                     });
                 },
                 selectDiagnostic(message) {
@@ -5229,82 +5763,99 @@ void main() {
                         Runtime.focusNode(message.nodeId);
                         this.activeTab = 'node';
                     } else if (message.edgeId) {
-                        Runtime.selectedNodeIds = [];
-                        Runtime.selectedEdgeId = message.edgeId;
-                        Runtime.refresh();
+                        Runtime.focusEdge(message.edgeId);
                     }
                 },
                 centerSelectedNode() {
                     if (this.node) Runtime.focusNode(this.node.id);
                 },
-                openAllDiagnostics() { this.activeTab = 'diagnostics'; }
+                openAllDiagnostics(options = {}) {
+                    this.activeTab = 'diagnostics';
+                    if (options.focus) this.$nextTick(() => (this._tabs?.button_nodes.diagnostics || this.$refs.tabPicker)?.focus());
+                },
+                editSubgraph() {
+                    const target = this.node?.data.targetGraphId;
+                    if (target && Runtime.setActiveGraph(target)) this.setTab('graph');
+                },
+                focusConnection(id) { Runtime.focusEdge(id, { preserveNodes: true }); },
+                disconnectConnection(id) { Runtime.disconnectEdge(id); }
             },
-            mounted() { Runtime.registerView(this); this._lightflowNumbers = window.LightManagerUI?.controls?.mountNumberEditors?.(this.$el); },
-            beforeDestroy() { this._lightflowNumbers?.dispose(); Runtime.unregisterView(this); },
+            mounted() {
+                Runtime.registerView(this);
+                this.mountTabs();
+            },
+            updated() { this.syncTabLabels(); },
+            beforeDestroy() {
+                this._tabs?.delete?.();
+                Runtime.unregisterView(this);
+            },
             template: `
-                <div class="vsg-inspector">
+                <div class="vsg-inspector lf-controls">
+                    <div v-if="sharedTabs" v-show="graph" ref="tabs" class="vsg-inspector-tabstrip"></div>
+                    <vsg-field v-else-if="graph" ref="tabPicker" :control="tabControl()" :value="activeTab" @commit="setTab"></vsg-field>
                     <template v-if="graph">
-                        <nav class="vsg-inspector-tabs" role="tablist" :aria-label="tr('inspector')">
-                            <button id="vsg_inspector_tab_graph" role="tab" aria-controls="vsg_inspector_panel_graph" :tabindex="activeTab === 'graph' ? 0 : -1" :aria-selected="activeTab === 'graph'" :class="{active: activeTab === 'graph'}" @keydown="onTabKey" @click="setTab('graph')"><i class="material-icons">account_tree</i><span>{{ tr('graph') }}</span></button>
-                            <button id="vsg_inspector_tab_node" role="tab" aria-controls="vsg_inspector_panel_node" :tabindex="activeTab === 'node' ? 0 : -1" :aria-selected="activeTab === 'node'" :class="{active: activeTab === 'node'}" @keydown="onTabKey" @click="setTab('node')"><i class="material-icons">tune</i><span>{{ tr('node') }}</span></button>
-                            <button id="vsg_inspector_tab_diagnostics" role="tab" aria-controls="vsg_inspector_panel_diagnostics" :tabindex="activeTab === 'diagnostics' ? 0 : -1" :aria-selected="activeTab === 'diagnostics'" :class="{active: activeTab === 'diagnostics'}" @keydown="onTabKey" @click="setTab('diagnostics')"><i class="material-icons">fact_check</i><span>{{ tr('diagnostics') }}</span><small v-if="runtime.diagnostics.length">{{ runtime.diagnostics.length }}</small></button>
-                        </nav>
-
-                        <div v-if="activeTab === 'graph'" id="vsg_inspector_panel_graph" class="vsg-inspector-tabpanel" role="tabpanel" aria-labelledby="vsg_inspector_tab_graph">
+                        <div v-show="activeTab === 'graph'" :id="panelId + '_graph'" class="vsg-inspector-tabpanel" role="tabpanel" :aria-labelledby="tabIds.graph">
                             <section class="vsg-inspector-section">
-                                <div class="vsg-section-heading"><div><i class="material-icons">analytics</i><h3>{{ tr('graph_summary') }}</h3></div><button class="tool vsg-more-button" @click="openGraphActions" :title="tr('graph_actions')" :aria-label="tr('graph_actions')"><i class="material-icons">more_vert</i></button></div>
+                                <div class="vsg-section-heading"><div><i class="material-icons">analytics</i><h3>{{ tr('graph_summary') }}</h3></div><button class="tool vsg-tool-button vsg-more-button" @click="openGraphActions" aria-haspopup="menu" :title="tr('graph_actions')" :aria-label="tr('graph_actions')"><i class="material-icons">more_vert</i></button></div>
                                 <dl class="vsg-summary-grid">
                                     <div><dt>{{ tr('node_count') }}</dt><dd>{{ graph.nodes.length }}</dd></div>
                                     <div><dt>{{ tr('connection_count') }}</dt><dd>{{ graph.edges.length }}</dd></div>
-                                    <div><dt>{{ tr('last_compiled') }}</dt><dd :class="'is-' + runtime.compileState">{{ runtime.lastCompiledAt ? tr('just_now') : tr('not_compiled') }}</dd></div>
                                 </dl>
                             </section>
                             <section class="vsg-inspector-section">
                                 <div class="vsg-section-heading"><div><i class="material-icons">settings</i><h3>{{ tr('graph_settings') }}</h3></div></div>
-                                <label class="vsg-field"><span>{{ tr('graph_name') }}</span><input class="dark_bordered" :value="graph.name" @change="updateGraphName"></label>
-                                <div class="vsg-field"><span>Graph Type</span><code>{{ graph.settings.graphKind === 'subgraph' ? 'Sub Graph' : 'Material Graph' }}</code></div>
-                                <div v-if="graph.settings.graphKind !== 'subgraph'" class="vsg-field vsg-field-stack"><span>{{ tr('material_id') }}</span><span class="vsg-copy-field"><input class="dark_bordered vsg-mono" :value="graph.settings.materialId" :title="graph.settings.materialId" @change="updateGraphSetting('materialId', $event)" :aria-label="tr('material_id')"><button class="tool" @click.prevent="copyMaterialId" :title="tr('copy_material_id')" :aria-label="tr('copy_material_id')"><i class="material-icons">content_copy</i></button></span></div>
-                                <label v-if="graph.settings.graphKind !== 'subgraph'" class="vsg-field"><span>{{ tr('alpha_mode') }}</span><select class="dark_bordered" :value="graph.settings.alphaMode" @change="updateGraphSetting('alphaMode', $event)"><option value="opaque">Opaque</option><option value="cutout">Cutout</option><option value="blend">Blend</option><option value="additive">Additive</option></select></label>
-                                <label class="vsg-check-field"><input type="checkbox" :checked="graph.settings.snapToGrid" @change="updateGraphSetting('snapToGrid', $event, 'checkbox')"><span>{{ tr('snap_grid') }}</span></label>
-                                <label class="vsg-field"><span>Grid Size</span><input class="dark_bordered" type="number" min="8" max="64" step="1" :value="graph.settings.gridSize" @change="updateGraphSetting('gridSize', $event, 'number')"></label>
-                                <label v-if="graph.settings.graphKind !== 'subgraph'" class="vsg-check-field"><input type="checkbox" :checked="graph.settings.livePreview" @change="toggleLive"><span>{{ tr('live_preview') }}</span></label>
-                                <div class="vsg-inspector-actions">
-                                    <button v-if="graph.settings.graphKind !== 'subgraph'" class="button" @click="exportMaterial"><i class="material-icons">data_object</i><span>{{ tr('export_material') }}</span></button>
-                                    <button class="button" @click="openGraphActions"><i class="material-icons">more_horiz</i><span>{{ tr('more') }}</span></button>
-                                </div>
+                                <div class="vsg-field"><span>{{ tr('graph_name') }}</span><vsg-compact-text :value="graph.name" :label="tr('graph_name')" @commit="updateGraphName"></vsg-compact-text></div>
+                                <div class="vsg-field"><span>{{ tr('graph_kind') }}</span><code>{{ tr(graph.settings.graphKind === 'subgraph' ? 'subgraph' : 'material_graph') }}</code></div>
+                                <div v-if="graph.settings.graphKind !== 'subgraph'" class="vsg-field vsg-field-stack"><span>{{ tr('material_id') }}</span><div class="vsg-copy-field"><vsg-compact-text class="vsg-mono-field" :value="graph.settings.materialId" :label="tr('material_id')" :tooltip="graph.settings.materialId" @commit="updateMaterialId"></vsg-compact-text><button class="tool vsg-tool-button" @click.prevent="copyMaterialId" :title="tr('copy_material_id')" :aria-label="tr('copy_material_id')"><i class="material-icons">content_copy</i></button></div></div>
+                                <div v-if="graph.settings.graphKind !== 'subgraph'" class="vsg-field"><span>{{ tr('alpha_mode') }}</span><vsg-field :control="alphaControl()" :value="graph.settings.alphaMode" @commit="updateGraphSetting('alphaMode', $event)"></vsg-field></div>
+                                <vsg-field :control="graphCheckbox(tr('snap_grid'))" :value="graph.settings.snapToGrid" @commit="updateGraphSetting('snapToGrid', $event)"></vsg-field>
+                                <div class="vsg-field vsg-field-stack"><span>{{ tr('grid_size') }}</span><vsg-field :control="graphNumber(tr('grid_size'), 8, 64, 1)" :value="graph.settings.gridSize" @commit="updateGraphSetting('gridSize', $event)"></vsg-field></div>
+                                <template v-if="graph.settings.graphKind !== 'subgraph'">
+                                    <vsg-field :control="graphCheckbox(tr('live_preview'), false, 'vsg_live_preview_help')" :value="graph.settings.livePreview" @commit="updateGraphSetting('livePreview', $event)"></vsg-field>
+                                    <p id="vsg_live_preview_help" class="vsg-field-help">{{ tr('live_preview_help') }}</p>
+                                </template>
                             </section>
                         </div>
 
-                        <div v-else-if="activeTab === 'node'" id="vsg_inspector_panel_node" class="vsg-inspector-tabpanel" role="tabpanel" aria-labelledby="vsg_inspector_tab_node">
+                        <div v-show="activeTab === 'node'" :id="panelId + '_node'" class="vsg-inspector-tabpanel" role="tabpanel" :aria-labelledby="tabIds.node">
                             <section class="vsg-inspector-section">
                                 <div class="vsg-section-heading"><div><i class="material-icons">tune</i><h3>{{ tr('selected_node') }}</h3></div></div>
                                 <div v-if="!node" class="vsg-inspector-empty">{{ tr('no_selection') }}</div>
-                                <template v-else>
+                                <template v-else-if="activeTab === 'node'">
                                     <div class="vsg-selected-node-title" :style="{'--node-color': definition.color}"><span class="vsg-selected-node-dot"></span><strong>{{ nodeTitle }}</strong><code>{{ nodeTypeLabel }}</code></div>
-                                    <label v-if="!node.type.endsWith('_parameter')" class="vsg-field"><span>{{ tr('title_override') }}</span><input class="dark_bordered" :value="node.title" @change="updateNodeField({key: 'title', type: 'nodeTitle'}, $event)"></label>
-                                    <label v-for="field in definition.properties" :key="field.key" class="vsg-field" :class="{'vsg-check-field': field.type === 'checkbox'}">
-                                        <template v-if="field.type === 'checkbox'"><input type="checkbox" :checked="fieldValue(field)" @change="updateNodeField(field, $event)"><span>{{ field.label }}</span></template>
-                                        <template v-else-if="field.type === 'select' || field.type === 'material'"><span>{{ field.label }}</span><select class="dark_bordered" :value="fieldValue(field)" @change="updateNodeField(field, $event)"><option v-for="(label, value) in fieldOptions(field)" :key="value" :value="value">{{ label }}</option></select></template>
-                                        <template v-else-if="field.type === 'textarea'"><span>{{ field.label }}</span><textarea class="dark_bordered vsg-code-input" :value="fieldValue(field)" @change="updateNodeField(field, $event)" spellcheck="false"></textarea></template>
-                                        <template v-else-if="field.type === 'color'"><span>{{ field.label }}</span><vsg-advanced-color class="vsg-inspector-color-control" :value="fieldValue(field)" :label="field.label" @commit="updateNodeColor(field, $event)"></vsg-advanced-color></template>
-                                        <template v-else><span>{{ field.label }}</span><input class="dark_bordered vsg-mono" :type="field.type === 'number' ? 'number' : 'text'" :value="fieldValue(field)" @change="updateNodeField(field, $event)"></template>
-                                    </label>
+                                    <div v-if="!node.type.endsWith('_parameter')" :key="node.id + ':title'" class="vsg-field"><span>{{ tr('title_override') }}</span><vsg-compact-text :value="node.title" :label="tr('title_override')" @commit="updateNodeField({key: 'title', type: 'nodeTitle'}, $event)"></vsg-compact-text></div>
+                                    <div v-for="field in definition.properties" :key="node.id + ':' + field.key" class="vsg-field" :class="{'vsg-field-stack': ['vec2', 'vec3', 'vec4', 'textarea', 'texture', 'checkbox'].includes(field.type)}">
+                                        <span v-if="field.type !== 'checkbox'">{{ field.label }}</span>
+                                        <vsg-advanced-color v-if="field.type === 'color'" class="vsg-inspector-color-control" :value="fieldValue(field)" :label="field.label" @commit="updateNodeColor(field, $event)"></vsg-advanced-color>
+                                        <vsg-compact-text v-else-if="field.type === 'text'" :value="fieldValue(field)" :label="field.label" @commit="updateNodeField(field, $event)"></vsg-compact-text>
+                                        <vsg-field v-else :control="nodeControl(field)" :value="fieldValue(field)" @commit="updateNodeField(field, $event)"></vsg-field>
+                                    </div>
                                     <div v-if="node.type === 'preset_output'" class="vsg-preset-note"><i class="material-icons">info</i><span>{{ tr('exact_preset_note') }}</span></div>
                                     <div v-if="node.type === 'preset_output' && availableUniforms.length" class="vsg-add-uniform-row">
-                                        <select class="dark_bordered" v-model="uniformToAdd"><option value="">{{ tr('add_uniform_port') }}</option><option v-for="entry in availableUniforms" :key="entry.name" :value="entry.name">{{ entry.label }} ({{ entry.type }})</option></select>
+                                        <vsg-field :key="node.id" :control="uniformControl()" :value="uniformToAdd || 'vsg:none'" @commit="uniformToAdd = $event === 'vsg:none' ? '' : $event"></vsg-field>
                                         <button class="tool" :disabled="!uniformToAdd" @click="addUniformPort" :aria-label="tr('add_uniform_port')"><i class="material-icons">add</i></button>
                                     </div>
                                     <h4 v-if="inputPorts.length">{{ tr('input_defaults') }}</h4>
-                                    <div v-for="port in inputPorts" :key="port.id" class="vsg-input-default-row" :class="{connected: inputConnected(port)}">
+                                    <div v-for="port in inputPorts" :key="node.id + ':' + port.id" class="vsg-input-default-row" :class="{connected: inputConnected(port)}">
                                         <span class="vsg-port-swatch" :style="{backgroundColor: getPortTypeColor(port.type)}"></span>
                                         <label>{{ port.name }}</label>
                                         <span v-if="inputConnected(port)" class="vsg-connected-label">{{ tr('connected') }}</span>
-                                        <input v-else-if="port.type === 'bool'" type="checkbox" :checked="inputValue(port)" @change="updateInput(port, $event)">
-                                        <input v-else class="dark_bordered vsg-mono" :value="inputValue(port)" @change="updateInput(port, $event)">
+                                        <vsg-field v-else :class="{'vsg-input-default-wide': ['vec2', 'vec3', 'vec4', 'color', 'texture'].includes(port.type)}" :control="graphPortControl(port, inputValue(port))" :value="inputValue(port)" @commit="updateInput(port, $event)"></vsg-field>
                                         <button v-if="node.type === 'preset_output'" class="tool vsg-remove-port" @click="removeUniformPort(port)" :title="tr('remove_port')" :aria-label="tr('remove_port') + ' ' + port.name"><i class="material-icons">close</i></button>
                                     </div>
                                     <button class="button vsg-center-node" @click="centerSelectedNode"><i class="material-icons">filter_center_focus</i><span>{{ tr('center_node') }}</span></button>
+                                    <button v-if="node.type === 'subgraph_instance' && runtime.graphs.some(entry => entry.id === node.data.targetGraphId)" class="button vsg-center-node" @click="editSubgraph"><i class="material-icons">account_tree</i><span>{{ tr('edit_subgraph') }}</span></button>
                                 </template>
+                            </section>
+                            <section v-if="nodeConnections.length" class="vsg-inspector-section">
+                                <div class="vsg-section-heading"><div><i class="material-icons">hub</i><h3>{{ tr('connection_count') }}</h3></div><small>{{ nodeConnections.length }}</small></div>
+                                <ul class="vsg-connection-list">
+                                    <li v-for="edge in nodeConnections" :key="edge.id">
+                                        <div class="vsg-connection-description"><span>{{ edge.from }}</span><span>{{ '→ ' + edge.to }}</span></div>
+                                        <button class="tool vsg-tool-button" @click="focusConnection(edge.id)" :title="tr('focus_connection')" :aria-label="tr('focus_connection') + ' · ' + edge.from + ' → ' + edge.to"><i class="material-icons">filter_center_focus</i></button>
+                                        <button class="tool vsg-tool-button" @click="disconnectConnection(edge.id)" :title="tr('disconnect')" :aria-label="tr('disconnect') + ' · ' + edge.from + ' → ' + edge.to"><i class="material-icons">link_off</i></button>
+                                    </li>
+                                </ul>
                             </section>
                             <section v-if="node && selectedDiagnostics.length" class="vsg-inspector-section vsg-context-diagnostics">
                                 <div class="vsg-section-heading"><div><i class="material-icons">warning</i><h3>{{ tr('diagnostics') }}</h3></div><small>{{ selectedDiagnostics.length }}</small></div>
@@ -5313,13 +5864,13 @@ void main() {
                             </section>
                         </div>
 
-                        <div v-else id="vsg_inspector_panel_diagnostics" class="vsg-inspector-tabpanel" role="tabpanel" aria-labelledby="vsg_inspector_tab_diagnostics">
-                            <section class="vsg-inspector-section vsg-diagnostics">
+                        <div v-show="activeTab === 'diagnostics'" :id="panelId + '_diagnostics'" class="vsg-inspector-tabpanel" role="tabpanel" :aria-labelledby="tabIds.diagnostics">
+                            <section v-if="activeTab === 'diagnostics'" class="vsg-inspector-section vsg-diagnostics">
                                 <div class="vsg-section-heading"><div><i class="material-icons">fact_check</i><h3>{{ tr('diagnostics') }}</h3></div><small>{{ runtime.diagnostics.length }}</small></div>
                                 <div v-if="!runtime.diagnostics.length" class="vsg-diagnostic is-success"><i class="material-icons">check_circle</i><span>{{ tr('no_diagnostics') }}</span></div>
                                 <article v-for="(message, index) in runtime.diagnostics" :key="index" class="vsg-diagnostic-card" :class="'is-' + message.severity">
                                     <div class="vsg-diagnostic-card-body"><i class="material-icons">{{ message.severity === 'error' ? 'error' : 'warning' }}</i><span><strong>{{ diagnosticTitle(message) }}</strong>{{ message.message }}</span></div>
-                                    <button v-if="message.nodeId" class="button" @click="selectDiagnostic(message)"><i class="material-icons">filter_center_focus</i><span>{{ tr('center_node') }}</span></button>
+                                    <button v-if="message.nodeId || message.edgeId" class="button" @click="selectDiagnostic(message)"><i class="material-icons">filter_center_focus</i><span>{{ tr(message.nodeId ? 'center_node' : 'focus_connection') }}</span></button>
                                 </article>
                             </section>
                         </div>
@@ -5330,9 +5881,9 @@ void main() {
     }
 
     function reidentifyGraph(graph) {
-        const clone = sanitizeGraph(deepClone(graph));
+        const clone = sanitizeGraph(graph);
         clone.id = makeId('graph');
-        clone.settings.materialId = `${GENERATED_MATERIAL_PREFIX}${safeIdentifier(clone.id, 'graph')}`;
+        clone.settings.materialId = generatedMaterialId(clone.id);
         const nodeIds = new Map();
         clone.nodes.forEach(node => {
             const oldId = node.id;
@@ -5344,9 +5895,55 @@ void main() {
             edge.from.node = nodeIds.get(edge.from.node) || edge.from.node;
             edge.to.node = nodeIds.get(edge.to.node) || edge.to.node;
         });
+        clone.groups.forEach(group => {
+            group.id = makeId('group');
+            group.nodeIds = group.nodeIds.map(id => nodeIds.get(id));
+        });
         clone.createdAt = clone.updatedAt = Date.now();
         clone.revision = 0;
         return clone;
+    }
+
+    function importGraphDocuments(documents) {
+        const looseGraphs = new Map();
+        const imported = [];
+        const roots = documents.map(({ graph, dependencies }) => {
+            const root = reidentifyGraph(graph);
+            if (!dependencies.length && !looseGraphs.has(graph.id)) looseGraphs.set(graph.id, root.id);
+            const remapped = new Map([[graph.id, root.id]]);
+            const bundled = dependencies.map(dependency => {
+                const clone = reidentifyGraph(dependency);
+                remapped.set(dependency.id, clone.id);
+                return clone;
+            });
+            for (const entry of [...bundled, root]) imported.push({ entry, remapped });
+            return root;
+        });
+        for (const { entry, remapped } of imported) {
+            for (const node of entry.nodes) {
+                if (node.type !== 'subgraph_instance') continue;
+                const id = node.data.targetGraphId;
+                node.data.targetGraphId = remapped.get(id) || looseGraphs.get(id) || id;
+            }
+        }
+        const active = roots[roots.length - 1];
+        if (!active) return null;
+        const addedSize = JSON.stringify(imported.map(({ entry }) => entry)).length;
+        if (Runtime.serializeState().length + addedSize + active.id.length > MAX_PROJECT_GRAPH_BYTES) throw new Error(tr('graph_too_large'));
+        return Runtime.runUndo('Import visual shader graph', () => {
+            for (const { entry } of imported) {
+                entry.name = Runtime.uniqueGraphName(entry.name);
+                Runtime.graphs.push(entry);
+            }
+            imported.forEach(({ entry }) => {
+                if (entry.settings.graphKind === 'subgraph') Runtime.synchronizeSubgraphInstances(entry.id);
+            });
+            Runtime.activeGraphId = active.id;
+            Runtime.pendingFrameGraphId = active.id;
+            Runtime.selectedNodeIds = [];
+            Runtime.selectedEdgeId = '';
+            return active;
+        }, { cause: 'import_graph' });
     }
 
     function exportActiveGraph() {
@@ -5354,7 +5951,7 @@ void main() {
         if (!graph) return false;
         let content;
         try {
-            content = serializeGraph(graph);
+            content = serializeGraph(graph, Runtime.graphs);
         } catch (error) {
             Blockbench.showToastNotification({ text: error.message || tr('graph_too_large'), icon: 'error', expire: 6000 });
             return false;
@@ -5369,16 +5966,19 @@ void main() {
     }
 
     function importGraphFile() {
+        const project = window.Project;
+        if (!project) return;
         Blockbench.import({
             type: 'Lightflow Visual Shader Graph',
             extensions: ['lfsg', 'json'],
             multiple: true
         }, files => {
+            if (window.Project !== project || Runtime.disposed || !files?.length) return;
             const imported = [];
             const failures = [];
             (files || []).forEach(file => {
                 try {
-                    imported.push(reidentifyGraph(parseGraphFile(file.content)));
+                    imported.push(parseGraphDocument(file.content));
                 } catch (error) {
                     failures.push(error);
                 }
@@ -5388,16 +5988,17 @@ void main() {
                 Blockbench.showToastNotification({ text: message, icon: 'error', expire: 6000 });
                 return;
             }
-            Runtime.runUndo('Import visual shader graph', () => {
-                imported.forEach(graph => {
-                    graph.name = Runtime.uniqueGraphName(graph.name);
-                    Runtime.graphs.push(graph);
-                });
-                Runtime.activeGraphId = imported[imported.length - 1].id;
-                Runtime.selectedNodeIds = [];
-            }, { cause: 'import_graph' });
+            try {
+                importGraphDocuments(imported);
+            } catch (error) {
+                Blockbench.showToastNotification({ text: error.message, icon: 'error', expire: 6000 });
+                return;
+            }
             Blockbench.showQuickMessage(tr('graph_imported'), 2200);
-            if (failures.length) console.warn('[Visual Shader Graph] Some graph files could not be imported.', failures);
+            if (failures.length) {
+                Blockbench.showToastNotification({ text: tr('import_partial'), icon: 'warning', expire: 6000 });
+                console.warn('[Visual Shader Graph] Some graph files could not be imported.', failures);
+            }
         });
     }
 
@@ -5434,6 +6035,29 @@ void main() {
                 color: var(--color-text);
                 background: var(--color-ui);
                 font-family: var(--font-custom, inherit);
+            }
+            :is(.vsg-canvas-panel, .vsg-library, .vsg-inspector, .vsg-menu, .vsg-color-popup, .vsg-dialog),
+            :is(.vsg-canvas-panel, .vsg-library, .vsg-inspector, .vsg-menu, .vsg-color-popup, .vsg-dialog) *,
+            :is(.vsg-canvas-panel, .vsg-library, .vsg-inspector, .vsg-menu, .vsg-color-popup, .vsg-dialog) *::before,
+            :is(.vsg-canvas-panel, .vsg-library, .vsg-inspector, .vsg-menu, .vsg-color-popup, .vsg-dialog) *::after {
+                box-shadow: none !important;
+            }
+            .vsg-menu.contextMenu, .vsg-menu .contextMenu, .vsg-color-popup.sp-container {
+                border: 1px solid var(--color-border);
+            }
+            .vsg-menu.contextMenu, .vsg-menu .contextMenu {
+                background: var(--color-ui);
+                color: var(--color-text);
+            }
+            .vsg-menu .menu_search_bar {
+                background: var(--color-ui) !important;
+                border-bottom-color: var(--color-border);
+            }
+            .vsg-menu .menu_search_bar input { color: var(--color-text); }
+            .vsg-menu .menu_search_bar input::placeholder { color: var(--color-subtle_text); }
+            .vsg-menu li[menu_item]:is(:hover, .focused, .opened):not(.disabled) {
+                background: var(--color-button);
+                color: var(--color-text);
             }
             .vsg-canvas-panel {
                 display: grid;
@@ -5486,23 +6110,6 @@ void main() {
                 background: var(--color-border);
             }
             .vsg-toolbar-spacer { flex: 1 1 auto; }
-            .vsg-status {
-                display: inline-flex;
-                align-items: center;
-                min-width: 0;
-                gap: 4px;
-                margin-right: 5px;
-                padding: 0 5px;
-                color: var(--color-subtle_text);
-                font-size: 11px;
-                line-height: 24px;
-                white-space: nowrap;
-            }
-            .vsg-status .material-icons { font-size: 15px; }
-            .vsg-status.is-compiled { color: var(--color-text); }
-            .vsg-status.is-compiled .material-icons { color: var(--color-axis-y); }
-            .vsg-status.is-error { color: var(--color-close); }
-            .vsg-status.is-compiling { color: var(--color-warning); }
             .vsg-graph-viewport {
                 position: relative;
                 min-width: 0;
@@ -5519,7 +6126,8 @@ void main() {
                 background-size: 20px 20px, 20px 20px, 100px 100px, 100px 100px;
             }
             .vsg-graph-viewport:focus-visible {
-                box-shadow: inset 0 0 0 2px var(--lf-focus-color, var(--color-text));
+                outline: 2px solid var(--lf-focus-color, var(--color-text));
+                outline-offset: -2px;
             }
             .vsg-graph-world {
                 position: absolute;
@@ -5569,7 +6177,6 @@ void main() {
                 border: 1px solid color-mix(in srgb, var(--node-color) 45%, var(--color-border));
                 border-radius: 3px;
                 background: color-mix(in srgb, var(--color-ui) 94%, var(--node-color));
-                box-shadow: 0 3px 10px color-mix(in srgb, var(--color-back) 35%, transparent);
                 user-select: none;
             }
             .vsg-node.output {
@@ -5648,7 +6255,6 @@ void main() {
             .vsg-port:focus-visible,
             .vsg-port.connected {
                 background: var(--port-color);
-                box-shadow: 0 0 0 2px color-mix(in srgb, var(--port-color) 28%, transparent);
                 outline: none;
             }
             .vsg-port-input { margin-left: 0; }
@@ -5665,16 +6271,18 @@ void main() {
                 display: flex;
                 flex-direction: column;
                 align-items: center;
-                justify-content: center;
-                min-height: 220px;
-                padding: 28px;
+                justify-content: safe center;
+                min-height: 0;
+                overflow: auto;
+                padding: var(--lf-space-4, 16px);
                 text-align: center;
                 background: color-mix(in srgb, var(--color-back) 88%, var(--color-ui));
             }
             .vsg-empty-state > .material-icons { color: var(--color-subtle_text); font-size: 48px; }
             .vsg-empty-state h2 { margin: 10px 0 4px; font-size: 16px; }
             .vsg-empty-state p { max-width: 420px; margin: 0 0 16px; color: var(--color-subtle_text); }
-            .vsg-empty-state > button {
+            .vsg-start-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--lf-space-2, 8px); }
+            .vsg-start-actions > button {
                 width: max-content !important;
                 min-width: 140px !important;
                 max-width: 100%;
@@ -5683,6 +6291,7 @@ void main() {
                 padding: 6px 14px !important;
                 line-height: 1.3;
                 white-space: normal;
+                border-radius: var(--lf-radius-control, 8px);
             }
             .vsg-toolbar button:disabled { opacity: .45; cursor: default; }
             .vsg-library {
@@ -5693,16 +6302,10 @@ void main() {
                 position: sticky;
                 z-index: 2;
                 top: 0;
-                display: grid;
-                grid-template-columns: 22px minmax(0, 1fr);
-                align-items: center;
-                gap: 3px;
                 padding: 6px;
                 border-bottom: 1px solid var(--color-border);
                 background: var(--color-ui);
             }
-            .vsg-library-search .material-icons { color: var(--color-subtle_text); font-size: 17px; text-align: center; }
-            .vsg-library-search input { width: 100%; height: 27px; }
             .vsg-library-section { padding: 5px 0; }
             .vsg-library-category + .vsg-library-category { border-top: 1px solid color-mix(in srgb, var(--color-border) 65%, transparent); }
             .vsg-section-header,
@@ -5798,47 +6401,6 @@ void main() {
                 font-size: 10.5px;
             }
             .vsg-field > span { color: var(--color-subtle_text); }
-            .vsg-field input,
-            .vsg-field select { width: 100%; min-width: 0; height: 25px; }
-            .vsg-field input[type="color"] { padding: 2px; }
-            .vsg-field.vsg-check-field,
-            .vsg-check-field {
-                display: flex;
-                align-items: center;
-                min-height: 29px;
-                gap: 7px;
-                font-size: 10.5px;
-            }
-            .vsg-field.vsg-check-field > span,
-            .vsg-check-field > span { color: var(--color-text); }
-            .vsg-code-input {
-                grid-column: 1 / -1;
-                width: 100%;
-                min-height: 82px;
-                padding: 6px;
-                resize: vertical;
-                font: 10.5px/1.45 var(--font-code, monospace);
-                tab-size: 4;
-            }
-            .vsg-mono { font-family: var(--font-code, monospace) !important; font-variant-numeric: tabular-nums; }
-            .vsg-inspector-actions {
-                display: grid;
-                grid-template-columns: 1fr 1fr;
-                gap: 5px;
-                margin-top: 8px;
-            }
-            .vsg-inspector-actions .button {
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                min-width: 0;
-                gap: 4px;
-                padding: 0 6px;
-                font-size: 10px;
-                white-space: nowrap;
-            }
-            .vsg-inspector-actions .material-icons { font-size: 15px; }
-            .vsg-secondary-actions .button { color: var(--color-subtle_text); }
             .vsg-selected-node-title {
                 display: grid;
                 grid-template-columns: 22px minmax(0, 1fr) auto;
@@ -5877,7 +6439,7 @@ void main() {
                 font-size: 10px;
             }
             .vsg-input-default-row.connected { opacity: .62; }
-            .vsg-input-default-row > input.dark_bordered { width: 100%; min-width: 0; height: 23px; }
+            .vsg-input-default-wide { grid-column: 2 / -1; grid-row: 2; }
             .vsg-port-swatch { width: 7px; height: 7px; border-radius: 50%; }
             .vsg-connected-label { color: var(--color-subtle_text); font-style: italic; text-align: right; }
             .vsg-remove-port { width: 20px !important; height: 20px !important; min-width: 20px; }
@@ -5888,8 +6450,7 @@ void main() {
                 gap: 4px;
                 margin-top: 8px;
             }
-            .vsg-add-uniform-row select { width: 100%; height: 25px; }
-            .vsg-add-uniform-row .tool { width: 26px !important; height: 25px !important; }
+            .vsg-add-uniform-row > .tool { width: 26px !important; height: 30px !important; }
             .vsg-preset-note {
                 display: grid;
                 grid-template-columns: 18px minmax(0, 1fr);
@@ -5920,10 +6481,8 @@ void main() {
             .vsg-diagnostic.is-success .material-icons { color: var(--color-axis-y); }
             .vsg-diagnostic + .vsg-diagnostic { border-top: 1px solid color-mix(in srgb, var(--color-border) 50%, transparent); }
             @media (max-width: 900px) {
-                .vsg-status { display: none; }
                 .vsg-graph-select { width: min(180px, 34vw); }
                 .vsg-field { grid-template-columns: 1fr; gap: 2px; padding-block: 3px; }
-                .vsg-inspector-actions { grid-template-columns: 1fr; }
             }
 
             /* Production workbench redesign */
@@ -5936,14 +6495,14 @@ void main() {
             .vsg-canvas-panel {
                 grid-template-rows: auto minmax(0, 1fr) 30px;
                 container: vsg-canvas / inline-size;
-                min-height: 260px;
+                min-height: 110px;
                 overflow: hidden;
             }
             .vsg-toolbar {
                 min-height: 44px;
                 flex-wrap: wrap;
-                gap: 5px;
-                padding: 5px 7px;
+                gap: var(--lf-space-1, 4px);
+                padding: var(--lf-space-1, 4px) var(--lf-space-2, 8px);
                 overflow: visible;
             }
             .vsg-toolbar-group {
@@ -5965,68 +6524,50 @@ void main() {
             .vsg-graph-select {
                 width: 100%;
                 max-width: none;
-                height: 30px;
-                padding-inline: 9px 28px;
-                border-color: color-mix(in srgb, var(--color-border) 85%, transparent);
+                height: var(--lf-control-h, 30px);
                 font-size: 12px;
                 font-weight: 650;
             }
-            button.vsg-toolbar-action,
             button.vsg-primary-action,
             button.vsg-apply-action,
-            .vsg-inspector-actions button,
             button.vsg-center-node {
                 display: inline-flex !important;
                 align-items: center;
                 justify-content: center;
                 width: auto !important;
                 min-width: 0 !important;
-                height: 30px !important;
+                height: var(--lf-control-h, 30px) !important;
                 margin: 0 !important;
-                gap: 5px;
-                padding: 0 8px !important;
+                gap: var(--lf-space-1, 4px);
+                padding: 0 var(--lf-space-2, 8px) !important;
                 overflow: hidden;
-                border-radius: 3px;
+                border-radius: var(--lf-radius-control, 8px);
                 line-height: 1;
                 white-space: nowrap;
             }
-            button.vsg-toolbar-action > span,
             button.vsg-primary-action > span,
             button.vsg-apply-action > span,
-            .vsg-inspector-actions button > span,
             button.vsg-center-node > span {
                 min-width: 0;
                 overflow: hidden;
                 text-overflow: ellipsis;
             }
-            button.vsg-toolbar-action .material-icons,
             button.vsg-primary-action .material-icons,
             button.vsg-apply-action .material-icons { flex: 0 0 auto; font-size: 16px; }
             button.vsg-primary-action { min-width: 86px !important; font-weight: 650; }
             button.vsg-apply-action { min-width: 72px !important; }
             .vsg-chevron { margin-left: -3px; font-size: 16px !important; }
             .vsg-toolbar-spacer { min-width: 0; }
-            .vsg-status {
-                flex: 0 1 auto;
-                max-width: 130px;
-                margin: 0;
-                padding: 0 4px;
-                font-size: 11px;
-                line-height: 28px;
-                overflow: hidden;
-                text-overflow: ellipsis;
-            }
-            .vsg-status .material-icons { flex: 0 0 auto; }
             .vsg-tool-button {
-                width: 30px !important;
-                min-width: 30px !important;
-                max-width: 30px !important;
-                height: 30px !important;
+                width: var(--lf-control-h, 30px) !important;
+                min-width: var(--lf-control-h, 30px) !important;
+                max-width: var(--lf-control-h, 30px) !important;
+                height: var(--lf-control-h, 30px) !important;
+                border-radius: var(--lf-radius-control, 8px);
                 padding: 0 !important;
             }
             .vsg-graph-viewport { isolation: isolate; }
             .vsg-graph-viewport.is-panning { cursor: grabbing; }
-            .vsg-graph-viewport:focus-visible { box-shadow: inset 0 0 0 2px var(--lf-focus-color, var(--color-text)); }
             .vsg-connections { overflow: visible; }
             .vsg-connection { stroke-width: 2px; opacity: .9; }
             .vsg-connection.selected { stroke-width: 3px; opacity: 1; }
@@ -6041,24 +6582,25 @@ void main() {
                 pointer-events: none;
             }
             .vsg-node {
+                --lf-input-h: 22px;
+                --lf-radius-control: var(--lf-radius-detail, 4px);
                 min-height: 76px;
                 border-color: color-mix(in srgb, var(--node-color) 58%, var(--color-border));
-                border-radius: 4px;
+                border-radius: calc(var(--lf-radius-control) + var(--lf-space-2, 8px));
                 background: color-mix(in srgb, var(--color-ui) 97%, var(--node-color));
-                box-shadow: 0 3px 12px color-mix(in srgb, var(--color-back) 44%, transparent);
             }
             .vsg-node.output { border-width: 1px; }
             .vsg-node.selected {
                 outline: 2px solid var(--lf-focus-color, var(--color-text));
                 outline-offset: 2px;
-                box-shadow: 0 0 0 1px color-mix(in srgb, var(--node-color) 70%, transparent), 0 5px 18px color-mix(in srgb, var(--color-back) 55%, transparent);
             }
             .vsg-node:focus-visible { outline: 2px solid var(--lf-focus-color, var(--color-text)); outline-offset: 3px; }
             .vsg-node-header {
                 min-height: 34px;
                 grid-template-columns: 20px minmax(0, 1fr);
-                gap: 5px;
-                padding: 4px 8px;
+                gap: var(--lf-space-1, 4px);
+                padding: var(--lf-space-1, 4px) var(--lf-space-2, 8px);
+                border-radius: 0;
                 background: color-mix(in srgb, var(--node-color) 16%, var(--color-ui));
             }
             .vsg-node-header > span { font-size: 12px; font-weight: 700; }
@@ -6113,17 +6655,9 @@ void main() {
             }
             .vsg-advanced-color-control .sp-preview { height: 16px !important; }
             .vsg-node-number-control { flex: 1 1 118px; }
-            .vsg-node-number-control > input[type="range"] { width: 66px; min-width: 36px; height: 18px; margin: 0; }
-            .vsg-node-number-input {
-                width: 48px !important;
-                min-width: 42px;
-                height: 21px !important;
-                padding: 0 3px !important;
-                font: 9.5px var(--font-code, monospace) !important;
-                text-align: right;
-            }
-            .vsg-node-bool-control { cursor: pointer; font: 10px var(--font-code, monospace); }
-            .vsg-node-bool-control > input { margin: 0; }
+            .vsg-node-number-control > div { flex: 1; }
+            .vsg-node-meta .vsg-shared-field { --lf-input-h: 22px; --lf-control-h: 22px; }
+            .vsg-node-bool-control .custom_checkbox { height: 22px !important; }
             .vsg-node-body { padding: 6px 0 7px; }
             .vsg-port-row {
                 grid-template-columns: minmax(68px, 1fr) minmax(44px, 68px) minmax(68px, 1fr);
@@ -6153,7 +6687,6 @@ void main() {
                 border: 0 !important;
                 border-radius: 0 !important;
                 background: transparent !important;
-                box-shadow: none !important;
                 appearance: none;
                 -webkit-appearance: none;
                 cursor: crosshair;
@@ -6165,13 +6698,12 @@ void main() {
                 border: 2px solid var(--port-color);
                 border-radius: 50%;
                 background: var(--color-ui);
-                transition: background-color 90ms ease, box-shadow 90ms ease, transform 90ms ease;
+                transition: background-color 90ms ease, transform 90ms ease;
             }
             button.vsg-port:hover::before,
             button.vsg-port:focus-visible::before,
             button.vsg-port.connected::before {
                 background: var(--port-color);
-                box-shadow: 0 0 0 3px color-mix(in srgb, var(--port-color) 25%, transparent);
             }
             button.vsg-port:focus-visible { outline: 2px solid var(--lf-focus-color, var(--color-text)) !important; outline-offset: -2px; }
             button.vsg-port:active::before { transform: scale(.86); }
@@ -6195,31 +6727,6 @@ void main() {
             .vsg-statusbar .material-icons { font-size: 13px; }
             .vsg-statusbar .is-compiled { color: var(--color-text); }
             .vsg-statusbar-tools { justify-content: flex-end; gap: 7px; }
-            .vsg-segmented { display: inline-flex; height: 23px; border: 1px solid var(--color-border); border-radius: 3px; overflow: hidden; }
-            .vsg-segmented button {
-                width: 27px !important;
-                min-width: 27px !important;
-                height: 21px !important;
-                padding: 0 !important;
-                border: 0;
-                border-radius: 0;
-                color: var(--color-subtle_text);
-                background: transparent;
-                font: 10px var(--font-code, monospace);
-            }
-            .vsg-segmented button + button { border-left: 1px solid var(--color-border); }
-            .vsg-segmented button.active { color: var(--color-accent_text); background: var(--color-accent); }
-            .vsg-shortcut-hint kbd {
-                min-width: 18px;
-                padding: 1px 4px;
-                border: 1px solid var(--color-border);
-                border-bottom-color: color-mix(in srgb, var(--color-border) 70%, var(--color-back));
-                border-radius: 3px;
-                color: var(--color-text);
-                background: var(--color-button);
-                font: 9.5px var(--font-code, monospace);
-                text-align: center;
-            }
             .vsg-sr-only {
                 position: absolute !important;
                 width: 1px !important;
@@ -6237,11 +6744,9 @@ void main() {
                 position: sticky;
                 top: 0;
                 z-index: 4;
-                grid-template-columns: 24px minmax(0, 1fr);
                 min-height: 43px;
                 padding: 7px;
             }
-            .vsg-library-search input { height: 29px; font-size: 11.5px; }
             .vsg-library-section { padding: 7px 0; }
             .vsg-library-section > h3 {
                 margin: 2px 10px 6px;
@@ -6297,59 +6802,19 @@ void main() {
                 overflow-y: auto;
                 overflow-x: hidden;
             }
-            .vsg-inspector-tabs {
+            .vsg-inspector-tabstrip {
                 position: sticky;
                 top: 0;
                 z-index: 5;
-                display: grid;
-                grid-template-columns: repeat(3, minmax(0, 1fr));
-                min-height: 40px;
                 border-bottom: 1px solid var(--color-border);
                 background: var(--color-ui);
             }
-            .vsg-inspector-tabs button {
-                position: relative;
-                display: inline-flex;
-                align-items: center;
-                justify-content: center;
+            .vsg-inspector-tabstrip .lf-tabs > button {
                 min-width: 0 !important;
-                height: 39px !important;
-                gap: 5px;
-                padding: 0 6px !important;
-                overflow: hidden;
-                border: 0;
-                border-radius: 0;
-                color: var(--color-subtle_text);
-                background: transparent;
-                font-size: 10.5px;
-            }
-            .vsg-inspector-tabs button::after {
-                content: '';
-                position: absolute;
-                right: 8px;
-                bottom: 0;
-                left: 8px;
-                height: 2px;
-                background: transparent;
-            }
-            .vsg-inspector-tabs button:hover,
-            .vsg-inspector-tabs button:focus-visible { color: var(--color-text); background: var(--color-button); outline: none; }
-            .vsg-inspector-tabs button:focus-visible { box-shadow: inset 0 0 0 2px var(--lf-focus-color, var(--color-text)); }
-            .vsg-inspector-tabs button.active { color: var(--color-text); }
-            .vsg-inspector-tabs button.active::after { background: var(--lf-accent-indicator, var(--color-text)); }
-            .vsg-inspector-tabs .material-icons { flex: 0 0 auto; font-size: 15px; }
-            .vsg-inspector-tabs span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-            .vsg-inspector-tabs small {
-                flex: 0 0 auto;
-                min-width: 17px;
-                padding: 1px 4px;
-                border-radius: 3px;
-                color: var(--color-accent_text);
-                background: var(--color-accent);
-                font: 9px var(--font-code, monospace);
+                outline-offset: -2px;
             }
             .vsg-inspector-tabpanel { min-width: 0; }
-            .vsg-inspector-section { padding: 10px; }
+            .vsg-inspector-section { padding: var(--lf-space-3, 12px); }
             .vsg-section-heading {
                 display: flex;
                 align-items: center;
@@ -6365,26 +6830,26 @@ void main() {
             .vsg-more-button { width: 26px !important; min-width: 26px !important; height: 26px !important; }
             .vsg-summary-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; margin: 0; background: var(--color-border); }
             .vsg-summary-grid > div { display: flex; align-items: center; justify-content: space-between; min-width: 0; min-height: 31px; gap: 8px; padding: 5px 7px; background: var(--color-ui); }
-            .vsg-summary-grid > div:last-child { grid-column: 1 / -1; }
             .vsg-summary-grid dt { min-width: 0; overflow: hidden; color: var(--color-subtle_text); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
             .vsg-summary-grid dd { margin: 0; color: var(--color-text); font: 10px var(--font-code, monospace); }
-            .vsg-summary-grid dd.is-compiled { color: var(--color-text); }
             .vsg-field {
+                width: 100%;
+                min-width: 0;
                 grid-template-columns: minmax(94px, .72fr) minmax(0, 1.28fr);
                 min-height: 34px;
-                gap: 8px;
+                gap: var(--lf-space-2, 8px);
                 font-size: 11px;
             }
             .vsg-field > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-            .vsg-field input,
-            .vsg-field select { width: 100%; min-width: 0; max-width: 100%; height: 27px; font-size: 11px; }
-            .vsg-field-stack { grid-template-columns: 1fr; gap: 4px; padding-block: 3px; }
-            .vsg-copy-field { display: grid; grid-template-columns: minmax(0, 1fr) 27px; min-width: 0; gap: 4px; }
-            .vsg-copy-field .tool { width: 27px !important; min-width: 27px !important; height: 27px !important; }
+            .vsg-shared-field, .vsg-shared-field > div { min-width: 0; }
+            .vsg-shared-field .lf-dropdown-row { padding-inline: 0 !important; }
+            .vsg-compact-text input { width: 100%; min-width: 0; max-width: 100%; font-size: 11px; }
+            .vsg-inline-input input { height: 23px !important; padding-inline: 3px !important; }
+            .vsg-compact-text { min-width: 0; }
+            .vsg-mono-field input { font-family: var(--font-code, monospace); font-variant-numeric: tabular-nums; }
+            .vsg-field-stack { grid-template-columns: minmax(0, 1fr); gap: var(--lf-space-1, 4px); padding-block: 3px; }
+            .vsg-copy-field { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; min-width: 0; gap: var(--lf-space-1, 4px); }
             .vsg-copy-field .material-icons { font-size: 15px; }
-            .vsg-check-field { min-height: 34px; font-size: 11px; }
-            .vsg-inspector-actions { grid-template-columns: minmax(0, 1fr) minmax(82px, .55fr); gap: 6px; margin-top: 10px; }
-            .vsg-inspector-actions .button { width: 100% !important; min-height: 30px; font-size: 10.5px; }
             .vsg-selected-node-title {
                 grid-template-columns: 20px minmax(0, 1fr) auto;
                 min-height: 42px;
@@ -6429,39 +6894,23 @@ void main() {
             .vsg-diagnostic-card-body .material-icons { color: var(--color-warning); font-size: 17px; }
             .vsg-diagnostic-card.is-error .material-icons { color: var(--color-close); }
             .vsg-diagnostic-card-body strong { display: block; margin-bottom: 2px; }
+            .vsg-diagnostic-card-body > span { white-space: pre-wrap; overflow-wrap: anywhere; }
             .vsg-diagnostic-card .button { display: flex !important; width: 100% !important; min-width: 0 !important; height: 29px !important; margin-top: 8px; gap: 5px; }
             .vsg-preset-note { font-size: 10px; }
             .vsg-input-default-row { grid-template-columns: 9px minmax(64px, 1fr) minmax(74px, 1fr) auto; min-height: 31px; font-size: 10.5px; }
 
-            @container vsg-canvas (max-width: 980px) {
-                .vsg-toolbar-action .vsg-action-label { display: none; }
-                button.vsg-toolbar-action { width: 30px !important; min-width: 30px !important; padding: 0 !important; }
-                .vsg-toolbar-graph { flex-basis: 190px; }
-                .vsg-statusbar-tools .vsg-shortcut-hint { display: none; }
-            }
-            @container vsg-canvas (max-width: 740px) {
-                .vsg-toolbar-graph { flex-basis: 150px; min-width: 100px; }
-                .vsg-status { display: none; }
-                .vsg-apply-action > span,
-                .vsg-preview-label { display: none; }
-                button.vsg-apply-action { width: 34px !important; min-width: 34px !important; padding: 0 !important; }
+            @container vsg-canvas (max-width: 540px) {
+                .vsg-toolbar-graph { flex: 1 1 128px; min-width: 104px; }
+                .vsg-toolbar-spacer { display: none; }
                 .vsg-apply-action .vsg-chevron { display: none; }
-                .vsg-statusbar-group { gap: 7px; }
             }
-            @container vsg-canvas (max-width: 560px) {
-                .vsg-toolbar-files { display: none; }
-                .vsg-toolbar-graph { flex: 1 1 130px; }
-                .vsg-statusbar-group > span:nth-child(2),
-                .vsg-statusbar-group > span:nth-child(3),
-                .vsg-preview-label { display: none; }
+            @container vsg-canvas (max-width: 330px) {
+                .vsg-statusbar-group .vsg-build-time { display: none; }
             }
             @container vsg-inspector (max-width: 320px) {
-                .vsg-inspector-tabs button { gap: 3px; padding-inline: 3px !important; }
-                .vsg-inspector-tabs .material-icons { display: none; }
+                .vsg-inspector-tabstrip .horizontal_select_icon { display: none; }
                 .vsg-field { grid-template-columns: 1fr; gap: 3px; padding-block: 4px; }
-                .vsg-inspector-actions { grid-template-columns: 1fr; }
                 .vsg-summary-grid { grid-template-columns: 1fr; }
-                .vsg-summary-grid > div:last-child { grid-column: auto; }
             }
             @media (prefers-reduced-motion: reduce) {
                 .vsg-tool-button,
@@ -6556,6 +7005,38 @@ void main() {
             .vsg-resource-item strong { font-size: 10.5px; font-weight: 650; }
             .vsg-resource-item small { color: var(--color-subtle_text); font: 9px var(--font-code, monospace); }
             .vsg-type-chip { padding: 1px 4px; border: 1px solid; border-radius: 8px; color: var(--color-subtle_text); font: 8.5px var(--font-code, monospace); }
+
+            .vsg-statusbar { font-size: 11px; color: var(--color-text); }
+            .vsg-statusbar-group { gap: 7px; }
+            .vsg-statusbar .vsg-build-state { white-space: normal; line-height: 1.1; }
+            .vsg-build-state.is-compiled .material-icons { color: var(--color-axis-y); }
+            .vsg-build-state.is-error .material-icons { color: var(--color-close); }
+            .vsg-statusbar .vsg-zoom-label,
+            .vsg-statusbar .vsg-diagnostics-link {
+                width: auto !important;
+                min-width: 34px !important;
+                height: 24px !important;
+                padding-inline: 4px !important;
+                gap: 4px;
+                font: inherit;
+                font-variant-numeric: tabular-nums;
+            }
+            .vsg-field-help { margin: 3px 0 5px; color: var(--color-text); font-size: 11px; line-height: 1.45; }
+            .vsg-connection-list { margin: 0; padding: 0; list-style: none; }
+            .vsg-connection-list li {
+                display: grid;
+                grid-template-columns: minmax(0, 1fr) auto auto;
+                align-items: center;
+                gap: 4px;
+                padding: 6px 0;
+                border-bottom: 1px solid var(--color-border);
+            }
+            .vsg-connection-description { display: grid; gap: 2px; font-size: 11px; line-height: 1.3; overflow-wrap: anywhere; }
+            .vsg-connection-list .vsg-tool-button:focus-visible,
+            .vsg-statusbar .vsg-tool-button:focus-visible {
+                outline: 2px solid var(--lf-focus-color, var(--color-text));
+                outline-offset: -2px;
+            }
         `;
         document.head.appendChild(style);
         return style;
@@ -6611,7 +7092,7 @@ void main() {
             name: tr('title'),
             icon: 'schema',
             condition: { modes: ['shader_graph'] },
-            default_position: { slot: 'bottom', height: 610, float_position: [220, 100], float_size: [1080, 720] },
+            default_position: { slot: 'bottom', height: 440, float_position: [220, 100], float_size: [1080, 720] },
             growable: true,
             resizable: true,
             expand_button: true,
@@ -6633,7 +7114,7 @@ void main() {
 
     function selectShaderGraphMode() {
         if (!window.Project || !graphMode) return false;
-        graphMode.select();
+        if (!graphMode.selected) graphMode.select();
         return true;
     }
 
@@ -6654,23 +7135,15 @@ void main() {
         compileActive: options => Runtime.compileActive(options),
         applyGlobally: () => Runtime.applyMaterialGlobally(),
         applyToSelection: () => Runtime.applyMaterialToSelection(),
-        importGraph: content => {
-            const graph = reidentifyGraph(parseGraphFile(content));
-            Runtime.runUndo('Import visual shader graph', () => {
-                graph.name = Runtime.uniqueGraphName(graph.name);
-                Runtime.graphs.push(graph);
-                Runtime.activeGraphId = graph.id;
-            }, { cause: 'api_import_graph' });
-            return graph;
-        },
-        exportActiveGraph: () => Runtime.activeGraph ? serializeGraph(Runtime.activeGraph) : null
+        importGraph: content => importGraphDocuments([parseGraphDocument(content)]),
+        exportActiveGraph: () => Runtime.activeGraph ? serializeGraph(Runtime.activeGraph, Runtime.graphs) : null
     }));
 
     Plugin.register(PLUGIN_ID, {
         title: 'Visual Shader Graph',
         icon: 'schema',
         author: 'MidFord327',
-        description: 'Create production-ready staged vertex/fragment shader graphs for Lightflow with typed geometry attributes, custom varyings, exact uniforms, Shader Architect compilation, project persistence, and portable graph exports.',
+        description: 'Build vertex and surface materials visually, apply them through Shader Architect, and share reusable subgraphs in portable graph files. Beta.',
         tags: ['Lightflow', 'Shaders', 'Materials'],
         version: '1.3.0',
         min_version: '4.9.0',
@@ -6702,7 +7175,7 @@ void main() {
                 name: tr('mode'),
                 icon: 'schema',
                 category: 'edit',
-                condition: () => !!window.Project,
+                condition: () => !!window.Project && graphMode?.selected === true,
                 onSelect() {
                     Runtime.refresh();
                     const graph = Runtime.activeGraph;

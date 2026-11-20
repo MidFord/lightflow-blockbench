@@ -184,7 +184,7 @@
             installedFilter: 'Instalados',
             availableFilter: 'Disponibles',
             changesFilter: 'Cambios',
-            catalogReady: 'Catálogo listo · {installed}/{total} instalados',
+            catalogReady: 'Catálogo listo',
             pendingUpdates: '{count} actualizaciones disponibles.',
             resetFilters: 'Limpiar filtros',
             category: 'Categoría',
@@ -197,7 +197,7 @@
             continueScene: 'Volver a la escena',
             readyTools: 'herramientas activas',
             downloads: 'Descargas',
-            essentialsReady: 'Esenciales listos',
+            essentialsTitle: 'Módulos esenciales',
             essentialsProgress: '{installed} de {total} esenciales listos',
             connectionPending: 'Preparando el catálogo…',
             catalogOffline: 'Catálogo integrado',
@@ -213,10 +213,6 @@
             tools: 'Herramientas',
             news: 'Novedades',
             settingsTitle: 'Instalación y actualizaciones',
-            firstStep: 'Prepara tu estudio',
-            firstStepCopy: 'Instala los cinco esenciales y sus dependencias.',
-            setupHint: 'Explora las herramientas. Las creativas son opcionales.',
-            installedHint: 'Tu estudio está listo. Abre un proyecto y empieza a crear.',
             recommended: 'Recomendado para empezar',
             aboutTab: 'Acerca de',
             detailsTab: 'Detalles',
@@ -249,7 +245,7 @@
             hubCurrent: 'Hub actualizado',
             hubConfirm: 'El Hub se cerrará y volverá a abrirse al actualizar. Guarda tus proyectos antes de continuar.',
             repair: 'Preparar esenciales',
-            disabledEssentials: 'Hay esenciales desactivados. Prepáralos para usar el estudio completo.',
+            disabledEssentials: 'Hay módulos esenciales desactivados.',
             networkError: 'No se pudo conectar. Revisa tu conexión y vuelve a intentarlo.',
             timeoutError: 'La conexión tardó demasiado. Vuelve a intentarlo.',
             rateLimit: 'GitHub no permite más consultas por ahora. Inténtalo más tarde.',
@@ -612,7 +608,7 @@
             installedFilter: 'Installed',
             availableFilter: 'Available',
             changesFilter: 'Changes',
-            catalogReady: 'Catalog ready · {installed}/{total} installed',
+            catalogReady: 'Catalog ready',
             pendingUpdates: '{count} updates available.',
             resetFilters: 'Clear filters',
             category: 'Category',
@@ -625,7 +621,7 @@
             continueScene: 'Back to the scene',
             readyTools: 'active tools',
             downloads: 'Downloads',
-            essentialsReady: 'Essentials ready',
+            essentialsTitle: 'Essential modules',
             essentialsProgress: '{installed} of {total} essentials ready',
             connectionPending: 'Preparing the catalog…',
             catalogOffline: 'Built-in catalog',
@@ -641,10 +637,6 @@
             tools: 'Tools',
             news: 'What’s new',
             settingsTitle: 'Installation and updates',
-            firstStep: 'Set up your studio',
-            firstStepCopy: 'Install the five essentials and their dependencies.',
-            setupHint: 'Explore the tools. Creative ones are optional.',
-            installedHint: 'Your studio is ready. Open a project and start creating.',
             recommended: 'Recommended to get started',
             aboutTab: 'About',
             detailsTab: 'Details',
@@ -677,7 +669,7 @@
             hubCurrent: 'Hub is up to date',
             hubConfirm: 'The Hub will close and reopen during its update. Save your projects before continuing.',
             repair: 'Prepare essentials',
-            disabledEssentials: 'Some essentials are disabled. Prepare them to use the complete studio.',
+            disabledEssentials: 'Some essential modules are disabled.',
             networkError: 'Could not connect. Check your connection and try again.',
             timeoutError: 'The connection timed out. Try again.',
             rateLimit: 'GitHub is limiting requests. Please try again later.',
@@ -1257,7 +1249,7 @@
                 const tag = sanitizeRef(release?.tag_name);
                 if (!tag || release.draft || releases.some(item => item.tag_name === tag)) continue;
                 const published = typeof release.published_at === 'string' && Number.isFinite(Date.parse(release.published_at)) ? new Date(release.published_at).toISOString() : '';
-                releases.push({tag_name: tag, name: String(release.name || tag).slice(0, 120), prerelease: release.prerelease === true, published_at: published, body: String(release.body || '').slice(0, 16000)});
+                releases.push({tag_name: tag, name: String(release.name || tag).slice(0, 120), prerelease: release.prerelease === true, published_at: published, body: String(release.body || '').slice(0, 128 * 1024)});
             }
             if (batch.length < 100) return releases;
         }
@@ -1627,30 +1619,65 @@
         else if (typeof window !== 'undefined') window.open(url, '_blank', 'noopener');
     }
 
-    function renderReleaseMarkdown(text, title = '') {
+    function releaseNoteUrl(value, tag, image = false) {
+        const url = String(value || '').trim();
+        if (/^https:\/\//i.test(url) || (!image && /^http:\/\//i.test(url))) return url;
+        if (!url || !tag || url.startsWith('#') || url.startsWith('//') || url.includes('\\') || /^[a-z][a-z\d+.-]*:/i.test(url)) return '';
+        const relative = new URL(url, 'https://lightflow.invalid/');
+        if (relative.origin !== 'https://lightflow.invalid') return '';
+        const ref = `refs/tags/${tag.split('/').map(encodeURIComponent).join('/')}`;
+        const root = image ? `https://raw.githubusercontent.com/${REPOSITORY.owner}/${REPOSITORY.name}` : `${REPOSITORY.github}/blob`;
+        return `${root}/${ref}${relative.pathname}${relative.search}${relative.hash}`;
+    }
+
+    function renderReleaseMarkdown(text, title = '', releaseTag = '') {
         const source = String(text || '');
+        const tag = sanitizeRef(releaseTag);
         const escaped = () => `<p>${source.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>')}</p>`;
         // Use Blockbench's bundled parser and sanitizer, without adding a network dependency.
         if (typeof marked === 'undefined' || typeof DOMPurify === 'undefined' || typeof DOMParser === 'undefined') return escaped();
         try {
             const html = typeof marked.parse === 'function' ? marked.parse(source, {gfm:true, breaks:false}) : marked(source);
             const clean = DOMPurify.sanitize(html, {
-                ALLOWED_TAGS: ['p','br','hr','h1','h2','h3','h4','h5','h6','strong','em','del','s','blockquote','ul','ol','li','pre','code','a','img','table','thead','tbody','tr','th','td','details','summary'],
-                ALLOWED_ATTR: ['href','title','src','alt','start'], ALLOW_DATA_ATTR:false, ALLOW_ARIA_ATTR:false
+                ALLOWED_TAGS: ['p','div','br','hr','h1','h2','h3','h4','h5','h6','b','strong','i','em','sub','sup','small','del','s','blockquote','ul','ol','li','pre','code','a','img','table','thead','tbody','tr','th','td','details','summary'],
+                ALLOWED_ATTR: ['href','title','src','alt','start','id','align','width','height','hspace','colspan','rowspan','open'],
+                ALLOW_DATA_ATTR:false, ALLOW_ARIA_ATTR:false
             });
             const document = new DOMParser().parseFromString(clean, 'text/html');
-            document.querySelectorAll('a').forEach(link => {
-                const href = link.getAttribute('href') || '';
-                if (!/^https?:\/\//i.test(href)) link.removeAttribute('href');
-                else { link.setAttribute('target', '_blank'); link.setAttribute('rel', 'noopener noreferrer'); }
-            });
-            document.querySelectorAll('img').forEach(image => {
-                if (!/^https:\/\//i.test(image.getAttribute('src') || '')) image.remove();
-                else { image.loading = 'lazy'; image.decoding = 'async'; image.referrerPolicy = 'no-referrer'; }
-            });
             const first = document.body.firstElementChild;
             const normalize = value => value.replace(/\s+/g, ' ').trim().toLowerCase();
             if (first?.tagName === 'H1' && title && normalize(first.textContent) === normalize(title)) first.remove();
+            const anchors = new Set();
+            document.querySelectorAll('[id],h1,h2,h3,h4,h5,h6').forEach(node => {
+                let anchor = node.getAttribute('id');
+                node.removeAttribute('id');
+                if (!anchor) {
+                    const base = node.textContent.trim().toLowerCase().replace(/[^\p{L}\p{N}\p{M}\s_-]/gu, '').replace(/\s/g, '-');
+                    anchor = base;
+                    for (let index = 1; anchors.has(anchor); index++) anchor = `${base}-${index}`;
+                }
+                if (anchor) { anchors.add(anchor); node.dataset.lfhubAnchor = anchor; }
+            });
+            document.querySelectorAll('a').forEach(link => {
+                const href = link.getAttribute('href')?.trim();
+                if (href?.startsWith('#')) return;
+                const resolved = releaseNoteUrl(href, tag);
+                if (!resolved) link.removeAttribute('href');
+                else {
+                    link.setAttribute('href', resolved);
+                    link.setAttribute('target', '_blank'); link.setAttribute('rel', 'noopener noreferrer');
+                }
+            });
+            document.querySelectorAll('img').forEach(image => {
+                const resolved = releaseNoteUrl(image.getAttribute('src'), tag, true);
+                if (!resolved) image.remove();
+                else {
+                    image.setAttribute('src', resolved);
+                    image.setAttribute('loading', 'lazy');
+                    image.setAttribute('decoding', 'async');
+                    image.setAttribute('referrerpolicy', 'no-referrer');
+                }
+            });
             return document.body.innerHTML;
         } catch (_) { return escaped(); }
     }
@@ -2174,22 +2201,33 @@
                     manifestOrigin,
                     hubRemoteVersion: manifestState.hub.version,
                     sourceReady: false,
-                    splashArt: HUB_SPLASH_ART, artFailed: false, selectedId: '', page: 'home', detailTab: 'aboutTab',
+                    // The splash and its caption belong to this Hub build, independent of the catalog.
+                    artwork: HUB_SPLASH_ART, selectedId: '', page: 'home', detailTab: 'aboutTab',
                     learningSelected: learningProgress.selected || learningProgress.resume?.id || 'first-image', learningUseCurrent: false, learningRevision: 0, learningSearch: '', learningFilter: 'all',
                     progress: null, retryIds: [], retryOptions: {}, newsLoading: false, newsError: '', failedImage: '', checkedTime: lastCheckTime || preferences.lastAutomaticCheck
                 };
             },
             components: {
                 'hub-markdown': {
-                    props: ['text', 'title'],
-                    computed: {html() { return renderReleaseMarkdown(this.text, this.title); }},
+                    props: ['text', 'title', 'releaseTag'],
+                    computed: {html() { return renderReleaseMarkdown(this.text, this.title, this.releaseTag); }},
                     render(h) { return h('div', {class:'lfhub-markdown', domProps:{innerHTML:this.html}, on:{click:this.openLink}}); },
                     methods: {openLink(event) {
                         const link = event.target?.closest?.('a');
                         if (!link || !this.$el.contains(link)) return;
                         event.preventDefault();
+                        event.stopPropagation();
                         const href = link.getAttribute('href');
-                        if (/^https?:\/\//i.test(href || '')) openUrl(href);
+                        if (href?.startsWith('#')) {
+                            let fragment = href.slice(1);
+                            try { fragment = decodeURIComponent(fragment); } catch (_) { /* Keep the literal anchor. */ }
+                            const target = [...this.$el.querySelectorAll('[data-lfhub-anchor]')].find(node => node.dataset.lfhubAnchor === fragment);
+                            if (target) {
+                                const section = target.closest('details');
+                                if (section) section.open = true;
+                                target.scrollIntoView({block:'start'});
+                            }
+                        } else if (/^https?:\/\//i.test(href || '')) openUrl(href);
                     }}
                 },
                 'hub-icon': {
@@ -2221,8 +2259,6 @@
                 learningResume() { void this.learningRevision; const saved=learningSession ? {id:learningSession.lesson.id,index:learningSession.index,project:learningSession.project} : learningProgress.resume;return saved && learningLessons().some(l=>l.id===saved.id) ? saved : null; },
                 learningCompletedCount() { void this.learningRevision; return this.learningLessons.filter(l=>learningProgress.completed?.[l.id]).length; },
                 selectedModule() { return this.modulesAll.find(module => module.id === this.selectedId) || null; },
-                essentialsNeedActivation() { return this.essentials.some(module => module.disabled); },
-                artwork() { void this.revision; return !this.artFailed && imageUrl(manifestState.artwork) || this.splashArt; },
                 checkedLabel() { return this.checkedTime ? tr('checkedAt', {date: new Intl.DateTimeFormat(language(), {dateStyle: 'short', timeStyle: 'short'}).format(this.checkedTime)}) : tr('neverChecked'); },
                 modules() {
                     void this.revision;
@@ -2238,8 +2274,20 @@
                 desktopAvailable() { return globalThis.isApp !== false && typeof require === 'function'; },
                 modulesAll() { void this.revision; return catalogModules().map(module => moduleView(module, this.preferences)); },
                 sourceMismatchCount() { return this.migrations.length; },
-                recommendedMissing() { return this.modulesAll.filter(module => module.recommended && module.compatible && (!this.localMode || module.localExists) && !module.installed); },
                 localMode() { return this.preferences.source === 'local'; },
+                releaseOptions() {
+                    const options = [{value: '', name: tr('latestRelease')}];
+                    const pinned = this.preferences.releaseTag;
+                    if (pinned && !this.releases.some(release => release.tag_name === pinned)) {
+                        options.push({value: pinned, name: pinned});
+                    }
+                    for (const release of this.releases) {
+                        const name = release.name === release.tag_name ? release.tag_name : `${release.name} · ${release.tag_name}`;
+                        options.push({value: release.tag_name, name: release.prerelease ? `${name} · ${tr('previewRelease')}` : name});
+                    }
+                    return options;
+                },
+                selectedReleaseName() { return this.releaseOptions.find(option => option.value === this.preferences.releaseTag)?.name; },
                 latestReleaseDate() {
                     const dates = this.releases.map(release => Date.parse(release.published_at)).filter(Number.isFinite);
                     return dates.length ? new Intl.DateTimeFormat(language(), {dateStyle: 'medium'}).format(new Date(Math.max(...dates))) : '';
@@ -2250,8 +2298,22 @@
                 canUpdateHub() { return !this.busy && this.sourceReady && isCompatible(manifestState.hub) && (!this.localMode || manifestState.hub.localExists); },
                 activeTools() { return this.modulesAll.filter(module => module.installed && !module.disabled); },
                 canCreateScene() { return !!globalThis.BarItems?.new_project || (typeof globalThis.newProject === 'function' && !!globalThis.Formats?.free); },
-                essentials() { return this.modulesAll.filter(module => module.recommended); },
+                essentials() { return this.modulesAll.filter(module => module.recommended && !module.unavailableInSource); },
                 essentialsInstalled() { return this.essentials.filter(module => module.installed && !module.disabled).length; },
+                essentialsDisabled() { return this.essentials.some(module => module.disabled); },
+                essentialsSetupTargets() {
+                    return this.essentials.filter(module => module.compatible && (!this.localMode || module.localExists) &&
+                        (!module.installed || module.disabled || module.sourceMismatch));
+                },
+                essentialsNeedActivation() { return this.essentialsSetupTargets.some(module => module.disabled); },
+                essentialsNeedSetup() { return this.essentialsSetupTargets.some(module => !module.installed || module.disabled); },
+                healthLabel() {
+                    if (this.busy) return tr('checking');
+                    if (!this.sourceReady) return tr('catalogOffline');
+                    return this.essentials.length
+                        ? tr('essentialsProgress', {installed: this.essentialsInstalled, total: this.essentials.length})
+                        : tr('catalogReady');
+                },
                 sceneAction() { return globalThis.Project && this.canOpen(this.modulesAll.find(module => module.id === 'light_manager') || {}) ? 'scene' : 'new'; }
             },
             methods: {
@@ -2294,6 +2356,7 @@
                 learningPrepare(lesson) { const missing=learningMissing(lesson);this.selectModule(this.modulesAll.find(m=>m.id===missing[0])); },
                 learningRelated(module) { return this.learningLessons.filter(l=>l.modules.includes(module.id)); },
                 showPage(page) {
+                    this.closePicker();
                     this.page = page==='learn' && !LEARNING_AVAILABLE ? 'home' : page; this.selectedId = ''; this.learningRevision++;
                     this.$nextTick(()=>{const content=this.$el.querySelector('.lfhub-content');if(content)content.scrollTop=0;});
                 },
@@ -2355,6 +2418,59 @@
                 compatibilityHint(module) { return module.variant === 'desktop' && (globalThis.isApp === false || globalThis.Blockbench?.isWeb === true) ? tr('desktopOnly') : `Blockbench ${module.min_blockbench}+`; },
                 dependencyNames(module) { return module.dependencies.map(id => manifestState.modules.find(item => item.id === id)?.title || id).join(', '); },
                 clearFilters() { this.search = ''; this.group = 'all'; this.stateFilter = 'all'; },
+                closePicker() {
+                    const menu = this._pickerMenu;
+                    if (menu && Menu.open === menu) menu.hide();
+                },
+                openPicker(event, options, selected, select, searchable = false) {
+                    const anchor = event.currentTarget;
+                    if (anchor.disabled || typeof Menu !== 'function') return;
+                    if (this._pickerMenu && Menu.open === this._pickerMenu && this._pickerAnchor === anchor) {
+                        this.closePicker();
+                        return;
+                    }
+                    this.closePicker();
+                    const search = searchable && globalThis.LightManagerUI?.searchMenu;
+                    const items = options.map(({value, name}, index) => ({
+                        id: `lightflow_hub_choice_${index}`,
+                        name,
+                        icon: value === selected ? 'far.fa-dot-circle' : 'far.fa-circle',
+                        click: () => { if (value !== selected) select(value); }
+                    }));
+                    const menu = new Menu('lightflow_hub_picker', items, {
+                        class: searchable ? 'lfhub-release-menu' : undefined,
+                        searchable: searchable && typeof search !== 'function',
+                        onClose: () => {
+                            anchor.setAttribute('aria-expanded', 'false');
+                            if (menu.node.contains(document.activeElement) && anchor.isConnected) anchor.focus();
+                            this._pickerMenu = this._pickerAnchor = null;
+                        }
+                    });
+                    this._pickerMenu = menu;
+                    this._pickerAnchor = anchor;
+                    menu.open(anchor);
+                    anchor.setAttribute('aria-expanded', 'true');
+                    if (typeof search === 'function') {
+                        search(menu, Object.fromEntries(items.map(item => [item.id, item])), anchor);
+                    } else if (!menu.node.contains(document.activeElement)) {
+                        menu.node.tabIndex = -1;
+                        menu.node.focus({preventScroll: true});
+                    }
+                },
+                pickCategory(event) {
+                    const options = ['all', 'essential', 'creative', 'specialized', 'developer'].map(value => ({value, name: tr(value)}));
+                    this.openPicker(event, options, this.group, value => { this.group = value; });
+                },
+                pickRelease(event) {
+                    const anchor = event.currentTarget;
+                    this.openPicker(event, this.releaseOptions, this.preferences.releaseTag, async value => {
+                        if (this.busy) return;
+                        this.preferences.releaseTag = value;
+                        await this.changeRelease();
+                        await this.$nextTick();
+                        if (anchor.isConnected && document.activeElement === document.body) anchor.focus();
+                    }, true);
+                },
                 browse(state) { this.search = ''; this.group = 'all'; this.stateFilter = state; this.$nextTick(() => this.$el.querySelector('.lfhub-search input')?.focus()); },
                 beginScene() {
                     const module = this.modulesAll.find(module => module.id === 'light_manager');
@@ -2415,7 +2531,7 @@
                         if (Array.isArray(result.releases)) { this.releases = result.releases; this.releasesLoaded = true; }
                         this.manifestOrigin = result.origin;
                         this.hubRemoteVersion = result.manifest.hub.version;
-                        this.sourceReady = true; this.artFailed = false; this.checkedTime = result.cached ? lastCheckTime : Date.now(); lastCheckTime = this.checkedTime;
+                        this.sourceReady = true; this.checkedTime = result.cached ? lastCheckTime : Date.now(); lastCheckTime = this.checkedTime;
                         if (!this.localMode && !result.cached && result.origin === 'github') {
                             this.preferences.lastAutomaticCheck = this.checkedTime;
                             savePreferences(this.preferences);
@@ -2481,8 +2597,8 @@
                     await this.installBatch([module.id], {force: true});
                 },
                 async installRecommended() {
-                    if (!this.sourceReady) return;
-                    const ids = this.essentials.filter(module => module.compatible && (!module.installed || module.sourceMismatch || module.disabled)).map(module => module.id);
+                    if (this.busy || !this.sourceReady) return;
+                    const ids = this.essentialsSetupTargets.map(module => module.id);
                     if (!ids.length) { this.notice = tr('upToDate'); return; }
                     if (!await confirmBox(`${tr('confirmInstallMany', {count: ids.length})}\n\n${tr('savedWork')}`, tr('installRecommended'))) return;
                     await this.installBatch(ids, {sourceApproved: true, activate: true});
@@ -2555,6 +2671,7 @@
             },
             beforeDestroy() {
                 this._hubDestroyed = true;
+                this.closePicker();
                 window.removeEventListener?.('focus', this._focusListener);
                 this._projectListeners?.forEach(listener => listener.delete?.());
                 this._moduleMenu?.delete?.();
@@ -2564,7 +2681,7 @@
                 <div class="lfhub-root" @keydown.capture="hubKeyboard" @keydown.stop @keyup.stop>
                     <div class="lfhub-topbar" role="banner"><hub-icon class="lfhub-hub-mark" :icon="hubIcon()"></hub-icon>
                         <span class="lfhub-wordmark">LIGHTFLOW <span>/ HUB</span></span>
-                        <span class="lfhub-health"><i class="material-icons">{{ busy ? 'sync' : sourceReady ? 'check_circle_outline' : 'cloud_off' }}</i>{{ busy ? t('checking') : sourceReady ? t('essentialsProgress', {installed:essentialsInstalled,total:essentials.length}) : t('catalogOffline') }}</span>
+                        <span class="lfhub-health"><i class="material-icons" aria-hidden="true">{{ busy ? 'sync' : sourceReady ? 'check_circle_outline' : 'cloud_off' }}</i>{{ healthLabel }}</span>
                         <button class="lfhub-icon-button" @click="refresh" :disabled="busy" :title="t('refresh')" :aria-label="t('refresh')"><i class="material-icons">sync</i></button>
                         <button class="lfhub-icon-button" @click="links($event)" :title="t('details')" :aria-label="t('details')"><i class="material-icons">more_horiz</i></button>
                     </div>
@@ -2576,7 +2693,7 @@
                             <div class="lfhub-toolbar">
                                 <label class="lfhub-search"><i class="material-icons">search</i><input v-model="search" :placeholder="t('search')" :aria-label="t('search')" type="search"></label>
                                 <nav class="lfhub-filters" :aria-label="t('tools')"><button v-for="item in ['all','installedFilter','availableFilter','changesFilter']" :key="item" :class="{active:stateFilter===item}" :aria-pressed="String(stateFilter===item)" @click="stateFilter=item">{{ t(item) }}</button></nav>
-                                <label class="lfhub-category"><span>{{ t('category') }}</span><select v-model="group" :aria-label="t('category')"><option v-for="item in ['all','essential','creative','specialized','developer']" :key="item" :value="item">{{ t(item) }}</option></select></label>
+                                <div class="lfhub-category"><span id="lfhub-category-label">{{ t('category') }}</span><button class="lfhub-picker" aria-haspopup="menu" aria-expanded="false" aria-labelledby="lfhub-category-label lfhub-category-value" @click="pickCategory"><span id="lfhub-category-value">{{ t(group) }}</span><i class="material-icons" aria-hidden="true">arrow_drop_down</i></button></div>
                             </div>
                             <div class="lfhub-list" :aria-busy="busy">
                                 <button v-for="module in modules" :key="module.id" class="lfhub-module" :class="{selected:selectedId===module.id,dimmed:module.disabled}" @click="selectModule(module)" :aria-pressed="String(selectedId===module.id)">
@@ -2597,21 +2714,19 @@
                                             <h1><span class="lfhub-hero-title-lead">{{ t('heroTaglineLead') }}</span> <span class="lfhub-hero-title-worlds">{{ t('heroTaglineWorlds') }}</span> <span class="lfhub-hero-title-accent">{{ t('heroTaglineAccent') }}</span></h1>
                                             <p class="lfhub-hero-description">{{ t('heroDescription') }}</p>
                                             <div class="lfhub-welcome-actions">
-                                                <button v-if="recommendedMissing.length || essentialsNeedActivation" class="accent" @click="installRecommended" :disabled="busy || !sourceReady"><i class="material-icons">download</i>{{ t(essentialsNeedActivation ? 'repair' : 'installRecommended') }}</button>
-                                                <button v-else class="accent" :class="{'lfhub-create-scene':sceneAction==='new'}" @click="beginScene" :disabled="busy || (sceneAction==='new' && !canCreateScene)"><i class="material-icons" aria-hidden="true">{{ sceneAction==='scene' ? 'arrow_forward' : 'add' }}</i>{{ t(sceneAction==='scene' ? 'continueScene' : 'startScene') }}</button>
-                                                <button v-if="recommendedMissing.length || essentialsNeedActivation" class="lfhub-text-button" :class="{'lfhub-create-scene':sceneAction==='new'}" @click="beginScene" :disabled="busy || (sceneAction==='new' && !canCreateScene)">{{ t(sceneAction==='scene' ? 'continueScene' : 'startScene') }}</button>
+                                                <button v-if="essentialsNeedSetup" class="accent" @click="installRecommended" :disabled="busy || !sourceReady"><i class="material-icons" aria-hidden="true">download</i>{{ t(essentialsNeedActivation ? 'repair' : 'installRecommended') }}</button>
+                                                <button :class="{accent:!essentialsNeedSetup,'lfhub-scene-secondary':essentialsNeedSetup,'lfhub-create-scene':!essentialsNeedSetup && sceneAction==='new'}" @click="beginScene" :disabled="busy || (sceneAction==='new' && !canCreateScene)"><i v-if="!essentialsNeedSetup" class="material-icons" aria-hidden="true">{{ sceneAction==='scene' ? 'arrow_forward' : 'add' }}</i>{{ t(sceneAction==='scene' ? 'continueScene' : 'startScene') }}</button>
                                             </div>
                                         </div>
                                         <figure class="lfhub-splash-artwork">
-                                            <img class="lfhub-splash" :src="artwork" :alt="t('splashAlt')" @error="artFailed=true" draggable="false">
+                                            <img class="lfhub-splash" :src="artwork" :alt="t('splashAlt')" draggable="false">
                                             <figcaption class="lfhub-splash-caption"><strong>{{ t('heroArtworkCredit') }}</strong><span>{{ t('heroNoPost') }}</span></figcaption>
                                         </figure>
                                     </section>
-                                    <section class="lfhub-onboarding">
-                                        <div class="lfhub-section-heading"><div><h2>{{ t(essentialsInstalled===essentials.length ? 'essentialsReady' : 'firstStep') }}</h2><p>{{ t(essentialsInstalled===essentials.length ? 'installedHint' : 'firstStepCopy') }}</p></div><span class="lfhub-step-count">{{ essentialsInstalled }}/{{ essentials.length }}</span></div>
+                                    <section v-if="essentials.length" class="lfhub-onboarding">
+                                        <div class="lfhub-section-heading"><h2>{{ t('essentialsTitle') }}</h2></div>
                                         <div class="lfhub-essential-list"><button v-for="module in essentials" :key="module.id" @click="selectModule(module)"><hub-icon :icon="iconFor(module)" :revision="revision"></hub-icon><span>{{ module.title }}</span><i class="material-icons" :class="{'is-ready':module.installed && !module.disabled}">{{ module.installed && !module.disabled ? 'check_circle' : 'chevron_right' }}</i></button></div>
-                                        <p v-if="essentialsNeedActivation" class="lfhub-muted">{{ t('disabledEssentials') }}</p>
-                                        <p class="lfhub-muted">{{ t('setupHint') }}</p>
+                                        <p v-if="essentialsDisabled" class="lfhub-muted">{{ t('disabledEssentials') }}</p>
                                     </section>
                                     <section v-if="learningEnabled" class="lfhub-learning-entry"><i class="material-icons" aria-hidden="true">school</i><div><h2>{{ learningResume ? learnText('inline.your_workshop_is_waiting') : learnText('inline.learn_by_doing') }}</h2><p>{{ learningLessons.length }} {{ learnText('inline.workshops_inside_blockbench_lights_materials_camera_an') }}</p></div><button @click="showPage('learn')">{{ learningResume ? learnText('inline.resume') : learnText('inline.explore_workshops') }}</button></section>
                                     <section v-if="hubUpdateAvailable" class="lfhub-hub-update"><i class="material-icons">system_update</i><div><strong>{{ t('hubUpdate', {version:hubRemoteVersion}) }}</strong><p>{{ t('autoExplanation') }}</p></div><button @click="updateHub" :disabled="!canUpdateHub">{{ t('updateHub') }}</button></section>
@@ -2656,7 +2771,7 @@
                                 <section v-else-if="page==='news'" class="lfhub-news">
                                     <h1>{{ t('news') }}</h1><p class="lfhub-muted">{{ t('newsHelp') }}</p>
                                     <p v-if="newsLoading" role="status">{{ t('checking') }}</p><div v-if="newsError" class="lfhub-warning" role="alert">{{ newsError }}<button @click="loadNews">{{ t('retry') }}</button></div>
-                                    <article v-for="release in releases" :key="release.tag_name" class="lfhub-release-entry"><div class="lfhub-release-heading"><h2>{{ release.name }}</h2><time>{{ dateLabel(release.published_at) }}</time></div><span v-if="release.prerelease" class="lfhub-maturity">{{ t('previewRelease') }}</span><hub-markdown :text="release.body || t('noNotes')" :title="release.name"></hub-markdown><button class="lfhub-text-button" @click="openUrl(releaseUrl(release.tag_name))"><i class="material-icons">open_in_new</i>{{ t('readRelease') }}</button></article>
+                                    <article v-for="release in releases" :key="release.tag_name" class="lfhub-release-entry"><div class="lfhub-release-heading"><h2>{{ release.name }}</h2><time>{{ dateLabel(release.published_at) }}</time></div><span v-if="release.prerelease" class="lfhub-maturity">{{ t('previewRelease') }}</span><hub-markdown :text="release.body || t('noNotes')" :title="release.name" :release-tag="release.tag_name"></hub-markdown><button class="lfhub-text-button" @click="openUrl(releaseUrl(release.tag_name))"><i class="material-icons">open_in_new</i>{{ t('readRelease') }}</button></article>
                                     <div v-if="!newsLoading && !newsError && !releases.length" class="lfhub-empty"><i class="material-icons">feed</i><span>{{ t('noNews') }}</span><button @click="openLink('github')">{{ t('viewGithub') }}</button></div>
                                 </section>
                                 <section v-else-if="page==='settings'" class="lfhub-settings">
@@ -2677,7 +2792,7 @@
                             <span v-if="preferences.channel === 'main'" class="lfhub-channel-help">{{ t('mainHelp') }}</span>
                         </div>
                         <label v-if="!localMode && preferences.channel === 'experimental'" class="lfhub-branch"><span>{{ t('branch') }}</span><input :disabled="busy" v-model="preferences.experimentalBranch" @change="branchChanged(); refresh()"></label>
-                        <label v-if="!localMode && preferences.channel === 'stable'" class="lfhub-release lfhub-control-group"><span class="lfhub-control-label">{{ t('releaseVersion') }}</span><select :disabled="busy || (releasesLoaded && !releases.length && !preferences.releaseTag)" v-model="preferences.releaseTag" @change="changeRelease" :aria-label="t('releaseVersion')"><option value="">{{ t('latestRelease') }}</option><option v-if="preferences.releaseTag && !releases.some(release => release.tag_name === preferences.releaseTag)" :value="preferences.releaseTag">{{ preferences.releaseTag }}</option><option v-for="release in releases" :key="release.tag_name" :value="release.tag_name">{{ release.name === release.tag_name ? release.tag_name : release.name + ' · ' + release.tag_name }}{{ release.prerelease ? ' · ' + t('previewRelease') : '' }}</option></select><span class="lfhub-release-help" role="status"><span v-if="releasesLoaded && releases.length < 2">{{ t(releases.length ? 'noOtherReleases' : 'noReleases') }}</span><time v-if="latestReleaseDate">{{ t('latestReleaseDate', {date: latestReleaseDate}) }}</time></span></label>
+                        <div v-if="!localMode && preferences.channel === 'stable'" class="lfhub-release lfhub-control-group"><span id="lfhub-release-label" class="lfhub-control-label">{{ t('releaseVersion') }}</span><button class="lfhub-picker" aria-haspopup="menu" aria-expanded="false" aria-labelledby="lfhub-release-label lfhub-release-value" :disabled="busy || (releasesLoaded && !releases.length && !preferences.releaseTag)" @click="pickRelease"><span id="lfhub-release-value" :title="selectedReleaseName">{{ selectedReleaseName }}</span><i class="material-icons" aria-hidden="true">arrow_drop_down</i></button><span class="lfhub-release-help" role="status"><span v-if="releasesLoaded && releases.length < 2">{{ t(releases.length ? 'noOtherReleases' : 'noReleases') }}</span><time v-if="latestReleaseDate">{{ t('latestReleaseDate', {date: latestReleaseDate}) }}</time></span></div>
                         <div v-if="localMode" class="lfhub-local-path"><span :title="preferences.localDirectory">{{ preferences.localDirectory || t('noFolder') }}</span><button :disabled="busy" @click="chooseFolder"><i class="material-icons">folder_open</i>{{ t('chooseFolder') }}</button><button :disabled="busy" class="lfhub-icon-button" @click="useSiblingFolder" :title="t('siblingFolder')" :aria-label="t('siblingFolder')"><i class="material-icons">my_location</i></button><button :disabled="busy" class="lfhub-icon-button" @click="chooseFiles" :title="t('chooseFiles')" :aria-label="t('chooseFiles')"><i class="material-icons">note_add</i></button></div>
                     </section>
 
@@ -2732,7 +2847,6 @@
             #lightflow_hub_dialog,#lightflow_hub_dialog *,#lightflow_hub_dialog *::before,#lightflow_hub_dialog *::after,
             .lflearn-dock,.lflearn-dock *,.lflearn-dock *::before,.lflearn-dock *::after,
             .lfhub-notifications,.lfhub-notifications *,.lfhub-notifications *::before,.lfhub-notifications *::after {box-shadow:none!important}
-            .lfhub-welcome-actions {display:flex;align-items:center;flex-wrap:wrap;gap:8px}
             .lfhub-learning-entry {display:flex;align-items:center;gap:12px;margin:0 24px;padding:16px 0;border-top:1px solid var(--color-border)}
             .lfhub-learning-entry>i {font-size:24px}.lfhub-learning-entry>div {flex:1;min-width:0}.lfhub-learning-entry h2 {margin:0 0 4px}.lfhub-learning-entry p {margin:0;font-size:13px}
             .lfhub-workspace.learning {grid-template-columns:1fr}.lfhub-workspace.learning .lfhub-catalog {display:none}
@@ -2816,7 +2930,11 @@
             .lfhub-filters button {flex:1;min-width:0;padding:8px 3px;font-size:12px;border:0;border-radius:0;background:transparent;border-bottom:2px solid transparent}
             .lfhub-filters button.active {border-bottom-color:var(--lfhub-indicator);background:transparent;color:var(--color-text);font-weight:600}
             .lfhub-category {display:flex;align-items:center;gap:8px;padding:8px 0;font-size:12px;color:var(--lfhub-secondary,var(--color-text))}
-            .lfhub-category select {margin-left:auto;max-width:68%;height:28px;font-size:12px}
+            .lfhub-root button.lfhub-picker {justify-content:space-between;min-width:0;background:var(--color-back);font-weight:400;text-align:left}
+            .lfhub-root button.lfhub-picker:hover:not(:disabled),.lfhub-root button.lfhub-picker[aria-expanded="true"] {background:var(--color-selected)}
+            .lfhub-picker span {min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+            .lfhub-root .lfhub-picker .material-icons {flex:none;font-size:18px}
+            .lfhub-root .lfhub-category .lfhub-picker {margin-left:auto;max-width:68%;min-height:28px;padding:3px 6px 3px 8px;font-size:12px}
             .lfhub-list {flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;scrollbar-gutter:stable;padding:0 10px 8px}
             .lfhub-root button.lfhub-module {display:flex;align-items:flex-start;text-align:left;width:100%;height:auto;gap:10px;margin:0 0 4px;padding:12px 10px;background:var(--lfhub-row);border:1px solid transparent;border-left:2px solid transparent;white-space:normal}
             .lfhub-root button.lfhub-module:hover:not(:disabled):not(.selected) {background:var(--lfhub-row-hover)}
@@ -2878,7 +2996,9 @@
             .lfhub-welcome-actions button {min-height:40px;padding-inline:16px}
             .lfhub-root .lfhub-welcome-actions button.lfhub-create-scene {background:#ffff96;color:#181912;border-color:#ffff96}
             .lfhub-root .lfhub-welcome-actions button.lfhub-create-scene:hover:not(:disabled) {background:#ffffb5;border-color:#ffffb5;filter:none}
-            .lfhub-welcome-actions > span {color:var(--lfhub-secondary,var(--color-text));font-size:12px;flex:1;min-width:180px}
+            .lfhub-root .lfhub-welcome-actions button.lfhub-scene-secondary {background:transparent;color:#eef0f6;border-color:#858b9c}
+            .lfhub-root .lfhub-welcome-actions button.lfhub-scene-secondary:hover:not(:disabled) {background:#242735;border-color:#b8bdcb}
+            .lfhub-root .lfhub-welcome-actions button.lfhub-scene-secondary:focus-visible {outline-color:#eef0f6}
             .lfhub-hub-update {display:flex;align-items:center;gap:12px;padding:16px 28px;border-top:1px solid var(--color-border)}
             .lfhub-hub-update > div {flex:1}
             .lfhub-hub-update p {color:var(--lfhub-secondary,var(--color-text));font-size:12px;margin:5px 0 0}
@@ -2912,7 +3032,10 @@
             .lfhub-segment button {font-size:13px}
             .lfhub-segment button.active {background:var(--lfhub-row-selected);border-color:var(--lfhub-indicator);font-weight:600}
             .lfhub-release {flex:1 1 100%}
-            .lfhub-release select {width:100%}
+            .lfhub-release .lfhub-picker {width:100%}
+            .contextMenu.lfhub-release-menu {max-width:calc(100vw - 24px)}
+            .contextMenu.lfhub-release-menu > li[menu_item] {height:auto;min-height:30px;padding-block:4px}
+            .contextMenu.lfhub-release-menu > li[menu_item] > span {min-width:0;flex-shrink:1;white-space:normal;overflow-wrap:anywhere}
             .lfhub-release-help {font-size:12px;color:var(--lfhub-secondary,var(--color-text));display:flex;flex-wrap:wrap;gap:8px}
             .lfhub-local-path {display:flex;gap:6px;flex-wrap:wrap;flex:1 1 100%;min-width:0}
             .lfhub-local-path > span {width:100%;overflow-wrap:anywhere;font-size:12px;color:var(--lfhub-secondary,var(--color-text))}
@@ -2922,7 +3045,7 @@
             .lfhub-release-entry {margin-top:26px;padding-bottom:24px;border-bottom:1px solid var(--color-border)}
             .lfhub-release-entry .lfhub-release-heading {display:flex;align-items:baseline;gap:12px;flex-wrap:wrap}
             .lfhub-release-entry time {font-size:12px;color:var(--lfhub-secondary,var(--color-text))}
-            .lfhub-markdown {font-size:14px;line-height:1.7;overflow-wrap:anywhere;margin:20px 0;max-width:72ch}
+            .lfhub-markdown {font-size:14px;line-height:1.7;overflow-wrap:anywhere;margin:20px auto;max-width:1040px}
             .lfhub-markdown > :first-child {margin-top:0!important}
             .lfhub-markdown > :last-child {margin-bottom:0!important}
             .lfhub-markdown :is(h1,h2,h3,h4,h5,h6) {font-weight:500;line-height:1.3;letter-spacing:0;margin:28px 0 12px;text-wrap:pretty}
@@ -2943,7 +3066,10 @@
             .lfhub-markdown pre code {padding:0;background:transparent;white-space:inherit}
             .lfhub-markdown a[href] {color:var(--color-accent);text-decoration:underline;text-underline-offset:3px;cursor:pointer}
             .lfhub-markdown a[href]:hover {filter:brightness(1.15)}
-            .lfhub-markdown img {display:block;max-width:100%;height:auto;max-height:360px;object-fit:contain;margin:18px 0;border-radius:var(--lfhub-radius)}
+            .lfhub-markdown img {display:inline-block;max-width:100%;height:auto;vertical-align:middle;border-radius:var(--lfhub-radius)}
+            .lfhub-markdown > img:not([align]) {display:block;margin-inline:auto}
+            .lfhub-markdown p:not([align]):has(> img:only-child:not([align])),
+            .lfhub-markdown p:not([align]):has(> a:only-child > img:only-child:not([align])) {text-align:center}
             .lfhub-markdown table {display:block;max-width:100%;overflow-x:auto;border-collapse:collapse;margin:18px 0;font-size:13px}
             .lfhub-markdown :is(th,td) {padding:9px 12px;text-align:left;border:1px solid var(--color-border);line-height:1.5}
             .lfhub-markdown th {background:var(--color-back);font-weight:600}
